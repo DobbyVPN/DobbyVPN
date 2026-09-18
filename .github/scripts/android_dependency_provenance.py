@@ -31,15 +31,12 @@ REPOSITORIES = [
 ]
 DECLARED_INPUTS = (
     ".go-version",
-    "kmp_module/settings.gradle.kts",
-    "kmp_module/build.gradle.kts",
-    "kmp_module/app/build.gradle.kts",
-    "kmp_module/grpcstub/build.gradle.kts",
-    "kmp_module/grpcstub/src/main/proto/com/dobby/vpnserver/vpnserver.proto",
-    "kmp_module/gradle/libs.versions.toml",
-    "kmp_module/gradle/wrapper/gradle-wrapper.properties",
-    "kmp_module/gradle/wrapper/gradle-wrapper.jar",
-    "kmp_module/gradle.properties",
+    "android_module/settings.gradle.kts",
+    "android_module/build.gradle.kts",
+    "android_module/app/build.gradle.kts",
+    "android_module/gradle/wrapper/gradle-wrapper.properties",
+    "android_module/gradle/wrapper/gradle-wrapper.jar",
+    "android_module/gradle.properties",
     "go_module/go.mod",
     "go_module/go.sum",
 )
@@ -177,7 +174,7 @@ def create_manifest(
     gradle_distribution = (
         _verify_external_gradle_distribution(gradle_archive, gradle_root)
         if gradle_archive is not None and gradle_root is not None
-        else _wrapper_values(source_root / "kmp_module/gradle/wrapper/gradle-wrapper.properties")
+        else _wrapper_values(source_root / "android_module/gradle/wrapper/gradle-wrapper.properties")
     )
     spec_sha256 = _sha256(spec_file)
     spec_input: dict[str, object] = {
@@ -207,7 +204,7 @@ def create_manifest(
             "go_version": GO_VERSION,
             "go_source_commit": GO_SOURCE_COMMIT,
         },
-        "go_modules": [{"module": MOBILE_MODULE, "version": MOBILE_VERSION, "commands": ["gomobile", "gobind"]}],
+        "go_modules": [{"module": MOBILE_MODULE, "version": MOBILE_VERSION, "commands": ["go build -buildmode=c-shared"]}],
         "spec": {
             "root": "source",
             "path": spec_relative,

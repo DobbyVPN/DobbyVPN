@@ -28,14 +28,13 @@ from torturer_checks.ios_simulator import (
 
 _RUNTIME = re.compile(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-(\d+(?:-\d+)*)\Z")
 _PROJECT_PATH = Path("swift_module/iosApp.xcodeproj")
-_SCHEME_NAME = "iosApp"
-_CONFIGURATION = "Debug"
-_APP_PRODUCT = "doBBYVPN.app"
+_CONFIGURATION = "Release"
+_APP_PRODUCT = "Dobby-Vpn.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
 _APP_LOG_CONTAINER_IDENTIFIER = "group.vpn.dobby.app"
 _APP_LOG_NAME = "app_logs.txt"
 _GO_APP_LOG_NAME = "go_app_logs.jsonl"
-_MINI_STARTUP_MARKER = b"startup.initialized mode=mini"
+_MINI_STARTUP_MARKER = b"startup.ui_attached mode=normal"
 _METAL_STARTUP_MARKER = b"startup.ui_attached mode=normal"
 _DEFAULT_ARCHITECTURE = "arm64"
 _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
@@ -45,7 +44,7 @@ _DIAGNOSTIC_TAIL_BYTES = 1024 * 1024
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
-IOS_KMP_BUILD_TIMEOUT_SECONDS = 15 * 60
+IOS_GO_UI_BUILD_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
 
 
@@ -213,7 +212,6 @@ class AvailableSimulator:
 @dataclass(frozen=True)
 class IOSSimulatorAppContract:
     project_relative_path: Path = _PROJECT_PATH
-    scheme: str = _SCHEME_NAME
     configuration: str = _CONFIGURATION
     app_product_name: str = _APP_PRODUCT
     bundle_identifier: str = _BUNDLE_IDENTIFIER
@@ -222,8 +220,8 @@ class IOSSimulatorAppContract:
     def __post_init__(self) -> None:
         if self.project_relative_path != _PROJECT_PATH:
             raise IOSSimulatorAppContractError("iOS Simulator project path is fixed by the public contract")
-        if self.scheme != _SCHEME_NAME or self.configuration != _CONFIGURATION:
-            raise IOSSimulatorAppContractError("iOS Simulator scheme and configuration are fixed")
+        if self.configuration != _CONFIGURATION:
+            raise IOSSimulatorAppContractError("iOS Simulator configuration is fixed")
         if self.app_product_name != _APP_PRODUCT or self.bundle_identifier != _BUNDLE_IDENTIFIER:
             raise IOSSimulatorAppContractError("iOS Simulator app identity is fixed by the public contract")
         if self.architecture not in _SUPPORTED_ARCHITECTURES:
@@ -310,17 +308,12 @@ def xcodebuild_app_command(
         udid = simctl_boot_command(device_udid)[-1]
     except IOSSimulatorContractError as error:
         raise IOSSimulatorAppContractError(str(error)) from error
-    command = [
-        "xcodebuild", "build", "-project", str(candidate_root / contract.project_relative_path),
-        "-scheme", contract.scheme, "-configuration", contract.configuration,
-        "-sdk", "iphonesimulator", "-destination", f"platform=iOS Simulator,id={udid}",
-        "-derivedDataPath", str(work_dir / "derived-data"),
-        f"ARCHS={_XCODE_ARCHITECTURES[contract.architecture]}",
-        "CODE_SIGNING_ALLOWED=YES", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=-",
+    del udid, mode
+    go_framework = candidate_root / "go_module" / "DobbyVPNRuntime.xcframework"
+    return [
+        "/bin/bash", "scripts/package_ios_app.sh", "iossimulator",
+        str(contract.app_path(work_dir)), str(go_framework), contract.architecture,
     ]
-    if mode == "mini":
-        command.append("SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DOBBY_SIMULATOR_MINI")
-    return command
 
 
 def simctl_get_app_container_command(device_udid: str) -> list[str]:
@@ -476,8 +469,9 @@ def run_ios_simulator_app_contract(
     """Launch the app, verify its startup marker, then shut down the Simulator."""
     mode = _validate_mode(mode)
     budget = budget or RunBudget()
-    if mode == "metal":
-        require_metal(runner, budget=budget)
+    # Fyne's iOS renderer uses the pinned OpenGLES/GLKit path. A host Metal
+    # probe is not a prerequisite for this UI and would incorrectly reject a
+    # usable Simulator on the no-Metal development VM.
     work_dir.mkdir(parents=True, exist_ok=True)
     simulator: AvailableSimulator | None = None
     container: Path | None = None
@@ -510,20 +504,8 @@ def run_ios_simulator_app_contract(
             budget=budget,
         )
 
-        _require_success(
-            runner,
-            xcodebuild_app_command(
-                contract,
-                candidate_root=candidate_root,
-                device_udid=simulator.udid,
-                work_dir=work_dir,
-                mode=mode,
-            ),
-            f"build {mode.title()} Simulator app",
-            budget=budget,
-        )
         if not app_path.is_dir():
-            raise IOSSimulatorAppContractError(f"iOS Simulator build produced no app bundle: {app_path}")
+            raise IOSSimulatorAppContractError(f"Go/Fyne Simulator build produced no app bundle: {app_path}")
         _require_success(
             runner,
             simctl_install_command(simulator.udid, app_path),
@@ -584,14 +566,6 @@ def run_ios_simulator_app_contract(
     return evidence
 
 
-def _ios_test_tasks(architecture: str) -> tuple[str, str]:
-    if architecture == "arm64":
-        return (":app:linkDebugFrameworkIosSimulatorArm64", ":app:iosSimulatorArm64Test")
-    if architecture == "amd64":
-        return (":app:linkDebugFrameworkIosX64", ":app:iosX64Test")
-    raise IOSSimulatorAppContractError(f"unsupported iOS Simulator architecture: {architecture}")
-
-
 def prepare_ios_simulator_candidate(
     *,
     candidate_root: Path,
@@ -604,11 +578,8 @@ def prepare_ios_simulator_candidate(
     candidate_root = Path(candidate_root).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     go_root = candidate_root / "go_module"
-    kmp_root = candidate_root / "kmp_module"
-    swift_root = candidate_root / "swift_module"
     go_framework = go_root / "DobbyVPNRuntime.xcframework"
-    staged_go_framework = swift_root / "DobbyVPNRuntime.xcframework"
-    staged_kmp_framework = swift_root / "app.framework"
+    app_path = contract.app_path(work_dir)
 
     _require_success(
         runner,
@@ -621,32 +592,10 @@ def prepare_ios_simulator_candidate(
         raise IOSSimulatorAppContractError(f"iOS Go build produced no XCFramework: {go_framework}")
     _require_success(
         runner,
-        ["/usr/bin/ditto", str(go_framework), str(staged_go_framework)],
-        "stage iOS Go framework",
-        budget=budget,
+        ["/bin/bash", "scripts/package_ios_app.sh", "iossimulator", str(app_path), str(go_framework), contract.architecture],
+        "build Go/Fyne iOS Simulator app",
+        cwd=go_root,
+        timeout_seconds=budget.operation_timeout(IOS_GO_UI_BUILD_TIMEOUT_SECONDS),
     )
-
-    link_task, test_task = _ios_test_tasks(contract.architecture)
-    _require_success(
-        runner,
-        ["./gradlew", link_task, test_task, "--rerun-tasks", "--no-daemon", "--stacktrace"],
-        "run iOS KMP tests",
-        cwd=kmp_root,
-        timeout_seconds=budget.operation_timeout(IOS_KMP_BUILD_TIMEOUT_SECONDS),
-    )
-    framework_relative = "iosSimulatorArm64" if contract.architecture == "arm64" else "iosX64"
-    framework_path = kmp_root / "app" / "build" / "bin" / framework_relative / "debugFramework" / "app.framework"
-    if not framework_path.is_dir():
-        raise IOSSimulatorAppContractError(f"iOS KMP build produced no Simulator framework: {framework_path}")
-    _require_success(
-        runner,
-        ["/bin/rm", "-rf", str(staged_kmp_framework)],
-        "clear staged iOS KMP framework",
-        budget=budget,
-    )
-    _require_success(
-        runner,
-        ["/usr/bin/ditto", str(framework_path), str(staged_kmp_framework)],
-        "stage iOS KMP framework",
-        budget=budget,
-    )
+    if not app_path.is_dir():
+        raise IOSSimulatorAppContractError(f"Go/Fyne build produced no Simulator app: {app_path}")

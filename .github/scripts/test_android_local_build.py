@@ -34,7 +34,8 @@ class AndroidLocalBuildTests(unittest.TestCase):
             gradle_log = Path(temporary) / "gradle-calls.log"
 
             for relative in (
-                "kmp_module/app",
+                "android_module/app",
+                "go_module",
                 ".github/android",
                 ".github/scripts",
                 go_path / "bin",
@@ -45,10 +46,12 @@ class AndroidLocalBuildTests(unittest.TestCase):
                 (root / relative if isinstance(relative, str) else relative).mkdir(
                     parents=True, exist_ok=True
                 )
-            (root / "kmp_module/gradle.properties").write_text(
+            (root / "android_module/gradle.properties").write_text(
                 "versionName=1.2.3\nversionCode=123\n", encoding="utf-8"
             )
             (root / ".go-version").write_text("1.25.1\n", encoding="utf-8")
+            (root / "go_module/go.mod").write_text("module fixture\n", encoding="utf-8")
+            (root / "go_module/go.sum").write_text("", encoding="utf-8")
             (root / ".github/android/dependency-spec.json").write_text("{}\n", encoding="utf-8")
             for name in (
                 "android_dependency_provenance.py",
@@ -83,6 +86,9 @@ case "${1:-}" in
   version)
     printf 'path/tool\n\tgolang.org/x/mobile %s\n' "v0.0.0-20260520154334-0e4426e1883d"
     ;;
+  list)
+    printf 'v0.0.0-20260520154334-0e4426e1883d\n'
+    ;;
   *) exit 2 ;;
 esac
 """,
@@ -105,12 +111,12 @@ fi
 echo "$*" >> "$GRADLE_CALL_LOG"
 case "$*" in
   *:app:assembleReleaseAndroidTest*)
-    mkdir -p kmp_module/app/build/outputs/apk/androidTest/release
-    printf 'synthetic companion\n' > kmp_module/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
+    mkdir -p android_module/app/build/outputs/apk/androidTest/release
+    printf 'synthetic companion\n' > android_module/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
     ;;
   *:app:assembleRelease*)
-    mkdir -p kmp_module/app/build/outputs/apk/release
-    printf 'synthetic local app\n' > kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk
+    mkdir -p android_module/app/build/outputs/apk/release
+    printf 'synthetic local app\n' > android_module/app/build/outputs/apk/release/app-release-unsigned.apk
     ;;
   *clean*)
     echo 'unexpected clean' >&2
@@ -131,11 +137,6 @@ case "$*" in
 esac
 """,
             )
-            # Existing executable files make the driver's metadata checks pass;
-            # the fake Go command supplies their pinned module metadata.
-            for name in ("gomobile", "gobind"):
-                _executable(go_path / "bin" / name, "#!/bin/sh\nexit 0\n")
-
             environment = {
                 **os.environ,
                 "PATH": str(fake_bin) + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

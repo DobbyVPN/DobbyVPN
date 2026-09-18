@@ -1,7 +1,6 @@
 import NetworkExtension
 import DobbyVPNRuntime
 import os
-import app
 import CommonDI
 import Foundation
 import Darwin
@@ -269,7 +268,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)
-        let path = LogsRepository_iosKt.provideGoLogFilePath().normalized().description()
+        let path = IOSAppCompositionRoot.goLogFilePath().path
         logs.writeLog(log: "Starting Go tunnel logger using local storage")
         guard DobbyvpnInitLogger(path) else {
             logs.writeLog(log: "[ERROR] service_logger_init result=failed failure_code=LOCAL_LOGGER_REJECTED")

@@ -57,23 +57,20 @@ python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
 The existing WiX and macOS `pkgbuild` steps consume the generated Windows and
 macOS archives; Linux receives the generated Debian package directly.
 
-### Mobile Go/Fyne UI migration artifact
+### Mobile Go/Fyne UI
 
-The shared Fyne screens can be packaged for Android and iOS with the pinned
-Fyne toolchain:
+The shared Fyne screens are the release UI on Android and iOS. Android's plain
+`android_module` Gradle project cross-compiles `cmd/dobbyui` directly and
+packages the pinned Fyne Java activity:
 
 ```bash
-./scripts/package_mobile_ui.sh android/arm64 /tmp/dobby-vpn.apk
-./scripts/package_mobile_ui.sh iossimulator /tmp/Dobby-Vpn.app
+cd ../android_module
+./gradlew :app:assembleRelease
 ```
 
-This artifact proves the same rendered UI, accessibility labels, keyboard and
-tap callbacks on the mobile renderer. It intentionally does not create a
-second VPN runtime: Android `VpnService` and the iOS `NetworkExtension`
-remain the native lifecycle boundaries and must be integrated by their native
-app projects before a mobile package is used for release. The headless Go UI
-tests therefore stay useful on every host, while device/emulator UI checks
-remain required for the native shell handoff.
+The Kotlin sources in that project contain only the Android permission,
+foreground `VpnService`, TUN allocation, and JNI callback boundary. The
+session manager and all visible state remain in Go.
 
 For a real Android emulator, use the matching ABI and then drive the package
 through the accessibility tree:
@@ -122,42 +119,21 @@ GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-ma
 With CGO enabled, build each target on its matching macOS runner/toolchain. CI
 uses GitHub-hosted `macos-15` for arm64 and `macos-15-intel` for amd64.
 
-### Android
+### Android runtime and app
 
 ```bash
 export ANDROID_HOME=<ANDROID_SDK_PATH>
 export ANDROID_SDK_ROOT=$ANDROID_HOME
 
-go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
-gopath="$(go env GOPATH)"
-mkdir -p "$gopath/pkg/gomobile"
-export PATH="$gopath/bin:$PATH"
-go mod download golang.org/x/mobile
-
-gomobile bind \
-  -target=android/arm64,android/amd64 \
-  -androidapi=26 \
-  -tags=static \
-  -javapkg=com.dobby.gomobile \
-  -ldflags="-s -w -buildid=" \
-  -o dobbyvpn-runtime.aar \
-  ./android_exports
+cd ../android_module
+./gradlew :app:assembleRelease
 ```
 
-The Gradle `:app` module runs this `gomobile bind` step automatically before
-Android compilation. The generated AAR contains `arm64-v8a` and `x86_64` Go
-JNI libraries; the Android app also packages the matching
-`libc++_shared.so` runtime for both ABIs.
+The release driver verifies `libdobby_vpn.so` in both ABI payloads. The
+TrustTunnel native bridge is linked only for arm64-v8a; x86_64 reports the
+typed unsupported-protocol failure.
 
-To verify the generated AAR and debug APK ABI payloads locally, run:
-
-```bash
-cd kmp_module
-./gradlew :app:verifyDebugNativeAbiPayloads
-```
-
-### IOS
+### iOS runtime and app
 
 ```bash
 go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
@@ -184,9 +160,21 @@ the unused slice by selecting its native architecture explicitly:
 # or: ./scripts/build_ios_xcframework.sh --simulator-architecture amd64
 ```
 
-Physical packet-tunnel qualification is intentionally not claimed until a real
-iPhone is available; the Simulator remains a package/build check. Every mode
-writes the expected `DobbyVPNRuntime.xcframework` artifact.
+The XCFramework is only the Go NetworkExtension runtime. It is linked by the
+Swift tunnel target; the containing app's visible controls are the Go/Fyne
+binary packaged by `scripts/package_ios_app.sh`:
+
+```bash
+./scripts/build_ios_xcframework.sh --simulator-architecture arm64
+./scripts/package_ios_app.sh iossimulator /tmp/Dobby-Vpn.app \
+  DobbyVPNRuntime.xcframework arm64
+```
+
+Simulator packaging uses temporary ad-hoc signing metadata and does not look
+up an Apple Development certificate. Physical-device/App Store packaging uses
+the supplied distribution identity and profiles. Physical packet-tunnel
+traffic qualification is intentionally not claimed until a real iPhone is
+available; the Simulator remains a rendered-app/lifecycle check.
 
 ## Session API
 
@@ -205,7 +193,7 @@ Go/Fyne GUI. It supports `connect`, `connect-profile`, `profile-inventory`,
 configuration and returns only the ordered connection indices and protocols;
 it and `logs clear` do not need the VPN service to be running.
 
-See the canonical [vpnserver.proto](../kmp_module/grpcstub/src/main/proto/com/dobby/vpnserver/vpnserver.proto)
+See the canonical [vpnserver.proto](grpcproto/vpnserver.proto)
 for the authenticated session and local Diagnostics transport.
 
 After editing that proto, regenerate stubs:
@@ -218,14 +206,7 @@ export PATH="$PWD/../../tools/protoc/bin:$(go env GOPATH)/bin:$PATH"
 ./scripts/regenerate-grpcproto.sh
 ```
 
-The script copies the canonical proto into `grpcproto/` (gitignored) and runs
+The script verifies the canonical proto in `grpcproto/` and runs
 the workspace-local `tools/protoc/bin/protoc`. It requires `protoc-gen-go` and
 `protoc-gen-go-grpc` in `$(go env GOPATH)/bin`; install those user-local plugins
 only when they are absent.
-
-**Kotlin** (from `kmp_module/`, uses Gradle/protobuf plugin — same canonical file):
-
-```bash
-cd kmp_module
-./gradlew :grpcstub:generateProto
-```

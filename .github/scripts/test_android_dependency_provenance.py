@@ -98,7 +98,7 @@ def test_manifest_rejects_changed_declared_input(tmp_path: Path) -> None:
     manifest = MODULE.create_manifest(tmp_path, COMMIT, TREE, spec)
     output = tmp_path / "manifest.json"
     output.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
-    (tmp_path / "kmp_module/settings.gradle.kts").write_bytes(b"changed")
+    (tmp_path / "android_module/settings.gradle.kts").write_bytes(b"changed")
     with pytest.raises(ValueError, match="declared input hashes changed"):
         MODULE.verify_manifest(tmp_path, COMMIT, TREE, spec, output)
 

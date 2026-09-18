@@ -28,40 +28,32 @@ go test -tags=ci ./...
 go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
 
-The Android native VPN shell is currently built from `kmp_module/`, with JDK 17
-and the Android SDK. This is a temporary lifecycle-boundary check, not the
-desktop UI build and not the intended long-term owner of UI state:
+The Android native VPN shell and Go/Fyne UI are built from the standalone
+`android_module/` project, with JDK 17, the Android SDK, and the pinned NDK:
 
 ```bash
-./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads :app:assembleReleaseAndroidTest
-./gradlew :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
+cd android_module
+./gradlew :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease
 ```
 
-The root KMP `detekt` aggregate has no sources; use the source-set tasks above.
-
-The shared Go/Fyne mobile renderer can be cross-built on an Android runner
-without replacing that service shell yet:
-
-```bash
-./go_module/scripts/package_mobile_ui.sh android/arm64 "$RUNNER_TEMP/dobby-vpn-fyne-ui.apk"
-```
-
-The generated APK is a migration artifact. It proves that the same Go screen
-and accessibility labels compile for Android, but it does not contain the
-native `VpnService`; it must not be used as a release APK until the shell/IPC
-integration is complete.
+The Gradle task directly cross-compiles `go_module/cmd/dobbyui` into
+`libdobby_vpn.so` for arm64-v8a and x86_64 and packages the pinned Fyne Java
+activity. Kotlin contains only the permission and `VpnService` boundary. The
+release driver verifies both native libraries and their TrustTunnel symbol
+policy.
 
 On an emulator whose ABI matches the package, drive the rendered screen with
 the real Android accessibility/input path:
 
 ```bash
 python3 .github/scripts/mobile_android_ui_smoke.py \
-  --apk "$RUNNER_TEMP/dobby-vpn-fyne-ui.apk"
+  --apk "$RUNNER_TEMP/dobby-vpn-go-ui.apk"
 ```
 
-The smoke launches the Fyne `GoNativeActivity`, checks visible labels, taps
-Settings and Back, and uninstalls the temporary APK. It is a UI-renderer check,
-not VPN-service or permission qualification.
+The smoke launches the release-shaped Fyne `GoNativeActivity`, checks visible
+labels, taps Settings and Back, and uninstalls the temporary APK. A real
+Connect action additionally requires a permission-approved emulator/device and
+uses the Go session through `VpnService`; it is not replaced by a CLI call.
 
 With a disposable Android emulator/device connected, run the app's own
 instrumentation tests directly: `./gradlew :app:connectedReleaseAndroidTest`.
@@ -102,18 +94,24 @@ Mobile Go/Fyne qualification must use real Android/iOS rendering, keyboard,
 tap, lifecycle, and permission interaction. Headless Fyne tests prove widget
 state and callbacks only; they do not prove that a platform renderer
 presented a frame or that a user tap reached it. Simulator GUI tests also do
-not prove a physical iOS NetworkExtension tunnel. The current mobile shell is
-the migration boundary until those checks pass.
+not prove a physical iOS NetworkExtension tunnel. The Go/Fyne UI and native
+lifecycle shell are integrated, so release qualification uses the same package
+rather than a renderer-only migration artifact.
 
-On a macOS runner with Xcode, the iOS renderer artifact can be built for the
-Simulator with:
+On a macOS runner with Xcode, the integrated iOS Go/Fyne app can be built for
+the Simulator with:
 
 ```bash
-./go_module/scripts/package_mobile_ui.sh iossimulator "$RUNNER_TEMP/Dobby-Vpn.app"
+./go_module/scripts/build_ios_xcframework.sh --simulator-architecture arm64
+./go_module/scripts/package_ios_app.sh iossimulator "$RUNNER_TEMP/Dobby-Vpn.app" \
+  go_module/DobbyVPNRuntime.xcframework arm64
 ```
 
-This is likewise a renderer/build check; the production NetworkExtension and
-its permission handoff remain native until the real app integration is tested.
+Simulator packaging uses temporary self-signed metadata and ad-hoc signing; it
+does not require an Apple Development certificate. A physical-device IPA
+still requires the Apple distribution certificate and provisioning profiles.
+The Simulator check exercises rendered startup and accessibility markers, not
+packet-tunnel traffic.
 
 ## iOS
 
@@ -121,20 +119,16 @@ On a Mac with Xcode and an installed Simulator runtime:
 
 ```bash
 swift test --enable-code-coverage --package-path swift_module
-cd kmp_module
-./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :app:iosSimulatorArm64Test
 ```
 
-On Intel, use `:app:linkDebugFrameworkIosX64 :app:iosX64Test` instead.
-The Test workflow covers Swift lifecycle and KMP shared-core tests. The KMP
-framework is currently retained only for the Swift app's lifecycle shell while
-the Go renderer is integrated.
+The Test workflow covers Swift lifecycle policy tests and the Go runtime/app
+package. There is no Kotlin Multiplatform or Compose compile in this path.
 The private Harness also runs the app-contract helper in
 `torturer/tests/ios_simulator/`. Local Intel runs use explicit Mini mode and
-check initialization without Metal. GitHub uses explicit Metal mode, which
-requires usable Metal and checks that the normal app builds, launches, and
-attaches its main view. This startup smoke does not prove that Metal presented
-a frame. Neither mode is VPN traffic qualification.
+GitHub keeps the explicit Metal-mode label for compatibility, but the Fyne
+OpenGLES package does not require a Metal capability probe. Both modes build,
+launch, and check the normal Go/Fyne UI-attached marker. Neither mode is VPN
+traffic qualification.
 
 Simulator coverage is not physical-device VPN coverage. The vendor
 TrustTunnel bridge is device-only; the Simulator returns an unsupported
@@ -150,8 +144,8 @@ Product and functional tests live at one revision. See
 Pushes to `main` and pull requests run **Test** automatically. To check a
 feature branch before opening a pull request, use **Actions → Test → Run
 workflow** and select that branch. Its goal is source/build checks, including
-the iOS Simulator Metal app-startup smoke on a Metal-capable runner; it does
-not create a Render VPN or publish anything.
+the iOS Simulator Go/Fyne app-startup smoke; it does not create a Render VPN
+or publish anything.
 
 After the intended change is merged, use **Actions → Release → Run workflow**
 on `main` when you want to qualify real signed packages. It tests those exact

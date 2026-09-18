@@ -1,9 +1,8 @@
-import app
 import Foundation
 
 /// Stores only the user-entered source URL. Go owns acquired bytes, parsing,
 /// profile selection, telemetry policy, and protocol state.
-public final class DobbyConfigsRepositoryImpl: DobbyConfigsRepository {
+public final class DobbyConfigsRepositoryImpl {
     public static let shared = DobbyConfigsRepositoryImpl()
 
     private let userDefaults = UserDefaults(suiteName: appGroupIdentifier) ?? UserDefaults.standard

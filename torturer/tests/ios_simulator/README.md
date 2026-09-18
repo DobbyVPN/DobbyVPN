@@ -1,26 +1,26 @@
 # iOS Simulator checks
 
-The public GitHub Test workflow prepares the Go and KMP frameworks and runs
-the KMP Simulator tests. It then invokes `run_app_contract.py`, which checks
-Metal availability, builds and launches the normal app, and waits for the
-main view to attach. This is an app-startup check, not proof that Metal
-presented a frame. The CLI takes only the checkout root and a temporary work
-directory. It does not claim or validate source provenance.
+The public GitHub Test workflow builds the Go packet-tunnel runtime
+XCFramework, packages the Go/Fyne application with the native Swift
+NetworkExtension shell, and launches that same app on an iPhone Simulator.
+`run_app_contract.py` checks the app-group startup and UI-attached markers,
+not VPN traffic or screenshots.
 
-The private Harness uses `--platform ios-simulator --simulator-mode mini` on a
-host without usable Metal, or `--simulator-mode metal` on a Metal-capable host.
-Its local adapter prepares Go/KMP frameworks and invokes the shared contract
-directly; it does not call the public CLI. Mini builds and launches a
-disposable app and requires its `startup.initialized mode=mini` marker without
-constructing the Metal-backed Compose view. Metal requires a usable device and
-the normal app's `startup.ui_attached mode=normal` marker. Neither mode checks
-rendered pixels, accessibility exposure, or VPN traffic. Metal fails clearly
-on a host without usable Metal and never falls back to Mini.
+The private Harness accepts `--platform ios-simulator --simulator-mode mini`
+on a host without usable Metal and `--simulator-mode metal` on a Metal-capable
+host for compatibility with existing commands. Both modes now exercise the
+same OpenGLES-backed Fyne package; neither requires an Apple Development
+certificate, and neither performs a Metal capability probe. The distinction is
+only the caller's host/timeout policy. A missing Simulator, build, launch,
+accessibility permission, or startup marker is a failed or unavailable check,
+never a pass.
 
-The app-group log is required for the startup marker. Copying log tails into
-diagnostics is best-effort and is not a second validation step. The check
-clears the disposable Simulator's app log before launch so a retained marker
-from an earlier run cannot pass the check.
+The app-group log is required for the fresh startup marker. Copying bounded log
+tails into diagnostics is best-effort and does not decide pass/fail. The check
+clears the disposable Simulator's app log before launch so an earlier marker
+cannot satisfy the current run.
 
-Neither Simulator mode tests VPN traffic or the physical-device-only
-TrustTunnel bridge.
+The Simulator does not run a packet tunnel or the physical-device-only
+TrustTunnel bridge. A signed physical-device build still requires the normal
+Apple distribution certificate and provisioning profiles; that requirement is
+separate from unsigned/ad-hoc Simulator packaging.

@@ -1,14 +1,13 @@
 # UI behavior
 
 The shared Go/Fyne UI renders the state owned by one Go session manager in each
-service process. Desktop release packages now launch this native UI directly;
-the desktop package has no JVM or Compose launcher. It forwards the entered
-source bytes and displays current snapshots. It does not parse configuration,
-choose a protocol, or manage tunnel resources. Production Android and iOS
-retain thin native VPN shells for permissions, foreground/extension lifetime,
-secure storage, and system sharing APIs while the Go/Fyne mobile application
-is brought to parity. Those shells must not duplicate session or protocol
-policy.
+service process. Desktop, Android, and iOS release packages launch this native
+UI directly; no package carries a JVM or Compose UI runtime. It forwards the
+entered source bytes and displays current snapshots. It does not parse
+configuration, choose a protocol, or manage tunnel resources. Android and iOS
+retain thin native VPN shells for permission, foreground/extension lifetime,
+secure storage, and system sharing APIs. Those shells must not duplicate
+session or protocol policy.
 
 ## UI qualification
 
@@ -29,7 +28,9 @@ Linux deliberately stays CLI/service-only.
 The Fyne driver is not an operating-system input simulator: it validates
 widget callbacks, layout state, accessibility labels, and the real service
 boundary. The native-window qualification covers actual rendering and input
-wiring. Neither duplicates the canonical functional scenario definitions.
+wiring; Android UI Automator and iOS Simulator accessibility checks cover
+mobile rendered controls. Neither duplicates the canonical functional scenario
+definitions.
 
 ## Connect and reattach
 

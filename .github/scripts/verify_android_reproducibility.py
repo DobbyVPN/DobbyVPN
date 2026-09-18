@@ -17,8 +17,6 @@ from android_dependency_provenance import (
     GO_VERSION,
     GRADLE_VERSION,
     JAVA_MAJOR,
-    MOBILE_MODULE,
-    MOBILE_VERSION,
 )
 
 
@@ -28,15 +26,15 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 VERSION_NAME = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 NATIVE_PATHS = (
-    "lib/arm64-v8a/libgojni.so",
-    "lib/x86_64/libgojni.so",
+    "lib/arm64-v8a/libdobby_vpn.so",
+    "lib/x86_64/libdobby_vpn.so",
 )
 TOOLCHAIN = {
     "android_build_tools": ANDROID_BUILD_TOOLS,
     "android_ndk": ANDROID_NDK,
     "go": f"go{GO_VERSION}",
     "go_source_commit": GO_SOURCE_COMMIT,
-    "gomobile": f"{MOBILE_MODULE}@{MOBILE_VERSION}",
+    "fyne": "fyne.io/fyne/v2@v2.8.1",
     "gradle": GRADLE_VERSION,
     "java": str(JAVA_MAJOR),
 }
@@ -45,7 +43,7 @@ BUILD_ENVIRONMENT = {
     "go_root": "/home/vagrant/build/srclib/go",
     "gopath": "/home/vagrant/go",
     "gradle_flags": "--no-build-cache --no-daemon --rerun-tasks",
-    "gomobile_cache_isolation": "fresh_per_build",
+    "go_cache_isolation": "fresh_per_build",
     "source_root": "/home/vagrant/build/com.dobby.vpn",
 }
 

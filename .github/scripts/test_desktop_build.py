@@ -129,7 +129,7 @@ class DesktopBuildTests(unittest.TestCase):
 
     def test_builds_do_not_package_removed_cloak_runtime(self) -> None:
         script = SCRIPT_PATH.read_text(encoding="utf-8")
-        android = (SCRIPT_PATH.parents[2] / "kmp_module" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+        android = (SCRIPT_PATH.parents[2] / "android_module" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
         ios = (SCRIPT_PATH.parents[1] / "workflows" / "ios_libs_generate.yml").read_text(encoding="utf-8")
         desktop = (SCRIPT_PATH.parents[1] / "workflows" / "desktop_libs_generate.yml").read_text(encoding="utf-8")
 
@@ -332,8 +332,8 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn("path: runtime/services/macos-arm64", workflow)
         self.assertNotIn("run_conveyor", script)
         self.assertNotIn("printConveyorConfig", script)
-        self.assertFalse((SCRIPT_PATH.parents[2] / "kmp_module" / "conveyor.conf").exists())
-        self.assertFalse((SCRIPT_PATH.parents[2] / "kmp_module" / "conveyor-ci.conf").exists())
+        self.assertFalse((SCRIPT_PATH.parents[2] / "android_module" / "conveyor.conf").exists())
+        self.assertFalse((SCRIPT_PATH.parents[2] / "android_module" / "conveyor-ci.conf").exists())
         self.assertFalse(SCRIPT_PATH.with_name("conveyor-config").exists())
         self.assertFalse(SCRIPT_PATH.with_name("conveyor-config.bat").exists())
 

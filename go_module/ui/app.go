@@ -42,7 +42,13 @@ func NewApplication(runtime fyne.App, client SessionClient, stores ...SourceStor
 
 func (a *Application) Run() {
 	a.Start()
-	a.Window.ShowAndRun()
+	// Show before emitting the native marker.  The marker is consumed by the
+	// Simulator contract and must mean that the production window has been
+	// handed to the platform renderer, not merely that its widget tree was
+	// constructed.
+	a.Window.Show()
+	markUIAttached()
+	a.App.Run()
 }
 
 // Start attaches the UI to the service without opening a native window. It is
@@ -95,7 +101,12 @@ func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionV
 	if len(stores) > 0 {
 		store = stores[0]
 	}
-	view := &ConnectionView{client: client, store: store}
+	view := &ConnectionView{
+		client:         client,
+		store:          store,
+		renderedStatus: "Disconnected",
+		renderedButton: "Connect",
+	}
 	view.Input = NewAccessibleEntry(true, "Connection configuration")
 	view.Input.SetPlaceHolder("HTTPS connection URL or inline configuration")
 	view.Input.SetMinRowsVisible(4)
@@ -146,6 +157,15 @@ func (e *AccessibleEntry) AccessibilityRole() fyne.AccessibleRole {
 }
 
 func (v *ConnectionView) Content() fyne.CanvasObject { return v.root }
+
+// Presentation returns the last authoritative presentation without reading
+// Fyne widgets from a worker goroutine. The headless companion uses this
+// synchronized view while native renderers update widgets through fyne.Do.
+func (v *ConnectionView) Presentation() (status, details, button string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.renderedStatus, v.renderedDetails, v.renderedButton
+}
 
 // Configure validates and stores a profile without starting a generation.
 // The desktop companion uses this operation to keep the semantic configure

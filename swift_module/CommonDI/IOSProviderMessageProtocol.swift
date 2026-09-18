@@ -138,14 +138,18 @@ public struct IOSProviderCommand: Equatable {
             required = []
             allowed = ["session_id"]
         case .configure, .reset:
-            required = ["session_id", "expected_sequence"]
-            allowed = required
+            // The mobile manager is process-local and allocates its opaque
+            // owner on the first snapshot/configure call.  An omitted owner
+            // therefore means "the current process owner"; a non-empty
+            // owner is still checked by Go for stale-session fencing.
+            required = ["expected_sequence"]
+            allowed = ["session_id", "expected_sequence"]
         case .start:
-            required = ["session_id", "expected_sequence", "mode", "index"]
-            allowed = required
+            required = ["expected_sequence", "mode", "index"]
+            allowed = ["session_id", "expected_sequence", "mode", "index"]
         case .stop:
-            required = ["session_id", "generation"]
-            allowed = required
+            required = ["generation"]
+            allowed = ["session_id", "generation"]
         }
         guard present.isSubset(of: allowed), required.isSubset(of: present) else {
             throw IOSProviderMessageError.malformed
@@ -186,7 +190,7 @@ public struct IOSProviderCommand: Equatable {
 /// Provider response envelope. The payload is the exact UTF-8
 /// byte sequence returned by Go, carried as base64 so Swift never reserializes
 /// or changes the inner JSON. The containing app validates this envelope and
-/// then returns only the untouched inner Go bytes to KMP.
+/// then returns only the untouched inner Go bytes to the Go/Fyne UI bridge.
 public struct IOSProviderResponse: Equatable {
     public static let version = 1
 

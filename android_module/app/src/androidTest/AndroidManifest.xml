@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.dobby.vpn.test">
+    <application>
+        <meta-data
+            android:name="com.dobby.test.source_sha"
+            android:value="${dobbyTestSourceSha}" />
+    </application>
+</manifest>

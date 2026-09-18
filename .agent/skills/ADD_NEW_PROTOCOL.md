@@ -5,7 +5,7 @@ description: Add a protocol engine through the neutral Go runtime while preservi
 
 # Add a new protocol
 
-This guide is intentionally protocol-neutral. DobbyVPN has one shared Compose
+This guide is intentionally protocol-neutral. DobbyVPN has one shared Go/Fyne
 UI, one Go product/runtime layer, and thin operating-system shells only where
 the platform VPN API requires them. A new protocol must not create a second
 session manager, protocol-specific RPC, KMP repository, Swift lifecycle owner,
@@ -25,7 +25,7 @@ or UI toggle.
 4. Add parser, runtime, cleanup, and integration tests, including cancellation,
    failed startup, stale callbacks, and reconnect/recovery behavior.
 5. Update the supported-protocol documentation and sanitized examples. Keep
-   the shared Compose presentation flow unchanged.
+   the shared Go/Fyne presentation flow unchanged.
 6. Add matching SessionV2, Harness, and Torturer contract coverage only after
    the application behavior is complete. Preserve the existing test suite and
    its evidence norms.
@@ -38,7 +38,7 @@ or UI toggle.
   socket protection, and native callback publication.
 - iOS owns NetworkExtension/Packet Tunnel lifetime, TUN/socket callbacks, and
   native callback publication.
-- Shared Compose code renders safe SessionV2 snapshots/events and never parses
+- Shared Go/Fyne code renders safe SessionV2 snapshots/events and never parses
   protocol configuration or owns VPN resources.
 
 Before merging, prove that SessionV2 remains the sole externally meaningful

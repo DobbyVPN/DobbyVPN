@@ -1,4 +1,4 @@
-"""Run the hosted iOS Simulator Metal app-startup check without VPN credentials."""
+"""Run the hosted iOS Simulator Go/Fyne app-startup check without credentials."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from torturer_checks.ios_simulator_app import (  # noqa: E402
     RunBudget,
     SubprocessCommandRunner,
     public_ios_simulator_app_contract,
+    prepare_ios_simulator_candidate,
     run_ios_simulator_app_contract,
 )
 
@@ -29,10 +30,18 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_arguments(argv)
     try:
-        # The workflow stages Go/KMP dependencies and runs their tests first.
+        # The workflow stages the Go runtime XCFramework first. This helper
+        # packages the Go/Fyne app with the native Swift lifecycle shell.
         contract = public_ios_simulator_app_contract("arm64")
         runner = SubprocessCommandRunner()
         budget = RunBudget()
+        prepare_ios_simulator_candidate(
+            candidate_root=args.candidate_root,
+            work_dir=args.work_dir,
+            runner=runner,
+            contract=contract,
+            budget=budget,
+        )
         evidence = run_ios_simulator_app_contract(
             candidate_root=args.candidate_root,
             work_dir=args.work_dir,
@@ -45,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
-        "iOS-Simulator-Metal app startup check passed: "
+        "iOS-Simulator-Go/Fyne app startup check passed: "
         f"{evidence.simulator.name} ({evidence.simulator.runtime})"
     )
     return 0

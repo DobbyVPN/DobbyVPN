@@ -25,9 +25,9 @@ def _archive(path: Path, entries: set[str]) -> None:
 
 def test_missing_archive_entry_is_rejected(tmp_path: Path) -> None:
     archive = tmp_path / "runtime.aar"
-    _archive(archive, {"jni/arm64-v8a/libgojni.so"})
+    _archive(archive, {"lib/arm64-v8a/libdobby_vpn.so"})
     with pytest.raises(MODULE.NativePayloadError, match="x86_64"):
-        MODULE.require_payloads(archive, "gomobile AAR", "jni", libcxx=False)
+        MODULE.require_payloads(archive, "Go/Fyne APK", "lib", libcxx=False)
 
 
 def test_defined_and_undefined_symbols_are_distinguished() -> None:
@@ -53,7 +53,7 @@ def test_unsupported_abi_must_not_define_trusttunnel_symbols() -> None:
 def test_readelf_failure_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     readelf = tmp_path / "llvm-readelf"
     readelf.write_text("synthetic", encoding="utf-8")
-    library = tmp_path / "libgojni.so"
+    library = tmp_path / "libdobby_vpn.so"
     library.write_bytes(b"synthetic")
     monkeypatch.setattr(
         MODULE,

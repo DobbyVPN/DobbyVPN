@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 const maxStoredSource = 1 << 20
@@ -111,6 +112,7 @@ func (s *FileSourceStore) Save(ctx context.Context, raw []byte) error {
 // MemorySourceStore is useful for UI tests and mobile adapters that provide
 // secure storage in their native shell.
 type MemorySourceStore struct {
+	mu    sync.RWMutex
 	value []byte
 }
 
@@ -118,6 +120,8 @@ func (s *MemorySourceStore) Load(ctx context.Context) ([]byte, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return append([]byte(nil), s.value...), nil
 }
 
@@ -128,6 +132,8 @@ func (s *MemorySourceStore) Save(ctx context.Context, raw []byte) error {
 	if len(raw) > maxStoredSource {
 		return fmt.Errorf("connection source exceeds %d bytes", maxStoredSource)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.value = append(s.value[:0], raw...)
 	return nil
 }

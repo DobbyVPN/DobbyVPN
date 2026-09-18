@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Dobby" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#4F6BED</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

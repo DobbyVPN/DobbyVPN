@@ -1,6 +1,6 @@
 # vpnserver.proto (Go stubs)
 
-**Canonical source:** `kmp_module/grpcstub/src/main/proto/com/dobby/vpnserver/vpnserver.proto`
+**Canonical source:** [`vpnserver.proto`](vpnserver.proto)
 
 Edit that file only. Regenerate Go stubs with:
 
@@ -8,6 +8,5 @@ Edit that file only. Regenerate Go stubs with:
 ./scripts/regenerate-grpcproto.sh
 ```
 
-(from `go_module/`). See [../README.md](../README.md) for Kotlin stub regeneration.
-
-The copied `vpnserver.proto` in this directory is a build artifact from that script and is not tracked in git.
+(from `go_module/`). The Go proto and generated stubs are tracked together;
+there is no Kotlin stub generator after the KMP removal.

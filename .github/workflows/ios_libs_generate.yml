@@ -46,165 +46,47 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
 
-      - name: Download Go modules & dependencies
+      - name: Download Go modules
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
-        run: |
-          go mod download
+        run: go mod download
 
-      - name: Install pinned gomobile toolchain
+      - name: Install pinned Go mobile runtime tools
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-          go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-          go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
+          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
+          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
           gopath="$(go env GOPATH)"
-          tool_dir="$gopath/bin"
-          mkdir -p "$gopath/pkg/gomobile"
-          echo "$tool_dir" >> "$GITHUB_PATH"
+          echo "$gopath/bin" >> "$GITHUB_PATH"
           for tool in gomobile gobind; do
-            test -x "$tool_dir/$tool"
-            tool_metadata="$(go version -m "$tool_dir/$tool" 2>&1 | tee /dev/stderr)"
-            if [[ "$tool_metadata" != *'golang.org/x/mobile'* || "$tool_metadata" != *"$mobile_version"* ]]; then
-              echo "tool metadata is not pinned to golang.org/x/mobile@$mobile_version: $tool" >&2
-              exit 1
-            fi
+            test -x "$gopath/bin/$tool"
+            go version -m "$gopath/bin/$tool" | grep -F "$mobile_version" >/dev/null
           done
 
-      - name: Verify pinned gomobile runtime dependency
+      - name: Verify pinned Go mobile runtime dependency
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         working-directory: go_module
         run: |
           test "$(go list -m -f '{{.Version}}' golang.org/x/mobile)" = 'v0.0.0-20260520154334-0e4426e1883d'
           go mod download golang.org/x/mobile
 
+      - name: Build iOS Go runtime XCFramework
+        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
+        working-directory: go_module
+        run: ./scripts/build_ios_xcframework.sh
+
       - name: Verify Go bootstrap preserved candidate source
         if: steps.ios_lib_cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          source_status="$(git status --porcelain --untracked-files=all)"
-          if [[ -n "$source_status" ]]; then
-            printf '%s\n' "$source_status"
-            git diff --no-ext-diff --binary
-            echo "candidate source changed during iOS Go bootstrap" >&2
-            exit 1
-          fi
+          test -z "$(git status --porcelain --untracked-files=all)"
 
-      - name: Build iOS XCFramework
-        if: steps.ios_lib_cache.outputs.cache-hit != 'true'
-        working-directory: go_module
-        run: |
-          ./scripts/build_ios_xcframework.sh
-
-      - name: Upload iOS XCFramework
+      - name: Upload iOS runtime XCFramework
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: DobbyVPNRuntime.xcframework
           path: go_module/DobbyVPNRuntime.xcframework
-          if-no-files-found: error
-
-  build_ios_app_lib:
-    runs-on: macos-15
-    timeout-minutes: 30
-    env:
-      APPLE_BUILD_NUMBER: ${{ github.run_number }}
-      APP_SOURCE_SHA: ${{ inputs.source_sha }}
-      APP_SOURCE_REPOSITORY: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ inputs.source_sha }}
-          persist-credentials: false
-
-      - name: Verify exact source checkout
-        shell: bash
-        env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-
-      - name: Read app version
-        id: version
-        run: python3 .github/scripts/version_metadata.py --version-file VERSION --github-output "$GITHUB_OUTPUT"
-
-      - name: Select Xcode 26.3
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-          test "$(xcodebuild -version | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: gradle
-          cache-dependency-path: |
-            kmp_module/**/*.gradle.kts
-            kmp_module/gradle/libs.versions.toml
-            kmp_module/gradle/wrapper/gradle-wrapper.properties
-
-      - name: Cache Kotlin/Native compiler data
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/.konan
-          key: ${{ runner.os }}-konan-${{ hashFiles('kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
-
-      - name: Cache Gradle build outputs
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/.gradle/caches/build-cache-*
-          key: ${{ runner.os }}-gradle-build-cache-${{ hashFiles('kmp_module/**/*.gradle.kts', 'kmp_module/gradle/libs.versions.toml', 'kmp_module/gradle/wrapper/gradle-wrapper.properties') }}
-
-      - name: Cache Swift packages
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: |
-            ~/Library/Caches/org.swift.swiftpm
-            ~/.swiftpm
-            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
-          key: ${{ runner.os }}-xcode-spm-${{ hashFiles('swift_module/iosApp.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-
-      - name: Resolve Swift Package Dependencies
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project swift_module/iosApp.xcodeproj
-
-      - name: Build KMP iOS framework
-        working-directory: kmp_module
-        env:
-          APP_MAJOR_VERSION: ${{ steps.version.outputs.major }}
-          APP_MINOR_VERSION: ${{ steps.version.outputs.minor }}
-          APP_MAINTENANCE_VERSION: ${{ steps.version.outputs.maintenance }}
-        run: |
-          set -euo pipefail
-          test "$APP_SOURCE_SHA" = "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
-          VERSION_NAME="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          VERSION_CODE="${APPLE_BUILD_NUMBER}"
-          ./gradlew linkReleaseFrameworkIosArm64 --build-cache --parallel \
-            -PprojectRepositoryCommit="${APP_SOURCE_SHA}" \
-            -PprojectRepositoryCommitLink="https://github.com/${APP_SOURCE_REPOSITORY}/tree/${APP_SOURCE_SHA}" \
-            -Pandroid.injected.version.code="${VERSION_CODE}" \
-            -Pandroid.injected.version.name="${VERSION_NAME}"
-
-      - name: Verify KMP iOS build preserved candidate source
-        shell: bash
-        run: |
-          set -euo pipefail
-          source_status="$(git status --porcelain --untracked-files=all)"
-          if [[ -n "$source_status" ]]; then
-            printf '%s\n' "$source_status"
-            git diff --no-ext-diff --binary
-            echo "candidate source changed during KMP iOS build" >&2
-            exit 1
-          fi
-
-      - name: Upload app.framework
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: app.framework
-          path: kmp_module/app/build/bin/iosArm64/releaseFramework/app.framework
           if-no-files-found: error

@@ -2,34 +2,41 @@ from pathlib import Path
 import unittest
 
 
-SOURCE = (
-    Path(__file__).resolve().parents[2]
-    / "kmp_module/app/src/iosMain/kotlin/com/dobby/feature/logging/domain/LogsRepository.ios.kt"
-)
+class IosNativeShellContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(__file__).resolve().parents[2]
 
+    def test_native_shell_contains_only_the_go_bridge_and_lifecycle_host(self) -> None:
+        composition = (self.root / "swift_module/CommonDI/AppCompositionRoot.swift").read_text()
+        bridge = (self.root / "swift_module/CommonDI/GoUIBridge.swift").read_text()
+        header = (self.root / "swift_module/CommonDI/CommonDI.h").read_text()
+        content_view = (self.root / "swift_module/iosApp/ContentView.swift").read_text()
+        self.assertIn("IOSAppCompositionRoot.logsRepository", bridge)
+        self.assertIn("IOSAppCompositionRoot.sessionShell", bridge)
+        self.assertIn("dobby_ui_configure", header)
+        self.assertIn("goLogFilePath", composition)
+        self.assertIn("Dobby VPN", content_view)
+        self.assertNotIn("createIosAppDependencies", composition)
+        self.assertNotIn("import app", composition)
+        self.assertNotIn("Compose", content_view)
 
-class IosLogStorageContractTests(unittest.TestCase):
-    def test_mini_mode_keeps_initialization_and_is_simulator_only(self) -> None:
-        root = Path(__file__).resolve().parents[2]
-        source = (root / "swift_module/iosApp/iOSApp.swift").read_text()
-        composition_root = (root / "swift_module/CommonDI/AppCompositionRoot.swift").read_text()
-        content_view = (root / "swift_module/iosApp/ContentView.swift").read_text()
-        self.assertIn("IOSAppCompositionRoot.logsRepository", source)
-        self.assertIn("createIosAppDependencies", composition_root)
-        self.assertIn("IOSAppCompositionRoot.appDependencies", content_view)
-        self.assertEqual(source.count("#if DOBBY_SIMULATOR_MINI && targetEnvironment(simulator)"), 2)
-        self.assertIn('startup.initialized mode=mini', source)
-        self.assertIn('startup.ui_attached mode=normal', source)
-        self.assertIn("#else\n            ContentView()", source)
+    def test_logs_are_known_app_group_files_and_do_not_use_permission_guards(self) -> None:
+        root = self.root / "swift_module/CommonDI"
+        composition = (root / "AppCompositionRoot.swift").read_text()
+        self.assertIn('sharedLogPath("app_logs.txt")', composition)
+        self.assertIn('sharedLogPath("go_app_logs.jsonl")', composition)
+        self.assertNotIn("chmod", composition)
+        self.assertNotIn("DobbyVPNLogs", composition)
+        self.assertNotIn("import app", composition)
 
-    def test_logs_use_the_app_group_container_without_permission_guards(self) -> None:
-        source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn('return "$containerPath/$name".toPath()', source)
-        self.assertNotIn("chmod", source)
-        self.assertNotIn("DobbyVPNLogs", source)
-        self.assertIn("failure.printStackTrace()", source)
-        self.assertNotIn("runCatching", source)
-        self.assertNotIn('error("Failed to get shared log container")', source)
+    def test_simulator_packaging_does_not_require_apple_development_signing(self) -> None:
+        script = (self.root / "go_module/scripts/package_ios_app.sh").read_text()
+        self.assertIn("temporary self-signed certificate", script)
+        self.assertIn("no Apple Development certificate", script)
+        self.assertIn("iossimulator", script)
+        self.assertIn("codesign --force --sign -", script)
+        self.assertIn("com.apple.security.application-groups", script)
+        self.assertIn("group.vpn.dobby.app", script)
 
 
 if __name__ == "__main__":

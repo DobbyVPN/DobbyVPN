@@ -42,8 +42,8 @@ def require_payloads(path: Path, label: str, directory: str, *, libcxx: bool) ->
     entries = archive_entries(path)
     for abi in ANDROID_ABIS:
         prefix = f"{directory}/{abi}/"
-        if f"{prefix}libgojni.so" not in entries:
-            raise NativePayloadError(f"{label} is missing the Go JNI library for {abi}")
+        if f"{prefix}libdobby_vpn.so" not in entries:
+            raise NativePayloadError(f"{label} is missing the Go/Fyne library for {abi}")
         if libcxx and f"{prefix}libc++_shared.so" not in entries:
             raise NativePayloadError(f"{label} is missing libc++_shared.so for {abi}")
 
@@ -85,32 +85,31 @@ def verify_symbol_policy(abi: str, symbols: str) -> None:
     if undefined:
         joined = ", ".join(sorted(undefined))
         raise NativePayloadError(
-            f"libgojni.so for {abi} has unresolved TrustTunnel bridge symbols: {joined}"
+            f"libdobby_vpn.so for {abi} has unresolved TrustTunnel bridge symbols: {joined}"
         )
     if abi == TRUSTTUNNEL_ABI:
         missing = BRIDGE_SYMBOLS - defined
         if missing:
             joined = ", ".join(sorted(missing))
             raise NativePayloadError(
-                f"libgojni.so for {abi} is missing TrustTunnel bridge symbols: {joined}"
+                f"libdobby_vpn.so for {abi} is missing TrustTunnel bridge symbols: {joined}"
             )
     elif defined:
         raise NativePayloadError(
-            f"libgojni.so for {abi} unexpectedly links TrustTunnel; "
+            f"libdobby_vpn.so for {abi} unexpectedly links TrustTunnel; "
             "update the ABI policy only with a packaged x86_64 bridge"
         )
 
 
-def verify(aar: Path, apk: Path, readelf: Path) -> None:
-    require_payloads(aar, "gomobile AAR", "jni", libcxx=False)
-    require_payloads(apk, "debug APK", "lib", libcxx=True)
-    with zipfile.ZipFile(aar) as archive, tempfile.TemporaryDirectory(
+def verify(apk: Path, readelf: Path) -> None:
+    require_payloads(apk, "APK", "lib", libcxx=False)
+    with zipfile.ZipFile(apk) as archive, tempfile.TemporaryDirectory(
         prefix="dobbyvpn-native-payloads-"
     ) as temporary:
         temporary_root = Path(temporary)
         for abi in ANDROID_ABIS:
-            entry = f"jni/{abi}/libgojni.so"
-            extracted = temporary_root / f"{abi}-libgojni.so"
+            entry = f"lib/{abi}/libdobby_vpn.so"
+            extracted = temporary_root / f"{abi}-libdobby_vpn.so"
             with archive.open(entry) as source, extracted.open("wb") as destination:
                 while chunk := source.read(1024 * 1024):
                     destination.write(chunk)
@@ -119,12 +118,11 @@ def verify(aar: Path, apk: Path, readelf: Path) -> None:
 
 def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--aar", type=Path, required=True)
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--readelf", type=Path, required=True)
     args = parser.parse_args(arguments)
     try:
-        verify(args.aar, args.apk, args.readelf)
+        verify(args.apk, args.readelf)
     except NativePayloadError as error:
         parser.error(str(error))
     return 0

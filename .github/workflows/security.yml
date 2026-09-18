@@ -28,11 +28,11 @@ jobs:
           exit-code: 1
           trivyignores: .trivyignore
 
-      - name: Run Trivy (Kotlin)
+      - name: Run Trivy (Android native shell)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: fs
-          scan-ref: kmp_module/
+          scan-ref: android_module/
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1

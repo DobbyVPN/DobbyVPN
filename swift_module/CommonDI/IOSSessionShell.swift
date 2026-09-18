@@ -1,5 +1,4 @@
 import Foundation
-import app
 import CoreFoundation
 
 private func dobbyDarwinEventCallback(
@@ -14,7 +13,7 @@ private func dobbyDarwinEventCallback(
 }
 
 /// Containing-app side of the iOS session bridge. Go in the provider owns state.
-final class IOSSessionShell: NSObject, IosSessionBridge {
+public final class IOSSessionShell: NSObject {
     private let secrets = SharedKeychainSecretStore.shared
     private let manager: VpnManagerImpl
     private let logs = IOSAppCompositionRoot.logsRepository
@@ -50,7 +49,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         }
     }
 
-    func configure(sessionID: String, expectedSequence: Int64, rawConfig: KotlinByteArray) -> String {
+    public func configure(sessionID: String, expectedSequence: Int64, rawConfig: Data) -> String {
         if let failure = storeConfiguration(rawConfig) {
             return failure
         }
@@ -64,7 +63,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         return result.response
     }
 
-    func start(sessionID: String, expectedSequence: Int64, mode: String, index: Int32) -> String {
+    public func start(sessionID: String, expectedSequence: Int64, mode: String, index: Int32) -> String {
         executeResult(
             operation: .start,
             requestID: requestID(for: .start),
@@ -75,7 +74,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         ).response
     }
 
-    func stop(sessionID: String, generation: Int64) -> String {
+    public func stop(sessionID: String, generation: Int64) -> String {
         executeResult(
             operation: .stop,
             requestID: requestID(for: .stop),
@@ -84,7 +83,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         ).response
     }
 
-    func snapshot(sessionID: String) -> String {
+    public func snapshot(sessionID: String) -> String {
         executeResult(
             operation: .snapshot,
             requestID: requestID(for: .snapshot),
@@ -92,7 +91,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         ).response
     }
 
-    func reset(sessionID: String, expectedSequence: Int64) -> String {
+    public func reset(sessionID: String, expectedSequence: Int64) -> String {
         let result = executeResult(
             operation: .reset,
             requestID: requestID(for: .reset),
@@ -109,7 +108,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         return result.response
     }
 
-    func awaitEvent(timeoutMillis: Int64) -> Bool {
+    public func awaitEvent(timeoutMillis: Int64) -> Bool {
         eventCondition.lock()
         let deadline = Date().addingTimeInterval(max(0, Double(timeoutMillis) / 1000.0))
         while eventGeneration == deliveredEventGeneration {
@@ -130,8 +129,7 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         eventCondition.unlock()
     }
 
-    private func storeConfiguration(_ rawConfig: KotlinByteArray) -> String? {
-        let raw = data(from: rawConfig)
+    private func storeConfiguration(_ raw: Data) -> String? {
         guard !raw.isEmpty else { return failure("MALFORMED_CONFIG", message: "configuration is blank") }
         guard secrets.set(raw, for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {
             logs.writeLog(log: "iOS session configuration mailbox write returned failure")
@@ -158,10 +156,15 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
         index: Int32? = nil
     ) -> (response: String, isGoResult: Bool) {
         do {
+            // An empty Go owner is the documented first-call form. Do not put
+            // an empty identifier on the wire: omission lets the provider
+            // attach to its process-local manager and return the allocated
+            // opaque owner in the next snapshot.
+            let normalizedSessionID = sessionID?.isEmpty == true ? nil : sessionID
             let command = try IOSProviderCommand(
                 operation: operation,
                 requestID: requestID,
-                sessionID: sessionID,
+                sessionID: normalizedSessionID,
                 generation: generation,
                 mode: mode,
                 index: index,
@@ -184,11 +187,6 @@ final class IOSSessionShell: NSObject, IosSessionBridge {
 
     private func requestID(for operation: IOSProviderOperation) -> String {
         "ios-\(operation.rawValue)-\(UUID().uuidString)"
-    }
-
-    private func data(from value: KotlinByteArray) -> Data {
-        let count = Int(value.size)
-        return Data((0..<count).map { UInt8(bitPattern: value.get(index: Int32($0))) })
     }
 
     private func failure(_ code: String, message: String) -> String {

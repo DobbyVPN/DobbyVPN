@@ -4,9 +4,6 @@ included:
   - CommonDI
   - tunnel
 
-excluded:
-  - app.framework
-
 disabled_rules:
   - trailing_comma
   - opening_brace

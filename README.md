@@ -7,11 +7,16 @@ Yet another VPN client. Currently wraps around OutlineSDK, TrustTunnel & XRay.
 The architecture driver is one shared UI layer where sharing is valuable, one
 Go product/runtime layer for behavior, and only thin OS-specific shells where
 VPN APIs require them. Go owns configuration acquisition, parsing, selection,
-and the process-local session; the native Go/Fyne UI renders the desktop
-snapshots and has no JVM or Gradle runtime. The mobile Go/Fyne package is the
-reversible UI migration artifact, while the Android and iOS release shells
-still retain Kotlin/Compose and Swift only until the native VPN lifecycle can
-be attached to that package and its real-device UI contract passes.
+the process-local session, and the Fyne UI on desktop, Android, and iOS. The
+Android Kotlin and iOS Swift projects remain only for permission/service or
+NetworkExtension lifetime, secure storage, and the C/JNI bridge. They do not
+own UI state or protocol policy. Linux is intentionally qualified through the
+CLI/service path; desktop GUI qualification is reserved for Windows and macOS.
+
+The migration is reversible: the pre-migration product is retained at the
+`go-ui-baseline-1.5.0` tag and the `migration/go-ui-1.5.1-complete` branch.
+Those references are rollback points, not compatibility code in the release
+tree.
 
 See the complete [architecture contract](docs/ARCHITECTURE.md) for the
 responsibility boundaries and supported configuration behavior.
@@ -25,6 +30,10 @@ DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
 Desktop build commands, a local CLI configuration check, and CI build
 commands are documented in [.github/scripts/README.md](.github/scripts/README.md).
+For Windows/macOS iteration, the native `dobby-vpn-ui` executable can be
+injected into a disposable VM directly; Release still qualifies the packaged
+installer/archive and the real native-window interaction path. No JVM is
+installed by the desktop client.
 
 Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
 URLs are rejected, redirects must remain HTTPS, and downloaded or inline

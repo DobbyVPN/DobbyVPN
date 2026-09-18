@@ -7,7 +7,7 @@ updates:
     open-pull-requests-limit: 5
 
   - package-ecosystem: gradle
-    directory: /kmp_module
+    directory: /android_module
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

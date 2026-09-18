@@ -3,7 +3,7 @@ import PackageDescription
 
 // Compile the exact platform-neutral source that is also part of the
 // production CommonDI target. This catches drift without requiring signing,
-// generated KMP frameworks, NetworkExtension, or an iOS device.
+// NetworkExtension, or an iOS device.
 let package = Package(
     name: "DobbyVPNIOSLifecycleCore",
     platforms: [.macOS(.v13)],

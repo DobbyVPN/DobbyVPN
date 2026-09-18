@@ -242,6 +242,18 @@ jobs:
           test "$platform_version" != "$PLATFORM"
           printf 'PLATFORM_VERSION=%s\n' "$platform_version" >> "$GITHUB_ENV"
 
+      - name: Exercise real Android Go/Fyne controls
+        if: inputs.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is the same release APK installed for the functional lane,
+          # not the renderer-only helper. UI Automator launches the production
+          # Go/Fyne activity and taps its visible Settings/Back controls.
+          "$ADB" shell am instrument -w -r \
+            -e class com.dobby.GoUiInstrumentedTest \
+            com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner
+
       - name: Start installed service
         if: inputs.platform != 'android'
         timeout-minutes: 5

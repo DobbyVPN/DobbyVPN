@@ -10,6 +10,7 @@ import (
 )
 
 type fakeClient struct {
+	mu        sync.Mutex
 	snapshot  Snapshot
 	configure ConfigureResult
 	started   bool
@@ -52,9 +53,13 @@ func (r *reconnectClient) Reset(context.Context, uint64) (Snapshot, error) {
 }
 
 func (f *fakeClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.configure, nil
 }
 func (f *fakeClient) Start(context.Context, uint64) (StartResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.started = true
 	if f.startedCh != nil {
 		close(f.startedCh)
@@ -63,16 +68,40 @@ func (f *fakeClient) Start(context.Context, uint64) (StartResult, error) {
 	return StartResult{Generation: 4, Sequence: f.configure.Sequence + 1}, nil
 }
 func (f *fakeClient) Stop(context.Context, uint64) (StopResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.stopped = true
 	return StopResult{Generation: 4, Sequence: 9}, nil
 }
-func (f *fakeClient) Snapshot(context.Context) (Snapshot, error) { return f.snapshot, nil }
+func (f *fakeClient) Snapshot(context.Context) (Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapshot, nil
+}
 func (f *fakeClient) Watch(context.Context) (<-chan Snapshot, error) {
 	updates := make(chan Snapshot)
 	close(updates)
 	return updates, nil
 }
 func (f *fakeClient) Reset(context.Context, uint64) (Snapshot, error) { return Snapshot{}, nil }
+
+func (f *fakeClient) startedValue() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.started
+}
+
+func (f *fakeClient) setStarted(value bool) {
+	f.mu.Lock()
+	f.started = value
+	f.mu.Unlock()
+}
+
+func (f *fakeClient) stoppedValue() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stopped
+}
 
 func TestConnectionViewRendersAuthoritativeSnapshot(t *testing.T) {
 	runtime := test.NewApp()
@@ -157,7 +186,7 @@ func TestConnectionViewButtonDrivesSessionClient(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("visible Connect control did not start the session")
 	}
-	if !client.started {
+	if !client.startedValue() {
 		t.Fatal("session client was not started")
 	}
 }
@@ -176,7 +205,7 @@ func TestConnectionViewPersistsOnlyAcceptedSourceAndCanRestartConfiguredSession(
 	test.Type(view.Input, "https://example.test/accepted")
 	view.toggle()
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && !client.started {
+	for time.Now().Before(deadline) && !client.startedValue() {
 		time.Sleep(5 * time.Millisecond)
 	}
 	got, err := store.Load(context.Background())
@@ -187,14 +216,16 @@ func TestConnectionViewPersistsOnlyAcceptedSourceAndCanRestartConfiguredSession(
 		t.Fatalf("stored source = %q", got)
 	}
 
-	client.started = false
+	client.setStarted(false)
 	view.Input.SetText("")
+	view.mu.Lock()
 	view.snapshot.Configured = true
+	view.mu.Unlock()
 	view.toggle()
-	for time.Now().Before(deadline) && !client.started {
+	for time.Now().Before(deadline) && !client.startedValue() {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !client.started {
+	if !client.startedValue() {
 		t.Fatal("configured session was not started without re-entering source")
 	}
 }
@@ -254,7 +285,7 @@ func TestApplicationCloseDetachesWithoutStoppingSession(t *testing.T) {
 	application := NewApplication(runtime, client)
 	application.Start()
 	application.Close()
-	if client.stopped {
+	if client.stoppedValue() {
 		t.Fatal("closing the UI must not stop the service-owned session")
 	}
 }

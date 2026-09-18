@@ -16,16 +16,16 @@ pre-commit:
       only:
         - os: windows
 
-    kotlin-detekt-unix:
-      glob: "kmp_module/**/*.kt"
-      run: cd kmp_module && ./gradlew :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
+    android-lint-unix:
+      glob: "android_module/**/*.kt"
+      run: cd android_module && ./gradlew :app:lintRelease
       only:
         - os: linux
         - os: darwin
 
-    kotlin-detekt-windows:
-      glob: "kmp_module/**/*.kt"
-      run: cd kmp_module && gradlew.bat :app:detektMetadataCommonMain :app:detektJvmMain :grpcstub:detekt
+    android-lint-windows:
+      glob: "android_module/**/*.kt"
+      run: cd android_module && gradlew.bat :app:lintRelease
       only:
         - os: windows
 

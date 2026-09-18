@@ -82,7 +82,7 @@ tee_stderr() {
 }
 
 git_bin=${GIT_BIN:-git}
-gradle_bin=${GRADLE_BIN:-"$source_root/kmp_module/gradlew"}
+gradle_bin=${GRADLE_BIN:-"$source_root/android_module/gradlew"}
 
 validate_source_checkout() {
   local root=$1
@@ -142,8 +142,8 @@ if [[ -n "$gradle_archive" ]]; then
 fi
 [[ -x "$gradle_bin" ]] || { echo "Gradle entry point is not executable: $gradle_bin" >&2; exit 2; }
 
-version_name=$(sed -n 's/^versionName=//p' "$source_root/kmp_module/gradle.properties")
-version_code=$(sed -n 's/^versionCode=//p' "$source_root/kmp_module/gradle.properties")
+version_name=$(sed -n 's/^versionName=//p' "$source_root/android_module/gradle.properties")
+version_code=$(sed -n 's/^versionCode=//p' "$source_root/android_module/gradle.properties")
 [[ "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$version_code" =~ ^[1-9][0-9]*$ ]] || {
   echo 'Android version properties are missing or invalid' >&2
   exit 2
@@ -156,9 +156,7 @@ go_path=${GOPATH:-}
   echo 'the pinned Go executable, GOROOT, and GOPATH are required' >&2
   exit 2
 }
-gomobile_bin=${GOMOBILE:-"$go_path/bin/gomobile"}
-gobind_bin=${GOBIND:-"$go_path/bin/gobind"}
-export GOROOT="$go_root" GOPATH="$go_path" GOMOBILE="$gomobile_bin" GOBIND="$gobind_bin" GOFLAGS='-trimpath -buildvcs=false'
+export GOROOT="$go_root" GOPATH="$go_path" GOFLAGS='-trimpath -buildvcs=false'
 expected_go_version="go$(tr -d '[:space:]' < "$source_root/.go-version")"
 [[ "$($go_bin env GOVERSION)" == "$expected_go_version" ]] || { echo 'Go version does not match .go-version' >&2; exit 2; }
 [[ "$($go_bin env GOROOT)" == "$GOROOT" && "$($go_bin env GOPATH)" == "$GOPATH" ]] || {
@@ -173,26 +171,10 @@ mobile_version=${mobile_pin#*@}
   echo 'dependency specification yielded an unexpected x/mobile pin' >&2
   exit 2
 }
-tool_metadata_matches_pin() {
-  local tool=$1
-  "$go_bin" version -m "$tool" | tee_stderr | grep -F "$mobile_module" | grep -F "$mobile_version" >/dev/null
+[[ "$(cd "$source_root/go_module" && "$go_bin" list -m -f '{{.Version}}' golang.org/x/mobile)" == "$mobile_version" ]] || {
+  echo 'Go module graph is not pinned to the approved x/mobile revision' >&2
+  exit 2
 }
-ensure_mobile_tool() {
-  local name=$1
-  local path="$go_path/bin/$name"
-  if [[ ! -x "$path" ]] || ! tool_metadata_matches_pin "$path"; then
-    echo "building pinned $name from $mobile_module@$mobile_version" >&2
-    GOBIN="$go_path/bin" "$go_bin" install "$mobile_module/cmd/$name@$mobile_version"
-  fi
-  [[ -x "$path" ]] && tool_metadata_matches_pin "$path" || {
-    echo "tool is not built from the pinned module: $path" >&2
-    exit 2
-  }
-}
-ensure_mobile_tool gomobile
-ensure_mobile_tool gobind
-tool_metadata_matches_pin "$gomobile_bin" || { echo 'GOMOBILE is not built from the pinned module' >&2; exit 2; }
-tool_metadata_matches_pin "$gobind_bin" || { echo 'GOBIND is not built from the pinned module' >&2; exit 2; }
 
 [[ -n "${ANDROID_SDK_ROOT:-}" && -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" ]] || {
   echo 'Android SDK/build-tools 36.0.0 apksigner is required' >&2
@@ -209,8 +191,8 @@ grep -F 'Pkg.Revision = 27.3.13750724' "$ANDROID_NDK_HOME/source.properties" >/d
 gradle_version=$("$gradle_bin" --version --no-daemon | tee_stderr | awk '/^Gradle / && !seen {version=$2; seen=1} END {if (seen) print version}')
 [[ "$gradle_version" == '8.13' ]] || { echo 'Gradle version is not 8.13' >&2; exit 2; }
 
-build_cache=${DOBBYVPN_GOMOBILE_GOCACHE:-"$source_root/.android-build/go-cache"}
-build_tmp=${DOBBYVPN_GOMOBILE_GOTMPDIR:-"$source_root/.android-build/go-tmp"}
+build_cache=${DOBBYVPN_ANDROID_GO_CACHE:-"$source_root/.android-build/go-cache"}
+build_tmp=${DOBBYVPN_ANDROID_GO_TMPDIR:-"$source_root/.android-build/go-tmp"}
 build_mod_cache="$go_path/pkg/mod"
 mkdir -p "$build_cache" "$build_tmp" "$build_mod_cache" "$(dirname -- "$output")"
 if [[ "$local_build" == 0 ]]; then
@@ -259,22 +241,22 @@ verify_source_integrity_after_build() {
 gradle_flags=(--no-build-cache --no-daemon --rerun-tasks --stacktrace)
 run_unsigned_build() {
   local cache=$1 tmp=$2 destination=$3 built
-  export DOBBYVPN_GOMOBILE_GOCACHE="$cache" DOBBYVPN_GOMOBILE_GOTMPDIR="$tmp"
+  export GOCACHE="$cache" GOTMPDIR="$tmp"
   mkdir -p "$cache" "$tmp"
   ( cd -- "$source_root"
-    "$gradle_bin" -p kmp_module :app:assembleRelease "${gradle_flags[@]}" \
+    "$gradle_bin" -p android_module :app:assembleRelease "${gradle_flags[@]}" \
       -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
       -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
   )
-  built="$source_root/kmp_module/app/build/outputs/apk/release/app-release-unsigned.apk"
+  built="$source_root/android_module/app/build/outputs/apk/release/app-release-unsigned.apk"
   [[ -f "$built" ]] || { echo "Gradle did not produce $built" >&2; exit 1; }
   cp -- "$built" "$destination"
 }
 
 run_test_companion_build() {
-  local destination=$1 built="$source_root/kmp_module/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
+  local destination=$1 built="$source_root/android_module/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
   ( cd -- "$source_root"
-    "$gradle_bin" -p kmp_module :app:assembleReleaseAndroidTest "${gradle_flags[@]}" \
+    "$gradle_bin" -p android_module :app:assembleReleaseAndroidTest "${gradle_flags[@]}" \
       -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
       -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
   )
@@ -293,7 +275,7 @@ if [[ "$local_build" == 1 ]]; then
 fi
 
 run_unsigned_build "$build_cache/first" "$build_tmp/first" "$first_output"
-( cd -- "$source_root"; "$gradle_bin" -p kmp_module clean --no-daemon --no-build-cache )
+( cd -- "$source_root"; "$gradle_bin" -p android_module clean --no-daemon --no-build-cache )
 run_unsigned_build "$build_cache/second" "$build_tmp/second" "$output"
 if [[ -n "$test_companion_output" ]]; then
   run_test_companion_build "$test_companion_output"
@@ -312,6 +294,18 @@ if [[ -n "$test_companion_output" ]]; then
   source_verifier_args+=(--test-companion "$test_companion_output")
 fi
 python3 "$source_verifier" "${source_verifier_args[@]}"
+
+# Verify the final Go/Fyne shared libraries against the ABI policy. TrustTunnel
+# bridge symbols are present only in arm64-v8a; x86_64 must remain a portable
+# renderer/service build with no unresolved native bridge dependency.
+readelf_bin=${ANDROID_READELF:-}
+if [[ -z "$readelf_bin" ]]; then
+  ndk_toolchain=$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print -quit)
+  readelf_bin="$ndk_toolchain/bin/llvm-readelf"
+fi
+[[ -x "$readelf_bin" ]] || { echo "Android NDK llvm-readelf is required: $readelf_bin" >&2; exit 2; }
+python3 "$source_root/.github/scripts/verify_android_native_payloads.py" \
+  --apk "$output" --readelf "$readelf_bin"
 
 SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" \
   TEST_COMPANION_OUTPUT="$test_companion_output" REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \

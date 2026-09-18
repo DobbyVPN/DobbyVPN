@@ -26,8 +26,8 @@ VERSION_CODE = 1_004_008
 def write_apk(path: Path, suffix: bytes = b"", signature: bytes | None = None) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
         archive.writestr("AndroidManifest.xml", b"manifest" + suffix)
-        archive.writestr("lib/arm64-v8a/libgojni.so", b"arm64-library")
-        archive.writestr("lib/x86_64/libgojni.so", b"x86-library")
+        archive.writestr("lib/arm64-v8a/libdobby_vpn.so", b"arm64-library")
+        archive.writestr("lib/x86_64/libdobby_vpn.so", b"x86-library")
         if signature is not None:
             archive.writestr("META-INF/DOBBYVPN.SF", b"signature manifest")
             archive.writestr("META-INF/DOBBYVPN.RSA", signature)
@@ -99,7 +99,7 @@ class AndroidReproducibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             apk = Path(directory) / "bad.apk"
             with zipfile.ZipFile(apk, "w") as archive:
-                archive.writestr("lib/arm64-v8a/libgojni.so", b"arm64")
+                archive.writestr("lib/arm64-v8a/libdobby_vpn.so", b"arm64")
             with self.assertRaisesRegex(REPRO.VerificationError, "x86_64"):
                 REPRO.create_document(apk, apk, SOURCE_SHA, VERSION_NAME, VERSION_CODE)
 
@@ -188,9 +188,9 @@ class AndroidReproducibilityTests(unittest.TestCase):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 with zipfile.ZipFile(apk, "w") as archive:
-                    archive.writestr("lib/arm64-v8a/libgojni.so", b"first")
-                    archive.writestr("lib/arm64-v8a/libgojni.so", b"second")
-                    archive.writestr("lib/x86_64/libgojni.so", b"x86")
+                    archive.writestr("lib/arm64-v8a/libdobby_vpn.so", b"first")
+                    archive.writestr("lib/arm64-v8a/libdobby_vpn.so", b"second")
+                    archive.writestr("lib/x86_64/libdobby_vpn.so", b"x86")
             with self.assertRaisesRegex(REPRO.VerificationError, "exactly one"):
                 REPRO.create_document(apk, apk, SOURCE_SHA, VERSION_NAME, VERSION_CODE)
 

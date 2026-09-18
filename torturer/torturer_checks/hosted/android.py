@@ -47,13 +47,13 @@ from .cli import (
 
 
 _PACKAGE_NAME = "com.dobby.vpn"
-_MAIN_ACTIVITY = "com.dobby.vpn/com.dobby.feature.main.ui.MainActivity"
+_MAIN_ACTIVITY = "com.dobby.vpn/org.golang.app.GoNativeActivity"
 _APP_DATA = "/data/user/0/com.dobby.vpn"
 _APP_FILES = "/data/user/0/com.dobby.vpn/files"
-_INSTRUMENTATION_COMPONENT = "com.dobby.vpn.test/com.dobby.TestApplicationRunner"
-_INSTRUMENTATION_CLASS = (
-    "com.dobby.feature.vpn_service.AndroidHostedProfileInstrumentationTest"
+_INSTRUMENTATION_COMPONENT = (
+    "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner"
 )
+_INSTRUMENTATION_CLASS = "com.dobby.GoUiHostedProfileTest"
 _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _ALLOWED_OPERATIONS = {
     "configure",
@@ -182,7 +182,7 @@ class AndroidHostedAdapter:
     """Run canonical scenarios through DobbyVPN Android instrumentation."""
 
     adapter_id = "hosted-android-app"
-    adapter_version = "v5"
+    adapter_version = "v6"
 
     def __init__(
         self,

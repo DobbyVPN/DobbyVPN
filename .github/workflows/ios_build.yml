@@ -54,12 +54,22 @@ jobs:
           test "$(git rev-parse HEAD)" = "$APP_SOURCE_SHA"
 
       - name: Select Xcode 26.3
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           ruby-version: '3.3'
           bundler-cache: true
+
+      - name: Set up Go for the Go/Fyne executable
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go_module/go.sum
+
+      - name: Download Go modules
+        working-directory: go_module
+        run: go mod download
 
       - name: Cache Swift packages
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
@@ -81,12 +91,6 @@ jobs:
           APPLE_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           bundle exec fastlane ios bump_build_and_version
-
-      - name: Download KMP framework
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: app.framework
-          path: swift_module/app.framework
 
       - name: Fastlane prepare_signing
         env:

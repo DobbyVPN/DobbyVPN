@@ -1,4 +1,3 @@
-import app
 import NetworkExtension
 import Foundation
 
@@ -151,9 +150,8 @@ public final class VpnManagerImpl: NSObject {
 
     private func ensureProviderReady(until deadline: TimeInterval) -> String? {
         if Thread.isMainThread {
-            // KMP invokes this bridge on Dispatchers.Default. Refuse a main
-            // thread wait rather than freezing the UI if a caller violates the
-            // boundary.
+            // Provider readiness waits must never freeze the UI thread. Refuse
+            // a main-thread call if a caller violates that boundary.
             logs.writeLog(log: "[provider] readiness check rejected on the main thread")
             return "readiness check rejected on the main thread"
         }

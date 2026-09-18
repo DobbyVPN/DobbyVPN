@@ -37,8 +37,8 @@ jobs:
           level: warning
           fail_level: error
 
-  lint-kotlin:
-    name: "Kotlin Lint — detekt"
+  lint-android:
+    name: "Android native-shell lint"
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -53,46 +53,26 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go_module/go.sum
+
+      - name: Download Go modules
+        working-directory: go_module
+        run: go mod download
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
 
-      - name: Setup reviewdog
-        uses: reviewdog/action-setup@e04ffabe3898a0af8d0fb1af00c188831c4b5893 # v1.3.2
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
-          reviewdog_version: v0.20.3
+          packages: platforms;android-35 build-tools;36.0.0 ndk;27.3.13750724
 
-      - name: Run detekt
-        working-directory: kmp_module
-        run: |
-          ./gradlew \
-            :app:detektMetadataCommonMain \
-            :app:detektJvmMain \
-            :grpcstub:detekt
-
-      - name: Upload Detekt baseline-ratchet reports
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: detekt-reports
-          path: kmp_module/**/build/reports/detekt/
-          if-no-files-found: error
-
-      - name: Report Detekt results on pull requests
-        if: ${{ always() && github.event_name == 'pull_request' }}
-        env:
-          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # The tracked Detekt baselines suppress only acknowledged findings.
-          # New findings fail the Gradle task above and are also surfaced here.
-          mapfile -d '' -t detekt_files < <(
-            find kmp_module -path "*/build/reports/detekt/*.xml" -type f -print0 | sort -z
-          )
-          ((${#detekt_files[@]}))
-          for f in "${detekt_files[@]}"; do
-            test -s "$f"
-            reviewdog -f=checkstyle -name="detekt" -reporter=github-pr-review -level=warning -fail-level=error < "$f"
-          done
+      - name: Run Android native-shell lint
+        working-directory: android_module
+        run: ./gradlew :app:lintRelease --no-daemon --stacktrace
 
   lint-swift:
     name: "Swift Lint — SwiftLint"

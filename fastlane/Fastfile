@@ -1,3 +1,5 @@
+require "shellwords"
+
 # CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
 # Android/F-Droid versionCode is stable for the marketing version. Apple's
 # CFBundleVersion remains the GitHub Actions run number.
@@ -40,20 +42,6 @@ platform :ios do
     )
   end
 
-  desc "Build Kotlin Multiplatform"
-  lane :build_kotlin_multiplatform do
-    gradle(
-      task: "linkReleaseFrameworkIosArm64",
-      project_dir: "kmp_module",
-      properties: {
-        "projectRepositoryCommit" => COMMIT,
-        "projectRepositoryCommitLink" => COMMIT_LINK,
-        "android.injected.version.code" => VERSION_CODE,
-        "android.injected.version.name" => FULL_VERSION,
-      }
-    )
-  end
-
   desc "Prepare signing"
   lane :prepare_signing do
     keychain_name = "build.keychain-db"
@@ -89,33 +77,24 @@ platform :ios do
     install_provisioning_profile(path: profile2)
   end
 
-  desc "Build IPA"
+  desc "Build the Go/Fyne IPA and native NetworkExtension shell"
   lane :build_ios do
     unless COMMIT&.match?(/\A[0-9a-f]{40}\z/)
       raise "APP_SOURCE_SHA must be the exact lowercase 40-character source commit"
     end
-    export_options = {
-      method: "app-store",
-      signingStyle: "manual",
-      provisioningProfiles: {
-        BUNDLE_ID => "DobbyVPNAppStore",
-        BUNDLE_ID_TUNNEL => "DobbyVPNTunnelAppStore"
-      },
-      teamID: TEAM_ID
-    }
-
-    gym(
-      project: PROJECT,
-      scheme: SCHEME,
-      configuration: "Release",
-      sdk: "iphoneos",
-      clean: true,
-      xcargs: "DOBBY_SOURCE_COMMIT=#{COMMIT}",
-      archive_path: ARCHIVE,
-      export_method: "app-store",
-      export_options: export_options,
-      output_directory: EXPORT_DIR,
-      output_name: IPA_NAME
+    runtime = File.expand_path("../swift_module/DobbyVPNRuntime.xcframework", __dir__)
+    output = File.join(EXPORT_DIR, IPA_NAME)
+    FileUtils.mkdir_p(EXPORT_DIR)
+    sh(
+      "VERSION_NAME=#{FULL_VERSION.shellescape} " \
+      "APP_BUILD=#{build_number.shellescape} " \
+      "SOURCE_COMMIT=#{COMMIT.shellescape} " \
+      "IOS_CERTIFICATE_NAME=#{'Apple Distribution'.shellescape} " \
+      "IOS_PROFILE_NAME=#{'DobbyVPNAppStore'.shellescape} " \
+      "IOS_TUNNEL_PROFILE_NAME=#{'DobbyVPNTunnelAppStore'.shellescape} " \
+      "IOS_TEAM_ID=#{TEAM_ID.to_s.shellescape} " \
+      "IOS_SIGNING_IDENTITY=#{'Apple Distribution'.shellescape} " \
+      "./go_module/scripts/package_ios_app.sh ios #{output.shellescape} #{runtime.shellescape}"
     )
   end
 

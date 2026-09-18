@@ -52,8 +52,8 @@ worktree, downloads a fresh owner profile, and invokes the same functional
 engine on local VMs. Local evidence remains private.
 
 The iOS Simulator app-contract helper is a local side check, not VPN E2E.
-The parent Test workflow owns public Swift and KMP Simulator shared-core
-checks; there is no separate public Torturer Simulator workflow.
+The parent Test workflow owns the Go runtime XCFramework and Go/Fyne app
+startup check; there is no separate public Torturer Simulator workflow.
 
 ## Hosted configuration after the merge
 

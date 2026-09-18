@@ -100,19 +100,19 @@ func handle(request request, application *ui.Application) response {
 		setInput(application, request.Config)
 		test.Tap(application.Connection.Connect)
 		if err := waitFor(application, "Connected", timeout(request.Timeout)); err != nil {
-			return response{Error: err.Error(), Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
+			return errorSnapshot(application, err)
 		}
 		return snapshot(application)
 	case "configure":
 		setInput(application, request.Config)
 		if err := application.Connection.Configure(context.Background(), []byte(application.Connection.Input.Text)); err != nil {
-			return response{Error: err.Error(), Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
+			return errorSnapshot(application, err)
 		}
 		return snapshot(application)
 	case "disconnect":
 		test.Tap(application.Connection.Connect)
 		if err := waitForAny(application, []string{"Disconnected", "Failed", "Error"}, timeout(request.Timeout)); err != nil {
-			return response{Error: err.Error(), Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
+			return errorSnapshot(application, err)
 		}
 		return snapshot(application)
 	case "wait":
@@ -120,12 +120,12 @@ func handle(request request, application *ui.Application) response {
 			return response{Error: "wait requires state"}
 		}
 		if err := waitFor(application, request.State, timeout(request.Timeout)); err != nil {
-			return response{Error: err.Error(), Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
+			return errorSnapshot(application, err)
 		}
 		return snapshot(application)
 	case "close":
 		application.Close()
-		return response{OK: true, Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
+		return snapshot(application)
 	default:
 		return response{Error: fmt.Sprintf("unsupported operation %q", request.Op)}
 	}
@@ -143,7 +143,15 @@ func setInput(application *ui.Application, config string) {
 }
 
 func snapshot(application *ui.Application) response {
-	return response{OK: true, Status: application.Connection.Status.Text, Details: application.Connection.Details.Text, Button: application.Connection.Connect.Text}
+	status, details, button := application.Connection.Presentation()
+	return response{OK: true, Status: status, Details: details, Button: button}
+}
+
+func errorSnapshot(application *ui.Application, err error) response {
+	value := snapshot(application)
+	value.OK = false
+	value.Error = err.Error()
+	return value
 }
 
 func timeout(milliseconds int) time.Duration {
@@ -160,15 +168,17 @@ func waitFor(application *ui.Application, state string, limit time.Duration) err
 func waitForAny(application *ui.Application, states []string, limit time.Duration) error {
 	deadline := time.Now().Add(limit)
 	for time.Now().Before(deadline) {
+		status, details, _ := application.Connection.Presentation()
 		for _, state := range states {
-			if application.Connection.Status.Text == state {
+			if status == state {
 				return nil
 			}
 		}
-		if application.Connection.Status.Text == "Error" || application.Connection.Status.Text == "Failed" {
-			return fmt.Errorf("UI entered %s: %s", application.Connection.Status.Text, application.Connection.Details.Text)
+		if status == "Error" || status == "Failed" {
+			return fmt.Errorf("UI entered %s: %s", status, details)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("timed out waiting for UI state %q (current %q)", strings.Join(states, ","), application.Connection.Status.Text)
+	status, _, _ := application.Connection.Presentation()
+	return fmt.Errorf("timed out waiting for UI state %q (current %q)", strings.Join(states, ","), status)
 }

@@ -18,14 +18,14 @@ reviews:
         Review Go behavior, concurrency, resource cleanup, errors, and platform
         boundaries. Check relevant tests without inventing undocumented gates.
 
-    - path: "kmp_module/app/**/*.kt"
+    - path: "android_module/app/**/*.kt"
       instructions: >
-        Review UI state, coroutine lifetime, platform boundaries, and relevant
-        tests. Prefer the patterns already used in the affected module.
+        Review Android permission, VpnService, JNI lifecycle boundaries, and
+        relevant tests. Go owns session policy; keep the Kotlin shell thin.
 
     - path: "swift_module/**/*.swift"
       instructions: >
-        Review Swift/Kotlin interop, lifecycle, and VPN extension behavior.
+        Review the Go/Swift bridge, lifecycle, and VPN extension behavior.
         Keep findings tied to observable bugs or documented requirements.
 
     - path: ".github/workflows/**"

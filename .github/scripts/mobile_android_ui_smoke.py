@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Drive the Go/Fyne migration APK through a real Android accessibility tree.
+"""Drive a Go/Fyne Android APK through a real accessibility tree.
 
-This is intentionally a renderer test. The migration APK does not contain the
-production VpnService, so this check exercises launch, visible labels, and
-native taps without pretending to qualify a VPN tunnel.
+This smoke check exercises launch, visible labels, and native taps. It is
+deliberately separate from the hosted VPN scenario, which also verifies the
+production VpnService and real network observations.
 """
 
 from __future__ import annotations

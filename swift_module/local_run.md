@@ -1,58 +1,53 @@
-# Guide to Running the iOS App Locally
+# Guide to running the iOS app locally
 
-## v1.5.0 iOS coverage boundary
+The release app's visible controls are rendered by Go/Fyne. Swift remains the
+containing-app and NetworkExtension shell: it owns app-group storage,
+permission/provider setup, the one-shot Keychain mailbox, and the C bridge
+called by the Go process.
 
-No physical iPhone is available for v1.5.0. Do not add or infer a physical
-NetworkExtension packet-tunnel pass from Simulator, framework, IPA, or
-screenshot evidence. The available signed-IPA and Simulator/build checks must
-still pass and the physical traffic gap must remain visible in release status.
+## Simulator
 
-## Installing Dependencies
-
-### DobbyVPNRuntime.xcframework
-
-This is the compiled Go part of our project. It is taken from CI, where it is
-stored as an artifact. To build it locally from `go_module/` on a Mac with
-Xcode and gomobile installed, run:
+On a Mac with Xcode and the pinned Go toolchain:
 
 ```bash
-./scripts/build_ios_xcframework.sh
-```
-
-Copy the resulting `DobbyVPNRuntime.xcframework` into `swift_module/`.
-For a Simulator-only local check, select the native slice to avoid building
-the physical-iOS and other Simulator architectures:
-
-```bash
+cd go_module
+go mod download
+go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
+go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
 ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
-# Intel Mac: ./scripts/build_ios_xcframework.sh --simulator-architecture amd64
+./scripts/package_ios_app.sh iossimulator /tmp/Dobby-Vpn.app \
+  DobbyVPNRuntime.xcframework arm64
+xcrun simctl install booted /tmp/Dobby-Vpn.app
+xcrun simctl launch booted vpn.dobby.app
 ```
 
-### app.framework
+Use `amd64` on an Intel Mac. Simulator packaging supplies temporary
+self-signed metadata to the pinned Fyne packager and ad-hoc signs the bundle;
+an Apple Development certificate or provisioning profile is not required.
+The Simulator can validate rendered startup/accessibility controls, but cannot
+validate a physical NetworkExtension tunnel or TrustTunnel.
 
-This is the compiled Kotlin part of our project. Build the target matching the
-SDK you intend to use, then copy the output to `swift_module/app.framework`:
+## Physical-device/App Store build
+
+The Release workflow downloads `DobbyVPNRuntime.xcframework`, installs the
+Apple distribution certificate and both provisioning profiles, builds the
+CommonDI/tunnel frameworks, and invokes:
 
 ```bash
-# Physical iOS
-./gradlew :app:linkReleaseFrameworkIosArm64
-ditto app/build/bin/iosArm64/releaseFramework/app.framework ../swift_module/app.framework
-
-# Apple-silicon iOS Simulator
-./gradlew :app:linkDebugFrameworkIosSimulatorArm64
-ditto app/build/bin/iosSimulatorArm64/debugFramework/app.framework ../swift_module/app.framework
-
-# Intel iOS Simulator
-./gradlew :app:linkDebugFrameworkIosX64
-ditto app/build/bin/iosX64/debugFramework/app.framework ../swift_module/app.framework
+./go_module/scripts/package_ios_app.sh ios swift_module/build/ipa/DobbyVPN.ipa \
+  swift_module/DobbyVPNRuntime.xcframework
 ```
 
-The Simulator can build and install the app and run shared-code tests, but it
-cannot run a Packet Tunnel or a real TrustTunnel connection.
+Set `IOS_CERTIFICATE_NAME`, `IOS_PROFILE_NAME`, and `IOS_SIGNING_IDENTITY` to
+the identities installed by the signing job. This device path intentionally
+requires the Apple distribution credentials; that requirement does not apply
+to the Simulator path above.
 
-## Certificate Setup
+## Swift lifecycle tests
 
-You need to generate a **Development** certificate on the [Apple Developer](https://developer.apple.com/account/resources/profiles/list) website.
+```bash
+swift test --enable-code-coverage --package-path swift_module
+```
 
-In Xcode, open the app settings and go to the `Signing & Capabilities` section.
-In the `Signing (Debug)` block, under `iOS`, you need to sign in with your Apple developer account.
+These tests cover the native provider command/response and cleanup policy.
+They do not replace the Go UI tests or a real device VPN run.

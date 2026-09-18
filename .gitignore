@@ -38,10 +38,6 @@ go.work.sum
 **/*.dSYM.zip
 **/*.xcarchive
 
-# KMP/Xcode integration output (frameworks produced for Xcode)
-**/app/build/xcode-frameworks/
-/swift_module/app.framework/
-
 # Generated XCFrameworks (project-local)
 **/*.xcframework
 
@@ -60,16 +56,8 @@ go.work.sum
 **/__pycache__/
 *.pyc
 
-# Copied from canonical KMP proto during go_module/scripts/regenerate-grpcproto.sh
-go_module/grpcproto/vpnserver.proto
-
-# Local release qualification stages the exact downloaded Debian package here.
-# It is an ignored build artifact, never application source.
-/kmp_module/app/dobbyVPN-linux.deb
-
 # Public desktop_build.py and the native packager generate these local staging trees.
 # They are reproducible build outputs, never application source.
-/kmp_module/services/
 /output/
 
 # Owner-local Harness/runtime worktrees and qualification artefacts.
@@ -79,4 +67,3 @@ go_module/grpcproto/vpnserver.proto
 # Module-local qualification runs must stay owner-only Harness evidence.
 # They are never application source or stageable public-repository files.
 /go_module/runtime/
-/kmp_module/runtime/

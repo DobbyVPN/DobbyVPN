@@ -153,7 +153,7 @@ class FakeAndroidRunner:
             return CommandResult(
                 argv,
                 0,
-                b"Starting: Intent { cmp=com.dobby.vpn/com.dobby.feature.main.ui.MainActivity }\n"
+                b"Starting: Intent { cmp=com.dobby.vpn/org.golang.app.GoNativeActivity }\n"
                 b"Status: ok\nComplete\n",
                 b"",
             )
@@ -496,7 +496,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
 
     def test_instrumentation_crash_is_reported_before_observation_read(self) -> None:
         self.runner.instrumentation = (
-            b"INSTRUMENTATION_STATUS: class=com.dobby.feature.vpn_service.AndroidHostedProfileInstrumentationTest\n"
+            b"INSTRUMENTATION_STATUS: class=com.dobby.GoUiHostedProfileTest\n"
             b"INSTRUMENTATION_STATUS: stack=org.koin.core.error.NoBeanDefFoundException: No definition found for PermissionEventsChannel\n"
             b"INSTRUMENTATION_STATUS_CODE: -2\n"
             b"INSTRUMENTATION_RESULT: shortMsg=Process crashed.\n"

@@ -250,6 +250,11 @@ def finalize(
     if not isinstance(target.get("commit"), str) or not target["commit"]:
         raise MetadataError("requested build has no source commit")
     target["commit"] = source_sha
+    # The release shell is a plain Android project now. Keep the inherited
+    # upstream recipe fields for historical builds, but point the candidate at
+    # the one Gradle root that owns the Go/Fyne APK.
+    target["subdir"] = "android_module"
+    target["gradle"] = ["yes"]
     document["Binaries"] = binary_url
     document["UpdateCheckData"] = baseline["UpdateCheckData"]
     document["CurrentVersion"] = version_name

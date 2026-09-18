@@ -1,0 +1,4 @@
+* Share the Go/Fyne UI across desktop, Android, and iOS.
+* Keep Android VPN permission and iOS NetworkExtension lifecycle in thin native shells.
+* Remove the Kotlin Multiplatform/Compose UI and the desktop JVM runtime.
+* Add real rendered-control checks alongside headless Go UI and VPN functional tests.

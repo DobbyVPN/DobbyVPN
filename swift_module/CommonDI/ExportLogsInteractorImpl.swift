@@ -1,12 +1,11 @@
 import UIKit
 import UniformTypeIdentifiers
-import app
 import zlib
 
-class ExportLogsInteractorImpl: ExportLogsInteractor {
+public final class ExportLogsInteractorImpl {
     private var logs = IOSAppCompositionRoot.logsRepository
 
-    func export(logs: [String]) {
+    public func export(logs: [String]) {
         let logText = logs.joined(separator: "\n")
 
         let formatter = DateFormatter()
