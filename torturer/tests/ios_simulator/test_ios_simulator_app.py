@@ -18,6 +18,7 @@ from torturer_checks.ios_simulator_app import (
     IOSSimulatorAppContractError,
     RunBudget,
     SubprocessCommandRunner,
+    _app_container,
     prepare_ios_simulator_candidate,
     public_ios_simulator_app_contract,
     run_ios_simulator_app_contract,
@@ -56,11 +57,13 @@ class FakeRunner:
         startup_mode: str = "mini",
         write_startup_marker: bool = True,
         app_logs: bytes = b'{"message":"old run"}\n',
+        app_group_output: str | None = None,
     ) -> None:
         self.root = root
         self.fail = fail or {}
         self.startup_mode = startup_mode
         self.write_startup_marker = write_startup_marker
+        self.app_group_output = app_group_output
         self.commands: list[list[str]] = []
         self.calls: list[tuple[list[str], Path | None, float | None]] = []
         self.container = root / "simulator-app-group"
@@ -83,7 +86,12 @@ class FakeRunner:
         if command[:2] == ["swift", "-e"]:
             return CommandResult(0, "true\n")
         if command[:3] == ["xcrun", "simctl", "get_app_container"]:
-            return CommandResult(0, f"{self.container}\n")
+            return CommandResult(
+                0,
+                self.app_group_output
+                if self.app_group_output is not None
+                else f"group.vpn.dobby.app\t{self.container}\n",
+            )
         if command[:3] == ["xcrun", "simctl", "launch"]:
             self.log_at_launch = (self.container / "app_logs.txt").read_bytes()
             if self.write_startup_marker:
@@ -254,6 +262,21 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         )
         lookup = next(command for command in runner.commands if command[:3] == ["xcrun", "simctl", "get_app_container"])
         self.assertEqual(lookup[-1], "groups")
+
+    def test_app_group_lookup_selects_the_product_group_from_simctl_listing(self) -> None:
+        unrelated = self.root / "unrelated-group"
+        unrelated.mkdir()
+        runner = FakeRunner(
+            self.root,
+            app_group_output=(
+                f"group.other.app\t{unrelated}\n"
+                f"group.vpn.dobby.app\t{self.root / 'simulator-app-group'}\n"
+            ),
+        )
+        self.assertEqual(
+            _app_container(runner, UDID, budget=RunBudget()),
+            self.root / "simulator-app-group",
+        )
 
     def test_prepare_builds_the_go_runtime_and_packages_the_fyne_app(self) -> None:
         runner = FakeRunner(self.root)

@@ -31,6 +31,7 @@ _PROJECT_PATH = Path("swift_module/iosApp.xcodeproj")
 _CONFIGURATION = "Release"
 _APP_PRODUCT = "Dobby-Vpn.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
+_APP_GROUP_IDENTIFIER = "group.vpn.dobby.app"
 _APP_LOG_NAME = "app_logs.txt"
 _GO_APP_LOG_NAME = "go_app_logs.jsonl"
 _MINI_STARTUP_MARKER = b"startup.ui_attached mode=normal"
@@ -361,10 +362,34 @@ def _app_container(
             "locate iOS app logs",
             budget=budget,
         )
-        paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if len(paths) != 1 or not Path(paths[0]).is_absolute():
-            raise IOSSimulatorAppContractError("simctl returned no single absolute app-group container path")
-        return Path(paths[0])
+        # `simctl get_app_container ... groups` prints one tab-separated
+        # `<group identifier> <absolute path>` row per declared group.  It
+        # does not return a bare path, and Xcode 26 no longer accepts the
+        # group identifier as the command's third argument.  Select the
+        # product's declared group explicitly; accepting a lone absolute
+        # path keeps the contract compatible with older simctl versions and
+        # the small local command fake.
+        paths: list[Path] = []
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            fields = line.split(None, 1)
+            if len(fields) == 2 and fields[0] == _APP_GROUP_IDENTIFIER:
+                candidate = fields[1]
+            elif Path(line).is_absolute():
+                candidate = line
+            else:
+                continue
+            path = Path(candidate)
+            if path.is_absolute():
+                paths.append(path)
+        if len(paths) != 1:
+            raise IOSSimulatorAppContractError(
+                "simctl groups output did not contain exactly one absolute "
+                f"{_APP_GROUP_IDENTIFIER} container path"
+            )
+        return paths[0]
     except (IOSSimulatorAppContractError, OSError):
         if best_effort:
             return None
