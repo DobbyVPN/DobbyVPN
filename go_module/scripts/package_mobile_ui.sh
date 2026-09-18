@@ -41,6 +41,7 @@ pushd "$module_root" >/dev/null
   --src ./cmd/dobbyui \
   --name "Dobby Vpn" \
   --app-id com.dobby.vpn \
+  --icon "$script_root/assets/logo.png" \
   --app-version "$version" \
   --app-build "$build" \
   --tags accessibility

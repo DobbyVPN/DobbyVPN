@@ -28,8 +28,9 @@ go test -tags=ci ./...
 go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
 
-The Android platform shell is currently built from `kmp_module/`, with JDK 17
-and the Android SDK:
+The Android native VPN shell is currently built from `kmp_module/`, with JDK 17
+and the Android SDK. This is a temporary lifecycle-boundary check, not the
+desktop UI build and not the intended long-term owner of UI state:
 
 ```bash
 ./gradlew :grpcstub:test :app:jvmTest :app:testDebugUnitTest :app:verifyDebugNativeAbiPayloads :app:assembleReleaseAndroidTest
@@ -37,6 +38,18 @@ and the Android SDK:
 ```
 
 The root KMP `detekt` aggregate has no sources; use the source-set tasks above.
+
+The shared Go/Fyne mobile renderer can be cross-built on an Android runner
+without replacing that service shell yet:
+
+```bash
+./go_module/scripts/package_mobile_ui.sh android/arm64 "$RUNNER_TEMP/dobby-vpn-fyne-ui.apk"
+```
+
+The generated APK is a migration artifact. It proves that the same Go screen
+and accessibility labels compile for Android, but it does not contain the
+native `VpnService`; it must not be used as a release APK until the shell/IPC
+integration is complete.
 
 With a disposable Android emulator/device connected, run the app's own
 instrumentation tests directly: `./gradlew :app:connectedReleaseAndroidTest`.
@@ -80,6 +93,16 @@ presented a frame or that a user tap reached it. Simulator GUI tests also do
 not prove a physical iOS NetworkExtension tunnel. The current mobile shell is
 the migration boundary until those checks pass.
 
+On a macOS runner with Xcode, the iOS renderer artifact can be built for the
+Simulator with:
+
+```bash
+./go_module/scripts/package_mobile_ui.sh iossimulator "$RUNNER_TEMP/Dobby-Vpn.app"
+```
+
+This is likewise a renderer/build check; the production NetworkExtension and
+its permission handoff remain native until the real app integration is tested.
+
 ## iOS
 
 On a Mac with Xcode and an installed Simulator runtime:
@@ -91,7 +114,9 @@ cd kmp_module
 ```
 
 On Intel, use `:app:linkDebugFrameworkIosX64 :app:iosX64Test` instead.
-The Test workflow covers Swift lifecycle and KMP shared-core tests.
+The Test workflow covers Swift lifecycle and KMP shared-core tests. The KMP
+framework is currently retained only for the Swift app's lifecycle shell while
+the Go renderer is integrated.
 The private Harness also runs the app-contract helper in
 `torturer/tests/ios_simulator/`. Local Intel runs use explicit Mini mode and
 check initialization without Metal. GitHub uses explicit Metal mode, which

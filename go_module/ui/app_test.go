@@ -171,18 +171,18 @@ func TestConnectionViewReconnectsAfterWatchClosure(t *testing.T) {
 	t.Cleanup(view.Stop)
 
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && view.Status.Text != "Reconnecting" {
+	for time.Now().Before(deadline) && view.displayedStatus() != "Reconnecting" {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if view.Status.Text != "Reconnecting" {
-		t.Fatalf("status after watch closure = %q", view.Status.Text)
+	if view.displayedStatus() != "Reconnecting" {
+		t.Fatalf("status after watch closure = %q", view.displayedStatus())
 	}
 	client.updates <- Snapshot{State: StateConnected, Generation: 2}
-	for time.Now().Before(deadline) && view.Status.Text != "Connected" {
+	for time.Now().Before(deadline) && view.displayedStatus() != "Connected" {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if view.Status.Text != "Connected" {
-		t.Fatalf("status after watch reconnect = %q", view.Status.Text)
+	if view.displayedStatus() != "Connected" {
+		t.Fatalf("status after watch reconnect = %q", view.displayedStatus())
 	}
 }
 

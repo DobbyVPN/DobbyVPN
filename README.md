@@ -7,9 +7,11 @@ Yet another VPN client. Currently wraps around OutlineSDK, TrustTunnel & XRay.
 The architecture driver is one shared UI layer where sharing is valuable, one
 Go product/runtime layer for behavior, and only thin OS-specific shells where
 VPN APIs require them. Go owns configuration acquisition, parsing, selection,
-and the process-local session; the native Go/Fyne UI renders desktop snapshots,
-while the mobile Compose UI remains on Android and iOS during the reversible
-mobile transition experiment.
+and the process-local session; the native Go/Fyne UI renders the desktop
+snapshots and has no JVM or Gradle runtime. The mobile Go/Fyne package is the
+reversible UI migration artifact, while the Android and iOS release shells
+still retain Kotlin/Compose and Swift only until the native VPN lifecycle can
+be attached to that package and its real-device UI contract passes.
 
 See the complete [architecture contract](docs/ARCHITECTURE.md) for the
 responsibility boundaries and supported configuration behavior.

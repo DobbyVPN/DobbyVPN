@@ -2,10 +2,13 @@
 
 DobbyVPN keeps product behavior and the shared UI in Go, and uses small
 platform shells only where an operating system requires VPN APIs. Desktop
-uses the native Go/Fyne application. Android and iOS are being migrated to
-that same application UI while retaining native VPN boundaries; a mobile
-build is not complete until its rendered controls and native lifecycle tests
-pass.
+uses the native Go/Fyne application and has no JVM/Gradle launcher. Android
+and iOS have a Go/Fyne migration package, but their release applications still
+use the existing Kotlin/Compose and Swift shells until the Go renderer is
+connected to the native VPN lifecycle in the same app. A mobile build is not
+complete until its rendered controls, permission flow, and native lifecycle
+tests pass; a separately packaged Fyne screen is not evidence of a working
+VPN client.
 
 ## Ownership
 
@@ -30,10 +33,11 @@ session manager; this operator/test mode skips automatic selection and does
 not fail over to a different profile.
 
 The desktop CLI and native Go/Fyne GUI use the same authenticated gRPC service.
-Neither starts a JVM. Mobile Fyne clients use the same `SessionClient` model
-through a narrow JSON/native transport boundary. Android Kotlin and iOS Swift
-remain only at the VPN permission, service/extension, secure-storage, and
-system-lifecycle boundaries; they do not own UI state or protocol policy.
+Neither starts a JVM. The mobile Go/Fyne package uses the same `SessionClient`
+model through a narrow JSON/native transport boundary. Android Kotlin and iOS
+Swift remain at the VPN permission, service/extension, secure-storage, and
+system-lifecycle boundaries until the package is embedded into those shells;
+they must not become a second owner of protocol policy or session state.
 
 ## Platform shells
 

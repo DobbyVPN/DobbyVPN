@@ -75,6 +75,13 @@ type ConnectionView struct {
 	busy       bool
 	sequence   uint64
 	generation uint64
+	// rendered* mirrors the last authoritative presentation under mu. Native
+	// widgets are updated through fyne.Do and must not be read from a worker
+	// goroutine; the mirrors keep lifecycle tests race-free without making the
+	// widget tree a second state store.
+	renderedStatus  string
+	renderedButton  string
+	renderedDetails string
 }
 
 func NewConnectionView(client SessionClient) *ConnectionView {
@@ -360,24 +367,41 @@ func (v *ConnectionView) setBusy(busy bool) {
 }
 
 func (v *ConnectionView) render(snapshot Snapshot) {
+	status := statusText(snapshot)
+	button := buttonText(snapshot)
+	details := detailsText(snapshot)
 	v.mu.Lock()
 	v.snapshot = snapshot
 	v.sequence = snapshot.Sequence
 	v.generation = snapshot.Generation
+	v.renderedStatus = status
+	v.renderedButton = button
+	v.renderedDetails = details
 	v.mu.Unlock()
 
 	onUI(func() {
-		v.Status.SetText(statusText(snapshot))
-		v.Connect.SetText(buttonText(snapshot))
-		v.Details.SetText(detailsText(snapshot))
+		v.Status.SetText(status)
+		v.Connect.SetText(button)
+		v.Details.SetText(details)
 	})
 }
 
 func (v *ConnectionView) showError(err error) {
+	details := err.Error()
+	v.mu.Lock()
+	v.renderedStatus = "Error"
+	v.renderedDetails = details
+	v.mu.Unlock()
 	onUI(func() {
 		v.Status.SetText("Error")
-		v.Details.SetText(err.Error())
+		v.Details.SetText(details)
 	})
+}
+
+func (v *ConnectionView) displayedStatus() string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.renderedStatus
 }
 
 func statusText(snapshot Snapshot) string {
