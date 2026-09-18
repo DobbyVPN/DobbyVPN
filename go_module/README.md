@@ -57,9 +57,23 @@ python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
 The existing WiX and macOS `pkgbuild` steps consume the generated Windows and
 macOS archives; Linux receives the generated Debian package directly.
 
-The mobile Fyne entry point is intentionally opt-in while native VPN shells
-are retained: build it with `-tags=fyne_mobile` only for packaging/accessibility
-experiments.
+### Mobile Go/Fyne UI migration artifact
+
+The shared Fyne screens can be packaged for Android and iOS with the pinned
+Fyne toolchain:
+
+```bash
+./scripts/package_mobile_ui.sh android/arm64 /tmp/dobby-vpn.apk
+./scripts/package_mobile_ui.sh iossimulator /tmp/Dobby-Vpn.app
+```
+
+This artifact proves the same rendered UI, accessibility labels, keyboard and
+tap callbacks on the mobile renderer. It intentionally does not create a
+second VPN runtime: Android `VpnService` and the iOS `NetworkExtension`
+remain the native lifecycle boundaries and must be integrated by their native
+app projects before a mobile package is used for release. The headless Go UI
+tests therefore stay useful on every host, while device/emulator UI checks
+remain required for the native shell handoff.
 
 The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
 `go_module/modules/tun2socks`. It contains the upstream correction from
@@ -121,7 +135,7 @@ gomobile bind \
   -javapkg=com.dobby.gomobile \
   -ldflags="-s -w -buildid=" \
   -o dobbyvpn-runtime.aar \
-  ./kotlin_exports
+  ./android_exports
 ```
 
 The Gradle `:app` module runs this `gomobile bind` step automatically before

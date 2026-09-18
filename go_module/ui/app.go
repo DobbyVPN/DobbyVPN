@@ -69,6 +69,7 @@ type ConnectionView struct {
 	mu         sync.Mutex
 	ctx        context.Context
 	cancel     context.CancelFunc
+	done       chan struct{}
 	snapshot   Snapshot
 	started    bool
 	busy       bool
@@ -173,10 +174,15 @@ func (v *ConnectionView) Start() {
 	}
 	v.started = true
 	v.ctx, v.cancel = context.WithCancel(context.Background())
+	v.done = make(chan struct{})
 	ctx := v.ctx
+	done := v.done
 	v.mu.Unlock()
 
-	go v.watch(ctx)
+	go func() {
+		defer close(done)
+		v.watch(ctx)
+	}()
 }
 
 // Prime synchronously obtains the initial service snapshot.  The normal app
@@ -195,11 +201,16 @@ func (v *ConnectionView) Prime(ctx context.Context) error {
 
 func (v *ConnectionView) Stop() {
 	v.mu.Lock()
+	done := v.done
 	if v.cancel != nil {
 		v.cancel()
 	}
+	v.done = nil
 	v.started = false
 	v.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 func (v *ConnectionView) watch(ctx context.Context) {

@@ -211,3 +211,31 @@ func TestApplicationCloseDetachesWithoutStoppingSession(t *testing.T) {
 		t.Fatal("closing the UI must not stop the service-owned session")
 	}
 }
+
+func TestApplicationControlsHaveStableLabelsAndSettingsRoundTrip(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	client := &fakeClient{snapshot: Snapshot{State: StateConnected, Generation: 1}}
+	application := NewApplication(runtime, client)
+	application.Connection.render(client.snapshot)
+	t.Cleanup(application.Close)
+
+	if application.Connection.Input.AccessibilityLabel() != "Connection configuration" {
+		t.Fatalf("configuration label = %q", application.Connection.Input.AccessibilityLabel())
+	}
+	if application.Connection.Connect.AccessibilityLabel() != "Disconnect" {
+		t.Fatalf("connect label = %q", application.Connection.Connect.AccessibilityLabel())
+	}
+	if application.Connection.Status.AccessibilityLabel() != "Connected" {
+		t.Fatalf("status label = %q", application.Connection.Status.AccessibilityLabel())
+	}
+
+	test.Tap(application.Connection.Settings)
+	if application.Window.Content() != application.Settings.Content() {
+		t.Fatal("settings tap did not replace the connection content")
+	}
+	test.Tap(application.Settings.Back)
+	if application.Window.Content() != application.Connection.Content() {
+		t.Fatal("back tap did not restore the connection content")
+	}
+}

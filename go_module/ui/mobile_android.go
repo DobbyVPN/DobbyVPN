@@ -2,7 +2,7 @@
 
 package ui
 
-import dobbyvpn "go_module/kotlin_exports"
+import dobbyvpn "go_module/android_exports"
 
 func newMobileAPI() mobileAPI {
 	return mobileAPI{

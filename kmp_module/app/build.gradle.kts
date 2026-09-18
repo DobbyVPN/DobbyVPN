@@ -340,7 +340,7 @@ val gomobileBindAndroid by tasks.registering(Exec::class) {
         "-javapkg=com.dobby.gomobile",
         "-ldflags=-s -w -buildid=",
         "-o=${outputFile.absolutePath}",
-        "go_module/kotlin_exports"
+        "go_module/android_exports"
     )
     environment(
         "PATH",

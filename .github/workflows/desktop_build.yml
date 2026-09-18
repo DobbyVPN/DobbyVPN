@@ -49,28 +49,28 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: windows_grpcvpnserver.exe
-          path: kmp_module/services
+          path: runtime/services
 
       - name: Download Windows desktop CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-windows
-          path: kmp_module/services
+          path: runtime/services
 
       - name: Download Linux gRPC vpn service
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: ubuntu_grpcvpnserver
-          path: kmp_module/services
+          path: runtime/services
 
       - name: Download Linux desktop CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-linux
-          path: kmp_module/services
+          path: runtime/services
 
       - name: Add permissions to ubuntu service executable
-        working-directory: kmp_module/services
+        working-directory: runtime/services
         run: |
           chmod +x ubuntu_grpcvpnserver dobby-cli
 
@@ -78,28 +78,28 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: macos_grpcvpnserver-arm64
-          path: kmp_module/services
+          path: runtime/services
 
       - name: Download macOS arm64 desktop CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-macos-arm64
-          path: kmp_module/services/macos-arm64
+          path: runtime/services/macos-arm64
 
       - name: Download macOS amd64 gRPC vpn service
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: macos_grpcvpnserver-amd64
-          path: kmp_module/services/macos-amd64
+          path: runtime/services/macos-amd64
 
       - name: Download macOS amd64 desktop CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-macos-amd64
-          path: kmp_module/services/macos-amd64
+          path: runtime/services/macos-amd64
 
       - name: Verify staged macOS gRPC vpn services
-        working-directory: kmp_module/services
+        working-directory: runtime/services
         run: |
           set -euo pipefail
           chmod +x macos_grpcvpnserver macos-amd64/macos_grpcvpnserver macos-arm64/dobby-cli macos-amd64/dobby-cli
@@ -108,7 +108,7 @@ jobs:
           test -x macos-arm64/dobby-cli
 
       - name: Verify staged desktop CLI binaries
-        working-directory: kmp_module/services
+        working-directory: runtime/services
         run: |
           test -x dobby-cli
           test -f dobby-cli.exe
@@ -119,28 +119,28 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-vpn-ui-windows
-          path: kmp_module/services
+          path: runtime/services
 
       - name: Download Linux Go/Fyne UI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-vpn-ui-linux
-          path: kmp_module/services
+          path: runtime/services
 
       - name: Download macOS arm64 Go/Fyne UI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-vpn-ui-macos-arm64
-          path: kmp_module/services/macos-arm64
+          path: runtime/services/macos-arm64
 
       - name: Download macOS amd64 Go/Fyne UI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-vpn-ui-macos-amd64
-          path: kmp_module/services/macos-amd64
+          path: runtime/services/macos-amd64
 
       - name: Verify staged native Go/Fyne UI binaries
-        working-directory: kmp_module/services
+        working-directory: runtime/services
         run: |
           set -euo pipefail
           chmod +x dobby-vpn-ui macos-arm64/dobby-vpn-ui macos-amd64/dobby-vpn-ui
@@ -166,7 +166,7 @@ jobs:
           sudo apt-get install -y python3-pil
           python3 .github/scripts/package_desktop.py \
             --version "${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}" \
-            --staging-root kmp_module/services \
+            --staging-root runtime/services \
             --output output
 
       - name: Find files

@@ -127,26 +127,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var pathMonitor: Network.NWPathMonitor?
     private var lastPathSignature: String?
-    private var loadSampler: DispatchSourceTimer?
-    private let memoryHighWaterLock = NSLock()
-    private var memoryHighWaterMarkMB = 0.0
-    private var tunnelStartedAt = Date()
-
-    private struct MemorySnapshot {
-        let physFootprintMB: Double
-        let residentMB: Double
-        let virtualMB: Double
-        let compressedMB: Double
-        let highWaterMB: Double
-    }
-
-    private struct RUsageSnapshot {
-        let userCpuMs: Int64
-        let systemCpuMs: Int64
-        let maxRssKB: Int64
-        let voluntaryContextSwitches: Int64
-        let involuntaryContextSwitches: Int64
-    }
 
     private func fixedCString<T>(_ value: inout T) -> String {
         withUnsafePointer(to: &value) { pointer in
@@ -180,57 +160,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             )
         }
 
-        let physicalMemoryMB = processInfo.physicalMemory / 1024 / 1024
         logs.writeLog(
             log: "[tunnel:\(tunnelId)] OS platform=iOS osVersion=\(osVersionString) " +
                 "osDescription=\(processInfo.operatingSystemVersionString) " +
                 "process=\(processInfo.processName) kernel=\(sysname) " +
                 "kernelRelease=\(release) kernelVersion=\(version) " +
-                "machine=\(machine) physicalMemoryMB=\(physicalMemoryMB)"
+                "machine=\(machine)"
         )
-    }
-
-    func reportMemoryUsageMB() -> Double {
-        guard let snapshot = memorySnapshot() else {
-            logs.writeLog(log: "[Memory] unable to get info")
-            return 0.0
-        }
-        logs.writeLog(
-            log: "[Memory] VPN use: \(formatMB(snapshot.physFootprintMB)) MB " +
-                "residentMB=\(formatMB(snapshot.residentMB)) " +
-                "virtualMB=\(formatMB(snapshot.virtualMB)) " +
-                "compressedMB=\(formatMB(snapshot.compressedMB)) " +
-                "highWaterMB=\(formatMB(snapshot.highWaterMB))"
-        )
-        return snapshot.physFootprintMB
-    }
-
-    private func memorySnapshot() -> MemorySnapshot? {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
-
-        let result = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-            }
-        }
-
-        if result == KERN_SUCCESS {
-            let usedMB = bytesToMB(info.phys_footprint)
-            let highWater = memoryHighWaterLock.withLock { () -> Double in
-                if usedMB > memoryHighWaterMarkMB { memoryHighWaterMarkMB = usedMB }
-                return memoryHighWaterMarkMB
-            }
-            return MemorySnapshot(
-                physFootprintMB: usedMB,
-                residentMB: bytesToMB(info.resident_size),
-                virtualMB: bytesToMB(info.virtual_size),
-                compressedMB: bytesToMB(info.compressed),
-                highWaterMB: highWater
-            )
-        }
-        logs.writeLog(log: "[Memory] task_info failed kern_return=\(result)")
-        return nil
     }
 
     func logInterfaces() {
@@ -310,8 +246,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func startTunnel(options: [String : NSObject]?) async throws {
-        tunnelStartedAt = Date()
-        memoryHighWaterLock.withLock { memoryHighWaterMarkMB = 0 }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
@@ -335,7 +269,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)
-        startLoadSampler()
         let path = LogsRepository_iosKt.provideGoLogFilePath().normalized().description()
         logs.writeLog(log: "Starting Go tunnel logger using local storage")
         guard DobbyvpnInitLogger(path) else {
@@ -726,160 +659,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    private func logResourceSnapshot(label: String) {
-        let uptimeMs = elapsedMs(since: tunnelStartedAt)
-        let path = lastPathSignature ?? "(none)"
-        logs.writeLog(
-            log: "[tunnel:\(tunnelId)] RESOURCE \(label) uptimeMs=\(uptimeMs) " +
-                "\(loadSnapshotDetails()) " +
-                "path=\(path) interfaces={\(dobbyInterfaceSummary())}"
-        )
-    }
-
-    private func elapsedMs(since start: Date) -> Int {
-        Int(Date().timeIntervalSince(start) * 1000)
-    }
-
-    private func startLoadSampler() {
-        stopLoadSampler(reason: "restart")
-
-        let queue = DispatchQueue(label: "vpn.dobby.app.tunnel.load.\(tunnelId)", qos: .utility)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.0, leeway: .milliseconds(100))
-        timer.setEventHandler { [weak self] in
-            self?.logResourceSnapshot(label: "PERIODIC")
-        }
-        loadSampler = timer
-        timer.resume()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] LOAD_SAMPLER started intervalMs=1000")
-    }
-
-    private func stopLoadSampler(reason: String) {
-        guard let timer = loadSampler else { return }
-        loadSampler = nil
-        timer.setEventHandler {}
-        timer.cancel()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] LOAD_SAMPLER stopped reason=\(reason)")
-    }
-
-    private func loadSnapshotDetails() -> String {
-        let memoryDetails: String
-        if let memory = memorySnapshot() {
-            memoryDetails = "memoryMB=\(formatMB(memory.physFootprintMB)) " +
-                "residentMB=\(formatMB(memory.residentMB)) " +
-                "virtualMB=\(formatMB(memory.virtualMB)) " +
-                "compressedMB=\(formatMB(memory.compressedMB)) " +
-                "memoryHighWaterMB=\(formatMB(memory.highWaterMB))"
-        } else {
-            memoryDetails = "memoryMB=unavailable"
-        }
-
-        let usageDetails: String
-        if let usage = rusageSnapshot() {
-            usageDetails = "cpuUserMs=\(usage.userCpuMs) cpuSystemMs=\(usage.systemCpuMs) " +
-                "maxRssKB=\(usage.maxRssKB) ctxSwitchVoluntary=\(usage.voluntaryContextSwitches) " +
-                "ctxSwitchInvoluntary=\(usage.involuntaryContextSwitches)"
-        } else {
-            usageDetails = "rusage=unavailable"
-        }
-
-        return "\(memoryDetails) threads=\(threadCount()) \(usageDetails)"
-    }
-
-    private func threadCount() -> Int {
-        var threads: thread_act_array_t?
-        var count = mach_msg_type_number_t(0)
-        let result = task_threads(mach_task_self_, &threads, &count)
-        guard result == KERN_SUCCESS, let threads else {
-            logs.writeLog(log: "[Resources] task_threads failed kern_return=\(result)")
-            return -1
-        }
-
-        let size = vm_size_t(Int(count) * MemoryLayout<thread_t>.stride)
-        let deallocateResult = vm_deallocate(
-            mach_task_self_, vm_address_t(UInt(bitPattern: threads)), size
-        )
-        if deallocateResult != KERN_SUCCESS {
-            logs.writeLog(
-                log: "[Resources] vm_deallocate thread list failed kern_return=\(deallocateResult)"
-            )
-        }
-        return Int(count)
-    }
-
-    private func rusageSnapshot() -> RUsageSnapshot? {
-        var usage = rusage()
-        guard getrusage(RUSAGE_SELF, &usage) == 0 else {
-            let code = errno
-            logs.writeLog(
-                log: "[Resources] getrusage failed errno=\(code) error=\(String(cString: strerror(code)))"
-            )
-            return nil
-        }
-        return RUsageSnapshot(
-            userCpuMs: timevalToMs(usage.ru_utime),
-            systemCpuMs: timevalToMs(usage.ru_stime),
-            maxRssKB: Int64(usage.ru_maxrss),
-            voluntaryContextSwitches: Int64(usage.ru_nvcsw),
-            involuntaryContextSwitches: Int64(usage.ru_nivcsw)
-        )
-    }
-
-    private func timevalToMs(_ value: timeval) -> Int64 {
-        Int64(value.tv_sec) * 1000 + Int64(value.tv_usec) / 1000
-    }
-
-    private func bytesToMB<T: BinaryInteger>(_ bytes: T) -> Double {
-        Double(UInt64(bytes)) / 1024.0 / 1024.0
-    }
-
-    private func formatMB(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
-
-    private func dobbyInterfaceSummary() -> String {
-        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
-            return "scanFailed errno=\(errno)"
-        }
-        defer { freeifaddrs(ifaddrPtr) }
-
-        var dobbyMatches: [String] = []
-        var vpnInterfaces: [String] = []
-        var ptr: UnsafeMutablePointer<ifaddrs>? = first
-        while let current = ptr {
-            let rawName = String(cString: current.pointee.ifa_name)
-            let lowerName = rawName.lowercased()
-            let address = addressDescription(current.pointee.ifa_addr)
-            let flags = current.pointee.ifa_flags
-            let detail = "\(rawName)(\(address),flags=0x\(String(flags, radix: 16)))"
-
-            if isVPNInterfaceName(lowerName) {
-                vpnInterfaces.append(detail)
-            }
-            if address == "198.18.0.1" {
-                dobbyMatches.append(detail)
-            }
-            ptr = current.pointee.ifa_next
-        }
-
-        let dobby = dobbyMatches.isEmpty ? "none" : dobbyMatches.joined(separator: ",")
-        let vpn = vpnInterfaces.isEmpty ? "none" : vpnInterfaces.joined(separator: ",")
-        return "dobbyIPv4=\(dobby) vpnInterfaces=\(vpn)"
-    }
-
-    private func isVPNInterfaceName(_ lowerName: String) -> Bool {
-        lowerName.contains("utun") ||
-            lowerName.contains("tun") ||
-            lowerName.contains("tap") ||
-            lowerName.contains("ppp") ||
-            lowerName.contains("ipsec")
-    }
-
     private func teardownForStop(reason: String) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
-        logResourceSnapshot(label: "TEARDOWN_BEGIN reason=\(reason)")
-        stopLoadSampler(reason: reason)
         await stopGoSession(reason: reason)
 
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] clearing tunnel network settings")
@@ -889,7 +670,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         pathMonitor = nil
         lastPathSignature = nil
 
-        logResourceSnapshot(label: "TEARDOWN_END reason=\(reason)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason))")
     }
 

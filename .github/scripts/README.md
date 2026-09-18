@@ -76,7 +76,7 @@ and checksum-pinned `wintun.dll`, which the service loads at startup. The
 installer build requires those files and verifies their names in the finished
 MSI before upload.
 
-The desktop app build uses service binaries downloaded into `kmp_module/services`:
+The desktop app build uses service binaries downloaded into `runtime/services`:
 
 ```bash
 python .github/scripts/desktop_build.py app --skip-libs --require-all-services

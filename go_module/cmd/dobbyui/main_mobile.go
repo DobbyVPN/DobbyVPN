@@ -9,5 +9,8 @@ import (
 )
 
 func main() {
+	// The native Android/iOS shell owns VPN permission and transport. The Go
+	// process renders only the shared UI and calls the platform transport
+	// selected by its build target.
 	ui.NewApplication(app.NewWithID("com.dobby.vpn"), ui.NewMobileClient()).Run()
 }

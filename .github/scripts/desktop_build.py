@@ -33,8 +33,7 @@ from bounded_process import (
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 GO_MODULE_DIR = ROOT_DIR / "go_module"
-KMP_DIR = ROOT_DIR / "kmp_module"
-SERVICES_DIR = KMP_DIR / "services"
+SERVICES_DIR = ROOT_DIR / "runtime" / "services"
 LOCAL_BUILD_CACHE = os.environ.get("DOBBYVPN_LOCAL_BUILD_CACHE")
 TOOLS_DIR = (
     Path(LOCAL_BUILD_CACHE) / "desktop-tools"
@@ -908,8 +907,7 @@ def build_go_ui(
         "GOOS": GOOS_BY_PLATFORM[target_platform],
         "GOARCH": target_arch,
     })
-    metadata = read_gradle_properties()
-    version_name = os.environ.get("VERSION_NAME") or metadata.get("versionName", "0.0.1")
+    version_name = os.environ.get("VERSION_NAME") or read_version()
     version_parts = ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
     if all(os.environ.get(name) is not None for name in version_parts):
         version_name = ".".join(os.environ[name] for name in version_parts)
@@ -1151,15 +1149,12 @@ def build_service(
     return target
 
 
-def read_gradle_properties() -> dict[str, str]:
-    properties: dict[str, str] = {}
-    for line in (KMP_DIR / "gradle.properties").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        properties[key.strip()] = value.strip()
-    return properties
+def read_version() -> str:
+    """Read the one repository-owned desktop version source."""
+    value = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value):
+        fail(f"VERSION must contain a numeric x.y.z value, got {value!r}")
+    return value
 
 
 def required_service_platforms(require_all: bool, platform_value: str) -> list[str]:
@@ -1229,7 +1224,7 @@ def run_native_package() -> None:
     if major is not None and minor is not None and maintenance is not None:
         version = f"{major}.{minor}.{maintenance}"
     else:
-        version = os.environ.get("VERSION_NAME") or read_gradle_properties().get("versionName", "0.0.1")
+        version = os.environ.get("VERSION_NAME") or read_version()
     run(
         [
             sys.executable,
@@ -1508,7 +1503,7 @@ def run_cli_check(config_arg: str, port: int, control_socket: Path | None = None
     if control_socket is not None:
         env["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
     target = SERVICES_DIR / CLI_NAMES[host_platform()]
-    run([str(target), "check-config", config_arg], cwd=KMP_DIR, env=env)
+    run([str(target), "check-config", config_arg], cwd=ROOT_DIR, env=env)
 
 
 def cleanup_cli_test(
@@ -1627,7 +1622,7 @@ def parse_args() -> argparse.Namespace:
         help="Service platform to build/copy when --skip-libs is not set.",
     )
     app.add_argument("--arch", help="Override GOARCH for service builds.")
-    app.add_argument("--skip-libs", action="store_true", help="Use existing kmp_module/services binaries.")
+    app.add_argument("--skip-libs", action="store_true", help="Use existing runtime/services binaries.")
     app.add_argument("--require-all-services", action="store_true", help="Require Linux, macOS, and Windows services.")
     app.add_argument("--package", action="store_true", help="Assemble native desktop archives after staging inputs.")
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
@@ -1667,7 +1662,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    if not GO_MODULE_DIR.is_dir() or not KMP_DIR.is_dir():
+    if not GO_MODULE_DIR.is_dir() or not (ROOT_DIR / "VERSION").is_file():
         fail("Run this script from a cloned DobbyVPN repository")
     bootstrap_local_tools()
     args = parse_args()

@@ -87,6 +87,5 @@ actual fun platformLogInfo(): String {
     return "platform=ios " +
         "osVersion=$version " +
         "osDescription=${processInfo.operatingSystemVersionString} " +
-        "process=${processInfo.processName} " +
-        "physicalMemory=${processInfo.physicalMemory}"
+        "process=${processInfo.processName}"
 }

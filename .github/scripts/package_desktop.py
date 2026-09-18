@@ -21,8 +21,8 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SERVICES = ROOT / "kmp_module" / "services"
-LOGO = ROOT / "kmp_module" / "logos" / "logo.png"
+SERVICES = ROOT / "runtime" / "services"
+LOGO = ROOT / "assets" / "logo.png"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 
