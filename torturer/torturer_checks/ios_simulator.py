@@ -39,12 +39,18 @@ def simctl_install_command(device_udid: str, app: str | Path) -> list[str]:
     return ["xcrun", "simctl", "install", _validate_udid(device_udid), str(app_path)]
 
 
-def simctl_launch_command(device_udid: str, bundle_identifier: str) -> list[str]:
+def simctl_launch_command(
+    device_udid: str,
+    bundle_identifier: str,
+    *,
+    console: bool = False,
+) -> list[str]:
     _validate_bundle_identifier(bundle_identifier)
-    return [
-        "xcrun", "simctl", "launch", "--terminate-running-process",
-        _validate_udid(device_udid), bundle_identifier,
-    ]
+    command = ["xcrun", "simctl", "launch"]
+    if console:
+        command.append("--console")
+    command.extend(("--terminate-running-process", _validate_udid(device_udid), bundle_identifier))
+    return command
 
 
 def simctl_terminate_command(device_udid: str, bundle_identifier: str) -> list[str]:

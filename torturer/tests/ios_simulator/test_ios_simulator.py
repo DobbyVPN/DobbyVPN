@@ -34,6 +34,10 @@ class IOSSimulatorCommandsTest(unittest.TestCase):
             simctl_launch_command(UDID, BUNDLE),
             ["xcrun", "simctl", "launch", "--terminate-running-process", UDID, BUNDLE],
         )
+        self.assertEqual(
+            simctl_launch_command(UDID, BUNDLE, console=True),
+            ["xcrun", "simctl", "launch", "--console", "--terminate-running-process", UDID, BUNDLE],
+        )
         self.assertEqual(simctl_terminate_command(UDID, BUNDLE)[-1], BUNDLE)
         with self.assertRaisesRegex(IOSSimulatorContractError, "UDID"):
             simctl_boot_command("not-a-device")
