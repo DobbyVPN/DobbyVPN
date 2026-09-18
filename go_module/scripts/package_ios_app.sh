@@ -248,6 +248,13 @@ if [[ "$device" == 1 ]]; then
   # tunnel is re-signed with the same expanded values after it is copied.
   sed "s#\$(AppIdentifierPrefix)#$team_id.#g" "$app_entitlements" > "$expanded_app_entitlements"
   sed "s#\$(AppIdentifierPrefix)#$team_id.#g" "$tunnel_entitlements" > "$expanded_tunnel_entitlements"
+  # Direct codesign does not merge the application identity from the installed
+  # provisioning profile. Add the target-specific identity and team to both
+  # private entitlement files before re-signing the copied bundles.
+  /usr/libexec/PlistBuddy -c "Add :application-identifier string $team_id.vpn.dobby.app" "$expanded_app_entitlements"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $team_id" "$expanded_app_entitlements"
+  /usr/libexec/PlistBuddy -c "Add :application-identifier string $team_id.vpn.dobby.app.tunnel" "$expanded_tunnel_entitlements"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $team_id" "$expanded_tunnel_entitlements"
   codesign --force --sign "$identity" --timestamp --entitlements "$expanded_tunnel_entitlements" "$app/PlugIns/tunnel.appex"
   codesign --force --sign "$identity" --timestamp "$app/Frameworks/CommonDI.framework"
   /usr/libexec/PlistBuddy -c "Add :DobbyKeychainAccessGroup string $team_id.vpn.dobby.app" "$app/Info.plist" 2>/dev/null || \
