@@ -58,7 +58,10 @@ local/Release functional lanes use it for Connect, Disconnect, reconnect, and
 service-loss UI actions, while the existing semantic engine still owns VPN
 observations and cleanup. A separate native-window smoke injects one real
 mouse click and the platform close gesture against the packaged Windows/macOS
-binary. Linux remains CLI/service qualification only. GUI automation must
+binary. On hosted workers without an interactive desktop/window server this
+attempt is reported as unavailable while the real-service companion remains
+gating; a matching interactive Windows/macOS VM should treat the smoke as
+required. Linux remains CLI/service qualification only. GUI automation must
 drive visible controls and may not substitute CLI commands for GUI actions.
 
 The Go job emits one repository-wide coverage profile with

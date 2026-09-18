@@ -20,7 +20,10 @@ authenticated gRPC service. The shared functional adapter delegates tunnel,
 routing, traffic, process-loss, and cleanup assertions to the normal platform
 adapter. A Windows/macOS native-window smoke
 also starts the packaged binary, injects a real mouse click, and closes it with
-the platform gesture. Linux deliberately stays CLI/service-only.
+the platform gesture. Hosted runners without an interactive desktop/window
+server report that smoke as unavailable; the authenticated headless companion
+remains the gating check there, while an interactive Windows/macOS VM should
+require the native smoke. Linux deliberately stays CLI/service-only.
 
 The Fyne driver is not an operating-system input simulator: it validates
 widget callbacks, layout state, accessibility labels, and the real service
