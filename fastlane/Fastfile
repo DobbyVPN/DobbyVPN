@@ -83,6 +83,7 @@ platform :ios do
       raise "APP_SOURCE_SHA must be the exact lowercase 40-character source commit"
     end
     runtime = File.expand_path("../swift_module/DobbyVPNRuntime.xcframework", __dir__)
+    package_script = File.expand_path("../go_module/scripts/package_ios_app.sh", __dir__)
     output = File.join(EXPORT_DIR, IPA_NAME)
     FileUtils.mkdir_p(EXPORT_DIR)
     sh(
@@ -94,7 +95,7 @@ platform :ios do
       "IOS_TUNNEL_PROFILE_NAME=#{'DobbyVPNTunnelAppStore'.shellescape} " \
       "IOS_TEAM_ID=#{TEAM_ID.to_s.shellescape} " \
       "IOS_SIGNING_IDENTITY=#{'Apple Distribution'.shellescape} " \
-      "./go_module/scripts/package_ios_app.sh ios #{output.shellescape} #{runtime.shellescape}"
+      "#{package_script.shellescape} ios #{output.shellescape} #{runtime.shellescape}"
     )
   end
 
