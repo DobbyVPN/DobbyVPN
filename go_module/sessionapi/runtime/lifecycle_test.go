@@ -704,7 +704,10 @@ func TestProbeCancellationDuringRetryWaitCleansUp(t *testing.T) {
 func TestProbeDeadlineDuringRetryWaitCleansUp(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
-	o.ProbeTimeout = time.Millisecond
+	// Leave enough time for the test goroutine to enter the first probe before
+	// the overall deadline expires. The retry interval, rather than scheduler
+	// timing, must be what exercises the deadline path.
+	o.ProbeTimeout = 100 * time.Millisecond
 	o.ReadinessAttempts = 3
 	o.ReadinessRetryInterval = time.Hour
 	o.Probe = func(context.Context) (int64, error) {
@@ -725,7 +728,7 @@ func TestProbeDeadlineDuringRetryWaitCleansUp(t *testing.T) {
 func TestProbeRejectsLatePositiveResultAfterDeadline(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
-	o.ProbeTimeout = time.Millisecond
+	o.ProbeTimeout = 100 * time.Millisecond
 	o.Probe = func(ctx context.Context) (int64, error) {
 		record.add("probe")
 		<-ctx.Done()
