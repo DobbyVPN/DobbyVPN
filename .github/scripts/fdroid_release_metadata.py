@@ -32,6 +32,7 @@ GO_FYNE_BUILD = [
     "./make.bash",
     "popd",
     "export GOROOT=$$go$$",
+    'export GO_BIN="$GOROOT/bin/go"',
     'export GOPATH="$HOME/go"',
     'export GO111MODULE=on',
     'export GOFLAGS="-trimpath -buildvcs=false"',

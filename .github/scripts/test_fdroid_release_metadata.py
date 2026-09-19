@@ -110,6 +110,7 @@ class FdroidReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(target["gradle"], ["yes"])
         self.assertEqual(target["subdir"], "android_module")
         self.assertEqual(target["srclibs"], ["go@go1.25.1", "reproducible-apk-tools@v0.3.2"])
+        self.assertIn('export GO_BIN="$GOROOT/bin/go"', target["build"])
         self.assertEqual(target["rm"], ["swift_module"])
         self.assertIn("pushd $$go$$/src", target["build"])
         self.assertIn("go mod download", target["build"])

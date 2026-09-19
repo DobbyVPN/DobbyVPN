@@ -163,6 +163,7 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn('environment("CGO_LDFLAGS", "")', android)
         self.assertIn('environment("CFLAGS", "")', android)
         self.assertIn('"-trimpath", "-ldflags=-buildid= -s -w"', android)
+        self.assertIn('val goBinary = nonBlankEnvironment("GOROOT")', android)
         manifest = (SCRIPT_PATH.parents[2] / "android_module" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
         self.assertIn('android:versionCode="${dobbyVersionCode}"', manifest)
         self.assertIn('android:versionName="${dobbyVersionName}"', manifest)

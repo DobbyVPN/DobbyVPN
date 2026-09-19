@@ -8,7 +8,6 @@ plugins {
 
 val repoRoot = rootProject.projectDir.parentFile
 val goModule = repoRoot.resolve("go_module")
-val goBinary = providers.environmentVariable("GO_BIN").orElse("go")
 fun nonBlankEnvironment(name: String) =
     providers.environmentVariable(name)
         .map(String::trim)
@@ -17,6 +16,14 @@ fun nonBlankGradleProperty(name: String) =
     providers.gradleProperty(name)
         .map(String::trim)
         .filter { it.isNotEmpty() }
+// GOROOT is the pinned Go source built by the Android/F-Droid workflows. An
+// inherited GO_BIN can point at a buildserver's system Go and silently change
+// the native library (and its embedded Go version), so prefer the toolchain's
+// own executable whenever GOROOT is present.
+val goBinary = nonBlankEnvironment("GOROOT")
+    .map { File(it, "bin/go").absolutePath }
+    .orElse(nonBlankEnvironment("GO_BIN"))
+    .orElse("go")
 
 val localSdkRoot = providers.provider {
     val properties = Properties()
