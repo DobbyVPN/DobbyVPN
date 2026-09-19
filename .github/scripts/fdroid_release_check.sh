@@ -61,6 +61,7 @@ reference_key="$reference_dir/fdroid-reference.key"
 reference_ca_bundle="$reference_dir/fdroid-reference-ca-bundle.crt"
 https_log="$reference_dir/fdroid-https.log"
 reference_url="https://127.0.0.1:8765/$(basename "$reference_apk")"
+diagnostic_dir="${FDROID_DIAGNOSTIC_DIR:-}"
 server_pid=""
 
 test -d "$fdroiddata_dir"
@@ -159,6 +160,41 @@ run_fdroid_vagrant() {
   sudo --preserve-env --user vagrant "${fdroid_environment[@]}" fdroid "$@"
 }
 
+collect_native_diagnostics() {
+  local status=$1
+  [[ -n "$diagnostic_dir" ]] || return 0
+  mkdir -p "$diagnostic_dir"
+  {
+    echo "fdroid_build_status=$status"
+    echo "source_sha=$source_sha"
+    echo "version_name=$version_name"
+    echo "version_code=$version_code"
+    echo "reference_apk=$reference_apk"
+    echo "built_apk=$fdroid_home/tmp/com.dobby.vpn_${version_code}.apk"
+  } > "$diagnostic_dir/summary.txt"
+
+  local built_apk="$fdroid_home/tmp/com.dobby.vpn_${version_code}.apk"
+  [[ -f "$built_apk" ]] || return 0
+  for abi in arm64-v8a x86_64; do
+    local reference_so="$diagnostic_dir/reference-${abi}.so"
+    local built_so="$diagnostic_dir/fdroid-${abi}.so"
+    unzip -p "$reference_apk" "lib/$abi/libdobby_vpn.so" > "$reference_so" || true
+    unzip -p "$built_apk" "lib/$abi/libdobby_vpn.so" > "$built_so" || true
+    sha256sum "$reference_so" "$built_so" >> "$diagnostic_dir/sha256.txt" 2>/dev/null || true
+    if [[ -s "$reference_so" && -s "$built_so" ]]; then
+      cmp -l "$reference_so" "$built_so" | head -n 32 > "$diagnostic_dir/cmp-${abi}.txt" || true
+      readelf -S "$reference_so" > "$diagnostic_dir/reference-${abi}.sections.txt" 2>&1 || true
+      readelf -S "$built_so" > "$diagnostic_dir/fdroid-${abi}.sections.txt" 2>&1 || true
+      readelf -p .comment "$reference_so" > "$diagnostic_dir/reference-${abi}.comment.txt" 2>&1 || true
+      readelf -p .comment "$built_so" > "$diagnostic_dir/fdroid-${abi}.comment.txt" 2>&1 || true
+      strings -a "$reference_so" | grep -E '/home|/opt|/tmp|runner|vagrant|go-build|android-sdk|clang' \
+        > "$diagnostic_dir/reference-${abi}.paths.txt" || true
+      strings -a "$built_so" | grep -E '/home|/opt|/tmp|runner|vagrant|go-build|android-sdk|clang' \
+        > "$diagnostic_dir/fdroid-${abi}.paths.txt" || true
+    fi
+  done
+}
+
 mode="$(python3 "$metadata_helper" prepare \
   --metadata "$metadata_path" \
   --baseline "$baseline_path" \
@@ -215,7 +251,11 @@ rm "$fdroid_home/fdroiddata"
     --on-server \
     --no-tarball \
     "com.dobby.vpn:${version_code}"
-)
+) || {
+  build_status=$?
+  collect_native_diagnostics "$build_status"
+  exit "$build_status"
+}
 
 apk_path="$fdroid_home/tmp/com.dobby.vpn_${version_code}.apk"
 binary_path="$fdroid_home/tmp/binaries/com.dobby.vpn_${version_code}.binary.apk"

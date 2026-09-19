@@ -74,6 +74,7 @@ jobs:
       - name: Run the F-Droid metadata-driven build and scans
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fdroid-diagnostics"
           # fdroid_release_check.sh serves the signed Release APK over a
           # temporary, container-local HTTPS endpoint for fdroidserver's
           # reference-binary comparison.
@@ -82,9 +83,11 @@ jobs:
             --volume "$RUNNER_TEMP/fdroiddata:/workspace/fdroiddata" \
             --volume "$RUNNER_TEMP/fdroidserver:/workspace/fdroidserver:ro" \
             --volume "$RUNNER_TEMP/fdroid-reference:/workspace/reference" \
+            --volume "$RUNNER_TEMP/fdroid-diagnostics:/workspace/diagnostics" \
             --env SOURCE_SHA \
             --env VERSION_NAME \
             --env VERSION_CODE \
+            --env FDROID_DIAGNOSTIC_DIR=/workspace/diagnostics \
             "$FDROID_IMAGE" \
             /workspace/product/.github/scripts/fdroid_release_check.sh \
               --fdroiddata /workspace/fdroiddata \
@@ -93,6 +96,15 @@ jobs:
               --source-sha "$SOURCE_SHA" \
               --version-name "$VERSION_NAME" \
               --version-code "$VERSION_CODE"
+
+      - name: Upload F-Droid failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fdroid-native-failure-diagnostics
+          path: ${{ runner.temp }}/fdroid-diagnostics
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Record upstream inputs
         if: always()
