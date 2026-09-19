@@ -40,39 +40,39 @@ jobs:
 
       - name: Download Linux package
         if: inputs.platform == 'linux'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: dobbyVPN-linux.deb
           path: release-packages
       - name: Download Windows package
         if: inputs.platform == 'windows'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: dobbyVPN-windows-amd64.msi
           path: release-packages
       - name: Download macOS packages
         if: inputs.platform == 'macos'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: dobbyVPN-macos-*.pkg
           path: release-packages
           merge-multiple: true
       - name: Download Android packages
         if: inputs.platform == 'android'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: dobbyvpn-android-*.apk
           path: release-packages
           merge-multiple: true
       - name: Download Windows headless UI companion
         if: inputs.platform == 'windows'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: dobby-vpn-ui-test-windows
           path: release-ui
       - name: Download macOS arm64 headless UI companion
         if: inputs.platform == 'macos'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: dobby-vpn-ui-test-macos-arm64
           path: release-ui
@@ -86,7 +86,7 @@ jobs:
           test -x "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test"
 
       - name: Download shared Render VPN profile
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ inputs.render_artifact_name }}
           path: render
