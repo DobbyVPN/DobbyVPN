@@ -132,6 +132,7 @@ val buildGoUI by tasks.registering {
     val outputFiles = abis.map { (androidAbi, _) ->
         layout.buildDirectory.file("generated/go-libs/$androidAbi/libdobby_vpn.so").get().asFile
     }
+    val goBuildRoot = layout.buildDirectory.dir("generated/go-build")
     inputs.files(fileTree(goModule) { include("**/*.go", "go.mod", "go.sum") })
     outputs.files(outputFiles)
     dependsOn(copyFyneJava)
@@ -144,6 +145,15 @@ val buildGoUI by tasks.registering {
             .listFiles()?.singleOrNull()
             ?: error("Android NDK LLVM toolchain is unavailable under $ndk")
         val apiLevel = api.get()
+        // Keep Go/cgo's process-visible inputs identical for the hosted
+        // Android builder and the F-Droid buildserver. In particular, do
+        // not let each builder's HOME, GOENV, temporary directory, or
+        // inherited CGO flags enter the native shared object.
+        val reproducibleBuildRoot = goBuildRoot.get().asFile
+        val goCache = reproducibleBuildRoot.resolve("cache")
+        val goTemp = reproducibleBuildRoot.resolve("tmp")
+        goCache.mkdirs()
+        goTemp.mkdirs()
         abis.forEach { (androidAbi, pair) ->
             val (goArch, triple) = pair
             val output = layout.buildDirectory.dir("generated/go-libs/$androidAbi").get().asFile
@@ -166,8 +176,26 @@ val buildGoUI by tasks.registering {
                 environment("GOARCH", goArch)
                 environment("CGO_ENABLED", "1")
                 environment("CC", compiler.absolutePath)
-                // Keep cgo/linker metadata stable across the two clean release
-                // builds used by the reproducibility gate.
+                environment("GO111MODULE", "on")
+                environment("GOENV", "off")
+                environment("GOTOOLCHAIN", "local")
+                environment("GOFLAGS", "-trimpath -buildvcs=false")
+                environment("GOCACHE", goCache.absolutePath)
+                environment("GOTMPDIR", goTemp.absolutePath)
+                // Gradle inherits the caller's environment. Clear every
+                // conventional C flag family so a buildserver image cannot
+                // silently alter cgo's wrapper compilation or final link.
+                environment("CGO_CFLAGS", "")
+                environment("CGO_CPPFLAGS", "")
+                environment("CGO_CXXFLAGS", "")
+                environment("CGO_LDFLAGS", "")
+                environment("CFLAGS", "")
+                environment("CPPFLAGS", "")
+                environment("CXXFLAGS", "")
+                environment("LDFLAGS", "")
+                environment("LANG", "C")
+                environment("LC_ALL", "C")
+                environment("TZ", "UTC")
                 environment("SOURCE_DATE_EPOCH", "0")
             }
         }
