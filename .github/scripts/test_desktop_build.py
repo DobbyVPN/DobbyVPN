@@ -152,6 +152,11 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn('tasks.matching { it.name == "assembleRelease" }.configureEach', android)
         self.assertIn('finalizedBy(mirrorFroidReleaseApk)', android)
         self.assertIn('build/outputs/apk/release', android)
+        self.assertIn('manifestPlaceholders["dobbyVersionCode"] = versionCode.toString()', android)
+        self.assertIn('manifestPlaceholders["dobbyVersionName"] = versionName', android)
+        manifest = (SCRIPT_PATH.parents[2] / "android_module" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+        self.assertIn('android:versionCode="${dobbyVersionCode}"', manifest)
+        self.assertIn('android:versionName="${dobbyVersionName}"', manifest)
 
     def test_curl_download_has_bounded_transfer_time_without_retries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:

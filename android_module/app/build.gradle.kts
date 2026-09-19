@@ -45,6 +45,12 @@ android {
         targetSdk = 35
         this.versionCode = versionCode
         this.versionName = versionName
+        // Keep the release identity explicit in the merged manifest.  AGP's
+        // injected version properties are consumed by the DSL above, but the
+        // standalone F-Droid build must also expose the same values to
+        // fdroidserver's APK metadata parser.
+        manifestPlaceholders["dobbyVersionCode"] = versionCode.toString()
+        manifestPlaceholders["dobbyVersionName"] = versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["dobbyTestSourceSha"] = sourceCommit
         buildConfigField("String", "PROJECT_REPOSITORY_COMMIT", "\"$sourceCommit\"")
