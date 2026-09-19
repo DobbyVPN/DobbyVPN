@@ -10,7 +10,6 @@ set -euo pipefail
 
 readonly output="DobbyVPNRuntime.xcframework"
 readonly mobile_version="v0.0.0-20260520154334-0e4426e1883d"
-readonly expected_bridge_hash="ff9e5593a5c3218242338aca83db2432dded78d1748195302b363ddfddfd85e8"
 
 simulator_architecture=""
 if [[ "$#" -gt 0 ]]; then
@@ -105,6 +104,44 @@ if [[ -z "$simulator_architecture" ]]; then
     exit 1
   fi
 
+  provenance="$module_dir/lib/static-libraries.provenance.json"
+  if [[ ! -f "$provenance" ]]; then
+    echo "missing TrustTunnel static-library provenance: $provenance" >&2
+    exit 1
+  fi
+  expected_bridge_hash="$(python3 - "$provenance" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as source:
+        document = json.load(source)
+except OSError as error:
+    print(f"cannot read TrustTunnel static-library provenance {path}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+except json.JSONDecodeError as error:
+    print(f"invalid TrustTunnel static-library provenance JSON {path}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    value = document["artifacts"]["ios"]["sha256"]
+except (KeyError, TypeError):
+    print(f"TrustTunnel static-library provenance has no artifacts.ios.sha256: {path}", file=sys.stderr)
+    raise SystemExit(1)
+
+if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+    print(
+        f"invalid iOS bridge SHA-256 in TrustTunnel static-library provenance {path}: "
+        "expected exactly 64 lowercase hexadecimal characters",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+print(value)
+PY
+)"
   actual_bridge_hash="$(shasum -a 256 "$bridge" | awk '{print $1}')"
   if [[ "$actual_bridge_hash" != "$expected_bridge_hash" ]]; then
     echo "TrustTunnel bridge SHA-256 verification failed" >&2

@@ -658,6 +658,23 @@ def append_cgo_ldflags(env: dict[str, str], *flags: str) -> None:
     env["CGO_LDFLAGS"] = " ".join(part for part in (existing, *flags) if part)
 
 
+def configure_macos_deployment_target(
+    target_platform: str, environment: dict[str, str]
+) -> None:
+    """Pin the deployment floor for every macOS Go/cgo build.
+
+    ``-mmacosx-version-min`` only controls the final external link.  cgo
+    compiles C/C++ objects before that link, so leaving the SDK default in
+    place can produce objects targeting the runner's newer macOS release
+    while the executable advertises the product's older deployment floor.
+    Keep this invariant in the build helper so service, CLI, UI, and UI-test
+    builds all receive the same setting.
+    """
+    if target_platform != "macos":
+        return
+    environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
+
+
 def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
     """Stage the checksum-pinned Linux bridge for linking and packaging."""
     if host_platform() != "linux":
@@ -839,6 +856,7 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
     output = GO_MODULE_DIR / CLI_NAMES[target_platform]
     env = os.environ.copy()
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
+    configure_macos_deployment_target(target_platform, env)
     ldflags = "-buildid="
     if target_platform == "macos":
         # Use the host external linker so every native binary declares the
@@ -906,6 +924,7 @@ def build_go_ui(
         "GOOS": GOOS_BY_PLATFORM[target_platform],
         "GOARCH": target_arch,
     })
+    configure_macos_deployment_target(target_platform, environment)
     version_name = os.environ.get("VERSION_NAME") or read_version()
     version_parts = ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
     if all(os.environ.get(name) is not None for name in version_parts):
@@ -967,6 +986,7 @@ def build_go_ui_test(
         "GOOS": GOOS_BY_PLATFORM[target_platform],
         "GOARCH": target_arch,
     })
+    configure_macos_deployment_target(target_platform, environment)
     ldflags = "-buildid="
     if target_platform == "macos":
         ldflags += (
@@ -1093,6 +1113,7 @@ def build_service(
                 "GOARCH": target_arch,
             }
         )
+        configure_macos_deployment_target(target_platform, env)
         ldflags = "-buildid="
         if target_platform == "macos":
             # Keep the package's declared macOS 12 floor valid for both

@@ -554,6 +554,42 @@ class DesktopBuildTests(unittest.TestCase):
             "-L/custom -lc++ -framework SystemConfiguration",
         )
 
+    def test_macos_deployment_target_is_pinned_without_touching_other_platforms(self) -> None:
+        macos_environment = {"MACOSX_DEPLOYMENT_TARGET": "15.0"}
+        desktop_build.configure_macos_deployment_target("macos", macos_environment)
+        self.assertEqual(
+            macos_environment["MACOSX_DEPLOYMENT_TARGET"],
+            desktop_build.MACOS_MINIMUM_SYSTEM_VERSION,
+        )
+
+        linux_environment = {"MACOSX_DEPLOYMENT_TARGET": "15.0"}
+        desktop_build.configure_macos_deployment_target("linux", linux_environment)
+        self.assertEqual(linux_environment["MACOSX_DEPLOYMENT_TARGET"], "15.0")
+
+    def test_macos_cli_build_receives_deployment_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            go_module = root / "go_module"
+            services = root / "services"
+            go_module.mkdir()
+            services.mkdir()
+
+            def build(*args: object, **kwargs: object) -> None:
+                (go_module / "dobby-cli").touch()
+
+            with (
+                mock.patch.object(desktop_build, "GO_MODULE_DIR", go_module),
+                mock.patch.object(desktop_build, "SERVICES_DIR", services),
+                mock.patch.object(desktop_build, "run", side_effect=build) as run,
+                mock.patch.object(desktop_build.Path, "chmod"),
+            ):
+                desktop_build.build_cli("macos", "arm64")
+
+        self.assertEqual(
+            run.call_args.kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"],
+            desktop_build.MACOS_MINIMUM_SYSTEM_VERSION,
+        )
+
     def test_prepare_go_test_dependencies_stages_bridge_runtime_and_environment(self) -> None:
         calls: list[object] = []
         environment_updates: dict[str, str] = {}
@@ -646,6 +682,48 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertEqual(command[-1], "./cmd/dobbyui/")
         self.assertEqual(run.call_args.kwargs["env"]["CGO_ENABLED"], "1")
         self.assertEqual(run.call_args.kwargs["env"]["GOOS"], "linux")
+
+    def test_macos_go_ui_build_receives_deployment_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "dobby-vpn-ui"
+            with (
+                mock.patch.object(desktop_build, "host_platform", return_value="macos"),
+                mock.patch.object(desktop_build, "ensure_build_dependencies"),
+                mock.patch.object(desktop_build, "go_mod_download"),
+                mock.patch.object(
+                    desktop_build,
+                    "run",
+                    side_effect=lambda *args, **kwargs: output.touch(),
+                ) as run,
+                mock.patch.object(desktop_build.Path, "chmod"),
+            ):
+                desktop_build.build_go_ui("macos", "arm64", True, False, output)
+
+        self.assertEqual(
+            run.call_args.kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"],
+            desktop_build.MACOS_MINIMUM_SYSTEM_VERSION,
+        )
+
+    def test_macos_go_ui_test_build_receives_deployment_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "dobby-vpn-ui-test"
+            with (
+                mock.patch.object(desktop_build, "host_platform", return_value="macos"),
+                mock.patch.object(desktop_build, "ensure_build_dependencies"),
+                mock.patch.object(desktop_build, "go_mod_download"),
+                mock.patch.object(
+                    desktop_build,
+                    "run",
+                    side_effect=lambda *args, **kwargs: output.touch(),
+                ) as run,
+                mock.patch.object(desktop_build.Path, "chmod"),
+            ):
+                desktop_build.build_go_ui_test("macos", "arm64", True, False, output)
+
+        self.assertEqual(
+            run.call_args.kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"],
+            desktop_build.MACOS_MINIMUM_SYSTEM_VERSION,
+        )
 
     def test_go_ui_test_build_is_native_and_enables_accessibility(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -797,6 +875,10 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn(
             "-lc++ -framework SystemConfiguration",
             build_environments[0]["CGO_LDFLAGS"],
+        )
+        self.assertEqual(
+            build_environments[0]["MACOSX_DEPLOYMENT_TARGET"],
+            desktop_build.MACOS_MINIMUM_SYSTEM_VERSION,
         )
 
 
