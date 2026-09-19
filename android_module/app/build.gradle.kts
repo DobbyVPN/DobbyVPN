@@ -51,6 +51,7 @@ android {
         // fdroidserver's APK metadata parser.
         manifestPlaceholders["dobbyVersionCode"] = versionCode.toString()
         manifestPlaceholders["dobbyVersionName"] = versionName
+            ?: error("versionName is required for the Android manifest")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["dobbyTestSourceSha"] = sourceCommit
         buildConfigField("String", "PROJECT_REPOSITORY_COMMIT", "\"$sourceCommit\"")
