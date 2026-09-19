@@ -13,6 +13,10 @@ fun nonBlankEnvironment(name: String) =
     providers.environmentVariable(name)
         .map(String::trim)
         .filter { it.isNotEmpty() }
+fun nonBlankGradleProperty(name: String) =
+    providers.gradleProperty(name)
+        .map(String::trim)
+        .filter { it.isNotEmpty() }
 
 val localSdkRoot = providers.provider {
     val properties = Properties()
@@ -25,10 +29,10 @@ val localSdkRoot = providers.provider {
 val androidSdkRoot = nonBlankEnvironment("ANDROID_SDK_ROOT")
     .orElse(nonBlankEnvironment("ANDROID_HOME"))
     .orElse(localSdkRoot.map(String::trim).filter { it.isNotEmpty() })
-val versionName = providers.gradleProperty("android.injected.version.name")
-    .orElse(providers.gradleProperty("versionName")).get()
-val versionCode = providers.gradleProperty("android.injected.version.code")
-    .orElse(providers.gradleProperty("versionCode")).map(String::toInt).get()
+val versionName = nonBlankGradleProperty("android.injected.version.name")
+    .orElse(nonBlankGradleProperty("versionName")).get()
+val versionCode = nonBlankGradleProperty("android.injected.version.code")
+    .orElse(nonBlankGradleProperty("versionCode")).map(String::toInt).get()
 val sourceCommit = providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")
 
 android {
@@ -51,7 +55,6 @@ android {
         // fdroidserver's APK metadata parser.
         manifestPlaceholders["dobbyVersionCode"] = versionCode.toString()
         manifestPlaceholders["dobbyVersionName"] = versionName
-            ?: error("versionName is required for the Android manifest")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["dobbyTestSourceSha"] = sourceCommit
         buildConfigField("String", "PROJECT_REPOSITORY_COMMIT", "\"$sourceCommit\"")

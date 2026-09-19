@@ -146,6 +146,7 @@ class DesktopBuildTests(unittest.TestCase):
         android = (SCRIPT_PATH.parents[2] / "android_module" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
 
         self.assertIn("fun nonBlankEnvironment(name: String)", android)
+        self.assertIn("fun nonBlankGradleProperty(name: String)", android)
         self.assertIn(".filter { it.isNotEmpty() }", android)
         self.assertIn('orElse(androidSdkRoot.map { File(it, "ndk/27.3.13750724").absolutePath })', android)
         self.assertIn('val mirrorFroidReleaseApk by tasks.registering(Copy::class)', android)
