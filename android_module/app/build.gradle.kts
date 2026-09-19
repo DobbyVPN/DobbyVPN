@@ -163,7 +163,7 @@ val buildGoUI by tasks.registering {
             check(compiler.isFile) { "Android NDK compiler is unavailable: $compiler" }
             val command = listOf(
                 goBinary.get(), "build", "-buildmode=c-shared", "-tags=android,accessibility,static",
-                "-trimpath", "-ldflags=-buildid=", "-o", output.absolutePath, "./cmd/dobbyui"
+                "-trimpath", "-ldflags=-buildid= -s -w", "-o", output.absolutePath, "./cmd/dobbyui"
             )
             // Gradle's Exec task is intentionally one process per ABI. Running
             // the same Go command sequentially keeps generated c-shared
