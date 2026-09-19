@@ -46,25 +46,25 @@ jobs:
           fi
 
       - name: Download Windows gRPC vpn service
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: windows_grpcvpnserver.exe
           path: runtime/services
 
       - name: Download Windows desktop CLI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-cli-windows
           path: runtime/services
 
       - name: Download Linux gRPC vpn service
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ubuntu_grpcvpnserver
           path: runtime/services
 
       - name: Download Linux desktop CLI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-cli-linux
           path: runtime/services
@@ -75,25 +75,25 @@ jobs:
           chmod +x ubuntu_grpcvpnserver dobby-cli
 
       - name: Download macOS arm64 gRPC vpn service
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: macos_grpcvpnserver-arm64
           path: runtime/services
 
       - name: Download macOS arm64 desktop CLI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-cli-macos-arm64
           path: runtime/services/macos-arm64
 
       - name: Download macOS amd64 gRPC vpn service
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: macos_grpcvpnserver-amd64
           path: runtime/services/macos-amd64
 
       - name: Download macOS amd64 desktop CLI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-cli-macos-amd64
           path: runtime/services/macos-amd64
@@ -116,25 +116,25 @@ jobs:
           test -x macos-amd64/dobby-cli
 
       - name: Download Windows Go/Fyne UI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-vpn-ui-windows
           path: runtime/services
 
       - name: Download Linux Go/Fyne UI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-vpn-ui-linux
           path: runtime/services
 
       - name: Download macOS arm64 Go/Fyne UI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-vpn-ui-macos-arm64
           path: runtime/services/macos-arm64
 
       - name: Download macOS amd64 Go/Fyne UI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobby-vpn-ui-macos-amd64
           path: runtime/services/macos-amd64
