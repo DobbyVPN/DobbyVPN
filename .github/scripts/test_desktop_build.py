@@ -148,6 +148,8 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn("fun nonBlankEnvironment(name: String)", android)
         self.assertIn(".filter { it.isNotEmpty() }", android)
         self.assertIn('orElse(androidSdkRoot.map { File(it, "ndk/27.3.13750724").absolutePath })', android)
+        self.assertIn('tasks.named("assembleRelease")', android)
+        self.assertIn('build/outputs/apk/release', android)
 
     def test_curl_download_has_bounded_transfer_time_without_retries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:

@@ -164,6 +164,21 @@ val buildGoUI by tasks.registering {
 
 tasks.named("preBuild") { dependsOn(buildGoUI) }
 
+// F-Droid's Gradle output discovery looks below the selected Gradle root
+// (android_module/build), while AGP normally writes this app to app/build.
+// Keep the normal app output for the Android driver and mirror the unsigned
+// release APK at the root only when that task completes.
+tasks.named("assembleRelease") {
+    doLast {
+        val built = layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk").get().asFile
+        if (built.isFile) {
+            val fdroidOutput = rootProject.projectDir.resolve("build/outputs/apk/release")
+            fdroidOutput.mkdirs()
+            built.copyTo(fdroidOutput.resolve(built.name), overwrite = true)
+        }
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
