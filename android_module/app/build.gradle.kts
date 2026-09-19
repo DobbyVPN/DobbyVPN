@@ -1,4 +1,5 @@
 import java.io.File
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -8,6 +9,17 @@ plugins {
 val repoRoot = rootProject.projectDir.parentFile
 val goModule = repoRoot.resolve("go_module")
 val goBinary = providers.environmentVariable("GO_BIN").orElse("go")
+val localSdkRoot = providers.provider {
+    val properties = Properties()
+    val localProperties = rootProject.projectDir.resolve("local.properties")
+    if (localProperties.isFile) {
+        localProperties.inputStream().use { stream -> properties.load(stream) }
+    }
+    properties.getProperty("sdk.dir").orEmpty()
+}
+val androidSdkRoot = providers.environmentVariable("ANDROID_SDK_ROOT")
+    .orElse(providers.environmentVariable("ANDROID_HOME"))
+    .orElse(localSdkRoot)
 val versionName = providers.gradleProperty("android.injected.version.name")
     .orElse(providers.gradleProperty("versionName")).get()
 val versionCode = providers.gradleProperty("android.injected.version.code")
@@ -93,6 +105,7 @@ val copyFyneJava by tasks.registering(Copy::class) {
 val buildGoUI by tasks.registering {
     val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME")
         .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
+        .orElse(androidSdkRoot.map { File(it, "ndk/27.3.13750724").absolutePath })
         .orElse("")
     val api = providers.gradleProperty("android.ndk.api").orElse("26")
     val abis = mapOf(
