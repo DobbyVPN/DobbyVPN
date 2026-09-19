@@ -168,15 +168,13 @@ tasks.named("preBuild") { dependsOn(buildGoUI) }
 // (android_module/build), while AGP normally writes this app to app/build.
 // Keep the normal app output for the Android driver and mirror the unsigned
 // release APK at the root only when that task completes.
+val mirrorFroidReleaseApk by tasks.registering(Copy::class) {
+    from(layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk"))
+    into(rootProject.projectDir.resolve("build/outputs/apk/release"))
+}
+
 tasks.matching { it.name == "assembleRelease" }.configureEach {
-    doLast {
-        val built = layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk").get().asFile
-        if (built.isFile) {
-            val fdroidOutput = rootProject.projectDir.resolve("build/outputs/apk/release")
-            fdroidOutput.mkdirs()
-            built.copyTo(fdroidOutput.resolve(built.name), overwrite = true)
-        }
-    }
+    finalizedBy(mirrorFroidReleaseApk)
 }
 
 dependencies {
