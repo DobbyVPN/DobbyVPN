@@ -29,10 +29,10 @@ val localSdkRoot = providers.provider {
 val androidSdkRoot = nonBlankEnvironment("ANDROID_SDK_ROOT")
     .orElse(nonBlankEnvironment("ANDROID_HOME"))
     .orElse(localSdkRoot.map(String::trim).filter { it.isNotEmpty() })
-val versionName: String = nonBlankGradleProperty("android.injected.version.name")
+val releaseVersionName: String = nonBlankGradleProperty("android.injected.version.name")
     .orElse(nonBlankGradleProperty("versionName")).get()
     ?: error("versionName is required for the Android manifest")
-val versionCode: Int = nonBlankGradleProperty("android.injected.version.code")
+val releaseVersionCode: Int = nonBlankGradleProperty("android.injected.version.code")
     .orElse(nonBlankGradleProperty("versionCode")).map(String::toInt).get()
     ?: error("versionCode is required for the Android manifest")
 val sourceCommit = providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")
@@ -49,14 +49,14 @@ android {
         applicationId = providers.gradleProperty("packageName").get()
         minSdk = 26
         targetSdk = 35
-        this.versionCode = versionCode
-        this.versionName = versionName
+        this.versionCode = releaseVersionCode
+        this.versionName = releaseVersionName
         // Keep the release identity explicit in the merged manifest.  AGP's
         // injected version properties are consumed by the DSL above, but the
         // standalone F-Droid build must also expose the same values to
         // fdroidserver's APK metadata parser.
-        manifestPlaceholders["dobbyVersionCode"] = versionCode.toString()
-        manifestPlaceholders["dobbyVersionName"] = versionName
+        manifestPlaceholders["dobbyVersionCode"] = releaseVersionCode.toString()
+        manifestPlaceholders["dobbyVersionName"] = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["dobbyTestSourceSha"] = sourceCommit
         buildConfigField("String", "PROJECT_REPOSITORY_COMMIT", "\"$sourceCommit\"")
