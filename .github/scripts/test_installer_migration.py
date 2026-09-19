@@ -193,6 +193,18 @@ class InstallerMigrationTests(unittest.TestCase):
         self.assertIn("DobbyVPN Server is not running", source)
         self.assertIn("DobbyVPN Server remains registered", source)
 
+    def test_windows_arp_results_remain_arrays_for_zero_or_one_entry(self) -> None:
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+        query = """$entries = @(
+  @(
+    Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue
+    Get-ItemProperty 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue
+  ) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
+)"""
+        self.assertEqual(source.count(query), 2)
+        self.assertIn("if ($entries.Count -ne 1)", source)
+        self.assertIn("if ($entries.Count -ne 0)", source)
+
     def test_workflow_qualifies_both_macos_architectures(self) -> None:
         workflow = (SCRIPT_PATH.parents[1] / "workflows/installer_migration.yml").read_text(
             encoding="utf-8"

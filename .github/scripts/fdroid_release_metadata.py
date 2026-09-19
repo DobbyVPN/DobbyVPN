@@ -40,7 +40,6 @@ GO_FYNE_BUILD = [
     'export PATH="$GOROOT/bin:$GOPATH/bin:$PATH"',
     'test -x "$GOROOT/bin/go"',
     'test "$("$GOROOT/bin/go" env GOVERSION)" = "go1.26.8"',
-    'export ORG_GRADLE_PROJECT_dobbyGoBinary="$GOROOT/bin/go"',
     'go env GOROOT GOVERSION GOFLAGS GOTOOLCHAIN',
     'cd ..',
     'export REPO_ROOT=$(pwd)',
@@ -55,6 +54,7 @@ GO_FYNE_BUILD = [
     'export PATH="$JAVA_HOME/bin:$GOROOT/bin:$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$GOPATH/bin:$PATH"',
     'cd android_module',
     'sed -i -e "s/^versionCode=.*/versionCode=$$VERCODE$$/" -e "s/^versionName=.*/versionName=$$VERSION$$/" gradle.properties',
+    'printf "\\ndobbyGoBinary=$GOROOT/bin/go\\n" >> gradle.properties',
     'export COMMIT=$(git rev-parse HEAD)',
     'printf "\\nprojectRepositoryCommit=$COMMIT\\nprojectRepositoryCommitLink=https://github.com/DobbyVPN/DobbyVPN/tree/$COMMIT\\n" >> gradle.properties',
 ]

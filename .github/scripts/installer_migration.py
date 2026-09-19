@@ -227,9 +227,11 @@ class WindowsInstaller(InstallerAdapter):
         script = r'''
 $ErrorActionPreference = "Stop"
 $entries = @(
-  Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-  Get-ItemProperty 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
+  @(
+    Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
+    Get-ItemProperty 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
+  ) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
+)
 if ($entries.Count -ne 1) { throw "expected one DobbyVPN ARP entry" }
 if ([string]$entries[0].DisplayVersion -ne $env:DOBBYVPN_EXPECTED_VERSION) { throw "unexpected installed version" }
 $root = Join-Path ${env:ProgramFiles} 'DobbyVPN'
@@ -246,9 +248,11 @@ if ($service.Status -ne 'Running') { throw "DobbyVPN Server is not running" }
         script = r'''
 $ErrorActionPreference = "Stop"
 $entries = @(
-  Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-  Get-ItemProperty 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
+  @(
+    Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
+    Get-ItemProperty 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
+  ) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
+)
 if ($entries.Count -ne 0) { throw "DobbyVPN remains registered after uninstall" }
 if (Test-Path (Join-Path ${env:ProgramFiles} 'DobbyVPN')) { throw "DobbyVPN install directory remains" }
 if (Get-Service -Name 'DobbyVPN Server' -ErrorAction SilentlyContinue) { throw "DobbyVPN Server remains registered" }
