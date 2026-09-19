@@ -29,10 +29,12 @@ val localSdkRoot = providers.provider {
 val androidSdkRoot = nonBlankEnvironment("ANDROID_SDK_ROOT")
     .orElse(nonBlankEnvironment("ANDROID_HOME"))
     .orElse(localSdkRoot.map(String::trim).filter { it.isNotEmpty() })
-val versionName = nonBlankGradleProperty("android.injected.version.name")
+val versionName: String = nonBlankGradleProperty("android.injected.version.name")
     .orElse(nonBlankGradleProperty("versionName")).get()
-val versionCode = nonBlankGradleProperty("android.injected.version.code")
+    ?: error("versionName is required for the Android manifest")
+val versionCode: Int = nonBlankGradleProperty("android.injected.version.code")
     .orElse(nonBlankGradleProperty("versionCode")).map(String::toInt).get()
+    ?: error("versionCode is required for the Android manifest")
 val sourceCommit = providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")
 
 android {
