@@ -249,17 +249,37 @@ jobs:
           set -euo pipefail
           # This is the same release APK installed for the functional lane,
           # not the renderer-only helper. UI Automator launches the production
-          # Go/Fyne activity, types the fresh profile, and drives the native
-          # VPN consent/retry/reopen/disconnect path. Network observations
-          # remain owned by the hosted functional lane below.
-          ui_profile_device=/data/local/tmp/dobbyvpn-ui-profile.toml
-          "$ADB" push "$GITHUB_WORKSPACE/render/profile.toml" "$ui_profile_device" >/dev/null
-          "$ADB" shell chmod 644 "$ui_profile_device"
-          trap '"$ADB" shell rm -f "$ui_profile_device" >/dev/null 2>&1 || true' EXIT
-          "$ADB" shell am instrument -w -r \
-            -e dobby.ui_profile "$ui_profile_device" \
+          # Go/Fyne activity, enters synthetic invalid input through the native
+          # touch/input path, and verifies the visible failure/reopen flow.
+          # The functional lane below owns the real profile, VPN consent,
+          # traffic, Connect, and Disconnect checks.
+          ui_stdout="$EVIDENCE_DIR/android-native-ui.stdout.log"
+          ui_stderr="$EVIDENCE_DIR/android-native-ui.stderr.log"
+          ui_status=0
+          ui_timed_out=false
+          timeout --foreground 300s "$ADB" shell am instrument -w -r \
             -e class com.dobby.GoUiInstrumentedTest \
-            com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner
+            com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
+            >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
+          if [ "$ui_status" -eq 124 ]; then
+            ui_timed_out=true
+          fi
+          parser_args=(
+            --stdout "$ui_stdout" --stderr "$ui_stderr"
+            --returncode "$ui_status"
+          )
+          if [ "$ui_timed_out" = true ]; then
+            parser_args+=(--timed-out)
+          fi
+          parser_status=0
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
+            python3 -m torturer_checks.android_instrumentation \
+            "${parser_args[@]}" || parser_status=$?
+          if [ "$parser_status" -ne 0 ]; then
+            cat "$ui_stdout" >&2 || true
+            cat "$ui_stderr" >&2 || true
+            exit 1
+          fi
 
       - name: Start installed service
         if: inputs.platform != 'android'
@@ -412,6 +432,46 @@ jobs:
             "$EVIDENCE_DIR/app.log" || echo "warning: Android app log unavailable"
           adb pull /data/user/0/com.dobby.vpn/files/go_android_logs.jsonl \
             "$EVIDENCE_DIR/service.log" || echo "warning: Android service log unavailable"
+          adb pull /data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.png \
+            "$EVIDENCE_DIR/android-native-ui-failure.png" \
+            || echo "warning: Android UI failure screenshot unavailable"
+          adb pull /data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.xml \
+            "$EVIDENCE_DIR/android-native-ui-failure.xml" \
+            || echo "warning: Android UI failure tree unavailable"
+
+      - name: Remove Android standalone probe staging
+        if: always() && inputs.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb_bin="${ADB:-adb}"
+          "$adb_bin" shell \
+            'for path in /data/local/tmp/dobbyvpn-probe-*; do
+               case "$path" in
+                 /data/local/tmp/dobbyvpn-probe-*)
+                   [ -d "$path" ] || continue
+                   rm -rf -- "$path"
+                   ;;
+               esac
+             done'
+
+      - name: Remove Android qualification routing rules
+        if: always() && inputs.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb_bin="${ADB:-adb}"
+          "$adb_bin" shell \
+            'while iptables -D OUTPUT -j DOBBYVPN_TORTURER 2>/dev/null; do :; done
+             iptables -F DOBBYVPN_TORTURER 2>/dev/null || true
+             iptables -X DOBBYVPN_TORTURER 2>/dev/null || true
+             inventory="$(iptables -S)" || exit $?
+             case "$inventory" in
+               *DOBBYVPN_TORTURER*)
+                 echo "Android qualification routing chain remains: DOBBYVPN_TORTURER" >&2
+                 exit 1
+                 ;;
+             esac'
 
       - name: Remove shared profile from runner
         if: always()
@@ -429,6 +489,10 @@ jobs:
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stdout
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stderr
             ${{ runner.temp }}/dobbyvpn-release-evidence/ui-companion.stderr
+            ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui.stdout.log
+            ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui.stderr.log
+            ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui-failure.png
+            ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui-failure.xml
             ${{ runner.temp }}/dobbyvpn-release-evidence/windows-install.log
             ${{ runner.temp }}/dobbyvpn-release-service/windows-service-start.log
             ${{ runner.temp }}/dobbyvpn-release-service/windows-service.pid

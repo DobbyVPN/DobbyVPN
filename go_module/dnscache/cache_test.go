@@ -2,9 +2,17 @@ package dnscache
 
 import (
 	"context"
+	"errors"
+	"net"
 	"testing"
 	"time"
 )
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "lookup timed out" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 func TestSetAndResolveCacheHit(t *testing.T) {
 	Clear()
@@ -62,5 +70,45 @@ func TestResolvePreflightIPv4PinsResult(t *testing.T) {
 	}
 	if cached.expiresAt.Before(started.Add(PreflightCacheTTL - time.Second)) {
 		t.Fatalf("preflight cache expires too early: %s", cached.expiresAt)
+	}
+}
+
+func TestResolvePreflightIPv4RetriesOneTimeout(t *testing.T) {
+	Clear()
+	calls := 0
+	ip, err := resolvePreflightIPv4(
+		context.Background(), "vpn.example", time.Second, "test-retry",
+		func(context.Context, string, time.Duration, string) (net.IP, error) {
+			calls++
+			if calls == 1 {
+				return nil, timeoutError{}
+			}
+			return net.ParseIP("203.0.113.8").To4(), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolvePreflightIPv4 returned error: %v", err)
+	}
+	if calls != 2 || ip.String() != "203.0.113.8" {
+		t.Fatalf("calls=%d ip=%v, want 2 calls and 203.0.113.8", calls, ip)
+	}
+	if cached, ok := LookupIPv4("vpn.example", "test"); !ok || !cached.Equal(ip) {
+		t.Fatalf("retried result was not cached: ip=%v ok=%v", cached, ok)
+	}
+}
+
+func TestResolvePreflightIPv4DoesNotRetryPermanentFailure(t *testing.T) {
+	Clear()
+	calls := 0
+	want := errors.New("no such host")
+	_, err := resolvePreflightIPv4(
+		context.Background(), "missing.example", time.Second, "test-permanent",
+		func(context.Context, string, time.Duration, string) (net.IP, error) {
+			calls++
+			return nil, want
+		},
+	)
+	if !errors.Is(err, want) || calls != 1 {
+		t.Fatalf("err=%v calls=%d, want permanent error after one call", err, calls)
 	}
 }

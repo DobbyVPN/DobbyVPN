@@ -99,6 +99,8 @@ class FakeRunner:
                 with (self.container / "app_logs.txt").open("ab") as output:
                     output.write(b'{"message":"' + marker + b'"}\n')
             return CommandResult(0, f"{BUNDLE}: 1001\n")
+        if command[:2] == ["/usr/bin/defaults", "read"]:
+            return CommandResult(1, stderr="The domain/default pair does not exist")
         if command[:2] == ["/bin/bash", "scripts/build_ios_xcframework.sh"]:
             (Path(cwd) / "DobbyVPNRuntime.xcframework").mkdir(parents=True, exist_ok=True)
             return CommandResult(0)
@@ -180,6 +182,20 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "install"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "launch"] for command in runner.commands))
         self.assertTrue(any(command[:1] == ["xcodebuild"] for command in runner.commands))
+        self.assertIn(
+            [
+                "/usr/bin/defaults", "write", "com.apple.iphonesimulator",
+                "ConnectHardwareKeyboard", "-bool", "false",
+            ],
+            runner.commands,
+        )
+        self.assertIn(
+            [
+                "/usr/bin/defaults", "delete", "com.apple.iphonesimulator",
+                "ConnectHardwareKeyboard",
+            ],
+            runner.commands,
+        )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
         self.assertIn(b"startup.ui_attached mode=normal", (diagnostics / "app_logs.txt").read_bytes())
@@ -196,6 +212,30 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
                 mode="mini", contract=self.contract,
             )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
+
+    def test_keyboard_preference_read_failure_is_not_treated_as_unset(self) -> None:
+        runner = FakeRunner(
+            self.root,
+            fail={
+                ("/usr/bin/defaults", "read"): CommandResult(
+                    1, stderr="preference domain is unreadable"
+                )
+            },
+        )
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            "read Simulator hardware-keyboard preference failed",
+        ):
+            run_ios_simulator_app_contract(
+                candidate_root=self.candidate,
+                work_dir=self.root / "work",
+                runner=runner,
+                mode="mini",
+                contract=self.contract,
+            )
+        self.assertFalse(
+            any(command[:2] == ["/usr/bin/defaults", "write"] for command in runner.commands)
+        )
 
     def test_metal_contract_builds_launches_and_checks_view_attachment(self) -> None:
         runner = FakeRunner(self.root, startup_mode="metal")

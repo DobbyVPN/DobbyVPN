@@ -48,29 +48,27 @@ activity. Kotlin contains only the permission and `VpnService` boundary. The
 release driver verifies both native libraries and their TrustTunnel symbol
 policy.
 
-On an emulator whose ABI matches the package, drive the rendered screen with
-the real Android accessibility/input path:
+On an emulator whose ABI matches the installed app and test companion, drive
+the rendered screen through Android instrumentation:
 
 ```bash
-python3 .github/scripts/mobile_android_ui_smoke.py \
-  --apk "$RUNNER_TEMP/dobby-vpn-go-ui.apk" \
-  --profile /path/to/fresh/profile.toml
+adb shell am instrument -w -r \
+  -e class com.dobby.GoUiInstrumentedTest \
+  com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-The smoke launches the release-shaped Fyne `GoNativeActivity`, discovers its
-controls through Android accessibility, taps Settings and Back, types a fresh
-profile through native input, denies and then approves the VPN consent dialog,
-checks Connected, reopens the activity, and disconnects through the visible
-control before uninstalling the temporary APK. It requires a
-permission-capable emulator/device and uses the Go session through
-`VpnService`; it is not replaced by a CLI call. The hosted functional lane
-still owns traffic and routing assertions.
-
-With a disposable Android emulator/device connected, run the app's own
-instrumentation tests directly: `./gradlew
--PdobbyGoBinary="$(go env GOROOT)/bin/go"
-:app:connectedReleaseAndroidTest`.
-These service-shell tests do not replace VPN traffic tests.
+The test launches the release-shaped Fyne `GoNativeActivity`, discovers its
+controls through Android accessibility, taps Settings and Back, coordinate-
+taps the configuration input, waits for Fyne's visible focused native
+`android.widget.EditText`, and sets the literal `invalidprofile` value through
+that production Android input bridge. It verifies the native field exposes
+the text, clears it through the same bridge, dismisses the keyboard, and taps
+Connect. It requires the synchronous visible Error or Failed result for an
+empty source, then backgrounds and reopens the activity and requires
+a coherent non-connected state and Connect. It deliberately does not type a real profile or
+exercise VPN consent or a connected session. The hosted functional lane owns
+fresh-profile entry, VPN consent, real Connect/Disconnect, traffic, and routing
+assertions; the UI check is not replaced by a CLI call.
 
 From the repository root:
 
@@ -104,20 +102,24 @@ qualification is reported separately and does not invent per-platform
 coverage numbers.
 
 Mobile Go/Fyne qualification must use real Android/iOS rendering, keyboard,
-tap, lifecycle, and permission interaction. Headless Fyne tests prove widget
-state and callbacks only; they do not prove that a platform renderer
-presented a frame or that a user tap reached it. Simulator GUI tests also do
-not prove a physical iOS NetworkExtension tunnel. The Go/Fyne UI and native
-lifecycle shell are integrated, so release qualification uses the same package
-rather than a renderer-only migration artifact.
+tap, and lifecycle interaction. Android's real-renderer UI check types an
+intentionally invalid value and proves visible failure plus reopen; the
+Android hosted/local functional lane separately owns real-profile entry, VPN
+consent, Connect/Disconnect, and traffic/routing observations. Headless Fyne
+tests prove widget state and callbacks only; they do not prove that a platform
+renderer presented a frame or that a user tap reached it. Simulator GUI tests
+also do not prove a physical iOS NetworkExtension tunnel. The Go/Fyne UI and
+native lifecycle shell are integrated, so release qualification uses the same
+package rather than a renderer-only migration artifact.
 
 On a macOS runner with Xcode, the integrated iOS Go/Fyne app can be built for
 the Simulator with:
 
 ```bash
-./go_module/scripts/build_ios_xcframework.sh --simulator-architecture arm64
-./go_module/scripts/package_ios_app.sh iossimulator "$RUNNER_TEMP/Dobby-Vpn.app" \
-  go_module/DobbyVPNRuntime.xcframework arm64
+cd go_module
+./scripts/build_ios_xcframework.sh --simulator-architecture arm64
+./scripts/package_ios_app.sh iossimulator "$RUNNER_TEMP/Dobby-Vpn.app" \
+  DobbyVPNRuntime.xcframework arm64
 ```
 
 Simulator packaging uses temporary self-signed metadata and ad-hoc signing; it
@@ -130,6 +132,9 @@ visible failure outcome, and terminates/reopens the app. App-owned startup
 logs are diagnostics only; a log marker cannot satisfy the check. This proves
 rendered UI and input/lifecycle wiring, not a physical NetworkExtension
 packet-tunnel or TrustTunnel connection.
+
+Android real-UI and functional qualification requires an API 34 device or
+emulator because the instrumentation contract uses API 34 VPN behavior.
 
 ## iOS
 
@@ -169,11 +174,14 @@ or publish anything.
 After the intended change is merged, use **Actions → Release → Run workflow**
 on `main` when you want to qualify real signed packages. It tests those exact
 packages on Linux, Windows, macOS, and Android, shares one Render VPN, then
-deletes it. Release does not publish. When that run succeeds and you want to
-distribute it, use **Actions → Publish → Run workflow** on `main` and select
-its run ID. Publish uses those retained artifacts. Apple submission and
-GitHub/F-Droid publication are independent jobs. Publishing credentials stay
-in those jobs.
+deletes it. Release's prerequisite Test workflow also runs the real iOS
+Simulator XCTest UI contract; iOS is intentionally absent from the later
+traffic matrix because the Simulator cannot qualify a physical-device
+NetworkExtension tunnel. Release does not publish. When that run succeeds and
+you want to distribute it, use **Actions → Publish → Run workflow** on
+`main` and select its run ID. Publish uses those retained artifacts. Apple
+submission and GitHub/F-Droid publication are independent jobs. Publishing
+credentials stay in those jobs.
 
 If a Release fails, fix the cause and dispatch a new Release workflow. Do not
 rerun the old Release: only attempt 1 can qualify for Publish. This restriction
@@ -211,7 +219,11 @@ GitHub-hosted runner; their shutdown is not separately verified.
 
 Local VM tests take one product worktree and a fresh owner profile. They build
 for iteration, not for release reproducibility, and clean up after every
-result. See the private Harness README for the launcher command.
+result. Android local runs first execute the real-renderer accessibility and
+input journey with invalid input, visible failure, and reopen, then run the
+selected functional traffic scenarios. The functional run owns fresh-profile
+entry, VPN consent, Connect/Disconnect, and traffic/routing observations. See
+the private Harness README for the launcher command.
 
 Keep available logs even when a test fails. Missing logs are reported, not
 used to prevent cleanup. A failed cleanup is reported separately and prevents

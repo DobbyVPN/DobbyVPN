@@ -107,6 +107,9 @@ type ConnectionView struct {
 	renderedStatus  string
 	renderedButton  string
 	renderedDetails string
+	renderedLogs    string
+	localError      string
+	localErrorAt    uint64
 }
 
 func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionView {
@@ -191,11 +194,20 @@ type AccessibleEntry struct {
 }
 
 func NewAccessibleEntry(multiline bool, label string) *AccessibleEntry {
-	entry := widget.NewEntry()
+	// Entry's focus and keyboard path resolves the canvas object through its
+	// BaseWidget implementation.  Constructing an Entry with NewEntry first
+	// binds that implementation to the inner *widget.Entry; when the entry is
+	// then embedded in this accessibility wrapper, a mobile tap asks Fyne to
+	// focus an object that is no longer present in the canvas tree.  Construct
+	// the zero-value widget here and bind it to the wrapper before it is ever
+	// rendered so both the renderer and the focus path use the same object.
+	entry := &widget.Entry{Wrapping: fyne.TextWrap(fyne.TextTruncateClip)}
 	if multiline {
-		entry = widget.NewMultiLineEntry()
+		entry.MultiLine = true
 	}
-	return &AccessibleEntry{Entry: entry, label: label}
+	view := &AccessibleEntry{Entry: entry, label: label}
+	entry.ExtendBaseWidget(view)
+	return view
 }
 
 func (e *AccessibleEntry) AccessibilityLabel() string { return e.label }
@@ -396,6 +408,7 @@ func (v *ConnectionView) toggle() {
 		go v.disconnect(ctx, generation)
 		return
 	}
+	v.localError = ""
 	v.busy = true
 	sequence := v.sequence
 	text := strings.TrimSpace(v.Input.Text)
@@ -510,31 +523,58 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 	button := buttonText(snapshot)
 	details := detailsText(snapshot)
 	v.mu.Lock()
+	keepLocalError := v.localError != "" &&
+		snapshot.Sequence <= v.localErrorAt &&
+		snapshot.State != StatePreparing &&
+		snapshot.State != StateProbing &&
+		snapshot.State != StateConnected &&
+		snapshot.State != StateStopping &&
+		snapshot.State != StateFailed
+	if keepLocalError {
+		status = "Error"
+		details = v.localError
+	} else {
+		v.localError = ""
+	}
 	v.snapshot = snapshot
 	v.sequence = snapshot.Sequence
 	v.generation = snapshot.Generation
 	v.renderedStatus = status
 	v.renderedButton = button
 	v.renderedDetails = details
+	v.renderedLogs = snapshotLogText(snapshot)
 	v.mu.Unlock()
 
-	onUI(func() {
-		v.Status.SetText(status)
-		v.Connect.SetText(button)
-		v.Details.SetText(details)
-		v.Logs.SetText(snapshotLogText(snapshot))
-	})
+	v.applyPresentation()
 }
 
 func (v *ConnectionView) showError(err error) {
 	details := err.Error()
 	v.mu.Lock()
+	v.localError = details
+	v.localErrorAt = v.sequence
 	v.renderedStatus = "Error"
 	v.renderedDetails = details
 	v.mu.Unlock()
+	v.applyPresentation()
+}
+
+// applyPresentation reads the synchronized presentation only after its UI
+// callback starts. If an older render callback was already queued, it will
+// therefore apply the newest state instead of overwriting a later action
+// error with a stale snapshot.
+func (v *ConnectionView) applyPresentation() {
 	onUI(func() {
-		v.Status.SetText("Error")
+		v.mu.Lock()
+		status := v.renderedStatus
+		button := v.renderedButton
+		details := v.renderedDetails
+		logs := v.renderedLogs
+		v.mu.Unlock()
+		v.Status.SetText(status)
+		v.Connect.SetText(button)
 		v.Details.SetText(details)
+		v.Logs.SetText(logs)
 	})
 }
 

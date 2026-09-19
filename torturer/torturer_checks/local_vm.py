@@ -560,6 +560,22 @@ def run(args: argparse.Namespace) -> int:
                 return native_result.returncode
             state["native_ui_status"] = "passed"
             _write_json(run_dir / "platform.json", state)
+        elif args.platform == "android":
+            from .local_vm_android import run_ui as run_android_ui
+
+            native_result = run_android_ui(
+                run_dir,
+                runtime,
+                logs,
+                args.timeout,
+            )
+            state["native_ui_exit_code"] = native_result.returncode
+            if native_result.returncode != 0:
+                state["status"] = "native-ui-failed"
+                _write_json(run_dir / "platform.json", state)
+                return native_result.returncode
+            state["native_ui_status"] = "passed"
+            _write_json(run_dir / "platform.json", state)
         command = _functional_command(run_dir, {**descriptor, "runtime": runtime}, args.platform, args.timeout, args.scenarios)
         functional_environment = {
             **os.environ,

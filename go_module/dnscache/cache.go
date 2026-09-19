@@ -13,11 +13,13 @@ import (
 )
 
 const (
-	Category          = "DNSCache"
-	PreflightCacheTTL = 12 * time.Hour
-	// ServerResolveTimeout bounds the mandatory bootstrap lookup used to
-	// establish the VPN server route. A fresh macOS daemon can need longer than
-	// two seconds for its first resolver request after launchd restarts it.
+	Category            = "DNSCache"
+	PreflightCacheTTL   = 12 * time.Hour
+	preflightAttempts   = 2
+	preflightRetryDelay = 250 * time.Millisecond
+	// ServerResolveTimeout bounds each mandatory bootstrap lookup attempt used
+	// to establish the VPN server route. A fresh macOS daemon can need longer
+	// than two seconds for its first resolver request after launchd restarts it.
 	ServerResolveTimeout = 5 * time.Second
 )
 
@@ -102,14 +104,42 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 
 // ResolvePreflightIPv4 pins a successful bootstrap lookup for the session.
 func ResolvePreflightIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
-	ip, err := ResolveIPv4(ctx, host, timeout, source)
-	if err != nil {
-		return nil, err
+	return resolvePreflightIPv4(ctx, host, timeout, source, ResolveIPv4)
+}
+
+func resolvePreflightIPv4(
+	ctx context.Context,
+	host string,
+	timeout time.Duration,
+	source string,
+	resolve func(context.Context, string, time.Duration, string) (net.IP, error),
+) (net.IP, error) {
+	var lastErr error
+	for attempt := 1; attempt <= preflightAttempts; attempt++ {
+		ip, err := resolve(ctx, host, timeout, source)
+		if err == nil {
+			if !SetIPv4(host, ip.String(), source, PreflightCacheTTL) {
+				return nil, errors.New("failed to cache preflight IPv4")
+			}
+			return ip, nil
+		}
+		lastErr = err
+		var networkError net.Error
+		if attempt == preflightAttempts || !errors.As(err, &networkError) || !networkError.Timeout() {
+			return nil, err
+		}
+		log.Debugf(Category, "preflight lookup retry source=%s attempt=%d", source, attempt+1)
+		timer := time.NewTimer(preflightRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	if !SetIPv4(host, ip.String(), source, PreflightCacheTTL) {
-		return nil, errors.New("failed to cache preflight IPv4")
-	}
-	return ip, nil
+	return nil, lastErr
 }
 
 func LookupIPv4(host, source string) (net.IP, bool) {

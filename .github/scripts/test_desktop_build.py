@@ -555,16 +555,41 @@ class DesktopBuildTests(unittest.TestCase):
         )
 
     def test_macos_deployment_target_is_pinned_without_touching_other_platforms(self) -> None:
-        macos_environment = {"MACOSX_DEPLOYMENT_TARGET": "15.0"}
+        macos_environment = {
+            "MACOSX_DEPLOYMENT_TARGET": "15.0",
+            "CGO_CFLAGS": "-O2",
+        }
         desktop_build.configure_macos_deployment_target("macos", macos_environment)
         self.assertEqual(
             macos_environment["MACOSX_DEPLOYMENT_TARGET"],
             desktop_build.MACOS_MINIMUM_SYSTEM_VERSION,
         )
+        minimum_flag = (
+            f"-mmacosx-version-min={desktop_build.MACOS_MINIMUM_SYSTEM_VERSION}"
+        )
+        self.assertEqual(macos_environment["CGO_CFLAGS"], f"-O2 {minimum_flag}")
+        self.assertEqual(macos_environment["CGO_CXXFLAGS"], minimum_flag)
+        self.assertEqual(macos_environment["CGO_LDFLAGS"], minimum_flag)
 
         linux_environment = {"MACOSX_DEPLOYMENT_TARGET": "15.0"}
         desktop_build.configure_macos_deployment_target("linux", linux_environment)
         self.assertEqual(linux_environment["MACOSX_DEPLOYMENT_TARGET"], "15.0")
+
+    def test_macos_binary_deployment_target_is_verified(self) -> None:
+        binary = Path("/tmp/dobby-vpn")
+        metadata = "platform MACOS\n    minos 12.0\n"
+        with mock.patch.object(desktop_build, "run_capture", return_value=metadata):
+            desktop_build.verify_macos_deployment_target("macos", binary)
+
+        with (
+            mock.patch.object(
+                desktop_build,
+                "run_capture",
+                return_value="platform MACOS\n    minos 15.0\n",
+            ),
+            self.assertRaisesRegex(SystemExit, "minimum system version 12.0"),
+        ):
+            desktop_build.verify_macos_deployment_target("macos", binary)
 
     def test_macos_cli_build_receives_deployment_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -581,6 +606,7 @@ class DesktopBuildTests(unittest.TestCase):
                 mock.patch.object(desktop_build, "GO_MODULE_DIR", go_module),
                 mock.patch.object(desktop_build, "SERVICES_DIR", services),
                 mock.patch.object(desktop_build, "run", side_effect=build) as run,
+                mock.patch.object(desktop_build, "verify_macos_deployment_target"),
                 mock.patch.object(desktop_build.Path, "chmod"),
             ):
                 desktop_build.build_cli("macos", "arm64")
@@ -589,6 +615,8 @@ class DesktopBuildTests(unittest.TestCase):
             run.call_args.kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"],
             desktop_build.MACOS_MINIMUM_SYSTEM_VERSION,
         )
+        self.assertEqual(run.call_args.kwargs["env"]["CGO_ENABLED"], "0")
+        self.assertNotIn("-linkmode=external", run.call_args.args[0])
 
     def test_prepare_go_test_dependencies_stages_bridge_runtime_and_environment(self) -> None:
         calls: list[object] = []
@@ -695,6 +723,7 @@ class DesktopBuildTests(unittest.TestCase):
                     "run",
                     side_effect=lambda *args, **kwargs: output.touch(),
                 ) as run,
+                mock.patch.object(desktop_build, "verify_macos_deployment_target"),
                 mock.patch.object(desktop_build.Path, "chmod"),
             ):
                 desktop_build.build_go_ui("macos", "arm64", True, False, output)
@@ -716,6 +745,7 @@ class DesktopBuildTests(unittest.TestCase):
                     "run",
                     side_effect=lambda *args, **kwargs: output.touch(),
                 ) as run,
+                mock.patch.object(desktop_build, "verify_macos_deployment_target"),
                 mock.patch.object(desktop_build.Path, "chmod"),
             ):
                 desktop_build.build_go_ui_test("macos", "arm64", True, False, output)
@@ -864,6 +894,7 @@ class DesktopBuildTests(unittest.TestCase):
             mock.patch.object(desktop_build, "ensure_build_dependencies"),
             mock.patch.object(desktop_build, "go_mod_download"),
             mock.patch.object(desktop_build, "run", side_effect=record_run),
+            mock.patch.object(desktop_build, "verify_macos_deployment_target"),
             mock.patch.object(desktop_build.shutil, "copyfile"),
             mock.patch.object(desktop_build.Path, "mkdir"),
             mock.patch.object(desktop_build.Path, "chmod"),

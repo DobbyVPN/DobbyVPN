@@ -73,12 +73,14 @@ The Kotlin sources in that project contain only the Android permission,
 foreground `VpnService`, TUN allocation, and JNI callback boundary. The
 session manager and all visible state remain in Go.
 
-For a real Android emulator, use the matching ABI and then drive the package
-through the accessibility tree:
+For a real Android emulator, install the matching app and test companion from
+one build, then drive the package through the accessibility and native-input
+path:
 
 ```bash
-python3 .github/scripts/mobile_android_ui_smoke.py \
-  --apk /tmp/dobby-vpn.apk --profile /path/to/fresh/profile.toml
+adb shell am instrument -w -r \
+  -e class com.dobby.GoUiInstrumentedTest \
+  com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
@@ -106,16 +108,18 @@ unzip libdobby_bridge-linux-x86_64.zip
 CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o dobby-cli ./cmd/dobbyvpn/
 ```
 
-Both archives and the Go module tag are bound to go-go-tunnel source commit
-`6115b0e372ecf6daed2ae6bf4afe56bef03ef45c`. The release's
+The pinned `v1.0.1` desktop bridge archives are bound to go-go-tunnel source
+commit `6115b0e372ecf6daed2ae6bf4afe56bef03ef45c`; their
 `release-assets.manifest.json` is the canonical machine-readable member and
-platform-run provenance record.
+platform-run provenance record. The Go module is pinned independently in
+`go.mod` to source commit `bc54923e3c85427e025e97417243f847163c3f3d`, which
+uses the supported Go 1.26.8 toolchain.
 
 ### MacOS
 
 ```bash
-GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-arm64 ./cmd/dobbyvpn/
-GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-amd64 ./cmd/dobbyvpn/
+MACOSX_DEPLOYMENT_TARGET=12.0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-arm64 ./cmd/dobbyvpn/
+MACOSX_DEPLOYMENT_TARGET=12.0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-amd64 ./cmd/dobbyvpn/
 ```
 
 With CGO enabled, build each target on its matching macOS runner/toolchain. CI

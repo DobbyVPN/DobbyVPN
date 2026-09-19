@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/driver/mobile"
 	"fyne.io/fyne/v2/test"
 )
 
@@ -186,6 +188,29 @@ func TestConnectionViewRejectsEmptyConfiguration(t *testing.T) {
 	}
 }
 
+func TestConnectionViewKeepsLocalErrorUntilSessionAdvances(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	view := NewConnectionView(nil)
+	view.render(Snapshot{State: StateIdle, Sequence: 7})
+	view.showError(context.DeadlineExceeded)
+
+	view.render(Snapshot{State: StateIdle, Sequence: 7})
+	if view.Status.Text != "Error" || view.Details.Text != context.DeadlineExceeded.Error() {
+		t.Fatalf("stale snapshot replaced local error: status=%q details=%q", view.Status.Text, view.Details.Text)
+	}
+
+	view.render(Snapshot{State: StateIdle, Sequence: 7, Recovering: true})
+	if view.Status.Text != "Error" || view.Details.Text != context.DeadlineExceeded.Error() {
+		t.Fatalf("transport recovery replaced local error: status=%q details=%q", view.Status.Text, view.Details.Text)
+	}
+
+	view.render(Snapshot{State: StateConfigured, Sequence: 8})
+	if view.Status.Text != "Ready" {
+		t.Fatalf("new session state did not replace local error: %q", view.Status.Text)
+	}
+}
+
 func TestConnectionViewButtonDrivesSessionClient(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
@@ -297,6 +322,27 @@ func TestConnectionViewKeepsExportAccessibilityNameStable(t *testing.T) {
 	}
 	if view.Export.AccessibilityLabel() != "Export logs" {
 		t.Fatalf("export accessibility label = %q", view.Export.AccessibilityLabel())
+	}
+}
+
+func TestAccessibleEntryMobileTouchFocusesTheWrappedCanvasObject(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	view := NewConnectionView(nil)
+	window := runtime.NewWindow("")
+	window.SetContent(view.Content())
+	window.Resize(fyne.NewSize(460, 520))
+	window.Show()
+	t.Cleanup(window.Close)
+
+	// TouchDown is the mobile equivalent of the real tap path. Rendering once
+	// initializes Entry's cursor/selection state before the synthetic event.
+	test.WidgetRenderer(view.Input)
+	view.Input.TouchDown(&mobile.TouchEvent{
+		PointEvent: fyne.PointEvent{Position: fyne.NewPos(1, 1)},
+	})
+	if focused := window.Canvas().Focused(); focused != view.Input {
+		t.Fatalf("focused object = %T, want the accessible entry wrapper", focused)
 	}
 }
 

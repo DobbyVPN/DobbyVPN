@@ -31,15 +31,18 @@ object NativeVpnBridge {
     fun prepare(context: Context): Int {
         val permission = VpnService.prepare(context)
         if (permission != null) {
-            val launch = permission.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (context is Activity) {
-                context.startActivityForResult(launch, REQUEST_VPN_PERMISSION)
+                // Keep the consent activity in the caller's task. Adding
+                // FLAG_ACTIVITY_NEW_TASK to startActivityForResult can detach
+                // the system dialog from the visible Go/Fyne Activity on
+                // newer Android releases.
+                context.startActivityForResult(permission, REQUEST_VPN_PERMISSION)
             } else {
                 // Instrumentation and recovery callers may only have the
                 // application context. The VPN consent is process-global, so
                 // a normal task launch is sufficient; the next Connect call
                 // re-checks VpnService.prepare before starting the service.
-                context.startActivity(launch)
+                context.startActivity(permission.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             return 0
         }

@@ -40,6 +40,8 @@ _XCODE_ARCHITECTURES = {"arm64": "arm64", "amd64": "x86_64"}
 _DIAGNOSTIC_TAIL_BYTES = 1024 * 1024
 _SIMULATOR_LOG_TAIL_BYTES = 256 * 1024
 _SIMULATOR_DIAGNOSTIC_TIMEOUT_SECONDS = 30
+_SIMULATOR_PREFERENCE_DOMAIN = "com.apple.iphonesimulator"
+_HARDWARE_KEYBOARD_PREFERENCE = "ConnectHardwareKeyboard"
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
@@ -498,6 +500,71 @@ def _terminate_app(
     )
 
 
+def _disable_simulator_hardware_keyboard(
+    runner: CommandRunner, *, budget: RunBudget
+) -> str | None:
+    """Expose the software keyboard that XCTest taps for real Fyne input."""
+    read = runner.run(
+        [
+            "/usr/bin/defaults", "read", _SIMULATOR_PREFERENCE_DOMAIN,
+            _HARDWARE_KEYBOARD_PREFERENCE,
+        ],
+        timeout_seconds=budget.operation_timeout(10),
+    )
+    if read.returncode == 0:
+        previous = read.stdout.strip()
+    elif "does not exist" in read.stderr:
+        previous = None
+    else:
+        output = "\n".join(
+            part for part in (read.stdout, read.stderr) if part
+        ).strip()
+        raise IOSSimulatorAppContractError(
+            "read Simulator hardware-keyboard preference failed"
+            + (f":\n{output}" if output else "")
+        )
+    if previous not in {None, "0", "1"}:
+        raise IOSSimulatorAppContractError(
+            "Simulator hardware-keyboard preference has an unsupported value"
+        )
+    _require_success(
+        runner,
+        [
+            "/usr/bin/defaults", "write", _SIMULATOR_PREFERENCE_DOMAIN,
+            _HARDWARE_KEYBOARD_PREFERENCE, "-bool", "false",
+        ],
+        "disable Simulator hardware keyboard",
+        budget=budget,
+        timeout_seconds=budget.operation_timeout(10),
+    )
+    return previous
+
+
+def _restore_simulator_hardware_keyboard(
+    runner: CommandRunner, previous: str | None, *, budget: RunBudget
+) -> None:
+    if previous is None:
+        command = [
+            "/usr/bin/defaults", "delete", _SIMULATOR_PREFERENCE_DOMAIN,
+            _HARDWARE_KEYBOARD_PREFERENCE,
+        ]
+    else:
+        command = [
+            "/usr/bin/defaults", "write", _SIMULATOR_PREFERENCE_DOMAIN,
+            _HARDWARE_KEYBOARD_PREFERENCE, "-bool",
+            "true" if previous == "1" else "false",
+        ]
+    result = runner.run(command, timeout_seconds=budget.cleanup_timeout())
+    if result.returncode:
+        output = "\n".join(
+            part for part in (result.stdout, result.stderr) if part
+        ).strip()
+        raise IOSSimulatorAppContractError(
+            "restore Simulator hardware keyboard failed"
+            + (f":\n{output}" if output else "")
+        )
+
+
 def run_ios_simulator_app_contract(
     *,
     candidate_root: Path,
@@ -519,6 +586,8 @@ def run_ios_simulator_app_contract(
     container: Path | None = None
     app_launched = False
     boot_started = False
+    keyboard_preference_configured = False
+    previous_keyboard_preference: str | None = None
     failure: BaseException | None = None
     evidence: IOSSimulatorAppEvidence | None = None
     app_path = contract.app_path(work_dir)
@@ -531,6 +600,10 @@ def run_ios_simulator_app_contract(
             budget=budget,
         )
         simulator = select_available_iphone(inventory.stdout)
+        previous_keyboard_preference = _disable_simulator_hardware_keyboard(
+            runner, budget=budget
+        )
+        keyboard_preference_configured = True
         boot_started = True
         boot = runner.run(
             simctl_boot_command(simulator.udid),
@@ -623,6 +696,15 @@ def run_ios_simulator_app_contract(
                     _shutdown_simulator(runner, simulator, budget=budget)
                 except BaseException as error:
                     failure = _add_note(failure, "Simulator shutdown also failed", error)
+        if keyboard_preference_configured:
+            try:
+                _restore_simulator_hardware_keyboard(
+                    runner, previous_keyboard_preference, budget=budget
+                )
+            except BaseException as error:
+                failure = _add_note(
+                    failure, "Simulator keyboard preference cleanup also failed", error
+                )
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
     if evidence is None:

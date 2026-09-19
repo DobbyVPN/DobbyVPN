@@ -27,7 +27,16 @@ go_root="$script_root/go_module"
 runtime=${3:-"$swift_root/DobbyVPNRuntime.xcframework"}
 version=${VERSION_NAME:-$(tr -d '[:space:]' < "$script_root/VERSION")}
 build=${APP_BUILD:-1005001}
-source_commit=${SOURCE_COMMIT:-$(git -C "$script_root" rev-parse HEAD)}
+if [[ -n "${SOURCE_COMMIT:-}" ]]; then
+  source_commit=$SOURCE_COMMIT
+elif source_commit=$(git -C "$script_root" rev-parse HEAD 2>/dev/null); then
+  :
+else
+  # Disposable local candidates are transferred without .git. Keep their
+  # metadata explicitly non-release instead of failing before the UI test.
+  source_commit=0000000000000000000000000000000000000000
+  echo "source commit unavailable; using the local-candidate sentinel" >&2
+fi
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION_NAME must be x.y.z" >&2; exit 2; }
 [[ "$build" =~ ^[1-9][0-9]*$ ]] || { echo "APP_BUILD must be a positive integer" >&2; exit 2; }
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "SOURCE_COMMIT must be a full commit SHA" >&2; exit 2; }

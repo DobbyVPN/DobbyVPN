@@ -673,6 +673,27 @@ def configure_macos_deployment_target(
     if target_platform != "macos":
         return
     environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
+    minimum_flag = f"-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
+    for name in ("CGO_CFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS"):
+        existing = environment.get(name, "").strip()
+        environment[name] = " ".join(part for part in (existing, minimum_flag) if part)
+
+
+def verify_macos_deployment_target(target_platform: str, binary: Path) -> None:
+    """Require the completed Mach-O binary to advertise the supported floor."""
+    if target_platform != "macos":
+        return
+    metadata = run_capture(["xcrun", "vtool", "-show-build", str(binary)])
+    if metadata is None:
+        fail(f"Could not inspect the macOS deployment target: {binary}")
+    platforms = re.findall(r"^\s*platform\s+(\S+)\s*$", metadata, re.MULTILINE)
+    minimums = re.findall(r"^\s*minos\s+(\S+)\s*$", metadata, re.MULTILINE)
+    expected = MACOS_MINIMUM_SYSTEM_VERSION
+    if not platforms or any(platform != "MACOS" for platform in platforms):
+        fail(f"macOS binary has invalid platform metadata: {binary}")
+    if not minimums or any(version != expected for version in minimums):
+        fail(f"macOS binary does not declare minimum system version {expected}: {binary}")
+    log(f"Verified macOS {expected} deployment target: {binary}")
 
 
 def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
@@ -858,16 +879,12 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
     configure_macos_deployment_target(target_platform, env)
     ldflags = "-buildid="
-    if target_platform == "macos":
-        # Use the host external linker so every native binary declares the
-        # product's macOS 12 minimum consistently.
-        env["CGO_ENABLED"] = "1"
-        ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
     run(
         ["go", "build", "-trimpath", f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
         cwd=GO_MODULE_DIR,
         env=env,
     )
+    verify_macos_deployment_target(target_platform, output)
     SERVICES_DIR.mkdir(parents=True, exist_ok=True)
     target = SERVICES_DIR / CLI_NAMES[target_platform]
     shutil.copyfile(output, target)
@@ -956,6 +973,7 @@ def build_go_ui(
         cwd=GO_MODULE_DIR,
         env=environment,
     )
+    verify_macos_deployment_target(target_platform, output)
     if target_platform != "windows":
         output.chmod(output.stat().st_mode | 0o111)
     log(f"Built Go/Fyne UI {output}")
@@ -1007,6 +1025,7 @@ def build_go_ui_test(
         cwd=GO_MODULE_DIR,
         env=environment,
     )
+    verify_macos_deployment_target(target_platform, output)
     if target_platform != "windows":
         output.chmod(output.stat().st_mode | 0o111)
     log(f"Built headless Go/Fyne UI companion {output}")
@@ -1154,6 +1173,8 @@ def build_service(
             cwd=GO_MODULE_DIR,
             env=env,
         )
+
+    verify_macos_deployment_target(target_platform, output)
 
     if output_path is not None:
         target = output

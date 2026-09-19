@@ -10,6 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from torturer_checks.android_instrumentation import ROUTING_RULE_CHAIN
 from torturer_checks.hosted.android import (
     AndroidHostedAdapter,
     _observation_error_code,
@@ -82,11 +83,14 @@ class FakeAndroidRunner:
         self.routing_rule_packets = 1
         self.routing_rule_protocol = "tcp"
         self.routing_rule_interface = "eth0"
+        self.routing_rule_destinations = ("203.0.113.10",)
         self.routing_ready_override: dict[str, object] | None = None
         self.routing_blocked_override: dict[str, object] | None = None
         self.routing_unblocked_override: dict[str, object] | None = None
         self.routing_insert_failure: CommandResult | None = None
         self.routing_remove_failure: CommandResult | None = None
+        self.routing_cleanup_residual = False
+        self.routing_cleanup_inventory_failure = False
         self.activity_start_result: CommandResult | None = None
         self.staged_control_payloads: list[tuple[str, dict[str, object]]] = []
 
@@ -159,14 +163,18 @@ class FakeAndroidRunner:
             )
         if tail[:3] == ("shell", "iptables", "-L"):
             packets = self.routing_rule_packets
+            rules = "\n".join(
+                f"1 {packets} 64 REJECT {self.routing_rule_protocol} -- * "
+                f"{self.routing_rule_interface} 0.0.0.0/0 {destination} tcp dpt:443"
+                for destination in self.routing_rule_destinations
+            )
             return CommandResult(
                 argv,
                 0,
                 (
                     "num pkts bytes target prot opt in out source destination\n"
-                    f"1 {packets} 64 REJECT {self.routing_rule_protocol} -- * "
-                    f"{self.routing_rule_interface} 0.0.0.0/0 "
-                    "203.0.113.10 tcp dpt:443\n"
+                    + rules
+                    + "\n"
                 ).encode(),
                 b"",
             )
@@ -194,6 +202,14 @@ class FakeAndroidRunner:
                 failure.stderr,
                 failure.timed_out,
             )
+        if tail == ("shell", "iptables", "-S"):
+            if self.routing_cleanup_inventory_failure:
+                return CommandResult(argv, 1, b"", b"inventory failed\n")
+            stdout = (
+                b"-A OUTPUT -j DOBBYVPN_TORTURER\n"
+                if self.routing_cleanup_residual else b"-P OUTPUT ACCEPT\n"
+            )
+            return CommandResult(argv, 0, stdout, b"")
         if tail[:2] == ("shell", "iptables"):
             return CommandResult(argv, 0, b"", b"")
         if cat_paths is not None:
@@ -239,7 +255,7 @@ class FakeAndroidRunner:
                         "physical_interface": "eth0",
                         "physical_transport": "ethernet",
                         "vpn_interface": "tun0",
-                        "ipv4": "203.0.113.10",
+                        "ipv4s": ["203.0.113.10", "203.0.113.11"],
                         "port": 443,
                     }
                 return CommandResult(
@@ -410,6 +426,30 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
         )
 
+    def test_worker_observation_error_precedes_external_control_timeout(self) -> None:
+        self.runner.observation = _observation("ANDROID_PROFILE_OPERATION_FAILED")
+        self.adapter._active_controls = (
+            ("never-ready.json", "network_transition", 5.0),
+        )
+
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_PROFILE_OPERATION_FAILED"
+        ) as raised:
+            self.adapter._run_instrumentation(
+                "command.json",
+                time.monotonic() + 5.0,
+                output_name="observation.json",
+            )
+
+        self.assertNotIn("ANDROID_CONTROL_TIMEOUT", str(raised.exception))
+        self.assertTrue(
+            any(
+                call[1:4] == ("shell", "-T", "cat")
+                and call[-1].endswith("/observation.json")
+                for call in self.runner.calls
+            )
+        )
+
     def test_control_failure_preserves_host_progress_and_result(self) -> None:
         self.runner.routing_phases["routing.json.ready"] = "ready"
         self.runner.routing_insert_failure = CommandResult(
@@ -473,9 +513,24 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.runner.routing_rule_protocol = "6"
         self.assertEqual(
             self.adapter._routing_rule_counter(
-                "eth0", "203.0.113.10", 443, time.monotonic() + 5.0
+                "eth0", ("203.0.113.10",), 443, time.monotonic() + 5.0
             ),
             1,
+        )
+
+    def test_routing_rule_counter_aggregates_all_announced_destinations(self) -> None:
+        self.runner.routing_rule_packets = 2
+        self.runner.routing_rule_destinations = (
+            "203.0.113.10", "203.0.113.11"
+        )
+        self.assertEqual(
+            self.adapter._routing_rule_counter(
+                "eth0",
+                ("203.0.113.10", "203.0.113.11"),
+                443,
+                time.monotonic() + 5.0,
+            ),
+            4,
         )
 
     def test_product_error_propagates_and_cleanup_commands_are_still_attempted(self) -> None:
@@ -673,18 +728,40 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         ]
         self.assertEqual(phases, ["blocked", "unblocked", "finish"])
         iptables = [
-            call for call in self.runner.calls
+            call[1:] for call in self.runner.calls
             if call[1:3] == ("shell", "iptables")
         ]
-        self.assertEqual(iptables[0][1:], (
-            "shell", "iptables", "-I", "OUTPUT", "1", "-o", "eth0",
-            "-d", "203.0.113.10", "-p", "tcp", "--dport", "443", "-j",
-            "REJECT",
-        ))
-        self.assertEqual(iptables[-1][1:], (
-            "shell", "iptables", "-D", "OUTPUT", "-o", "eth0", "-d",
-            "203.0.113.10", "-p", "tcp", "--dport", "443", "-j", "REJECT",
-        ))
+        create = ("shell", "iptables", "-N", ROUTING_RULE_CHAIN)
+        first_rule = (
+            "shell", "iptables", "-A", ROUTING_RULE_CHAIN, "-o", "eth0",
+            "-d", "203.0.113.10", "-p", "tcp", "--dport", "443", "-j", "REJECT",
+        )
+        second_rule = (
+            "shell", "iptables", "-A", ROUTING_RULE_CHAIN, "-o", "eth0",
+            "-d", "203.0.113.11", "-p", "tcp", "--dport", "443", "-j", "REJECT",
+        )
+        jump = (
+            "shell", "iptables", "-I", "OUTPUT", "1", "-j", ROUTING_RULE_CHAIN,
+        )
+        remove_jump = (
+            "shell", "iptables", "-D", "OUTPUT", "-j", ROUTING_RULE_CHAIN,
+        )
+        self.assertIn(create, iptables)
+        self.assertIn(first_rule, iptables)
+        self.assertIn(second_rule, iptables)
+        self.assertIn(jump, iptables)
+        self.assertLess(iptables.index(create), iptables.index(first_rule))
+        self.assertLess(iptables.index(first_rule), iptables.index(jump))
+        self.assertGreaterEqual(iptables.count(remove_jump), 2)
+        self.assertEqual(
+            iptables[-4:],
+            [
+                remove_jump,
+                ("shell", "iptables", "-F", ROUTING_RULE_CHAIN),
+                ("shell", "iptables", "-X", ROUTING_RULE_CHAIN),
+                ("shell", "iptables", "-S"),
+            ],
+        )
         cat_reads = [
             call
             for call in self.runner.calls
@@ -781,6 +858,29 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                     any(call[1:4] == ("shell", "iptables", "-D") for call in runner.calls)
                 )
 
+        runner = FakeAndroidRunner(self.runner.raw_directory.parent / "request-before-rule")
+        runner.routing_phases["routing.json.ready"] = "ready"
+        runner.routing_rule_packets = 0
+        runner.routing_blocked_override = {
+            "phase": "blocked",
+            "direct": {"status": 200, "body": "203.0.113.10"},
+            "vpn": {"status": 200, "body": "198.51.100.7"},
+        }
+        adapter = AndroidHostedAdapter(
+            runner=runner,
+            profile=self.profile,
+            adb=self.adb,
+            source_sha=_SOURCE_SHA,
+            identity_url="https://identity.example.test/ip",
+            latency_url="https://latency.example.test/blob",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
+        )
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_ROUTING_DIRECT_NOT_BLOCKED"
+        ):
+            adapter._routing_proof("routing.json", time.monotonic() + 5.0)
+
         runner = FakeAndroidRunner(self.runner.raw_directory.parent / "recovery-invalid")
         runner.routing_phases["routing.json.ready"] = "ready"
         runner.routing_unblocked_override = {
@@ -850,7 +950,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             "physical_interface": "eth0",
             "physical_transport": "ethernet",
             "vpn_interface": "eth0",
-            "ipv4": "203.0.113.10",
+            "ipv4s": ["203.0.113.10", "203.0.113.11"],
             "port": 443,
         }
         adapter = AndroidHostedAdapter(
@@ -898,7 +998,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             "physical_interface": "eth0",
             "physical_transport": "cellular",
             "vpn_interface": "tun0",
-            "ipv4": "203.0.113.10",
+            "ipv4s": ["203.0.113.10", "203.0.113.11"],
             "port": 443,
         }
         adapter = AndroidHostedAdapter(
@@ -927,7 +1027,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             "phase": "ready",
             "physical_interface": "eth0",
             "vpn_interface": "tun0",
-            "ipv4": "203.0.113.10",
+            "ipv4s": ["203.0.113.10", "203.0.113.11"],
             "port": 443,
         }
 
@@ -1119,7 +1219,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             "physical_interface": "wlan0",
             "physical_transport": "wifi",
             "vpn_interface": "tun0",
-            "ipv4": "203.0.113.10",
+            "ipv4s": ["203.0.113.10", "203.0.113.11"],
             "port": 443,
         }
         runner.routing_rule_interface = "wlan0"
@@ -1188,7 +1288,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             "physical_interface": "eth0",
             "physical_transport": "ethernet",
             "vpn_interface": "tun0",
-            "ipv4": "203.0.113.10",
+            "ipv4s": ["203.0.113.10", "203.0.113.11"],
             "port": 443,
         }
         ethernet_runner.routing_rule_interface = "eth0"
@@ -1208,7 +1308,9 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             "network_transition", time.monotonic() + 5.0
         )
         ethernet_transition = next(
-            call for call in ethernet_runner.calls if "DobbyVPN uplink" in call[4]
+            call
+            for call in ethernet_runner.calls
+            if len(call) > 4 and "DobbyVPN uplink" in call[4]
         )
         self.assertEqual(ethernet_transition[-2:], ("ethernet", "eth0"))
 
@@ -1259,6 +1361,49 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
         )
         self.assertIn("ANDROID_CLEANUP_FAILED", raised.exception.__notes__[0])
+
+    def test_cleanup_removes_owned_chain_left_by_killed_run(self) -> None:
+        self.assertIsNone(
+            self.adapter._cleanup_device((), time.monotonic() + 5.0)
+        )
+        cleanup = [
+            call[1:] for call in self.runner.calls
+            if call[1:3] == ("shell", "iptables")
+        ]
+        self.assertEqual(cleanup, [
+            ("shell", "iptables", "-D", "OUTPUT", "-j", ROUTING_RULE_CHAIN),
+            ("shell", "iptables", "-F", ROUTING_RULE_CHAIN),
+            ("shell", "iptables", "-X", ROUTING_RULE_CHAIN),
+            ("shell", "iptables", "-S"),
+        ])
+
+    def test_cleanup_reports_owned_chain_that_remains(self) -> None:
+        self.runner.routing_cleanup_residual = True
+
+        failure = self.adapter._cleanup_device((), time.monotonic() + 5.0)
+
+        self.assertIsNotNone(failure)
+        self.assertIn("ANDROID_ROUTING_RULE_CLEANUP_FAILED", str(failure))
+
+    def test_cleanup_reports_routing_inventory_failure(self) -> None:
+        self.runner.routing_cleanup_inventory_failure = True
+
+        failure = self.adapter._cleanup_device((), time.monotonic() + 5.0)
+
+        self.assertIsNotNone(failure)
+        self.assertIn("ANDROID_ROUTING_RULE_CLEANUP_FAILED", str(failure))
+
+    def test_cleanup_retains_routing_and_app_cleanup_failures(self) -> None:
+        self.runner.routing_cleanup_residual = True
+        self.runner.fail_cleanup = True
+
+        failure = self.adapter._cleanup_device((), time.monotonic() + 5.0)
+
+        self.assertIsNotNone(failure)
+        self.assertIn("ANDROID_ROUTING_RULE_CLEANUP_FAILED", str(failure))
+        self.assertIn(
+            "ANDROID_CLEANUP_FAILED", "\n".join(failure.__notes__)
+        )
 
     def test_missing_seam_inputs_are_rejected_and_headless_contract_is_explicit(self) -> None:
         with self.assertRaisesRegex(HostedAdapterError, "ANDROID_ADB_UNAVAILABLE"):

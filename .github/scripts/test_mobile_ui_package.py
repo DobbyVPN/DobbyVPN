@@ -21,19 +21,6 @@ class MobileUIPackageScriptTests(unittest.TestCase):
         self.assertIn("native lifecycle boundaries", source)
         self.assertIn("second VPN runtime", source)
 
-        smoke = (SCRIPT.parents[2] / ".github" / "scripts" / "mobile_android_ui_smoke.py").read_text(encoding="utf-8")
-        self.assertIn("uiautomator", smoke)
-        self.assertIn('"Connection configuration"', smoke)
-        self.assertIn('"Settings"', smoke)
-        self.assertIn('"Back"', smoke)
-        self.assertIn("GoNativeActivity", smoke)
-        self.assertIn('"--profile"', smoke)
-        self.assertIn("Connection configuration", smoke)
-        self.assertIn("_CONSENT_DENY", smoke)
-        self.assertIn("_CONSENT_ALLOW", smoke)
-        self.assertIn("Connected", smoke)
-        self.assertIn("reopened", smoke)
-
     def test_script_rejects_missing_arguments_before_running_go(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT)],

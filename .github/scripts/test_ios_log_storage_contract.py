@@ -43,6 +43,8 @@ class IosNativeShellContractTests(unittest.TestCase):
         self.assertIn('cp -R "$tunnel_product" "$app/PlugIns/tunnel.appex"', script)
         self.assertIn('rm -rf "$app/Frameworks/CommonDI.framework" "$app/PlugIns/tunnel.appex"', script)
         self.assertIn("install_name_tool -add_rpath '@executable_path/Frameworks'", script)
+        self.assertIn('if [[ -n "${SOURCE_COMMIT:-}" ]]', script)
+        self.assertIn("source commit unavailable; using the local-candidate sentinel", script)
 
     def test_ui_test_target_is_simulator_only(self) -> None:
         project = (self.root / "swift_module/iosApp.xcodeproj/project.pbxproj").read_text()
@@ -52,6 +54,19 @@ class IosNativeShellContractTests(unittest.TestCase):
         self.assertEqual(target.count("SDKROOT = iphonesimulator;"), 2)
         self.assertEqual(target.count("SUPPORTED_PLATFORMS = iphonesimulator;"), 2)
         self.assertNotIn("SDKROOT = iphoneos;", target)
+
+    def test_fyne_ui_test_types_through_the_real_native_input_view(self) -> None:
+        ui_test = (self.root / "swift_module/iosAppUITests/GoFyneUIInteractionTests.swift").read_text()
+        self.assertIn("input.frame.isEmpty", ui_test)
+        self.assertIn("input.coordinate(withNormalizedOffset:", ui_test)
+        self.assertIn("typeUsingVisibleKeyboard", ui_test)
+        self.assertIn("app.keyboards.firstMatch", ui_test)
+        self.assertIn("key.tap()", ui_test)
+        self.assertIn("dismissSoftwareKeyboard", ui_test)
+        self.assertIn("connect.tap()", ui_test)
+        self.assertIn('["Error", "Failed"]', ui_test)
+        self.assertNotIn('["Error", "Failed", "Disconnected"]', ui_test)
+        self.assertNotIn("input.typeText(", ui_test)
 
 
 if __name__ == "__main__":

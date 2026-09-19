@@ -20,6 +20,10 @@ import traceback
 from typing import Callable, Mapping
 import uuid
 
+from torturer_checks.android_instrumentation import (
+    ROUTING_RULE_CHAIN,
+    parse_instrumentation_result,
+)
 from torturer_contract.functional.android_observation import (
     AndroidObservationError,
     AndroidProfileObservation,
@@ -89,34 +93,30 @@ _MAX_CLEANUP_RESERVE_SECONDS = 30.0
 _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
-_JUNIT_SUCCESS = re.compile(rb"(?m)^[ \t]*OK \(1 test[ \t]*\)$")
-_JUNIT_FAILURES = re.compile(rb"(?m)^[ \t]*FAILURES!!![ \t]*$")
-
-
 def _instrumentation_succeeded(result: CommandResult) -> bool:
     """Require both Android instrumentation completion and JUnit success."""
 
-    return (
-        result.returncode == 0
-        and not result.timed_out
-        and result.stdout.rstrip().endswith(b"INSTRUMENTATION_CODE: -1")
-        and _JUNIT_SUCCESS.search(result.stdout) is not None
-        and _JUNIT_FAILURES.search(result.stdout) is None
-    )
+    return parse_instrumentation_result(
+        returncode=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        timed_out=result.timed_out,
+    ).succeeded
 
 
 def _instrumentation_failure(result: CommandResult) -> ScenarioExecutionError:
-    success_marker_present = result.stdout.rstrip().endswith(
-        b"INSTRUMENTATION_CODE: -1"
+    parsed = parse_instrumentation_result(
+        returncode=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        timed_out=result.timed_out,
     )
-    junit_summary_present = _JUNIT_SUCCESS.search(result.stdout) is not None
-    failures_marker_present = _JUNIT_FAILURES.search(result.stdout) is not None
     failure = ScenarioExecutionError(
         "Android instrumentation failed: "
         f"returncode={result.returncode}, timed_out={result.timed_out}, "
-        f"success_marker_present={success_marker_present}, "
-        f"junit_summary_present={junit_summary_present}, "
-        f"failures_marker_present={failures_marker_present}"
+        f"success_marker_present={parsed.success_marker_present}, "
+        f"junit_summary_present={parsed.junit_summary_present}, "
+        f"failures_marker_present={parsed.failures_marker_present}"
     )
     _append_command_result_notes(failure, result)
     return failure
@@ -464,7 +464,10 @@ class AndroidHostedAdapter:
             "ANDROID_COMMAND_STAGE_FAILED",
         )
         instrument = self._run_instrumentation(
-            command_file.name, deadline, preserve_active=preserve_active
+            command_file.name,
+            deadline,
+            preserve_active=preserve_active,
+            output_name=output_name,
         )
         if (
             not _instrumentation_succeeded(instrument)
@@ -545,6 +548,7 @@ class AndroidHostedAdapter:
         deadline: float,
         *,
         preserve_active: bool = False,
+        output_name: str | None = None,
     ) -> CommandResult:
         controls = self._active_controls
         observe_live = bool(controls or self._progress_sink)
@@ -599,7 +603,10 @@ class AndroidHostedAdapter:
             platform="android",
             state="started",
         )
+        observation_checked = False
+
         def check_worker() -> None:
+            nonlocal observation_checked
             if worker.is_alive():
                 return
             worker_error = holder.get("error")
@@ -608,6 +615,11 @@ class AndroidHostedAdapter:
                 raise worker_error
             if isinstance(worker_result, CommandResult):
                 if _instrumentation_succeeded(worker_result):
+                    if output_name is not None and not observation_checked:
+                        observation_checked = True
+                        self._raise_observation_error_if_present(
+                            output_name, deadline
+                        )
                     return
                 failure = _instrumentation_failure(worker_result)
                 holder["worker_failure"] = failure
@@ -699,6 +711,31 @@ class AndroidHostedAdapter:
         )
         return result
 
+    def _raise_observation_error_if_present(
+        self, output_name: str, deadline: float
+    ) -> None:
+        """Surface an app error before a missing external-control file masks it."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        result = self._adb(
+            ("shell", "-T", "cat", f"{_APP_FILES}/{output_name}"),
+            min(2.0, remaining),
+            "ANDROID_OBSERVATION_UNAVAILABLE",
+            allow_nonzero=True,
+        )
+        if result.returncode != 0:
+            return
+        try:
+            value = json.loads(result.stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(value, Mapping):
+            return
+        error_code = value.get("error_code")
+        if isinstance(error_code, str) and error_code:
+            raise ScenarioExecutionError(error_code)
+
     def _complete_external_control(
         self,
         control_file: str,
@@ -752,7 +789,7 @@ class AndroidHostedAdapter:
         """Complete the app-bound Android routing proof through root ADB."""
 
         primary: BaseException | None = None
-        rule: tuple[str, str, int] | None = None
+        rule: tuple[str, tuple[str, ...], int] | None = None
         removed = False
         physical: str | None = None
         vpn: str | None = None
@@ -775,7 +812,7 @@ class AndroidHostedAdapter:
                     control_file, "ready", deadline, abort=abort
                 )
             )
-            physical, transport, vpn, ipv4, port = self._routing_ready_values(ready_value)
+            physical, transport, vpn, ipv4s, port = self._routing_ready_values(ready_value)
             self._emit_progress(
                 "native-state",
                 kind="routing-proof",
@@ -785,8 +822,8 @@ class AndroidHostedAdapter:
                 vpn_interface=vpn,
             )
             before_rx, before_tx = self._routing_counters(vpn, deadline)
-            self._routing_rule("insert", physical, ipv4, port, deadline)
-            rule = (physical, ipv4, port)
+            self._routing_rule("insert", physical, ipv4s, port, deadline)
+            rule = (physical, ipv4s, port)
             blocked_payload = json.dumps(
                 {"operation": "observe_routing_identity", "phase": "blocked"},
                 sort_keys=True,
@@ -796,14 +833,15 @@ class AndroidHostedAdapter:
             blocked = self._routing_ready(
                 control_file, "blocked", deadline, abort=abort
             )
+            # Surface the app's structured network failure before secondary
+            # firewall/counter assertions can obscure the actual cause.
             tunneled_ip = self._assert_routing_blocked(blocked)
-            self._observed_tunneled_ips.add(tunneled_ip)
             after_rx, after_tx = self._routing_counters(vpn, deadline)
-            packets = self._routing_rule_counter(physical, ipv4, port, deadline)
+            packets = self._routing_rule_counter(physical, ipv4s, port, deadline)
             if packets <= 0:
                 raise ScenarioExecutionError(
                     "ANDROID_ROUTING_RULE_NOT_HIT "
-                    f"interface={physical} destination={ipv4} port={port} "
+                    f"interface={physical} destinations={','.join(ipv4s)} port={port} "
                     f"packets={packets}"
                 )
             if after_rx <= before_rx or after_tx <= before_tx:
@@ -823,6 +861,7 @@ class AndroidHostedAdapter:
                 rx_delta=after_rx - before_rx,
                 tx_delta=after_tx - before_tx,
             )
+            self._observed_tunneled_ips.add(tunneled_ip)
         except BaseException as error:
             record(error)
 
@@ -948,11 +987,11 @@ class AndroidHostedAdapter:
     @staticmethod
     def _routing_ready_values(
         ready: Mapping[str, object],
-    ) -> tuple[str, str | None, str, str, int]:
+    ) -> tuple[str, str | None, str, tuple[str, ...], int]:
         physical = ready.get("physical_interface")
         transport = ready.get("physical_transport")
         vpn = ready.get("vpn_interface")
-        raw_ipv4 = ready.get("ipv4")
+        raw_ipv4s = ready.get("ipv4s")
         raw_port = ready.get("port")
         if (
             not isinstance(physical, str)
@@ -967,7 +1006,8 @@ class AndroidHostedAdapter:
             or not isinstance(vpn, str)
             or _ANDROID_INTERFACE.fullmatch(vpn) is None
             or physical == vpn
-            or not isinstance(raw_ipv4, str)
+            or not isinstance(raw_ipv4s, list)
+            or not raw_ipv4s
             or not isinstance(raw_port, int)
             or isinstance(raw_port, bool)
             or not 1 <= raw_port <= 65535
@@ -975,18 +1015,25 @@ class AndroidHostedAdapter:
             raise AndroidHostedAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_READY_INVALID", ready
             )
-        try:
-            address = ipaddress.ip_address(raw_ipv4)
-        except ValueError as error:
-            failure = AndroidHostedAdapter._routing_observation_failure(
-                "ANDROID_ROUTING_READY_INVALID", ready
-            )
-            raise failure from error
-        if address.version != 4:
-            raise AndroidHostedAdapter._routing_observation_failure(
-                "ANDROID_ROUTING_READY_INVALID", ready
-            )
-        return physical, transport, vpn, str(address), raw_port
+        addresses: list[str] = []
+        for raw_ipv4 in raw_ipv4s:
+            if not isinstance(raw_ipv4, str):
+                raise AndroidHostedAdapter._routing_observation_failure(
+                    "ANDROID_ROUTING_READY_INVALID", ready
+                )
+            try:
+                address = ipaddress.ip_address(raw_ipv4)
+            except ValueError as error:
+                failure = AndroidHostedAdapter._routing_observation_failure(
+                    "ANDROID_ROUTING_READY_INVALID", ready
+                )
+                raise failure from error
+            if address.version != 4 or str(address) in addresses:
+                raise AndroidHostedAdapter._routing_observation_failure(
+                    "ANDROID_ROUTING_READY_INVALID", ready
+                )
+            addresses.append(str(address))
+        return physical, transport, vpn, tuple(addresses), raw_port
 
     def _routing_counters(self, interface: str, deadline: float) -> tuple[int, int]:
         if _ANDROID_INTERFACE.fullmatch(interface) is None:
@@ -1013,39 +1060,95 @@ class AndroidHostedAdapter:
         self,
         action: str,
         physical: str,
-        ipv4: str,
+        ipv4s: tuple[str, ...],
         port: int,
         deadline: float,
     ) -> None:
         if action not in {"insert", "remove"}:
             raise ScenarioExecutionError("ANDROID_ROUTING_RULE_ACTION_INVALID")
-        operation = "-I" if action == "insert" else "-D"
+        if not ipv4s:
+            raise ScenarioExecutionError("ANDROID_ROUTING_READY_INVALID")
+        if action == "insert":
+            # A dedicated chain is both supported by Android's minimal
+            # iptables build and unmistakably qualification-owned. The
+            # comment match extension is absent on some ReDroid kernels.
+            self._cleanup_routing_chain(deadline)
+            try:
+                self._routing_chain_command("-N", deadline)
+                for ipv4 in ipv4s:
+                    self._routing_chain_rule(
+                        "-A", physical, ipv4, port, deadline
+                    )
+                self._adb(
+                    (
+                        "shell", "iptables", "-I", "OUTPUT", "1",
+                        "-j", ROUTING_RULE_CHAIN,
+                    ),
+                    _remaining(deadline, "ANDROID_ROUTING_RULE_TIMEOUT"),
+                    "ANDROID_ROUTING_RULE_INSTALL_FAILED",
+                )
+            except BaseException as error:
+                try:
+                    self._cleanup_routing_chain(deadline)
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        "Android routing rule rollback failure:\n"
+                        + "".join(
+                            traceback.format_exception(cleanup_error)
+                        ).rstrip()
+                    )
+                raise
+            return
+
+        self._cleanup_routing_chain(deadline, strict=True)
+
+    def _routing_chain_rule(
+        self,
+        operation: str,
+        physical: str,
+        ipv4: str,
+        port: int,
+        deadline: float,
+    ) -> None:
         arguments = (
-            "shell", "iptables", operation, "OUTPUT",
-            *(("1",) if action == "insert" else ()),
+            "shell", "iptables", operation, ROUTING_RULE_CHAIN,
             "-o", physical, "-d", ipv4, "-p", "tcp", "--dport", str(port),
             "-j", "REJECT",
         )
         self._adb(
             arguments,
             _remaining(deadline, "ANDROID_ROUTING_RULE_TIMEOUT"),
-            "ANDROID_ROUTING_RULE_INSTALL_FAILED"
-            if action == "insert" else "ANDROID_ROUTING_RULE_REMOVE_FAILED",
+            "ANDROID_ROUTING_RULE_INSTALL_FAILED",
+        )
+
+    def _routing_chain_command(self, operation: str, deadline: float) -> None:
+        self._adb(
+            ("shell", "iptables", operation, ROUTING_RULE_CHAIN),
+            _remaining(deadline, "ANDROID_ROUTING_RULE_TIMEOUT"),
+            "ANDROID_ROUTING_RULE_INSTALL_FAILED",
         )
 
     def _routing_rule_counter(
-        self, physical: str, ipv4: str, port: int, deadline: float
+        self, physical: str, ipv4s: tuple[str, ...], port: int, deadline: float
     ) -> int:
+        if not ipv4s:
+            raise ScenarioExecutionError("ANDROID_ROUTING_READY_INVALID")
         result = self._adb(
             (
-                "shell", "iptables", "-L", "OUTPUT", "-v", "-n", "-x",
+                "shell", "iptables", "-L", ROUTING_RULE_CHAIN, "-v", "-n", "-x",
                 "--line-numbers",
             ),
             _remaining(deadline, "ANDROID_ROUTING_RULE_COUNTER_FAILED"),
             "ANDROID_ROUTING_RULE_COUNTER_FAILED",
         )
-        expected_destination = {ipv4, f"{ipv4}/32"}
         port_marker = f"dpt:{port}"
+        expected_destinations = {
+            destination
+            for ipv4 in ipv4s
+            for destination in (ipv4, f"{ipv4}/32")
+        }
+        packets_total = 0
+        matched = False
         for line in result.stdout_text.splitlines():
             fields = line.split()
             for offset in (0, 1):
@@ -1063,10 +1166,13 @@ class AndroidHostedAdapter:
                     and fields[offset + 5] == "*"
                     and fields[offset + 6] == physical
                     and fields[offset + 7] == "0.0.0.0/0"
-                    and fields[offset + 8] in expected_destination
+                    and fields[offset + 8] in expected_destinations
                     and port_marker in fields[offset + 9:]
                 ):
-                    return packets
+                    matched = True
+                    packets_total += packets
+        if matched:
+            return packets_total
         failure = ScenarioExecutionError("ANDROID_ROUTING_RULE_COUNTER_INVALID")
         _append_command_result_notes(failure, result)
         raise failure
@@ -1599,10 +1705,77 @@ exit 0
             raise failure
         return result
 
+    def _cleanup_routing_chain(
+        self, deadline: float, *, strict: bool = False
+    ) -> None:
+        """Remove only the dedicated qualification chain and its jump.
+
+        Every command tolerates absence, making this safe before a proof and
+        after a killed run while never inspecting or deleting unrelated rules.
+        """
+
+        commands = (
+            ("-D", "OUTPUT", "-j", ROUTING_RULE_CHAIN),
+            ("-F", ROUTING_RULE_CHAIN),
+            ("-X", ROUTING_RULE_CHAIN),
+        )
+        primary: ScenarioExecutionError | None = None
+        for arguments in commands:
+            result = self._adb(
+                ("shell", "iptables", *arguments),
+                _cleanup_timeout(deadline),
+                "ANDROID_ROUTING_RULE_CLEANUP_FAILED",
+                allow_nonzero=True,
+            )
+            # An absent jump/chain is the intended idempotent state. Other
+            # iptables failures use the same nonzero status, so the subsequent
+            # full-table inventory is the idempotent fail-closed authority.
+            if strict and result.returncode != 0:
+                failure = ScenarioExecutionError(
+                    "ANDROID_ROUTING_RULE_REMOVE_FAILED"
+                )
+                _append_command_result_notes(failure, result)
+                if primary is None:
+                    primary = failure
+                else:
+                    primary.add_note(
+                        "Android routing cleanup also failed:\n"
+                        + "".join(traceback.format_exception(failure)).rstrip()
+                    )
+
+        inventory = self._adb(
+            ("shell", "iptables", "-S"),
+            _cleanup_timeout(deadline),
+            "ANDROID_ROUTING_RULE_CLEANUP_FAILED",
+            allow_nonzero=True,
+        )
+        residual = inventory.returncode != 0 or any(
+            ROUTING_RULE_CHAIN in line.split()
+            for line in inventory.stdout_text.splitlines()
+        )
+        if residual:
+            failure = ScenarioExecutionError(
+                "ANDROID_ROUTING_RULE_CLEANUP_FAILED"
+            )
+            _append_command_result_notes(failure, inventory)
+            if primary is None:
+                primary = failure
+            else:
+                primary.add_note(
+                    "Android routing cleanup absence proof failed:\n"
+                    + "".join(traceback.format_exception(failure)).rstrip()
+                )
+        if primary is not None:
+            raise primary
+
     def _cleanup_device(
         self, names: tuple[str, ...], deadline: float
     ) -> ScenarioExecutionError | None:
         error: ScenarioExecutionError | None = None
+        try:
+            self._cleanup_routing_chain(deadline)
+        except ScenarioExecutionError as failure:
+            error = failure
         mutation_parts: list[str] = []
         if names:
             mutation_parts.append(
@@ -1621,7 +1794,13 @@ exit 0
                 "ANDROID_CLEANUP_FAILED",
             )
         except ScenarioExecutionError as failure:
-            error = failure
+            if error is None:
+                error = failure
+            else:
+                error.add_note(
+                    "Android app cleanup also failed:\n"
+                    + "".join(traceback.format_exception(failure)).rstrip()
+                )
 
         verification_parts = [
             *(f"test ! -e {_APP_FILES}/{name}" for name in names),

@@ -11,14 +11,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 from typing import Any
 
+from .android_instrumentation import (
+    ROUTING_RULE_CHAIN,
+    parse_instrumentation_result,
+)
 
 _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
 COMPANION_PACKAGE = "com.dobby.vpn.test"
+PROBE_ROOT_GLOB = "/data/local/tmp/dobbyvpn-probe-*"
 
 
 def _error(message: str) -> Exception:
@@ -110,6 +116,21 @@ def _verify_installed(adb: str, serial: str, package: str, run_dir: Path, logs: 
         raise _error(f"Android package verification failed: {package}")
 
 
+def _owned_routing_cleanup_command() -> str:
+    """Build the exact dedicated-chain stale-rule cleanup script."""
+
+    return (
+        f"while iptables -D OUTPUT -j {ROUTING_RULE_CHAIN} 2>/dev/null; "
+        "do :; done; "
+        f"iptables -F {ROUTING_RULE_CHAIN} 2>/dev/null || true; "
+        f"iptables -X {ROUTING_RULE_CHAIN} 2>/dev/null || true; "
+        "inventory=$(iptables -S) || exit $?; "
+        f'case "$inventory" in *{ROUTING_RULE_CHAIN}*) '
+        f'echo "Android qualification routing chain remains: '
+        f'{ROUTING_RULE_CHAIN}" >&2; exit 1;; esac'
+    )
+
+
 def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float) -> dict[str, Any]:
     app = _apk(descriptor, "app")
     companion = _apk(descriptor, "test_companion")
@@ -147,6 +168,85 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     return runtime
 
 
+def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
+           timeout: float) -> subprocess.CompletedProcess[bytes]:
+    """Drive the installed release UI through Android's real input path."""
+    adb_value = runtime.get("adb")
+    serial = runtime.get("serial")
+    if not isinstance(adb_value, str) or not isinstance(serial, str):
+        raise _error("Android UI runtime is incomplete")
+    if not _SERIAL.fullmatch(serial):
+        raise _error("Android UI serial is invalid")
+    environment = os.environ.copy()
+    if not environment.get("ADB_SERVER_SOCKET"):
+        raise _error("Android ADB server socket is not configured")
+    result = _adb_call(
+        adb_value,
+        serial,
+        [
+            "shell", "am", "instrument", "-w", "-r",
+            "-e", "class", "com.dobby.GoUiInstrumentedTest",
+            "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
+        ],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-native-ui",
+        timeout=min(timeout, 300),
+        environment=environment,
+        check=False,
+    )
+    parsed = parse_instrumentation_result(
+        returncode=result.returncode,
+        stdout=result.stdout,
+        stderr=result.stderr,
+    )
+    if parsed.succeeded:
+        return result
+    # Preserve the rendered frame and Android accessibility tree while the
+    # failed activity is still visible. These are diagnostics only: collection
+    # must not replace the original instrumentation result or delay cleanup.
+    _adb_call(
+        adb_value,
+        serial,
+        ["exec-out", "cat", "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.png"],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-native-ui-screen",
+        timeout=min(timeout, 15),
+        environment=environment,
+        check=False,
+    )
+    _adb_call(
+        adb_value,
+        serial,
+        ["exec-out", "cat", "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.xml"],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-native-ui-tree",
+        timeout=min(timeout, 15),
+        environment=environment,
+        check=False,
+    )
+    _adb_call(
+        adb_value,
+        serial,
+        [
+            "shell", "rm", "-f",
+            "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.png",
+            "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.xml",
+        ],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-native-ui-diagnostic-cleanup",
+        timeout=min(timeout, 15),
+        environment=environment,
+        check=False,
+    )
+    return subprocess.CompletedProcess(
+        result.args, result.returncode or 1, result.stdout, result.stderr
+    )
+
+
 def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) -> None:
     """Remove only packages successfully installed by this run."""
 
@@ -169,6 +269,50 @@ def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) 
                       label="android-cleanup-state", timeout=min(timeout, 15), environment=environment)
     if state.returncode != 0 or state.stdout.strip() != b"device":
         raise _error("Android cleanup ADB device is unavailable")
+    # Recover the exact qualification-owned chain if a killed run left it.
+    try:
+        _adb_call(
+            adb_value,
+            serial,
+            ["shell", "sh", "-c", shlex.quote(_owned_routing_cleanup_command())],
+            run_dir=run_dir,
+            logs=logs,
+            label="android-cleanup-routing",
+            timeout=min(timeout, 30),
+            environment=environment,
+        )
+    except Exception as error:
+        errors.append(
+            f"android-cleanup-routing: {type(error).__name__}: {error}"
+        )
+    # The standalone UID-2000 network probe must stage dex files outside the
+    # app sandbox. Remove only the qualification-owned prefix so a killed run
+    # cannot leave executable material in the shared device temp directory.
+    probe_cleanup = (
+        f"for path in {PROBE_ROOT_GLOB}; do "
+        "case \"$path\" in "
+        "/data/local/tmp/dobbyvpn-probe-*) "
+        "[ -d \"$path\" ] || continue; rm -rf -- \"$path\" || exit $? ;; "
+        "esac; "
+        "done"
+    )
+    try:
+        _adb_call(
+            adb_value,
+            serial,
+            ["shell", "sh", "-c", shlex.quote(probe_cleanup)],
+            run_dir=run_dir,
+            logs=logs,
+            label="android-cleanup-network-probe",
+            timeout=min(timeout, 30),
+            environment=environment,
+        )
+    except Exception as error:
+        # Keep package/process teardown running and report this independent
+        # cleanup failure together with any later failure.
+        errors.append(
+            f"android-cleanup-network-probe: {type(error).__name__}: {error}"
+        )
     for package in packages:
         if not isinstance(package, str) or package not in {APP_PACKAGE, COMPANION_PACKAGE}:
             errors.append(f"invalid owned Android package: {package!r}")

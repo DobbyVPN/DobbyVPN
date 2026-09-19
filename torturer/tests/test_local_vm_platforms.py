@@ -362,6 +362,41 @@ class LocalVMPlatformTests(unittest.TestCase):
             state = json.loads((root / "platform.json").read_text())
             self.assertEqual(state["runtime"]["installed_packages"], ["com.dobby.vpn", "com.dobby.vpn.test"])
 
+    def test_android_native_ui_uses_instrumentation_without_staging_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = {
+                "ADB_SERVER_SOCKET": "localfilesystem:/run/redroid/adb.sock",
+                "ANDROID_SERIAL": "redroid-1",
+            }
+            calls: list[tuple[list[str], dict]] = []
+
+            def fake_logged(command, **kwargs):
+                calls.append((command, kwargs))
+                output = (
+                    b"OK (1 test)\nINSTRUMENTATION_CODE: -1\n"
+                    if kwargs["label"] == "android-native-ui" else b""
+                )
+                return subprocess.CompletedProcess(command, 0, output, b"")
+
+            with (
+                mock.patch.dict(local_vm_android.os.environ, environment, clear=True),
+                mock.patch.object(local_vm_android, "_run_logged", side_effect=fake_logged),
+            ):
+                result = local_vm_android.run_ui(
+                    root,
+                    {"adb": "/sdk/adb", "serial": "redroid-1"},
+                    root / "logs",
+                    10,
+                )
+
+            self.assertEqual(result.returncode, 0)
+            commands = [command for command, _ in calls]
+            instrument = next(command for command in commands if "instrument" in command)
+            self.assertIn("com.dobby.GoUiInstrumentedTest", instrument)
+            self.assertNotIn("dobby.ui_profile", instrument)
+            self.assertFalse(any("push" in command or "chmod" in command for command in commands))
+
 
 if __name__ == "__main__":
     unittest.main()
