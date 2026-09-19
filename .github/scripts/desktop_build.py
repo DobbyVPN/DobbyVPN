@@ -121,7 +121,7 @@ UI_TEST_NAMES = {
     "macos": "dobby-vpn-ui-test",
     "windows": "dobby-vpn-ui-test.exe",
 }
-MACOS_MINIMUM_SYSTEM_VERSION = "11.0"
+MACOS_MINIMUM_SYSTEM_VERSION = "12.0"
 PROBE_TIMEOUT_SECONDS = 30
 GOOS_BY_PLATFORM = {
     "linux": "linux",
@@ -158,14 +158,14 @@ def child_environment(
     command: list[str], env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     child_env = os.environ.copy() if env is None else env.copy()
-    if host_platform() == "windows" and command and command[0].replace("\\", "/").rsplit("/", 1)[-1].lower() in {
-        "go",
-        "go.exe",
-    }:
-        # The Windows Go 1.25.1 compiler stalled in asyncPreempt/badmcall
-        # and recursive panic reporting, even during compile -V=full.
-        # Upstream: golang/go#67108 and #79249. Scope this mitigation to
-        # Go tools, not the VPN runtime; remove after a verified fix.
+    executable = command[0].replace("\\", "/").rsplit("/", 1)[-1].lower() if command else ""
+    if executable in {"go", "go.exe"}:
+        child_env["GOTOOLCHAIN"] = "local"
+    if host_platform() == "windows" and executable in {"go", "go.exe"}:
+        # Some Windows Go compilers have stalled in asyncPreempt/badmcall and
+        # recursive panic reporting, even during compile -V=full. Upstream:
+        # golang/go#67108 and #79249. Scope this mitigation to Go tools, not
+        # the VPN runtime, until a Windows qualification proves it unnecessary.
         child_env["GODEBUG"] = ",".join(
             filter(None, (child_env.get("GODEBUG"), "asyncpreemptoff=1"))
         )
@@ -841,9 +841,8 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
     ldflags = "-buildid="
     if target_platform == "macos":
-        # Go's internal Darwin linker emits a macOS 12 load command even when
-        # the app declares macOS 11 support.  Use the host external linker so
-        # the native CLI remains honest about the product's minimum version.
+        # Use the host external linker so every native binary declares the
+        # product's macOS 12 minimum consistently.
         env["CGO_ENABLED"] = "1"
         ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
     run(
@@ -1096,7 +1095,7 @@ def build_service(
         )
         ldflags = "-buildid="
         if target_platform == "macos":
-            # Keep the Intel package's declared macOS 11 floor valid for both
+            # Keep the package's declared macOS 12 floor valid for both
             # the gRPC service and the native operator CLI.
             ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
         if target_platform == "linux":

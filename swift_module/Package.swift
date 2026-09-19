@@ -6,7 +6,10 @@ import PackageDescription
 // NetworkExtension, or an iOS device.
 let package = Package(
     name: "DobbyVPNIOSLifecycleCore",
-    platforms: [.macOS(.v13)],
+    // The lifecycle-core target uses Foundation/Swift APIs available on
+    // macOS 12. Keep the package floor aligned with the shipped desktop
+    // binaries instead of requiring a newer host just to run these tests.
+    platforms: [.macOS(.v12)],
     products: [
         .library(name: "IOSLifecycleCore", targets: ["IOSLifecycleCore"]),
     ],

@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   functional-tooling:
     name: Functional test tooling
@@ -131,6 +134,7 @@ jobs:
           go_root="$(go env GOROOT)"
           test "$(readlink -f "$(command -v go)")" = "$(readlink -f "$go_root/bin/go")"
           echo "GOROOT=$go_root" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_dobbyGoBinary=$go_root/bin/go" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:

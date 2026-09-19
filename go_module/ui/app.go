@@ -22,11 +22,23 @@ type Application struct {
 }
 
 func NewApplication(runtime fyne.App, client SessionClient, stores ...SourceStore) *Application {
+	return newApplication(runtime, client, nil, stores...)
+}
+
+// NewApplicationWithLogExporter is the constructor used when a platform has
+// an existing native save/share implementation. Keeping the exporter behind
+// this one injected interface leaves session ownership and snapshot mapping
+// in the shared UI.
+func NewApplicationWithLogExporter(runtime fyne.App, client SessionClient, exporter LogExporter, stores ...SourceStore) *Application {
+	return newApplication(runtime, client, exporter, stores...)
+}
+
+func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter, stores ...SourceStore) *Application {
 	var store SourceStore
 	if len(stores) > 0 {
 		store = stores[0]
 	}
-	view := NewConnectionView(client, store)
+	view := newConnectionView(client, exporter, store)
 	settings := NewSettingsView()
 	window := runtime.NewWindow("Dobby VPN")
 	window.Resize(fyne.NewSize(460, 520))
@@ -42,10 +54,9 @@ func NewApplication(runtime fyne.App, client SessionClient, stores ...SourceStor
 
 func (a *Application) Run() {
 	a.Start()
-	// Show before emitting the native marker.  The marker is consumed by the
-	// Simulator contract and must mean that the production window has been
-	// handed to the platform renderer, not merely that its widget tree was
-	// constructed.
+	// Show before emitting the diagnostic marker so logs distinguish a window
+	// handed to the platform renderer from a widget tree that was only built.
+	// Real UI qualification still drives the platform accessibility tree.
 	a.Window.Show()
 	markUIAttached()
 	a.App.Run()
@@ -66,14 +77,16 @@ func (a *Application) Close() {
 // UI tests.  Tests locate controls by their stable accessibility labels/text,
 // not by screen coordinates.
 type ConnectionView struct {
-	client SessionClient
-	store  SourceStore
+	client   SessionClient
+	store    SourceStore
+	exporter LogExporter
 
 	Input    *AccessibleEntry
 	Connect  *widget.Button
 	Status   *widget.Label
 	Details  *widget.Label
 	Logs     *AccessibleEntry
+	Export   *widget.Button
 	Settings *widget.Button
 	root     fyne.CanvasObject
 
@@ -97,6 +110,17 @@ type ConnectionView struct {
 }
 
 func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionView {
+	return newConnectionView(client, nil, stores...)
+}
+
+// NewConnectionViewWithLogExporter is useful to platform entry points and
+// headless tests that want to exercise the export action without changing the
+// SessionClient boundary.
+func NewConnectionViewWithLogExporter(client SessionClient, exporter LogExporter, stores ...SourceStore) *ConnectionView {
+	return newConnectionView(client, exporter, stores...)
+}
+
+func newConnectionView(client SessionClient, exporter LogExporter, stores ...SourceStore) *ConnectionView {
 	var store SourceStore
 	if len(stores) > 0 {
 		store = stores[0]
@@ -104,6 +128,7 @@ func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionV
 	view := &ConnectionView{
 		client:         client,
 		store:          store,
+		exporter:       exporter,
 		renderedStatus: "Disconnected",
 		renderedButton: "Connect",
 	}
@@ -118,20 +143,42 @@ func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionV
 	view.Logs = NewAccessibleEntry(true, "Connection logs")
 	view.Logs.SetMinRowsVisible(6)
 	view.Logs.Disable()
+	view.Export = widget.NewButton("Export logs", nil)
+	if exporter == nil {
+		view.Export.Disable()
+	}
 	view.Settings = widget.NewButton("Settings", nil)
 
 	view.Connect.OnTapped = func() { view.toggle() }
+	view.Export.OnTapped = func() { view.exportLogs() }
 	view.root = container.NewBorder(
 		container.NewVBox(
 			view.Status,
 			view.Details,
 			view.Input,
 			view.Connect,
+			view.Export,
 			view.Settings,
 		),
 		nil, nil, nil, view.Logs,
 	)
 	return view
+}
+
+// SetLogExporter injects the platform adapter after a window exists. This is
+// useful for desktop implementations whose file picker needs the Fyne window
+// as its parent while retaining the old constructor for test companions.
+func (v *ConnectionView) SetLogExporter(exporter LogExporter) {
+	v.mu.Lock()
+	v.exporter = exporter
+	v.mu.Unlock()
+	onUI(func() {
+		if exporter == nil {
+			v.Export.Disable()
+		} else {
+			v.Export.Enable()
+		}
+	})
 }
 
 // AccessibleEntry supplies the label/role that Fyne's native accessibility
@@ -367,6 +414,23 @@ func (v *ConnectionView) toggle() {
 	go v.connect(ctx, []byte(text), sequence)
 }
 
+func (v *ConnectionView) exportLogs() {
+	v.mu.Lock()
+	exporter := v.exporter
+	snapshot := v.snapshot
+	ctx := v.ctx
+	v.mu.Unlock()
+	if exporter == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := exporter.Export(ctx, snapshotLogLines(snapshot)); err != nil {
+		v.showError(err)
+	}
+}
+
 func (v *ConnectionView) connect(ctx context.Context, raw []byte, sequence uint64) {
 	configured, err := v.client.Configure(ctx, raw, sequence)
 	if err == nil {
@@ -521,6 +585,10 @@ func detailsText(snapshot Snapshot) string {
 }
 
 func snapshotLogText(snapshot Snapshot) string {
+	return strings.Join(snapshotLogLines(snapshot), "\n")
+}
+
+func snapshotLogLines(snapshot Snapshot) []string {
 	lines := make([]string, 0, len(snapshot.Warnings)+1)
 	for _, warning := range snapshot.Warnings {
 		line := warning.Code
@@ -536,7 +604,7 @@ func snapshotLogText(snapshot Snapshot) string {
 		}
 		lines = append(lines, line)
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 func onUI(fn func()) {

@@ -67,6 +67,108 @@ class LocalVMPlatformTests(unittest.TestCase):
             self.assertIsNone(state["runtime"]["network_interface"])
             self.assertNotIn("pid", state["runtime"])
 
+    def test_windows_native_ui_uses_interactive_token_and_cleans_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            logs = root / "logs"
+            cwd = root / "source"
+            cwd.mkdir()
+            calls: list[tuple[str, str, dict]] = []
+            wrapper_text: list[str] = []
+
+            def fake_powershell(script: str, **kwargs):
+                calls.append((kwargs["label"], script, kwargs))
+                if kwargs["label"] == "native-ui-task-register":
+                    wrapper_text.append((root / "native-ui-task.ps1").read_text(encoding="utf-8"))
+                    exit_marker = root / "native-ui.exit"
+                    (logs / "native-ui.stdout.log").write_bytes(b"ui output\n")
+                    (logs / "native-ui.stderr.log").write_bytes(b"")
+                    exit_marker.write_text("0", encoding="ascii")
+                return subprocess.CompletedProcess([], 0, b"", b"")
+
+            command = [
+                r"C:\Python\python.exe",
+                r"C:\candidate\native_ui_smoke.py",
+                "--platform", "windows",
+            ]
+            environment = {
+                "PROGRAMDATA": r"C:\candidate\ProgramData",
+                "DOBBYVPN_CONTROL_ADDRESS": "127.0.0.1:50051",
+                "DOBBYVPN_CONTROL_TOKEN_USER": r"TEST\dobby",
+                "DOBBY_LOG_PATH": r"C:\candidate\logs\service.log",
+                "DOBBY_LOG_ROOT": r"C:\candidate\logs",
+                "DOBBY_LOG_PRECREATED": "1",
+                "GODEBUG": "asyncpreemptoff=1",
+                "PATH": r"C:\Windows\System32;C:\Windows",
+                "PRIVATE_TEST_VALUE": "must-not-be-copied",
+            }
+            with mock.patch.object(local_vm_windows, "_powershell", side_effect=fake_powershell):
+                result = local_vm_windows.run_interactive_ui(
+                    command,
+                    run_dir=root,
+                    cwd=cwd,
+                    logs=logs,
+                    timeout=1,
+                    environment=environment,
+                )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b"ui output\n")
+            self.assertEqual((logs / "native-ui.stdout.log").read_bytes(), b"ui output\n")
+            self.assertEqual((logs / "native-ui.stderr.log").read_bytes(), b"")
+            self.assertEqual(
+                [label for label, _, _ in calls],
+                ["native-ui-task-register", "native-ui-task-cleanup"],
+            )
+            register_script = calls[0][1]
+            cleanup_script = calls[1][1]
+            self.assertIn("-LogonType Interactive -RunLevel Limited", register_script)
+            self.assertNotIn("InteractiveToken", register_script)
+            self.assertIn(r"TEST\dobby", register_script)
+            self.assertIn("Register-ScheduledTask", register_script)
+            self.assertNotIn("New-ScheduledTaskTrigger", register_script)
+            self.assertNotIn("-Trigger", register_script)
+            self.assertIn("Unregister-ScheduledTask", cleanup_script)
+            self.assertEqual(len(wrapper_text), 1)
+            self.assertIn("DOBBYVPN_CONTROL_TOKEN_USER", wrapper_text[0])
+            self.assertIn("EnvironmentVariables.Clear()", wrapper_text[0])
+            self.assertIn("USERPROFILE", wrapper_text[0])
+            self.assertIn(r"C:\Windows\System32;C:\Windows", wrapper_text[0])
+            self.assertNotIn("PRIVATE_TEST_VALUE", wrapper_text[0])
+            self.assertFalse((root / "native-ui-task.ps1").exists())
+
+    def test_windows_native_ui_timeout_kills_recorded_tree_and_unregisters(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            logs = root / "logs"
+            cwd = root / "source"
+            cwd.mkdir()
+            labels: list[str] = []
+
+            def fake_powershell(_script: str, **kwargs):
+                labels.append(kwargs["label"])
+                if kwargs["label"] == "native-ui-task-register":
+                    (root / "native-ui.pid").write_text("431", encoding="ascii")
+                return subprocess.CompletedProcess([], 0, b"", b"")
+
+            with mock.patch.object(local_vm_windows, "_powershell", side_effect=fake_powershell):
+                with self.assertRaisesRegex(local_vm.LocalVMError, "task timed out"):
+                    local_vm_windows.run_interactive_ui(
+                        [r"C:\Python\python.exe", r"C:\candidate\smoke.py"],
+                        run_dir=root,
+                        cwd=cwd,
+                        logs=logs,
+                        timeout=0.01,
+                        environment={"DOBBYVPN_CONTROL_TOKEN_USER": "dobby"},
+                    )
+
+            self.assertEqual(
+                labels,
+                ["native-ui-task-register", "native-ui-kill", "native-ui-task-cleanup"],
+            )
+            self.assertFalse((root / "native-ui.pid").exists())
+
+
     def test_windows_cleanup_uses_exact_identity_and_firewall_rule(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

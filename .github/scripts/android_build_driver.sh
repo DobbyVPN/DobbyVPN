@@ -16,6 +16,7 @@ source_repository='DobbyVPN/DobbyVPN'
 local_build=0
 gradle_archive=''
 gradle_root=''
+go_binary=''
 
 while (($#)); do
   case "$1" in
@@ -29,6 +30,7 @@ while (($#)); do
     --dependency-manifest) dependency_manifest=${2:?missing --dependency-manifest value}; shift 2 ;;
     --gradle-archive) gradle_archive=$2; shift 2 ;;
     --gradle-root) gradle_root=$2; shift 2 ;;
+    --go-binary) go_binary=$2; shift 2 ;;
     --local) local_build=1; shift ;;
     --source-repository) source_repository=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -149,17 +151,18 @@ version_code=$(sed -n 's/^versionCode=//p' "$source_root/android_module/gradle.p
   exit 2
 }
 
-go_bin=${GO_BIN:-"$(command -v go || true)"}
-go_root=${GOROOT:-}
+go_bin=${go_binary:-${GO_BIN:-"$(command -v go || true)"}}
 go_path=${GOPATH:-}
-[[ -n "$go_bin" && -x "$go_bin" && -n "$go_root" && -d "$go_root" && -n "$go_path" && -d "$go_path" ]] || {
-  echo 'the pinned Go executable, GOROOT, and GOPATH are required' >&2
+[[ -n "$go_bin" && -x "$go_bin" && -n "$go_path" && -d "$go_path" ]] || {
+  echo 'the pinned Go executable and GOPATH are required' >&2
   exit 2
 }
-export GOROOT="$go_root" GOPATH="$go_path" GOFLAGS='-trimpath -buildvcs=false'
+unset GOROOT
+export GOPATH="$go_path" GOFLAGS='-trimpath -buildvcs=false' GOTOOLCHAIN='local'
 expected_go_version="go$(tr -d '[:space:]' < "$source_root/.go-version")"
 [[ "$($go_bin env GOVERSION)" == "$expected_go_version" ]] || { echo 'Go version does not match .go-version' >&2; exit 2; }
-[[ "$($go_bin env GOROOT)" == "$GOROOT" && "$($go_bin env GOPATH)" == "$GOPATH" ]] || {
+go_root="$($go_bin env GOROOT)"
+[[ -d "$go_root" && "$($go_bin env GOPATH)" == "$GOPATH" ]] || {
   echo 'Go environment does not match the selected tool inputs' >&2
   exit 2
 }
@@ -246,6 +249,7 @@ run_unsigned_build() {
   ( cd -- "$source_root"
     "$gradle_bin" -p android_module :app:assembleRelease "${gradle_flags[@]}" \
       -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
+      -PdobbyGoBinary="$go_bin" \
       -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
   )
   built="$source_root/android_module/app/build/outputs/apk/release/app-release-unsigned.apk"
@@ -258,6 +262,7 @@ run_test_companion_build() {
   ( cd -- "$source_root"
     "$gradle_bin" -p android_module :app:assembleReleaseAndroidTest "${gradle_flags[@]}" \
       -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
+      -PdobbyGoBinary="$go_bin" \
       -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
   )
   [[ -f "$built" ]] || { echo "Gradle did not produce $built" >&2; exit 1; }

@@ -37,7 +37,7 @@ class DesktopBuildTests(unittest.TestCase):
 
     def test_find_go_skips_a_malformed_cached_installation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "go-1.25.1"
+            root = Path(temporary) / "go-1.26.8"
             (root / "bin").mkdir(parents=True)
             (root / "bin" / "go.exe").write_bytes(b"go")
             with (
@@ -47,7 +47,7 @@ class DesktopBuildTests(unittest.TestCase):
                 mock.patch.object(desktop_build.shutil, "which", return_value=str(root / "bin" / "go.exe")),
                 mock.patch.object(desktop_build, "run_capture") as run_capture,
             ):
-                (Path(temporary) / ".go-version").write_text("1.25.1\n", encoding="utf-8")
+                (Path(temporary) / ".go-version").write_text("1.26.8\n", encoding="utf-8")
                 self.assertIsNone(desktop_build.find_go())
             run_capture.assert_not_called()
 
@@ -163,7 +163,13 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn('environment("CGO_LDFLAGS", "")', android)
         self.assertIn('environment("CFLAGS", "")', android)
         self.assertIn('"-trimpath", "-ldflags=-buildid= -s -w"', android)
-        self.assertIn('val goBinary = nonBlankEnvironment("GOROOT")', android)
+        self.assertIn('val goBinary = nonBlankGradleProperty("dobbyGoBinary")', android)
+        self.assertIn('val validateGoToolchain by tasks.registering', android)
+        self.assertIn('dependsOn(validateGoToolchain)', android)
+        self.assertIn('commandLine(goBinary.get(), "mod", "download")', android)
+        self.assertIn('validateGoToolchain', android)
+        self.assertNotIn('nonBlankEnvironment("GOROOT")', android)
+        self.assertNotIn('nonBlankEnvironment("GO_BIN")', android)
         manifest = (SCRIPT_PATH.parents[2] / "android_module" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
         self.assertIn('android:versionCode="${dobbyVersionCode}"', manifest)
         self.assertIn('android:versionName="${dobbyVersionName}"', manifest)
@@ -281,7 +287,7 @@ class DesktopBuildTests(unittest.TestCase):
 
     def test_bounded_probe_scopes_async_preemption_workaround_to_windows_go(self) -> None:
         process = mock.Mock(pid=123, returncode=0)
-        process.communicate.return_value = (b"go version go1.25.1 windows/amd64\n", b"")
+        process.communicate.return_value = (b"go version go1.26.8 windows/amd64\n", b"")
         with (
             mock.patch.object(desktop_build, "host_platform", return_value="windows"),
             mock.patch.dict(desktop_build.os.environ, {"GODEBUG": "parent=1"}),

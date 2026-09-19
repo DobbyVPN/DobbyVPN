@@ -28,6 +28,9 @@ on:
         type: string
         required: true
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   ios_build:
     runs-on: macos-15

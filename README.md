@@ -18,6 +18,13 @@ The migration is reversible: the pre-migration product is retained at the
 Those references are rollback points, not compatibility code in the release
 tree.
 
+The product Go toolchain is pinned to Go 1.26.8 in `.go-version`. Desktop
+packages are native Go/Fyne executables with no JVM launcher. Android still
+runs its thin Kotlin/Java OS boundary on ART for permission and `VpnService`
+lifecycle, but has no KMP or Compose UI; iOS likewise retains only its thin
+Swift NetworkExtension boundary. No RAM benchmark or memory-usage acceptance
+criterion is part of this migration.
+
 See the complete [architecture contract](docs/ARCHITECTURE.md) for the
 responsibility boundaries and supported configuration behavior.
 
@@ -184,7 +191,10 @@ start a new Release run; rerunning the old run is unsupported.
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
 supported.
 
-Windows and MacOS apps require manual intervention to be installed for now - notarization is a work in progress.
+Windows and macOS packages are built and qualified by Release, including
+installer lifecycle checks. Distribution signing/notarization remains a
+release concern, so locally injected binaries are intended for iteration and
+are not distribution artifacts.
 
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)

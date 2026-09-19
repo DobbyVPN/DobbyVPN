@@ -31,8 +31,9 @@ python3 .github/scripts/desktop_build.py ui --platform current
 ```
 
 The command writes an unbundled executable to `go_module/dobby-vpn-ui` (or
-`dobby-vpn-ui.exe` on Windows). It is suitable for a disposable Windows
-manual-injection test while installer integration is being migrated.
+`dobby-vpn-ui.exe` on Windows). It is suitable for disposable native-window
+qualification or direct injection into a test VM; Release separately tests
+the packaged installer/archive.
 
 Build the headless UI companion on the native target host for service-backed
 UI qualification:
@@ -65,7 +66,7 @@ packages the pinned Fyne Java activity:
 
 ```bash
 cd ../android_module
-./gradlew :app:assembleRelease
+./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
 ```
 
 The Kotlin sources in that project contain only the Android permission,
@@ -76,7 +77,8 @@ For a real Android emulator, use the matching ABI and then drive the package
 through the accessibility tree:
 
 ```bash
-python3 .github/scripts/mobile_android_ui_smoke.py --apk /tmp/dobby-vpn.apk
+python3 .github/scripts/mobile_android_ui_smoke.py \
+  --apk /tmp/dobby-vpn.apk --profile /path/to/fresh/profile.toml
 ```
 
 The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
@@ -126,7 +128,7 @@ export ANDROID_HOME=<ANDROID_SDK_PATH>
 export ANDROID_SDK_ROOT=$ANDROID_HOME
 
 cd ../android_module
-./gradlew :app:assembleRelease
+./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
 ```
 
 The release driver verifies `libdobby_vpn.so` in both ABI payloads. The
@@ -172,9 +174,12 @@ binary packaged by `scripts/package_ios_app.sh`:
 
 Simulator packaging uses temporary ad-hoc signing metadata and does not look
 up an Apple Development certificate. Physical-device/App Store packaging uses
-the supplied distribution identity and profiles. Physical packet-tunnel
+the supplied distribution identity and profiles. The Simulator XCTest target
+checks real Go/Fyne accessibility actions, keyboard input, visible connection
+failure handling, and terminate/reopen lifecycle. Physical packet-tunnel
 traffic qualification is intentionally not claimed until a real iPhone is
-available; the Simulator remains a rendered-app/lifecycle check.
+available; the Simulator does not run the physical NetworkExtension tunnel or
+TrustTunnel bridge.
 
 ## Session API
 

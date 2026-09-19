@@ -19,18 +19,47 @@ char* dobby_ui_start(const char*, int64_t, const char*, int32_t);
 char* dobby_ui_stop(const char*, int64_t);
 char* dobby_ui_snapshot(const char*);
 char* dobby_ui_reset(const char*, int64_t);
+void dobby_ui_export_logs(const unsigned char*, int);
 void dobby_ui_free_string(char*);
 void dobby_ui_startup(const char*);
 void dobby_ui_attached(void);
 */
 import "C"
 
-import "unsafe"
+import (
+	"context"
+	"strings"
+	"unsafe"
+)
 
 // iosTransport forwards every UI operation to the containing Swift shell.
 // The Swift shell owns NetworkExtension; this process never constructs a Go
 // session manager or links the Packet Tunnel runtime.
 type iosTransport struct{}
+
+type iosLogExporter struct{}
+
+// The Swift bridge hands these lines to the existing gzip/share-sheet
+// interactor; Go does not write a file or retain a second log buffer.
+func newMobileLogExporter() LogExporter { return iosLogExporter{} }
+
+func (iosLogExporter) Export(ctx context.Context, lines []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	payload := []byte(strings.Join(lines, "\n"))
+	if len(payload) == 0 {
+		C.dobby_ui_export_logs(nil, 0)
+		return nil
+	}
+	value := C.CBytes(payload)
+	defer C.free(value)
+	C.dobby_ui_export_logs((*C.uchar)(value), C.int(len(payload)))
+	return nil
+}
 
 func markNativeStartup() {
 	mode := C.CString("normal")

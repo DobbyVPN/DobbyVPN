@@ -16,10 +16,11 @@ installer/
 │   └── README.md
 │
 ├── macos/
-│   ├── .gitignore 
-│   ├── build.sh 
-│   ├── postinstall.sh 
-│   ├── README.md 
+│   ├── .gitignore
+│   ├── build.sh
+│   ├── postinstall.sh
+│   ├── uninstall.sh
+│   ├── README.md
 │   └── vpnservice.plist
 │
 └── README.md
@@ -30,8 +31,8 @@ installer/
 | Platform | Output Format | Architecture | Status |
 | --- | --- | --- | --- |
 | Windows | `.msi` | amd64 | Supported |
-| macOS | `.pkg` | amd64 | Supported |
-| macOS | `.pkg` | aarch64 | Supported |
+| macOS 12+ | `.pkg` | amd64 | Supported |
+| macOS 12+ | `.pkg` | aarch64 | Supported |
 
 ## Windows Installer
 
@@ -96,6 +97,20 @@ installer/
 
 ## Notes
 
-Each installer installs the application and its gRPC VPN service. The Windows
-uninstaller removes the service. macOS has no uninstaller; remove the service
-manually when uninstalling the app.
+Each installer installs the application and its gRPC VPN service. Windows uses
+the MSI uninstaller, which removes the service with the package. macOS installs
+one fixed product-owned uninstaller at
+`/usr/local/libexec/dobbyvpn-uninstall`; run it with `sudo` to stop and remove
+the launchd service, plist, control socket, app bundle, and package receipt.
+
+Release migration qualification downloads the published v1.5.0 package only
+after checking the pinned entries in
+`.github/scripts/installer_rollback_manifest.json`. It then proves fresh
+install, upgrade, explicit uninstall-and-reinstall rollback, and final
+uninstall for the exact v1.5.1 package on Windows and both macOS architectures.
+The downloaded
+rollback package is temporary and is removed when the check exits.
+
+The macOS packages target macOS 12.0 or newer on both Intel and Apple-silicon
+hosts. Release migration qualification also exercises the package's native
+uninstall path; it does not require the old manual service-removal procedure.

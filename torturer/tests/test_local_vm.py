@@ -43,6 +43,28 @@ class LocalVMTests(unittest.TestCase):
             with self.assertRaisesRegex(local_vm.LocalVMError, "did not become ready"):
                 local_vm._wait_linux_service(42, Path("/service"), Path("/control"), 1800)
 
+    def test_windows_native_ui_is_delegated_to_interactive_session_adapter(self):
+        expected = subprocess.CompletedProcess(["python"], 0, b"", b"")
+        with mock.patch("torturer_checks.local_vm_windows.run_interactive_ui", return_value=expected) as run:
+            result = local_vm._run_native_ui(
+                ["python", "native_ui_smoke.py"],
+                platform="windows",
+                run_dir=Path("/tmp/run"),
+                cwd=Path("/tmp/run/source"),
+                logs=Path("/tmp/run/logs"),
+                timeout=10,
+                environment={"DOBBYVPN_CONTROL_TOKEN_USER": "dobby"},
+            )
+        self.assertIs(result, expected)
+        run.assert_called_once_with(
+            ["python", "native_ui_smoke.py"],
+            run_dir=Path("/tmp/run"),
+            cwd=Path("/tmp/run/source"),
+            logs=Path("/tmp/run/logs"),
+            timeout=10,
+            environment={"DOBBYVPN_CONTROL_TOKEN_USER": "dobby"},
+        )
+
     def test_capability_service_executable_is_probed_with_sudo(self):
         with mock.patch.object(local_vm, "_pid_alive", return_value=True), mock.patch.object(local_vm.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "/tmp/service\n", "")) as probe:
             self.assertTrue(local_vm._pid_matches(42, "/tmp/service"))

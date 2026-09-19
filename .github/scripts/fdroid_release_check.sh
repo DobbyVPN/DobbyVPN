@@ -152,6 +152,7 @@ fdroid_environment=(
   PYTHONUNBUFFERED=true
   "TERM=${TERM:-dumb}"
   "HOME=$fdroid_home"
+  GOTOOLCHAIN=local
   "NO_PROXY=$NO_PROXY"
   "no_proxy=$no_proxy"
   "REQUESTS_CA_BUNDLE=$reference_ca_bundle"

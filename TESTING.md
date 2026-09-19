@@ -3,6 +3,9 @@
 Run checks relevant to the change. Tests are disposable: rerun them freely,
 keep useful diagnostics, and clean up resources on success or failure.
 A missing tool or unavailable platform is not a passing test.
+The product Go modules use the exact Go 1.26.8 version recorded in
+`.go-version`; do not substitute another toolchain for qualification. This
+migration has no RAM benchmark or memory-usage acceptance criterion.
 
 Optional Git hooks can be installed with:
 
@@ -29,11 +32,14 @@ go test -race ./routing/... ./sessionapi/... ./tunnel/...
 ```
 
 The Android native VPN shell and Go/Fyne UI are built from the standalone
-`android_module/` project, with JDK 17, the Android SDK, and the pinned NDK:
+`android_module/` project, with JDK 17, the Android SDK, and the pinned NDK.
+Android necessarily hosts the thin Kotlin/Java OS boundary on ART; that code
+contains no KMP or Compose UI. The build uses the pinned Go toolchain:
 
 ```bash
 cd android_module
-./gradlew :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease
+./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" \
+  :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease
 ```
 
 The Gradle task directly cross-compiles `go_module/cmd/dobbyui` into
@@ -47,16 +53,23 @@ the real Android accessibility/input path:
 
 ```bash
 python3 .github/scripts/mobile_android_ui_smoke.py \
-  --apk "$RUNNER_TEMP/dobby-vpn-go-ui.apk"
+  --apk "$RUNNER_TEMP/dobby-vpn-go-ui.apk" \
+  --profile /path/to/fresh/profile.toml
 ```
 
-The smoke launches the release-shaped Fyne `GoNativeActivity`, checks visible
-labels, taps Settings and Back, and uninstalls the temporary APK. A real
-Connect action additionally requires a permission-approved emulator/device and
-uses the Go session through `VpnService`; it is not replaced by a CLI call.
+The smoke launches the release-shaped Fyne `GoNativeActivity`, discovers its
+controls through Android accessibility, taps Settings and Back, types a fresh
+profile through native input, denies and then approves the VPN consent dialog,
+checks Connected, reopens the activity, and disconnects through the visible
+control before uninstalling the temporary APK. It requires a
+permission-capable emulator/device and uses the Go session through
+`VpnService`; it is not replaced by a CLI call. The hosted functional lane
+still owns traffic and routing assertions.
 
 With a disposable Android emulator/device connected, run the app's own
-instrumentation tests directly: `./gradlew :app:connectedReleaseAndroidTest`.
+instrumentation tests directly: `./gradlew
+-PdobbyGoBinary="$(go env GOROOT)/bin/go"
+:app:connectedReleaseAndroidTest`.
 These service-shell tests do not replace VPN traffic tests.
 
 From the repository root:
@@ -110,8 +123,13 @@ the Simulator with:
 Simulator packaging uses temporary self-signed metadata and ad-hoc signing; it
 does not require an Apple Development certificate. A physical-device IPA
 still requires the Apple distribution certificate and provisioning profiles.
-The Simulator check exercises rendered startup and accessibility markers, not
-packet-tunnel traffic.
+The Simulator check runs the packaged app's XCTest UI target. XCTest locates
+the real Go/Fyne controls through accessibility, taps Settings and Back, types
+an intentionally invalid profile through the input, taps Connect, checks the
+visible failure outcome, and terminates/reopens the app. App-owned startup
+logs are diagnostics only; a log marker cannot satisfy the check. This proves
+rendered UI and input/lifecycle wiring, not a physical NetworkExtension
+packet-tunnel or TrustTunnel connection.
 
 ## iOS
 
@@ -122,13 +140,14 @@ swift test --enable-code-coverage --package-path swift_module
 ```
 
 The Test workflow covers Swift lifecycle policy tests and the Go runtime/app
-package. There is no Kotlin Multiplatform or Compose compile in this path.
+package. There is no Kotlin Multiplatform or Compose compile in this path;
+Swift remains only the thin iOS NetworkExtension boundary.
 The private Harness also runs the app-contract helper in
 `torturer/tests/ios_simulator/`. Local Intel runs use explicit Mini mode and
 GitHub keeps the explicit Metal-mode label for compatibility, but the Fyne
 OpenGLES package does not require a Metal capability probe. Both modes build,
-launch, and check the normal Go/Fyne UI-attached marker. Neither mode is VPN
-traffic qualification.
+launch, and run the same real XCTest accessibility/input/lifecycle contract.
+Neither mode is VPN traffic qualification.
 
 Simulator coverage is not physical-device VPN coverage. The vendor
 TrustTunnel bridge is device-only; the Simulator returns an unsupported

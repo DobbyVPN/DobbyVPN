@@ -2,12 +2,15 @@
 
 The shared Go/Fyne UI renders the state owned by one Go session manager in each
 service process. Desktop, Android, and iOS release packages launch this native
-UI directly; no package carries a JVM or Compose UI runtime. It forwards the
-entered source bytes and displays current snapshots. It does not parse
-configuration, choose a protocol, or manage tunnel resources. Android and iOS
-retain thin native VPN shells for permission, foreground/extension lifetime,
-secure storage, and system sharing APIs. Those shells must not duplicate
-session or protocol policy.
+UI directly; desktop carries no JVM launcher, and no platform carries a KMP or
+Compose UI runtime. Android's thin Kotlin/Java boundary runs on ART for
+permission and `VpnService` lifetime; iOS retains a thin Swift
+NetworkExtension boundary. The Go UI forwards entered source bytes and
+displays current snapshots. It does not parse configuration, choose a
+protocol, or manage tunnel resources. Android and iOS retain thin native VPN
+shells for permission, foreground/extension lifetime, secure storage, and
+system sharing APIs. Those shells must not duplicate session or protocol
+policy.
 
 ## UI qualification
 

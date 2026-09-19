@@ -24,6 +24,24 @@ type reconnectClient struct {
 	updates chan Snapshot
 }
 
+type fakeLogExporter struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (f *fakeLogExporter) Export(_ context.Context, lines []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lines = append([]string(nil), lines...)
+	return nil
+}
+
+func (f *fakeLogExporter) captured() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.lines...)
+}
+
 func (r *reconnectClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
 	return ConfigureResult{}, nil
 }
@@ -240,6 +258,48 @@ func TestConnectionViewRendersWarningsInLogs(t *testing.T) {
 	}
 }
 
+func TestConnectionViewExportsOnlyAuthoritativeDiagnostics(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	exporter := &fakeLogExporter{}
+	view := NewConnectionViewWithLogExporter(nil, exporter)
+	view.render(Snapshot{
+		State:       StateFailed,
+		Warnings:    []Warning{{Code: "PROFILE_WARNING", Message: "profile ignored"}},
+		LastFailure: &Failure{Code: "RUNTIME_FAILED", Message: "bridge unavailable"},
+	})
+	if view.Export.OnTapped == nil {
+		t.Fatal("export button has no callback")
+	}
+	view.Export.OnTapped()
+	got := exporter.captured()
+	want := []string{
+		"PROFILE_WARNING: profile ignored",
+		"RUNTIME_FAILED: bridge unavailable",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("exported %d lines, want %d: %q", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("exported line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestConnectionViewKeepsExportAccessibilityNameStable(t *testing.T) {
+	view := NewConnectionViewWithLogExporter(nil, &fakeLogExporter{})
+	if view.Export.Disabled() {
+		t.Fatal("injected exporter left export button disabled")
+	}
+	if view.Export.Text != "Export logs" {
+		t.Fatalf("export text = %q", view.Export.Text)
+	}
+	if view.Export.AccessibilityLabel() != "Export logs" {
+		t.Fatalf("export accessibility label = %q", view.Export.AccessibilityLabel())
+	}
+}
+
 func TestConnectionViewReconnectsAfterWatchClosure(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
@@ -275,6 +335,26 @@ func TestSettingsViewContainsBuildIdentity(t *testing.T) {
 	}
 	if view.Commit.Text != "Source commit: abc123" {
 		t.Fatalf("commit = %q", view.Commit.Text)
+	}
+	if view.Commit.URL == nil || view.Commit.URL.String() != "https://github.com/DobbyVPN/DobbyVPN/tree/abc123" {
+		t.Fatalf("commit URL = %v", view.Commit.URL)
+	}
+}
+
+func TestSettingsViewDoesNotInventMissingBuildIdentity(t *testing.T) {
+	oldVersion, oldCommit := Version, Commit
+	Version, Commit = " ", "unknown"
+	t.Cleanup(func() { Version, Commit = oldVersion, oldCommit })
+
+	view := NewSettingsView()
+	if view.Version.Text != "Version: development" {
+		t.Fatalf("version = %q", view.Version.Text)
+	}
+	if view.Commit.Text != "Source commit: unknown" {
+		t.Fatalf("commit = %q", view.Commit.Text)
+	}
+	if view.Commit.URL != nil {
+		t.Fatalf("unknown commit unexpectedly linked to %v", view.Commit.URL)
 	}
 }
 

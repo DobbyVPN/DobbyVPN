@@ -27,8 +27,8 @@
     "ndk": "27.3.13750724"
   },
   "go": {
-    "version": "1.25.1",
-    "source_commit": "56ebf80e57db9f61981fc0636fc6419dc6f68eda"
+    "version": "1.26.8",
+    "source_commit": "c293dd49cbe25e1fe8d97d94a5cb618e7b6d831e"
   },
   "go_mobile": {
     "module": "golang.org/x/mobile",

@@ -8,7 +8,6 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
 
 from torturer_checks.ios_simulator_app import (
     CLEANUP_RESERVE_SECONDS,
@@ -130,6 +129,7 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.candidate = self.root / "candidate"
         for name in ("go_module", "swift_module"):
             (self.candidate / name).mkdir(parents=True, exist_ok=True)
+        (self.candidate / "swift_module" / "iosApp.xcodeproj").mkdir(parents=True, exist_ok=True)
         self.contract = public_ios_simulator_app_contract("amd64")
 
     def test_run_budget_reserves_cleanup(self) -> None:
@@ -162,7 +162,7 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertEqual(command[-1], "amd64")
         self.assertNotIn("kmp_module", command)
 
-    def test_mini_requires_fresh_startup_marker_and_cleans_up(self) -> None:
+    def test_mini_runs_real_xctest_ui_contract_and_cleans_up(self) -> None:
         work = self.root / "work"
         runner = FakeRunner(self.root)
         diagnostics = self.root / "logs" / "ios"
@@ -179,25 +179,22 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertFalse(any(command[:2] == ["swift", "-e"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "install"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "launch"] for command in runner.commands))
+        self.assertTrue(any(command[:1] == ["xcodebuild"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
         self.assertIn(b"startup.ui_attached mode=normal", (diagnostics / "app_logs.txt").read_bytes())
         self.assertEqual((diagnostics / "go_app_logs.jsonl").read_bytes(), b"go log\n")
 
-    def test_mini_fails_without_new_startup_marker_but_still_shuts_down(self) -> None:
-        stale_marker = b'{"message":"startup.ui_attached mode=normal"}\n'
+    def test_ui_test_failure_still_shuts_down(self) -> None:
         runner = FakeRunner(
             self.root,
-            write_startup_marker=False,
-            app_logs=stale_marker,
+            fail={("xcodebuild",): CommandResult(1, stderr="XCTest accessibility failure")},
         )
-        with patch("torturer_checks.ios_simulator_app._STARTUP_WAIT_SECONDS", 0.01):
-            with self.assertRaisesRegex(IOSSimulatorAppContractError, "did not write startup.initialized"):
-                run_ios_simulator_app_contract(
-                    candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-                    mode="mini", contract=self.contract,
-                )
-        self.assertEqual(runner.log_at_launch, b"")
+        with self.assertRaisesRegex(IOSSimulatorAppContractError, "XCTest accessibility failure"):
+            run_ios_simulator_app_contract(
+                candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
+                mode="mini", contract=self.contract,
+            )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
     def test_metal_contract_builds_launches_and_checks_view_attachment(self) -> None:
@@ -212,6 +209,7 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertFalse(any(command[:2] == ["/bin/bash", "scripts/package_ios_app.sh"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "install"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "launch"] for command in runner.commands))
+        self.assertTrue(any(command[:1] == ["xcodebuild"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
@@ -227,32 +225,31 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_metal_requires_fresh_view_attachment_marker(self) -> None:
+    def test_ui_test_is_not_satisfied_by_a_stale_startup_marker(self) -> None:
         runner = FakeRunner(
             self.root,
             startup_mode="metal",
             write_startup_marker=False,
             app_logs=b'{"message":"startup.ui_attached mode=normal"}\n',
         )
-        with patch("torturer_checks.ios_simulator_app._STARTUP_WAIT_SECONDS", 0.01):
-            with self.assertRaisesRegex(IOSSimulatorAppContractError, "did not attach its main view"):
-                run_ios_simulator_app_contract(
-                    candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-                    mode="metal", contract=self.contract,
-                )
+        evidence = run_ios_simulator_app_contract(
+            candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
+            mode="metal", contract=self.contract,
+        )
+        self.assertEqual(evidence.mode, "metal")
+        self.assertTrue(any(command[:1] == ["xcodebuild"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_metal_startup_check_requires_app_log_container(self) -> None:
+    def test_ui_test_does_not_require_app_log_container(self) -> None:
         runner = FakeRunner(self.root, startup_mode="metal", fail={
             ("xcrun", "simctl", "get_app_container"): CommandResult(1, stderr="not available"),
         })
-        with self.assertRaisesRegex(IOSSimulatorAppContractError, "not available"):
-            run_ios_simulator_app_contract(
-                candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-                mode="metal", contract=self.contract,
-                diagnostic_dir=self.root / "diagnostics",
-            )
+        run_ios_simulator_app_contract(
+            candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
+            mode="metal", contract=self.contract,
+            diagnostic_dir=self.root / "diagnostics",
+        )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
     def test_app_log_lookup_uses_simctl_data_container_kind(self) -> None:
@@ -302,7 +299,9 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         runner = SubprocessCommandRunner()
         self.assertFalse(hasattr(runner, "raw_directory"))
         with self.assertRaisesRegex(IOSSimulatorAppContractError, "timed out"):
-            runner.run((sys.executable, "-c", child), timeout_seconds=0.1)
+            # Allow both interpreters to start even on a busy CI runner before
+            # exercising the timeout cleanup path.
+            runner.run((sys.executable, "-c", child), timeout_seconds=1.0)
         child_pid = int(pid_file.read_text())
         for _ in range(40):
             proc_stat = Path(f"/proc/{child_pid}/stat")

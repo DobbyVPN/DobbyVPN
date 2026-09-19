@@ -16,14 +16,32 @@ fun nonBlankGradleProperty(name: String) =
     providers.gradleProperty(name)
         .map(String::trim)
         .filter { it.isNotEmpty() }
-// GOROOT is the pinned Go source built by the Android/F-Droid workflows. An
-// inherited GO_BIN can point at a buildserver's system Go and silently change
-// the native library (and its embedded Go version), so prefer the toolchain's
-// own executable whenever GOROOT is present.
-val goBinary = nonBlankEnvironment("GOROOT")
-    .map { File(it, "bin/go").absolutePath }
-    .orElse(nonBlankEnvironment("GO_BIN"))
-    .orElse("go")
+// The caller must pass the exact Go executable selected during toolchain
+// preparation. Do not infer it from ambient environment: Gradle may run in a
+// separate process with a different PATH.
+val goBinary = nonBlankGradleProperty("dobbyGoBinary")
+val expectedGoVersion = repoRoot.resolve(".go-version").readText().trim()
+
+val validateGoToolchain by tasks.registering {
+    doLast {
+        val executable = File(goBinary.get())
+        check(executable.isFile && executable.canExecute()) {
+            "dobbyGoBinary must name an executable Go tool: ${executable.absolutePath}"
+        }
+        val process = ProcessBuilder(executable.absolutePath, "env", "GOVERSION")
+            .directory(goModule)
+            .redirectErrorStream(true)
+            .apply {
+                environment()["GOTOOLCHAIN"] = "local"
+                environment()["GOFLAGS"] = "-trimpath -buildvcs=false"
+            }
+            .start()
+        val observed = process.inputStream.bufferedReader().use { it.readText().trim() }
+        check(process.waitFor() == 0 && observed == "go$expectedGoVersion") {
+            "dobbyGoBinary GOVERSION must be go$expectedGoVersion, got ${observed.ifEmpty { "<empty>" }}"
+        }
+    }
+}
 
 val localSdkRoot = providers.provider {
     val properties = Properties()
@@ -103,8 +121,13 @@ android {
 }
 
 val downloadGoModules by tasks.registering(Exec::class) {
-    commandLine(goBinary.get(), "mod", "download")
+    dependsOn(validateGoToolchain)
+    doFirst {
+        commandLine(goBinary.get(), "mod", "download")
+    }
     workingDir(goModule)
+    environment("GOTOOLCHAIN", "local")
+    environment("GOFLAGS", "-trimpath -buildvcs=false")
 }
 
 val copyFyneJava by tasks.registering(Copy::class) {
@@ -142,7 +165,7 @@ val buildGoUI by tasks.registering {
     val goBuildRoot = layout.buildDirectory.dir("generated/go-build")
     inputs.files(fileTree(goModule) { include("**/*.go", "go.mod", "go.sum") })
     outputs.files(outputFiles)
-    dependsOn(copyFyneJava)
+    dependsOn(validateGoToolchain, copyFyneJava)
     doLast {
         check(ndkHome.get().isNotBlank()) {
             "ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) is required to build the Go Android UI"

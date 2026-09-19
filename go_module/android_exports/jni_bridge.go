@@ -8,95 +8,304 @@ package dobbyvpn
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 static JavaVM *dobby_vm;
 static jobject dobby_context;
 static jclass dobby_bridge;
+// The Fyne runtime can refresh the native context while its snapshot watcher
+// is making a JNI call. Keep global-reference replacement and use under one
+// lock; a deleted global reference must never be passed to Java.
+static pthread_mutex_t dobby_bridge_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static JNIEnv *dobby_env(bool *attached) {
-	if (dobby_vm == NULL) return NULL;
+	pthread_mutex_lock(&dobby_bridge_lock);
+	JavaVM *vm = dobby_vm;
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	if (vm == NULL) return NULL;
 	JNIEnv *env = NULL;
-	jint status = (*dobby_vm)->GetEnv(dobby_vm, (void **)&env, JNI_VERSION_1_6);
+	jint status = (*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6);
 	if (status == JNI_OK) return env;
-	if ((*dobby_vm)->AttachCurrentThread(dobby_vm, &env, NULL) != JNI_OK) return NULL;
-	*attached = true;
+	if (status != JNI_EDETACHED) return NULL;
+	if ((*vm)->AttachCurrentThread(vm, (void **)&env, NULL) != JNI_OK) return NULL;
+	if (attached != NULL) *attached = true;
 	return env;
 }
 
 static void dobby_detach(bool attached) {
-	if (attached && dobby_vm != NULL) (*dobby_vm)->DetachCurrentThread(dobby_vm);
+	if (!attached) return;
+	pthread_mutex_lock(&dobby_bridge_lock);
+	JavaVM *vm = dobby_vm;
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	if (vm != NULL) (*vm)->DetachCurrentThread(vm);
 }
 
 static void dobby_clear_exception(JNIEnv *env) {
 	if (env != NULL && (*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
+// FindClass on a thread attached from Go uses the system class loader on
+// Android and may not see application classes. Resolve the bridge through the
+// Context's loader instead, then retain only the global reference.
+static jclass dobby_load_bridge(JNIEnv *env, jobject context) {
+	if (env == NULL || context == NULL) return NULL;
+	jclass contextClass = (*env)->GetObjectClass(env, context);
+	if (contextClass == NULL) { dobby_clear_exception(env); return NULL; }
+	jmethodID getClass = (*env)->GetMethodID(env, contextClass, "getClass", "()Ljava/lang/Class;");
+	jobject runtimeClass = getClass == NULL ? NULL : (*env)->CallObjectMethod(env, context, getClass);
+	if (runtimeClass == NULL) {
+		dobby_clear_exception(env);
+		(*env)->DeleteLocalRef(env, contextClass);
+		return NULL;
+	}
+	jclass classClass = (*env)->GetObjectClass(env, runtimeClass);
+	jmethodID getLoader = classClass == NULL ? NULL : (*env)->GetMethodID(
+		env, classClass, "getClassLoader", "()Ljava/lang/ClassLoader;"
+	);
+	jobject loader = getLoader == NULL ? NULL : (*env)->CallObjectMethod(env, runtimeClass, getLoader);
+	jclass bridge = NULL;
+	if (loader != NULL) {
+		jclass loaderClass = (*env)->GetObjectClass(env, loader);
+		jmethodID loadClass = loaderClass == NULL ? NULL : (*env)->GetMethodID(
+			env, loaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;"
+		);
+		jstring name = (*env)->NewStringUTF(env, "com.dobby.nativebridge.NativeVpnBridge");
+		if (loadClass != NULL && name != NULL) {
+			bridge = (jclass)(*env)->CallObjectMethod(env, loader, loadClass, name);
+		}
+		if (name != NULL) (*env)->DeleteLocalRef(env, name);
+		if (loaderClass != NULL) (*env)->DeleteLocalRef(env, loaderClass);
+	}
+	if (bridge == NULL) {
+		// The direct lookup still works when this function is reached through a
+		// Java native method, and is a useful fallback for unusual class loaders.
+		dobby_clear_exception(env);
+		bridge = (*env)->FindClass(env, "com/dobby/nativebridge/NativeVpnBridge");
+	}
+	jclass global = NULL;
+	if (bridge != NULL) {
+		global = (jclass)(*env)->NewGlobalRef(env, bridge);
+		(*env)->DeleteLocalRef(env, bridge);
+	}
+	if (loader != NULL) (*env)->DeleteLocalRef(env, loader);
+	if (classClass != NULL) (*env)->DeleteLocalRef(env, classClass);
+	(*env)->DeleteLocalRef(env, runtimeClass);
+	(*env)->DeleteLocalRef(env, contextClass);
+	dobby_clear_exception(env);
+	return global;
+}
+
 static int dobby_call_prepare(void) {
 	bool attached = false;
 	JNIEnv *env = dobby_env(&attached);
-	if (env == NULL || dobby_bridge == NULL || dobby_context == NULL) { dobby_detach(attached); return -1; }
+	if (env == NULL) { dobby_detach(attached); return -1; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL || dobby_context == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return -1;
+	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "prepare", "(Landroid/content/Context;)I");
-	if (method == NULL) { dobby_clear_exception(env); dobby_detach(attached); return -1; }
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return -1;
+	}
 	jint result = (*env)->CallStaticIntMethod(env, dobby_bridge, method, dobby_context);
 	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); result = -1; }
+	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return (int)result;
 }
 
 static int32_t dobby_call_acquire(const char *session, int64_t generation) {
 	bool attached = false; JNIEnv *env = dobby_env(&attached);
-	if (env == NULL || dobby_bridge == NULL) { dobby_detach(attached); return -1; }
+	if (env == NULL) { dobby_detach(attached); return -1; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return -1;
+	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "acquireTunnel", "(Ljava/lang/String;J)I");
-	if (method == NULL) { dobby_clear_exception(env); dobby_detach(attached); return -1; }
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return -1;
+	}
 	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
+	if (id == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return -1;
+	}
 	jint result = (*env)->CallStaticIntMethod(env, dobby_bridge, method, id, (jlong)generation);
-	(*env)->DeleteLocalRef(env, id); dobby_clear_exception(env); dobby_detach(attached); return (int32_t)result;
+	(*env)->DeleteLocalRef(env, id);
+	dobby_clear_exception(env);
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return (int32_t)result;
 }
 
 static bool dobby_call_release(const char *session, int64_t generation, int32_t fd) {
 	bool attached = false; JNIEnv *env = dobby_env(&attached);
-	if (env == NULL || dobby_bridge == NULL) { dobby_detach(attached); return false; }
+	if (env == NULL) { dobby_detach(attached); return false; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "releaseTunnel", "(Ljava/lang/String;JI)Z");
-	if (method == NULL) { dobby_clear_exception(env); dobby_detach(attached); return false; }
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
 	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
+	if (id == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
 	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, id, (jlong)generation, (jint)fd);
-	(*env)->DeleteLocalRef(env, id); dobby_clear_exception(env); dobby_detach(attached); return result == JNI_TRUE;
+	(*env)->DeleteLocalRef(env, id);
+	dobby_clear_exception(env);
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return result == JNI_TRUE;
 }
 
 static bool dobby_call_protect(const char *session, int64_t generation, int32_t fd) {
 	bool attached = false; JNIEnv *env = dobby_env(&attached);
-	if (env == NULL || dobby_bridge == NULL) { dobby_detach(attached); return false; }
+	if (env == NULL) { dobby_detach(attached); return false; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "protectSocket", "(Ljava/lang/String;JI)Z");
-	if (method == NULL) { dobby_clear_exception(env); dobby_detach(attached); return false; }
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
 	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
+	if (id == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
 	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, id, (jlong)generation, (jint)fd);
-	(*env)->DeleteLocalRef(env, id); dobby_clear_exception(env); dobby_detach(attached); return result == JNI_TRUE;
+	(*env)->DeleteLocalRef(env, id);
+	dobby_clear_exception(env);
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return result == JNI_TRUE;
 }
 
 static void dobby_call_publish(const char *session, int64_t generation, const char *state, const char *failure) {
 	bool attached = false; JNIEnv *env = dobby_env(&attached);
-	if (env == NULL || dobby_bridge == NULL) { dobby_detach(attached); return; }
+	if (env == NULL) { dobby_detach(attached); return; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return;
+	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "publishState", "(Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;)V");
-	if (method == NULL) { dobby_clear_exception(env); dobby_detach(attached); return; }
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return;
+	}
 	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
 	jstring stateValue = (*env)->NewStringUTF(env, state == NULL ? "" : state);
 	jstring failureValue = (*env)->NewStringUTF(env, failure == NULL ? "" : failure);
+	if (id == NULL || stateValue == NULL || failureValue == NULL) {
+		if (id != NULL) (*env)->DeleteLocalRef(env, id);
+		if (stateValue != NULL) (*env)->DeleteLocalRef(env, stateValue);
+		if (failureValue != NULL) (*env)->DeleteLocalRef(env, failureValue);
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return;
+	}
 	(*env)->CallStaticVoidMethod(env, dobby_bridge, method, id, (jlong)generation, stateValue, failureValue);
-	(*env)->DeleteLocalRef(env, id); (*env)->DeleteLocalRef(env, stateValue); (*env)->DeleteLocalRef(env, failureValue);
-	dobby_clear_exception(env); dobby_detach(attached);
+	(*env)->DeleteLocalRef(env, id);
+	(*env)->DeleteLocalRef(env, stateValue);
+	(*env)->DeleteLocalRef(env, failureValue);
+	dobby_clear_exception(env);
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+}
+
+static bool dobby_call_export_logs(const unsigned char *logs, int length) {
+	bool attached = false; JNIEnv *env = dobby_env(&attached);
+	if (env == NULL || length < 0 || (length > 0 && logs == NULL)) {
+		dobby_detach(attached); return false;
+	}
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL || dobby_context == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
+	jmethodID method = (*env)->GetStaticMethodID(
+		env, dobby_bridge, "exportLogs", "(Landroid/content/Context;[B)Z"
+	);
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
+	jbyteArray payload = (*env)->NewByteArray(env, (jsize)length);
+	if (payload == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
+	if (length > 0) {
+		(*env)->SetByteArrayRegion(env, payload, 0, (jsize)length, (const jbyte *)logs);
+		if ((*env)->ExceptionCheck(env)) {
+			(*env)->ExceptionClear(env); (*env)->DeleteLocalRef(env, payload);
+			pthread_mutex_unlock(&dobby_bridge_lock);
+			dobby_detach(attached); return false;
+		}
+	}
+	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, dobby_context, payload);
+	(*env)->DeleteLocalRef(env, payload);
+	if ((*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); result = JNI_FALSE;
+	}
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return result == JNI_TRUE;
 }
 
 static void dobby_set_android_context(uintptr_t vm, uintptr_t envPointer, uintptr_t context) {
-	dobby_vm = (JavaVM *)vm;
 	JNIEnv *env = (JNIEnv *)envPointer;
-	if (env == NULL || context == 0) return;
+	if (vm == 0 || env == NULL || context == 0) return;
+	pthread_mutex_lock(&dobby_bridge_lock);
+	dobby_vm = (JavaVM *)vm;
 	if (dobby_context != NULL) (*env)->DeleteGlobalRef(env, dobby_context);
 	dobby_context = (*env)->NewGlobalRef(env, (jobject)context);
+	if (dobby_context == NULL) dobby_clear_exception(env);
 	if (dobby_bridge == NULL) {
-		jclass local = (*env)->FindClass(env, "com/dobby/nativebridge/NativeVpnBridge");
-		if (local != NULL) dobby_bridge = (*env)->NewGlobalRef(env, local);
-		dobby_clear_exception(env);
+		dobby_bridge = dobby_load_bridge(env, (jobject)context);
 	}
+	pthread_mutex_unlock(&dobby_bridge_lock);
 }
 
 static uintptr_t dobby_vm_for_env(JNIEnv *env) {
@@ -149,6 +358,8 @@ import (
 	"go_module/sessionapi/mobilebinding"
 )
 
+const maxAndroidLogExportBytes = 4 * 1024 * 1024
+
 type jniPlatformCallbacks struct{}
 
 func (jniPlatformCallbacks) AcquireTunnel(sessionID string, generation int64) int32 {
@@ -185,6 +396,18 @@ func setAndroidContext(vm, env, context uintptr) {
 
 func prepareAndroidService() int { return int(C.dobby_call_prepare()) }
 
+func exportAndroidLogs(raw []byte) bool {
+	if len(raw) > maxAndroidLogExportBytes {
+		return false
+	}
+	if len(raw) == 0 {
+		return bool(C.dobby_call_export_logs(nil, 0))
+	}
+	return bool(C.dobby_call_export_logs(
+		(*C.uchar)(unsafe.Pointer(&raw[0])), C.int(len(raw)),
+	))
+}
+
 // installJNIPlatform is called once from the package initializer. The Java
 // bridge is only a callback transport; it never receives configuration bytes.
 func installJNIPlatform(binding *mobilebinding.Binding) {
@@ -193,7 +416,8 @@ func installJNIPlatform(binding *mobilebinding.Binding) {
 
 // The instrumentation APK uses the same narrow binding as the production
 // Fyne activity. These JNI entry points are intentionally data-only wrappers;
-// they do not expose the manager or native descriptors to Java.
+// they do not expose the manager or native descriptors to Java. The explicit
+// diagnostic export is the only non-session payload crossing this boundary.
 
 //export Java_com_dobby_nativebridge_NativeGoSession_attach
 func Java_com_dobby_nativebridge_NativeGoSession_attach(env *C.JNIEnv, _ C.jclass, context C.jobject) {

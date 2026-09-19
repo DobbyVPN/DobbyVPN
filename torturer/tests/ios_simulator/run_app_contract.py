@@ -55,8 +55,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
-        "iOS-Simulator-Go/Fyne app startup check passed: "
-        f"{evidence.simulator.name} ({evidence.simulator.runtime})"
+        "iOS-Simulator-Go/Fyne XCTest UI interaction check passed: "
+        f"{evidence.simulator.name} ({evidence.simulator.runtime}); "
+        "VPN/NetworkExtension success is not asserted"
     )
     return 0
 

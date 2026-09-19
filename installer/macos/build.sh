@@ -81,15 +81,17 @@ build_package() {
       ln -s ../Resources/dobby-cli "$APP_BUNDLE/Contents/MacOS/dobby-cli"
     fi
 
-    mkdir Payload
-    cp -R "$APP_BUNDLE" Payload/
+    mkdir -p Payload/Applications Payload/usr/local/libexec
+    cp -R "$APP_BUNDLE" Payload/Applications/
+    cp ../../uninstall.sh Payload/usr/local/libexec/dobbyvpn-uninstall
+    chmod 755 Payload/usr/local/libexec/dobbyvpn-uninstall
     write_fixed_payload_component_plist
     pkgbuild --root Payload \
              --component-plist component.plist \
              --scripts Scripts \
              --identifier com.dobby.pkg \
              --version "$APP_VERSION" \
-             --install-location /Applications \
+             --install-location / \
              "dobbyVPN-macos-$payload_arch.pkg"
   )
 }

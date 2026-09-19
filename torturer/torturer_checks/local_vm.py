@@ -428,6 +428,40 @@ def _native_ui_command(run_dir: Path, descriptor: dict[str, Any], platform: str,
     ]
 
 
+def _run_native_ui(
+    command: list[str],
+    *,
+    platform: str,
+    run_dir: Path,
+    cwd: Path,
+    logs: Path,
+    timeout: float,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Run desktop UI smoke in the platform's actual interactive context."""
+
+    if platform == "windows":
+        from .local_vm_windows import run_interactive_ui
+
+        return run_interactive_ui(
+            command,
+            run_dir=run_dir,
+            cwd=cwd,
+            logs=logs,
+            timeout=timeout,
+            environment=environment,
+        )
+    return _run_logged(
+        command,
+        cwd=cwd,
+        logs=logs,
+        label="native-ui",
+        timeout=timeout,
+        environment=environment,
+        check=False,
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     source = _required_input(run_dir, "source", directory=True)
@@ -510,14 +544,14 @@ def run(args: argparse.Namespace) -> int:
                     for key, value in runtime_environment.items()
                     if isinstance(key, str) and isinstance(value, str)
                 })
-            native_result = _run_logged(
+            native_result = _run_native_ui(
                 _native_ui_command(run_dir, descriptor, args.platform, args.timeout),
+                platform=args.platform,
+                run_dir=run_dir,
                 cwd=run_dir / "source",
                 logs=logs,
-                label="native-ui",
                 timeout=min(args.timeout, 300.0),
                 environment=native_environment,
-                check=False,
             )
             state["native_ui_exit_code"] = native_result.returncode
             if native_result.returncode != 0:

@@ -24,7 +24,7 @@ ALLOWED_FINAL_FIELDS = {
     "UpdateCheckData",
 }
 GO_FYNE_SOURCES = [
-    "go@go1.25.1",
+    "go@go1.26.8",
     "reproducible-apk-tools@v0.3.2",
 ]
 GO_FYNE_BUILD = [
@@ -32,13 +32,16 @@ GO_FYNE_BUILD = [
     "./make.bash",
     "popd",
     "export GOROOT=$$go$$",
-    'export GO_BIN="$GOROOT/bin/go"',
     'export GOPATH="$HOME/go"',
     'export GO111MODULE=on',
     'export GOFLAGS="-trimpath -buildvcs=false"',
+    'export GOTOOLCHAIN="local"',
     'export SOURCE_DATE_EPOCH=0',
     'export PATH="$GOROOT/bin:$GOPATH/bin:$PATH"',
-    'go env GOROOT GOVERSION GOFLAGS',
+    'test -x "$GOROOT/bin/go"',
+    'test "$("$GOROOT/bin/go" env GOVERSION)" = "go1.26.8"',
+    'export ORG_GRADLE_PROJECT_dobbyGoBinary="$GOROOT/bin/go"',
+    'go env GOROOT GOVERSION GOFLAGS GOTOOLCHAIN',
     'cd ..',
     'export REPO_ROOT=$(pwd)',
     'pushd go_module',
@@ -284,7 +287,7 @@ def finalize(
     target["commit"] = source_sha
     # The release shell is a plain Android project now. Point the candidate at
     # the one Gradle root that owns the Go/Fyne APK and replace the inherited
-    # KMP/gomobile recipe with the pinned Go/Fyne build inputs.
+    # Legacy mobile recipe with the pinned Go/Fyne build inputs.
     target["subdir"] = "android_module"
     target["gradle"] = ["yes"]
     target["srclibs"] = list(GO_FYNE_SOURCES)

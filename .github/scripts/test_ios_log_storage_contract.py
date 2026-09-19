@@ -44,6 +44,15 @@ class IosNativeShellContractTests(unittest.TestCase):
         self.assertIn('rm -rf "$app/Frameworks/CommonDI.framework" "$app/PlugIns/tunnel.appex"', script)
         self.assertIn("install_name_tool -add_rpath '@executable_path/Frameworks'", script)
 
+    def test_ui_test_target_is_simulator_only(self) -> None:
+        project = (self.root / "swift_module/iosApp.xcodeproj/project.pbxproj").read_text()
+        target_start = project.index('E00000000000000000000009 /* Debug */')
+        target_end = project.index('/* End XCBuildConfiguration section */', target_start)
+        target = project[target_start:target_end]
+        self.assertEqual(target.count("SDKROOT = iphonesimulator;"), 2)
+        self.assertEqual(target.count("SUPPORTED_PLATFORMS = iphonesimulator;"), 2)
+        self.assertNotIn("SDKROOT = iphoneos;", target)
+
 
 if __name__ == "__main__":
     unittest.main()

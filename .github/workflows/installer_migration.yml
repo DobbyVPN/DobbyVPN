@@ -1,0 +1,88 @@
+name: Release installer migration qualification
+
+# This workflow is called by Release after the exact desktop installers have
+# been built. It owns only install/upgrade/rollback transitions; functional
+# VPN traffic qualification remains in qualification.yml.
+on:
+  workflow_call:
+    inputs:
+      version_name:
+        description: Marketing version of the exact Release package.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  migration:
+    name: Installer migration / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-2022
+            artifact: dobbyVPN-windows-amd64.msi
+            package: dobbyVPN-windows-amd64.msi
+          - platform: macos
+            runner: macos-15
+            artifact: dobbyVPN-macos-aarch64.pkg
+            package: dobbyVPN-macos-aarch64.pkg
+          - platform: macos
+            runner: macos-15-intel
+            artifact: dobbyVPN-macos-amd64.pkg
+            package: dobbyVPN-macos-amd64.pkg
+    steps:
+      - name: Reject Release reruns before package migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "Release reruns are unsupported; dispatch a fresh Release workflow." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download exact Release installer
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/dobbyvpn-installer-migration/package
+
+      - name: Qualify fresh install, upgrade, rollback, and final uninstall
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ inputs.version_name }}
+          PLATFORM: ${{ matrix.platform }}
+          PACKAGE_NAME: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/dobbyvpn-installer-migration/package/$PACKAGE_NAME"
+          test -f "$package"
+          python3 .github/scripts/installer_migration.py \
+            --platform "$PLATFORM" \
+            --package "$package" \
+            --current-version "$EXPECTED_VERSION" \
+            --log-dir "$RUNNER_TEMP/dobbyvpn-installer-migration/logs"
+
+      - name: Upload migration diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-installer-migration-${{ matrix.platform }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/dobbyvpn-installer-migration/logs
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Remove migration package and temporary state
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/dobbyvpn-installer-migration"

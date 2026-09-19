@@ -58,6 +58,39 @@ def simctl_terminate_command(device_udid: str, bundle_identifier: str) -> list[s
     return ["xcrun", "simctl", "terminate", _validate_udid(device_udid), bundle_identifier]
 
 
+def xcodebuild_ui_test_command(
+    device_udid: str,
+    project: str | Path,
+    derived_data: str | Path,
+) -> list[str]:
+    """Run the unsigned XCTest UI target against the already-installed app."""
+    app_project = Path(project)
+    if app_project.suffix != ".xcodeproj":
+        raise IOSSimulatorContractError("iOS UI test project must end in .xcodeproj")
+    data_path = Path(derived_data)
+    if not str(data_path):
+        raise IOSSimulatorContractError("iOS UI test derived-data path is required")
+    udid = _validate_udid(device_udid)
+    return [
+        "xcodebuild",
+        "-project", str(app_project),
+        "-scheme", "iosAppUITests",
+        "-configuration", "Release",
+        "-sdk", "iphonesimulator",
+        "-destination", f"platform=iOS Simulator,id={udid}",
+        "-derivedDataPath", str(data_path),
+        "-parallel-testing-enabled", "NO",
+        "-only-testing:iosAppUITests/GoFyneUIInteractionTests",
+        # Simulator XCTest runners need an installable code signature, but
+        # ``-`` is the ad-hoc identity and does not require an Apple
+        # Development certificate or provisioning profile.
+        "CODE_SIGNING_ALLOWED=YES",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY=-",
+        "test",
+    ]
+
+
 def _validate_bundle_identifier(value: str) -> None:
     if not isinstance(value, str) or not _BUNDLE_ID.fullmatch(value):
         raise IOSSimulatorContractError("bundle identifier has an unsupported format")

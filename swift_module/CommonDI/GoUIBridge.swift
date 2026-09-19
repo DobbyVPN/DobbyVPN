@@ -83,6 +83,20 @@ public func dobbyUIReset(
     ))
 }
 
+@_cdecl("dobby_ui_export_logs")
+public func dobbyUIExportLogs(_ rawLogs: UnsafePointer<UInt8>?, _ rawLength: Int32) {
+    guard rawLength >= 0, (rawLength == 0 || rawLogs != nil) else {
+        IOSAppCompositionRoot.logsRepository.writeLog(log: "Log export failed: invalid buffer")
+        return
+    }
+    let data = rawLogs.map { Data(bytes: $0, count: Int(rawLength)) } ?? Data()
+    let text = String(decoding: data, as: UTF8.self)
+    let logs = data.isEmpty ? [] : text.components(separatedBy: "\n")
+    DispatchQueue.main.async {
+        ExportLogsInteractorImpl().export(logs: logs)
+    }
+}
+
 @_cdecl("dobby_ui_free_string")
 public func dobbyUIFreeString(_ value: UnsafeMutablePointer<CChar>?) {
     guard let value else { return }

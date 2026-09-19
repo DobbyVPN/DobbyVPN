@@ -19,6 +19,9 @@ func SetAndroidContext(vm, env, context uintptr) { setAndroidContext(vm, env, co
 // ready, 0 when consent was launched and -1 for a native bridge failure.
 func PrepareAndroidService() int { return prepareAndroidService() }
 
+// ExportLogs passes input-safe diagnostics to Android's native share sheet.
+func ExportLogs(raw []byte) bool { return exportAndroidLogs(raw) }
+
 // PlatformCallbacks is declared in the bound package so gobind emits the Java
 // interface instead of skipping an interface imported from another package.
 type PlatformCallbacks interface {

@@ -91,6 +91,7 @@ class DobbyVpnService : VpnService() {
         return protect(fd)
     }
 
+    @Synchronized
     fun publishState(sessionID: String, generation: Long, state: String, failureCode: String) {
         if (sessionID != activeSession || generation < activeGeneration) return
         Log.i(TAG, "Go state=$state generation=$generation failure=$failureCode")

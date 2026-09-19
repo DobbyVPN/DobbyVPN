@@ -17,12 +17,44 @@ import socket
 import subprocess
 import time
 from typing import Any
+import uuid
 
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
 _INTERFACE = re.compile(r"^[1-9][0-9]*$")
 _CONTROL_ADDRESS = "127.0.0.1:50051"
 _FIREWALL_RULE = "DobbyVPN-Torturer-Routing-Probe"
+_NATIVE_UI_ENVIRONMENT = frozenset({
+    "PROGRAMDATA",
+    "DOBBYVPN_CONTROL_ADDRESS",
+    "DOBBYVPN_CONTROL_TOKEN_USER",
+    "DOBBY_LOG_PATH",
+    "DOBBY_LOG_ROOT",
+    "DOBBY_LOG_PRECREATED",
+    "GODEBUG",
+    # native_ui_smoke.py resolves PowerShell through shutil.which() for
+    # clipboard and UI Automation operations.  The scheduled task runs with
+    # the interactive account's environment, but ProcessStartInfo receives a
+    # deliberately bounded environment below, so carry the system PATH
+    # explicitly rather than relying on .NET's inherited value.
+    "PATH",
+})
+_NATIVE_UI_USER_ENVIRONMENT = (
+    # Go's desktop source store uses USERPROFILE.  The other values are the
+    # standard directories/runtime variables needed by Python, Fyne and
+    # Windows UI Automation; none carries runner credentials.
+    "APPDATA",
+    "COMSPEC",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LOCALAPPDATA",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "WINDIR",
+    "SystemRoot",
+)
 
 
 def _error(message: str) -> Exception:
@@ -73,6 +105,301 @@ def _powershell(script: str, *, cwd: Path, logs: Path, label: str, timeout: floa
         environment=environment,
         check=check,
     )
+
+
+def _powershell_literal(value: str) -> str:
+    """Return a single-quoted PowerShell literal for a trusted path/value."""
+
+    if "\x00" in value or "\r" in value or "\n" in value:
+        raise _error("Windows UI task value contains a control character")
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _native_ui_wrapper(
+    command: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+    stdout: Path,
+    stderr: Path,
+    pid: Path,
+    exit_code: Path,
+) -> str:
+    """Build the user-session PowerShell wrapper for the native UI smoke.
+
+    The wrapper starts the actual Python process with only the runtime values
+    the desktop client needs.  ``ProcessStartInfo`` gives us an exact child
+    PID so the SYSTEM worker can terminate the complete UI tree if the bounded
+    wait expires.
+    """
+
+    if not command or any(not isinstance(value, str) or not value for value in command):
+        raise _error("Windows native UI command is invalid")
+    if not cwd.is_dir():
+        raise _error("Windows native UI working directory is unavailable")
+    executable = _powershell_literal(command[0])
+    arguments = _powershell_literal(subprocess.list2cmdline(command[1:]))
+    lines = [
+        '$ErrorActionPreference = "Stop"',
+        "$exitCode = 1",
+        "try {",
+        "  $info = New-Object System.Diagnostics.ProcessStartInfo",
+        f"  $info.FileName = {executable}",
+        f"  $info.Arguments = {arguments}",
+        f"  $info.WorkingDirectory = {_powershell_literal(str(cwd))}",
+        "  $info.UseShellExecute = $false",
+        "  $info.CreateNoWindow = $true",
+        "  $info.RedirectStandardOutput = $true",
+        "  $info.RedirectStandardError = $true",
+        "  $userEnvironment = @{}",
+        "  foreach ($name in @(" + ", ".join(
+            _powershell_literal(name) for name in _NATIVE_UI_USER_ENVIRONMENT
+        ) + ")) {",
+        "    $value = [Environment]::GetEnvironmentVariable($name)",
+        "    if (-not [string]::IsNullOrWhiteSpace($value)) { $userEnvironment[$name] = $value }",
+        "  }",
+        # ProcessStartInfo starts with the task's user environment.  Clear it
+        # before applying the allow-list so credentials or unrelated runner
+        # settings cannot leak into the product smoke process.
+        "  $info.EnvironmentVariables.Clear()",
+        "  foreach ($entry in $userEnvironment.GetEnumerator()) { $info.EnvironmentVariables[$entry.Key] = $entry.Value }",
+    ]
+    for key in sorted(_NATIVE_UI_ENVIRONMENT):
+        value = environment.get(key)
+        if value is not None:
+            lines.append(
+                f"  $info.EnvironmentVariables[{_powershell_literal(key)}] = "
+                f"{_powershell_literal(value)}"
+            )
+    lines.extend([
+        "  $process = New-Object System.Diagnostics.Process",
+        "  $process.StartInfo = $info",
+        "  if (-not $process.Start()) { throw 'native UI process did not start' }",
+        f"  Set-Content -LiteralPath {_powershell_literal(str(pid))} "
+        "-Value ([string]$process.Id) -Encoding ASCII -NoNewline",
+        "  $stdoutTask = $process.StandardOutput.ReadToEndAsync()",
+        "  $stderrTask = $process.StandardError.ReadToEndAsync()",
+        "  $process.WaitForExit()",
+        f"  [IO.File]::WriteAllText({_powershell_literal(str(stdout))}, $stdoutTask.Result)",
+        f"  [IO.File]::WriteAllText({_powershell_literal(str(stderr))}, $stderrTask.Result)",
+        "  $exitCode = $process.ExitCode",
+        "} catch {",
+        f"  [IO.File]::AppendAllText({_powershell_literal(str(stderr))}, "
+        "($_ | Out-String) + [Environment]::NewLine)",
+        "}",
+        f"Set-Content -LiteralPath {_powershell_literal(str(exit_code))} "
+        "-Value ([string]$exitCode) -Encoding ASCII -NoNewline",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def _native_ui_register_script(
+    *,
+    task_name: str,
+    user: str,
+    wrapper: Path,
+    cwd: Path,
+) -> str:
+    """Build the SYSTEM-side registration/start operation."""
+
+    action_arguments = (
+        "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "
+        f'"{wrapper}"'
+    )
+    # A trigger is unnecessary for a task started with Start-ScheduledTask.
+    # Keeping this task triggerless prevents a failed start from launching a
+    # delayed UI while the caller is already cleaning up.
+    return "\n".join([
+        '$ErrorActionPreference = "Stop"',
+        f"$principal = New-ScheduledTaskPrincipal -UserId {_powershell_literal(user)} "
+        # ScheduledTasks names TASK_LOGON_INTERACTIVE_TOKEN "Interactive";
+        # "InteractiveToken" is valid in task XML, not for this cmdlet enum.
+        "-LogonType Interactive -RunLevel Limited",
+        f"$action = New-ScheduledTaskAction -Execute 'powershell.exe' "
+        f"-Argument {_powershell_literal(action_arguments)} "
+        f"-WorkingDirectory {_powershell_literal(str(cwd))}",
+        f"Register-ScheduledTask -TaskName {_powershell_literal(task_name)} "
+        "-Action $action -Principal $principal -Force | Out-Null",
+        f"Start-ScheduledTask -TaskName {_powershell_literal(task_name)}",
+        "",
+    ])
+
+
+def _native_ui_unregister_script(task_name: str) -> str:
+    return "\n".join([
+        '$ErrorActionPreference = "Stop"',
+        f"$task = Get-ScheduledTask -TaskName {_powershell_literal(task_name)} "
+        "-ErrorAction SilentlyContinue",
+        "if ($null -ne $task) {",
+        f"  Stop-ScheduledTask -TaskName {_powershell_literal(task_name)} "
+        "-ErrorAction SilentlyContinue",
+        f"  Unregister-ScheduledTask -TaskName {_powershell_literal(task_name)} "
+        "-Confirm:$false -ErrorAction Stop",
+        "}",
+        "",
+    ])
+
+
+_NATIVE_UI_KILL_SCRIPT = r'''$ErrorActionPreference = "Stop"
+$pidValue = [int]$env:DOBBYVPN_NATIVE_UI_PID
+if ($pidValue -le 0) { throw "native UI PID is invalid" }
+$process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+if ($null -ne $process) {
+  & "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
+  if ($LASTEXITCODE -ne 0 -and $null -ne (Get-Process -Id $pidValue -ErrorAction SilentlyContinue)) {
+    throw "native UI process tree did not terminate"
+  }
+}
+'''
+
+
+def run_interactive_ui(
+    command: list[str],
+    *,
+    run_dir: Path,
+    cwd: Path,
+    logs: Path,
+    timeout: float,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Run the real Windows UI in the logged-in user's interactive session.
+
+    The local VM worker remains SYSTEM and owns the VPN service.  Only this
+    short-lived UI smoke is delegated to the configured installed user through
+    Task Scheduler's existing interactive token; no password or second service
+    boundary is introduced.
+    """
+
+    from .local_vm import LocalVMError
+
+    if timeout <= 0:
+        raise LocalVMError("Windows native UI timeout must be positive")
+    run_dir = run_dir.resolve()
+    cwd = cwd.resolve()
+    logs = logs.resolve()
+    logs.mkdir(parents=True, exist_ok=True)
+    user = str(environment.get("DOBBYVPN_CONTROL_TOKEN_USER", "")).strip()
+    if not user or user.upper() in {"SYSTEM", "NT AUTHORITY\\SYSTEM"}:
+        raise LocalVMError("Windows interactive UI user is not configured")
+    # Keep the task and all markers inside this disposable candidate.  The
+    # wrapper itself is never exposed outside the VM run directory.
+    suffix = uuid.uuid4().hex
+    task_name = f"DobbyVPN-Torturer-NativeUI-{suffix}"
+    wrapper = run_dir / "native-ui-task.ps1"
+    stdout = logs / "native-ui.stdout.log"
+    stderr = logs / "native-ui.stderr.log"
+    pid = run_dir / "native-ui.pid"
+    exit_code = run_dir / "native-ui.exit"
+    filtered_environment = {
+        key: str(value)
+        for key, value in environment.items()
+        if key in _NATIVE_UI_ENVIRONMENT and isinstance(value, str)
+    }
+    if filtered_environment.get("DOBBYVPN_CONTROL_TOKEN_USER") != user:
+        raise LocalVMError("Windows interactive UI control-token user is invalid")
+    for path in (pid, exit_code, stdout, stderr):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise LocalVMError(f"Windows native UI marker is not removable: {path.name}") from error
+    wrapper.write_text(
+        _native_ui_wrapper(
+            command,
+            cwd=cwd,
+            environment=filtered_environment,
+            stdout=stdout,
+            stderr=stderr,
+            pid=pid,
+            exit_code=exit_code,
+        ),
+        encoding="utf-8",
+    )
+    registered = False
+    failure: Exception | None = None
+    try:
+        # Register-ScheduledTask and Start-ScheduledTask are one PowerShell
+        # operation.  Mark the task as potentially present before entering it
+        # so a successful registration followed by a failed Start is still
+        # cleaned up.
+        registered = True
+        _powershell(
+            _native_ui_register_script(
+                task_name=task_name, user=user, wrapper=wrapper, cwd=cwd,
+            ),
+            cwd=run_dir,
+            logs=logs,
+            label="native-ui-task-register",
+            timeout=min(timeout, 30.0),
+        )
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not exit_code.is_file():
+            time.sleep(min(0.1, max(0.01, deadline - time.monotonic())))
+        if not exit_code.is_file():
+            if pid.is_file():
+                try:
+                    value = pid.read_text(encoding="ascii").strip()
+                except OSError as error:
+                    raise LocalVMError("Windows native UI PID marker is unreadable") from error
+                if not _PID.fullmatch(value):
+                    raise LocalVMError("Windows native UI PID marker is invalid")
+                kill_environment = os.environ.copy()
+                kill_environment["DOBBYVPN_NATIVE_UI_PID"] = value
+                _powershell(
+                    _NATIVE_UI_KILL_SCRIPT,
+                    cwd=run_dir,
+                    logs=logs,
+                    label="native-ui-kill",
+                    timeout=min(timeout, 15.0),
+                    environment=kill_environment,
+                )
+            raise LocalVMError("Windows native UI task timed out")
+        try:
+            raw_exit_code = exit_code.read_text(encoding="ascii").strip()
+        except OSError as error:
+            raise LocalVMError("Windows native UI exit marker is unreadable") from error
+        if not re.fullmatch(r"-?[0-9]+", raw_exit_code):
+            raise LocalVMError("Windows native UI exit marker is invalid")
+        returncode = int(raw_exit_code)
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            stdout.read_bytes() if stdout.is_file() else b"",
+            stderr.read_bytes() if stderr.is_file() else b"",
+        )
+    except Exception as error:
+        failure = error
+        raise
+    finally:
+        if registered:
+            try:
+                _powershell(
+                    _native_ui_unregister_script(task_name),
+                    cwd=run_dir,
+                    logs=logs,
+                    label="native-ui-task-cleanup",
+                    timeout=min(timeout, 30.0),
+                )
+            except Exception as cleanup_error:
+                if failure is None:
+                    raise LocalVMError(
+                        f"Windows native UI task cleanup failed: {cleanup_error}"
+                    ) from cleanup_error
+                # Preserve the original UI error while retaining cleanup
+                # diagnostics in the command log produced by _powershell.
+                raise LocalVMError(
+                    f"{failure}; Windows native UI task cleanup failed: {cleanup_error}"
+                ) from failure
+        for path in (wrapper, pid, exit_code):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # These are disposable markers.  The task cleanup result and
+                # UI output remain authoritative diagnostics.
+                pass
 
 
 def _discover_network_interface(run_dir: Path, logs: Path, timeout: float) -> str:

@@ -5,6 +5,14 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.util.Log
+import androidx.core.content.FileProvider
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.zip.Deflater
+import java.util.zip.GZIPOutputStream
 
 /**
  * Private JNI target used by the Go/Fyne activity. Kotlin contains only the
@@ -13,6 +21,7 @@ import android.os.Build
  */
 object NativeVpnBridge {
     private const val REQUEST_VPN_PERMISSION = 4201
+    private const val MAX_LOG_EXPORT_BYTES = 4 * 1024 * 1024
 
     @Volatile
     private var service: DobbyVpnService? = null
@@ -92,5 +101,51 @@ object NativeVpnBridge {
     @JvmStatic
     fun publishState(sessionID: String, generation: Long, state: String, failureCode: String) {
         service?.publishState(sessionID, generation, state, failureCode)
+    }
+
+    /** Compress diagnostics and open Android's explicit share chooser. */
+    @JvmStatic
+    fun exportLogs(context: Context, rawLogs: ByteArray): Boolean {
+        if (rawLogs.size > MAX_LOG_EXPORT_BYTES) {
+            Log.e("DobbyVPN", "Log export failed: diagnostic export is too large")
+            return false
+        }
+        val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
+        // Keep concurrent exports independent. A timestamp-only name can
+        // collide when two UI callbacks run in the same second and would
+        // make one chooser point at the other export's contents.
+        var archive: File? = null
+        return try {
+            val outputArchive = File.createTempFile(
+                "DobbyVPN_logs_${stamp}_",
+                ".jsonl.gz",
+                context.cacheDir,
+            )
+            archive = outputArchive
+            object : GZIPOutputStream(outputArchive.outputStream()) {
+                init { def.setLevel(Deflater.BEST_COMPRESSION) }
+            }.use { it.write(rawLogs) }
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                outputArchive,
+            )
+            val share = Intent(Intent.ACTION_SEND)
+                .setType("application/gzip")
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            context.startActivity(
+                Intent.createChooser(share, "Export logs")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            true
+        } catch (error: Exception) {
+            // A failed chooser or FileProvider setup must not leave a private
+            // archive in the cache on every attempted export. A successful
+            // chooser keeps the file alive for the receiving application.
+            archive?.delete()
+            Log.e("DobbyVPN", "Log export failed", error)
+            false
+        }
     }
 }

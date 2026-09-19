@@ -27,6 +27,12 @@ class MobileUIPackageScriptTests(unittest.TestCase):
         self.assertIn('"Settings"', smoke)
         self.assertIn('"Back"', smoke)
         self.assertIn("GoNativeActivity", smoke)
+        self.assertIn('"--profile"', smoke)
+        self.assertIn("Connection configuration", smoke)
+        self.assertIn("_CONSENT_DENY", smoke)
+        self.assertIn("_CONSENT_ALLOW", smoke)
+        self.assertIn("Connected", smoke)
+        self.assertIn("reopened", smoke)
 
     def test_script_rejects_missing_arguments_before_running_go(self) -> None:
         result = subprocess.run(

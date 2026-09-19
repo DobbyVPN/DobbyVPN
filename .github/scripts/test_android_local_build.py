@@ -22,6 +22,7 @@ class AndroidLocalBuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "source"
             fake_bin = Path(temporary) / "bin"
+            go_bin_dir = Path(temporary) / "go-bin"
             sdk = Path(temporary) / "android-sdk"
             ndk = Path(temporary) / "android-ndk"
             go_root = Path(temporary) / "go-root"
@@ -49,7 +50,7 @@ class AndroidLocalBuildTests(unittest.TestCase):
             (root / "android_module/gradle.properties").write_text(
                 "versionName=1.2.3\nversionCode=123\n", encoding="utf-8"
             )
-            (root / ".go-version").write_text("1.25.1\n", encoding="utf-8")
+            (root / ".go-version").write_text("1.26.8\n", encoding="utf-8")
             (root / "go_module/go.mod").write_text("module fixture\n", encoding="utf-8")
             (root / "go_module/go.sum").write_text("", encoding="utf-8")
             (root / ".github/android/dependency-spec.json").write_text("{}\n", encoding="utf-8")
@@ -70,15 +71,16 @@ class AndroidLocalBuildTests(unittest.TestCase):
             )
 
             fake_bin.mkdir()
+            go_bin_dir.mkdir()
             _executable(
-                fake_bin / "go",
+                go_bin_dir / "go",
                 """#!/bin/sh
 set -eu
 case "${1:-}" in
   env)
     case "${2:-}" in
-      GOVERSION) printf 'go1.25.1\n' ;;
-      GOROOT) printf '%s\n' "$GOROOT" ;;
+      GOVERSION) printf 'go1.26.8\n' ;;
+      GOROOT) printf '%s\n' "$FAKE_GOROOT" ;;
       GOPATH) printf '%s\n' "$GOPATH" ;;
       *) exit 2 ;;
     esac
@@ -108,6 +110,14 @@ if [ "${1:-}" = "--version" ]; then
   echo 'Gradle 8.13'
   exit 0
 fi
+go_binary=''
+for argument in "$@"; do
+  case "$argument" in
+    -PdobbyGoBinary=*) go_binary=${argument#-PdobbyGoBinary=} ;;
+  esac
+done
+[ -x "$go_binary" ]
+[ "$(PATH=/nonexistent "$go_binary" env GOVERSION)" = 'go1.26.8' ]
 echo "$*" >> "$GRADLE_CALL_LOG"
 case "$*" in
   *:app:assembleReleaseAndroidTest*)
@@ -141,9 +151,9 @@ esac
                 **os.environ,
                 "PATH": str(fake_bin) + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "GRADLE_BIN": str(fake_bin / "gradle"),
-                "GO_BIN": str(fake_bin / "go"),
+                "GO_BIN": str(go_bin_dir / "go"),
                 "JAVA_BIN": str(fake_bin / "java"),
-                "GOROOT": str(go_root),
+                "FAKE_GOROOT": str(go_root),
                 "GOPATH": str(go_path),
                 "ANDROID_SDK_ROOT": str(sdk),
                 "ANDROID_NDK_HOME": str(ndk),
@@ -177,6 +187,7 @@ esac
             self.assertFalse(manifest.exists())
             self.assertIn("-PprojectRepositoryCommit=local", app_builds[0])
             self.assertIn("-PprojectRepositoryCommitLink=", app_builds[0])
+            self.assertIn(f"-PdobbyGoBinary={go_bin_dir / 'go'}", app_builds[0])
 
 
 if __name__ == "__main__":

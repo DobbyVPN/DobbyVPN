@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -72,7 +73,7 @@ class DesktopPackageTests(unittest.TestCase):
                     output,
                     arch="aarch64",
                     source_dir=root / "services",
-                    minimum_system_version="15.0",
+                    minimum_system_version="12.0",
                 )
 
             with zipfile.ZipFile(output / "dobby-vpn-1.5.1-windows-amd64.zip") as archive:
@@ -83,9 +84,13 @@ class DesktopPackageTests(unittest.TestCase):
 
             with zipfile.ZipFile(output / "dobby-vpn-1.5.1-mac-aarch64.zip") as archive:
                 names = set(archive.namelist())
+                info = plistlib.loads(
+                    archive.read("Dobby Vpn.app/Contents/Info.plist")
+                )
             self.assertIn("Dobby Vpn.app/Contents/MacOS/Dobby Vpn", names)
             self.assertIn("Dobby Vpn.app/Contents/Resources/dobby-cli", names)
             self.assertIn("Dobby Vpn.app/Contents/Info.plist", names)
+            self.assertEqual(info["LSMinimumSystemVersion"], "12.0")
 
     def test_version_is_strict_numeric_semver(self) -> None:
         self.assertTrue(package_desktop.VERSION_RE.fullmatch("1.5.1"))

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "tag": "v1.5.0",
+  "version": "1.5.0",
+  "assets": {
+    "windows": {
+      "name": "dobbyVPN-windows-amd64.msi",
+      "url": "https://github.com/DobbyVPN/DobbyVPN/releases/download/v1.5.0/dobbyVPN-windows-amd64.msi",
+      "sha256": "187e3c14c44746b8fbff328cfc24605359eb22ac2f224159703d9b0ea5316c79",
+      "size": 142204928
+    },
+    "macos-aarch64": {
+      "name": "dobbyVPN-macos-aarch64.pkg",
+      "url": "https://github.com/DobbyVPN/DobbyVPN/releases/download/v1.5.0/dobbyVPN-macos-aarch64.pkg",
+      "sha256": "17377193dcd93885a3ff475690db2a9542a63e6b2926d051ee2ccd9da1f10422",
+      "size": 153745737
+    },
+    "macos-amd64": {
+      "name": "dobbyVPN-macos-amd64.pkg",
+      "url": "https://github.com/DobbyVPN/DobbyVPN/releases/download/v1.5.0/dobbyVPN-macos-amd64.pkg",
+      "sha256": "9788350f4b1b0b62845d9d4add7b59c671f3ea658e41ceaa82e55404649334fa",
+      "size": 161027956
+    }
+  }
+}

@@ -3,7 +3,9 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"fyne.io/fyne/v2/driver"
 	dobbyvpn "go_module/android_exports"
@@ -18,6 +20,37 @@ func newMobileAPI() mobileAPI {
 		snapshot:  transport.Snapshot,
 		reset:     transport.Reset,
 	}
+}
+
+type androidLogExporter struct{}
+
+func newMobileLogExporter() LogExporter { return androidLogExporter{} }
+
+func (androidLogExporter) Export(ctx context.Context, lines []string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	payload := []byte(strings.Join(lines, "\n"))
+	var exported bool
+	err := driver.RunNative(func(value any) error {
+		context, ok := value.(*driver.AndroidContext)
+		if !ok {
+			return fmt.Errorf("Fyne did not provide an Android native context")
+		}
+		dobbyvpn.SetAndroidContext(context.VM, context.Env, context.Ctx)
+		exported = dobbyvpn.ExportLogs(payload)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if !exported {
+		return fmt.Errorf("Android log share could not be opened")
+	}
+	return nil
 }
 
 type androidTransport struct{}

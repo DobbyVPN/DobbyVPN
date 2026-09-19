@@ -2,14 +2,14 @@
 
 DobbyVPN keeps product behavior and the shared UI in Go, and uses small
 platform shells only where an operating system requires VPN APIs. Desktop,
-Android, and iOS release packages render the UI with Fyne. There is no JVM or
-Compose launcher. Kotlin remains in the Android project only for `VpnService`,
-permission, foreground notification, and JNI plumbing. Swift remains in the
-iOS project only for NetworkExtension, secure storage, app-group logging, and
-the C bridge used by the Go/Fyne app. A mobile build is not complete until its
-rendered controls, permission flow, and native lifecycle tests pass; a
-headless Fyne test or a separately built renderer is not evidence of a working
-VPN client.
+Android, and iOS release packages render the UI with Fyne. Desktop packages
+have no JVM launcher, and no platform uses a KMP/Compose UI. Android still
+runs its thin Kotlin/Java OS boundary on ART for `VpnService`, permission,
+foreground notification, and JNI plumbing. Swift remains in the iOS project
+only for NetworkExtension, secure storage, app-group logging, and the C bridge
+used by the Go/Fyne app. A mobile build is not complete until its rendered
+controls, permission flow, and native lifecycle tests pass; a headless Fyne
+test or a separately built renderer is not evidence of a working VPN client.
 
 ## Ownership
 

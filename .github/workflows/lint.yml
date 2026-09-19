@@ -9,6 +9,9 @@ on:
     branches:
       - main
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   lint-go-client:
     name: "Go Lint — golangci-lint"
@@ -72,7 +75,7 @@ jobs:
 
       - name: Run Android native-shell lint
         working-directory: android_module
-        run: ./gradlew :app:lintRelease --no-daemon --stacktrace
+        run: ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:lintRelease --no-daemon --stacktrace
 
   lint-swift:
     name: "Swift Lint — SwiftLint"

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from ctypes import wintypes
+import getpass
 import os
 from pathlib import Path
 import signal
@@ -24,6 +25,83 @@ import time
 
 class NativeUISmokeError(RuntimeError):
     pass
+
+
+def _windows_interactive_identity() -> str:
+    """Return the user/session owning this process or fail before launching a GUI.
+
+    A GitHub/owner runner may be a service session (session 0), where Fyne can
+    start and exit without ever creating a visible window.  Reporting that as a
+    UI pass would be dishonest, so require the current process to be attached
+    to an interactive session and record the identity used for the launch.
+    """
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        raise NativeUISmokeError("Windows UI qualification requires PowerShell to inspect the interactive session")
+    command = r'''
+$ErrorActionPreference = "Stop"
+$process = Get-Process -Id ([int]$env:DOBBY_UI_PARENT_PID)
+if ($process.SessionId -eq 0 -or -not [Environment]::UserInteractive) {
+    throw "GUI process is not in an interactive console session (session=$($process.SessionId))"
+}
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+Write-Output ("{0}|session={1}|userInteractive={2}" -f $identity, $process.SessionId, [Environment]::UserInteractive)
+'''
+    environment = os.environ.copy()
+    environment["DOBBY_UI_PARENT_PID"] = str(os.getpid())
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        check=False,
+        text=True,
+        capture_output=True,
+        env=environment,
+        timeout=10,
+    )
+    identity = result.stdout.strip()
+    if result.returncode != 0 or not identity:
+        detail = result.stderr.strip() or "current process is not attached to an interactive user session"
+        raise NativeUISmokeError(f"Windows native UI is unavailable: {detail}")
+    return identity
+
+
+def _macos_interactive_identity() -> str:
+    """Return the Aqua console user after checking the current launch context."""
+    if os.name != "posix":
+        raise NativeUISmokeError("macOS native UI qualification requires a macOS host")
+    current_user = getpass.getuser()
+    try:
+        console = subprocess.run(
+            ["stat", "-f", "%Su", "/dev/console"],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"could not inspect the macOS console user: {error}") from error
+    console_user = console.stdout.strip()
+    if console.returncode != 0 or not console_user or console_user in {"root", "loginwindow"}:
+        raise NativeUISmokeError(
+            "macOS native UI is unavailable: no logged-in Aqua console user "
+            f"(observed {console_user or 'none'})"
+        )
+    if current_user != console_user:
+        raise NativeUISmokeError(
+            "macOS native UI is unavailable: helper identity does not own the console "
+            f"(process={current_user!r}, console={console_user!r})"
+        )
+    uid = str(os.getuid())
+    session = subprocess.run(
+        ["launchctl", "print", f"gui/{uid}"],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+    if session.returncode != 0:
+        detail = session.stderr.strip() or "launchctl has no GUI session for the current user"
+        raise NativeUISmokeError(f"macOS native UI is unavailable: {detail}")
+    return f"{current_user}|uid={uid}|console={console_user}"
 
 
 def _wait_until(predicate, timeout: float, message: str) -> None:
@@ -326,10 +404,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.timeout <= 0 or not args.ui.is_file() or not args.profile.is_file():
         raise SystemExit("native UI qualification requires regular UI and profile files")
     if args.platform == "windows":
+        identity = _windows_interactive_identity()
         _windows_smoke(args.ui, args.profile, args.timeout)
     else:
+        identity = _macos_interactive_identity()
         _macos_smoke(args.ui, args.profile, args.timeout)
-    print(f"native-ui-smoke platform={args.platform} passed")
+    print(f"native-ui-smoke platform={args.platform} identity={identity} passed")
     return 0
 
 

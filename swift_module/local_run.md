@@ -24,8 +24,10 @@ xcrun simctl launch booted vpn.dobby.app
 Use `amd64` on an Intel Mac. Simulator packaging supplies temporary
 self-signed metadata to the pinned Fyne packager and ad-hoc signs the bundle;
 an Apple Development certificate or provisioning profile is not required.
-The Simulator can validate rendered startup/accessibility controls, but cannot
-validate a physical NetworkExtension tunnel or TrustTunnel.
+The Simulator XCTest UI target validates the rendered Go/Fyne controls through
+real accessibility lookup, taps, keyboard typing, and app terminate/reopen
+lifecycle. It cannot validate a physical NetworkExtension tunnel or
+TrustTunnel. App logs are diagnostic output, not the UI pass condition.
 
 ## Physical-device/App Store build
 

@@ -238,14 +238,14 @@ def main() -> None:
         output,
         arch="aarch64",
         source_dir=staging / "macos-arm64" if (staging / "macos-arm64").is_dir() else staging,
-        minimum_system_version="15.0",
+        minimum_system_version="12.0",
     )
     package_macos(
         args.version,
         output,
         arch="amd64",
         source_dir=staging / "macos-amd64",
-        minimum_system_version="11.0",
+        minimum_system_version="12.0",
     )
     # Keep the Linux payload at the historical staging root.  It is also the
     # only payload whose names overlap with the arm64 macOS CLI/UI.

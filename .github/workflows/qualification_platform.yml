@@ -249,8 +249,15 @@ jobs:
           set -euo pipefail
           # This is the same release APK installed for the functional lane,
           # not the renderer-only helper. UI Automator launches the production
-          # Go/Fyne activity and taps its visible Settings/Back controls.
+          # Go/Fyne activity, types the fresh profile, and drives the native
+          # VPN consent/retry/reopen/disconnect path. Network observations
+          # remain owned by the hosted functional lane below.
+          ui_profile_device=/data/local/tmp/dobbyvpn-ui-profile.toml
+          "$ADB" push "$GITHUB_WORKSPACE/render/profile.toml" "$ui_profile_device" >/dev/null
+          "$ADB" shell chmod 644 "$ui_profile_device"
+          trap '"$ADB" shell rm -f "$ui_profile_device" >/dev/null 2>&1 || true' EXIT
           "$ADB" shell am instrument -w -r \
+            -e dobby.ui_profile "$ui_profile_device" \
             -e class com.dobby.GoUiInstrumentedTest \
             com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner
 

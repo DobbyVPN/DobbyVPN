@@ -1,5 +1,9 @@
 # MacOS installer builder
 
+The package supports macOS 12.0 and newer on both Intel (`amd64`) and
+Apple-silicon (`arm64`) hosts. The package's Go/Fyne GUI runs as the logged-in
+user while the VPN service runs as the root launchd daemon.
+
 The desktop GUI runs as its user; `com.dobby.vpnservice` is the root launchd
 daemon. `postinstall.sh` is the single service installation path. Prepared
 source builds may supply `DOBBYVPN_SERVICE_RESOURCES` and
@@ -33,6 +37,11 @@ service. An amd64 package therefore fails to build if it is given an arm64
 service binary. The amd64 package also places the validated official
 `trusttunnel_client` helper beside its service; the Intel-only backend never
 searches PATH for it.
+
+The package also installs `/usr/local/libexec/dobbyvpn-uninstall`. This is the
+single supported uninstall path: run it with `sudo` to stop
+`com.dobby.vpnservice`, remove its launchd plist and control socket, forget the
+package receipt, and remove the app bundle. It accepts no path arguments.
 
 ## Build PKG
 

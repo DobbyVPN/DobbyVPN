@@ -12,6 +12,7 @@ from torturer_checks.ios_simulator import (
     simctl_install_command,
     simctl_launch_command,
     simctl_terminate_command,
+    xcodebuild_ui_test_command,
 )
 
 
@@ -39,10 +40,19 @@ class IOSSimulatorCommandsTest(unittest.TestCase):
             ["xcrun", "simctl", "launch", "--console", "--terminate-running-process", UDID, BUNDLE],
         )
         self.assertEqual(simctl_terminate_command(UDID, BUNDLE)[-1], BUNDLE)
+        ui_command = xcodebuild_ui_test_command(UDID, "swift_module/iosApp.xcodeproj", "/tmp/ios-ui-tests")
+        self.assertIn("-scheme", ui_command)
+        self.assertIn("iosAppUITests", ui_command)
+        self.assertEqual(ui_command[ui_command.index("-sdk") + 1], "iphonesimulator")
+        self.assertIn("-only-testing:iosAppUITests/GoFyneUIInteractionTests", ui_command)
+        self.assertIn("CODE_SIGNING_ALLOWED=YES", ui_command)
+        self.assertIn("CODE_SIGN_IDENTITY=-", ui_command)
         with self.assertRaisesRegex(IOSSimulatorContractError, "UDID"):
             simctl_boot_command("not-a-device")
         with self.assertRaisesRegex(IOSSimulatorContractError, r"\.app"):
             simctl_install_command(UDID, "not-an-app")
+        with self.assertRaisesRegex(IOSSimulatorContractError, r"\.xcodeproj"):
+            xcodebuild_ui_test_command(UDID, "not-a-project", "/tmp/ios-ui-tests")
 
 
 if __name__ == "__main__":

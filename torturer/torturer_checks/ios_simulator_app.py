@@ -23,6 +23,7 @@ from torturer_checks.ios_simulator import (
     simctl_install_command,
     simctl_launch_command,
     simctl_terminate_command,
+    xcodebuild_ui_test_command,
 )
 
 
@@ -33,12 +34,9 @@ _APP_PRODUCT = "Dobby-Vpn.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
 _APP_LOG_NAME = "app_logs.txt"
 _GO_APP_LOG_NAME = "go_app_logs.jsonl"
-_MINI_STARTUP_MARKER = b"startup.ui_attached mode=normal"
-_METAL_STARTUP_MARKER = b"startup.ui_attached mode=normal"
 _DEFAULT_ARCHITECTURE = "arm64"
 _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
 _XCODE_ARCHITECTURES = {"arm64": "arm64", "amd64": "x86_64"}
-_STARTUP_WAIT_SECONDS = 60
 _DIAGNOSTIC_TAIL_BYTES = 1024 * 1024
 _SIMULATOR_LOG_TAIL_BYTES = 256 * 1024
 _SIMULATOR_DIAGNOSTIC_TIMEOUT_SECONDS = 30
@@ -395,31 +393,6 @@ def _log_bytes(path: Path) -> bytes:
         return b""
 
 
-def _wait_for_startup(
-    log_path: Path,
-    *,
-    mode: str,
-    budget: RunBudget,
-) -> None:
-    marker = _MINI_STARTUP_MARKER if mode == "mini" else _METAL_STARTUP_MARKER
-    deadline = min(
-        budget.deadline - budget.cleanup_reserve_seconds,
-        budget.clock() + _STARTUP_WAIT_SECONDS,
-    )
-    while True:
-        if marker in _log_bytes(log_path):
-            return
-        remaining = deadline - budget.clock()
-        if remaining <= 0:
-            message = (
-                "Mini Simulator app did not write startup.initialized mode=mini"
-                if mode == "mini"
-                else "Metal Simulator app did not attach its main view"
-            )
-            raise IOSSimulatorAppContractError(message)
-        time.sleep(min(0.1, remaining))
-
-
 def _retain_diagnostics(container: Path | None, diagnostic_dir: Path | None) -> None:
     """Copy a bounded tail of app-owned logs when available; diagnostics never decide pass/fail."""
     if container is None or diagnostic_dir is None:
@@ -443,14 +416,14 @@ def _collect_simulator_diagnostics(
     budget: RunBudget,
     diagnostic_dir: Path | None,
 ) -> str | None:
-    """Capture bounded CoreSimulator logs when launch or startup fails.
+    """Capture bounded CoreSimulator logs when launch or UI interaction fails.
 
     A successful ``simctl launch`` only proves that SpringBoard accepted the
-    bundle.  The process can still exit during native initialization (for
-    example because of a dyld or renderer failure), and the app-owned log is
-    then legitimately empty.  CoreSimulator's unified log is the useful
-    diagnostic in that case.  Collection is best effort and never replaces
-    the original failure.
+    bundle.  The process can still exit during native initialization or fail
+    its XCTest accessibility actions, and the app-owned log is then
+    legitimately empty. CoreSimulator's unified log is the useful diagnostic
+    in that case. Collection is best effort and never replaces the original
+    failure.
     """
     command = [
         "xcrun", "simctl", "spawn", simulator.udid, "log", "show",
@@ -535,7 +508,7 @@ def run_ios_simulator_app_contract(
     budget: RunBudget | None = None,
     diagnostic_dir: Path | None = None,
 ) -> IOSSimulatorAppEvidence:
-    """Launch the app, verify its startup marker, then shut down the Simulator."""
+    """Launch the packaged app and run its real XCTest accessibility contract."""
     mode = _validate_mode(mode)
     budget = budget or RunBudget()
     # Fyne's iOS renderer uses the pinned OpenGLES/GLKit path. A host Metal
@@ -581,17 +554,17 @@ def run_ios_simulator_app_contract(
             "install Simulator app",
             budget=budget,
         )
-        container = _app_container(runner, simulator.udid, budget=budget)
-        if container is None:
-            raise IOSSimulatorAppContractError("Simulator app log container is unavailable")
-        log_path = container / _APP_LOG_NAME
-        try:
-            # Simulators are disposable; clear old runs so log rotation cannot
-            # make a retained startup marker look like evidence from this run.
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_bytes(b"")
-        except OSError as error:
-            raise IOSSimulatorAppContractError("could not reset the Simulator app log") from error
+        # App-owned logs are diagnostic only. The UI test below is the pass
+        # condition, so a missing sandbox path must not turn a real accessible
+        # UI into a marker-based claim or block cleanup.
+        container = _app_container(runner, simulator.udid, budget=budget, best_effort=True)
+        if container is not None:
+            log_path = container / _APP_LOG_NAME
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_bytes(b"")
+            except OSError:
+                container = None
         _require_success(
             runner,
             simctl_launch_command(simulator.udid, contract.bundle_identifier),
@@ -599,7 +572,20 @@ def run_ios_simulator_app_contract(
             budget=budget,
         )
         app_launched = True
-        _wait_for_startup(log_path, mode=mode, budget=budget)
+        project = candidate_root / _PROJECT_PATH
+        if not project.is_dir():
+            raise IOSSimulatorAppContractError(f"iOS XCTest project is unavailable: {project}")
+        _require_success(
+            runner,
+            xcodebuild_ui_test_command(
+                simulator.udid,
+                project,
+                work_dir / "ui-tests",
+            ),
+            "run iOS XCTest UI interaction contract",
+            cwd=candidate_root,
+            budget=budget,
+        )
 
         evidence = IOSSimulatorAppEvidence(
             simulator=simulator,

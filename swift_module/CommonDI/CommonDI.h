@@ -17,6 +17,7 @@ FOUNDATION_EXPORT char *dobby_ui_start(const char *, long long, const char *, in
 FOUNDATION_EXPORT char *dobby_ui_stop(const char *, long long);
 FOUNDATION_EXPORT char *dobby_ui_snapshot(const char *);
 FOUNDATION_EXPORT char *dobby_ui_reset(const char *, long long);
+FOUNDATION_EXPORT void dobby_ui_export_logs(const unsigned char *, int);
 FOUNDATION_EXPORT void dobby_ui_free_string(char *);
 FOUNDATION_EXPORT bool dobby_ui_await_event(long long);
 FOUNDATION_EXPORT void dobby_ui_startup(const char *);

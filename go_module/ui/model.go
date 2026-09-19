@@ -87,3 +87,11 @@ type SessionClient interface {
 	Watch(context.Context) (<-chan Snapshot, error)
 	Reset(context.Context, uint64) (Snapshot, error)
 }
+
+// LogExporter is the single UI boundary for an explicit diagnostic export.
+// The UI supplies only the input-safe lines it presents; a platform adapter
+// owns the save/share mechanics and any archive format required by that
+// platform. It never receives the entered configuration source.
+type LogExporter interface {
+	Export(context.Context, []string) error
+}

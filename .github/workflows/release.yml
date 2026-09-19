@@ -128,9 +128,16 @@ jobs:
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
 
+  installer_migration:
+    name: Qualify desktop installer migration
+    needs: [prepare_version, installers_build]
+    uses: ./.github/workflows/installer_migration.yml
+    with:
+      version_name: ${{ needs.prepare_version.outputs.version_name }}
+
   render_start:
     name: Start one disposable Render VPN
-    needs: [android_build, ios_build, installers_build, fdroid_check]
+    needs: [android_build, ios_build, installers_build, fdroid_check, installer_migration]
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     environment: render-functional
