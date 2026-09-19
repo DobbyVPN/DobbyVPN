@@ -142,6 +142,13 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertNotIn("'Cloak/internal/**'", ios)
         self.assertNotIn("'Cloak/internal/**'", desktop)
 
+    def test_android_ndk_provider_ignores_blank_environment_values(self) -> None:
+        android = (SCRIPT_PATH.parents[2] / "android_module" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+
+        self.assertIn("fun nonBlankEnvironment(name: String)", android)
+        self.assertIn(".filter { it.isNotEmpty() }", android)
+        self.assertIn('orElse(androidSdkRoot.map { File(it, "ndk/27.3.13750724").absolutePath })', android)
+
     def test_curl_download_has_bounded_transfer_time_without_retries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             output = Path(temporary_name) / "download.bin"
