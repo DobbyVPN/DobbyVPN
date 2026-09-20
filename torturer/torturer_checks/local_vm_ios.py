@@ -52,7 +52,6 @@ def run(
     evidence = ios.run_ios_simulator_app_contract(
         candidate_root=run_dir / "source", work_dir=work, runner=runner,
         contract=contract, budget=budget,
-        diagnostic_dir=logs / "ios",
     )
     _write_json(logs / "simulator.json", {
         "scope": "ios-simulator-mini", "suite": "mini", "passed": True,

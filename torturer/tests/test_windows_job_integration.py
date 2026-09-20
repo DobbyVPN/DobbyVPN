@@ -269,12 +269,12 @@ class WindowsJobIntegrationTests(unittest.TestCase):
             sentinel.kill()
             sentinel.wait(timeout=10.0)
 
-    def test_complete_stdout_and_stderr_are_retained(self) -> None:
+    def test_complete_stdout_and_stderr_are_returned_without_retention(self) -> None:
         expected_stdout = b"complete-out\x00\xff"
         expected_stderr = b"complete-err\x00\xfe"
         with tempfile.TemporaryDirectory() as temporary:
-            raw_directory = Path(temporary) / "runner-raw"
-            runner = SubprocessRunner(raw_directory)
+            scratch_directory = Path(temporary) / "runner-scratch"
+            runner = SubprocessRunner(scratch_directory)
             result = runner.run(
                 (
                     sys.executable,
@@ -288,12 +288,7 @@ class WindowsJobIntegrationTests(unittest.TestCase):
 
             self.assertEqual(result.stdout, expected_stdout)
             self.assertEqual(result.stderr, expected_stderr)
-            retained_files = list(raw_directory.glob("command-001*.raw.log"))
-            self.assertEqual(len(retained_files), 1)
-            retained = retained_files[0]
-            content = retained.read_bytes()
-            self.assertIn(b"stdout-begin\n" + expected_stdout + b"\nstdout-end\n", content)
-            self.assertIn(b"stderr-begin\n" + expected_stderr + b"\nstderr-end\n", content)
+            self.assertEqual(tuple(scratch_directory.iterdir()), ())
 
     def test_parent_can_close_redirected_handles_immediately(self) -> None:
         expected_stdout = b"delayed-out\x00\xff"
@@ -341,8 +336,8 @@ class WindowsJobIntegrationTests(unittest.TestCase):
     def test_windows_service_controller_owns_native_replacement_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory(prefix="windows-service-controller-") as temporary:
             root = Path(temporary)
-            raw = root / "raw"
-            raw.mkdir()
+            scratch = root / "scratch"
+            scratch.mkdir()
             identity_file = root / "service.identity"
             pid_file = root / "service.pid"
             port = self._unused_tcp_port()
@@ -368,8 +363,8 @@ class WindowsJobIntegrationTests(unittest.TestCase):
                     binary=Path(sys.executable),
                     pid_file=pid_file,
                     identity_file=identity_file,
-                    runner=SubprocessRunner(raw),
-                    raw_directory=raw,
+                    runner=SubprocessRunner(scratch),
+                    raw_directory=scratch,
                     control_address=f"127.0.0.1:{port}",
                     expected_initial_identity=identity,
                     initialization_deadline=time.monotonic() + 10.0,
@@ -385,7 +380,6 @@ class WindowsJobIntegrationTests(unittest.TestCase):
                 assert replacement is not None
                 self.assertIsNotNone(job_for(replacement))
                 controller.finalize_restarted_service(15.0)
-                controller.finalize_evidence(5.0)
                 self.assertIsNotNone(replacement.poll())
                 self.assertIsNone(job_for(replacement))
             finally:

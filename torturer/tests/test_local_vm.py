@@ -67,6 +67,35 @@ class LocalVMTests(unittest.TestCase):
             environment={"DOBBYVPN_CONTROL_TOKEN_USER": "dobby"},
         )
 
+    def test_native_ui_environment_does_not_copy_host_or_runtime_secrets(self) -> None:
+        with mock.patch.dict(
+            local_vm.os.environ,
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/Users/alice",
+                "CI_PRIVATE_ENDPOINT": "https://private.invalid",
+                "AWS_SECRET_ACCESS_KEY": "must-not-cross",
+            },
+            clear=True,
+        ):
+            environment = local_vm._native_ui_environment(
+                "macos",
+                {
+                    "environment": {
+                        "DOBBYVPN_CONTROL_SOCKET": "/var/run/dobbyvpn/control.sock",
+                        "CI_RUNTIME_SECRET": "must-not-cross",
+                    },
+                },
+            )
+        self.assertEqual(
+            environment,
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/Users/alice",
+                "DOBBYVPN_CONTROL_SOCKET": "/var/run/dobbyvpn/control.sock",
+            },
+        )
+
     def test_capability_service_executable_is_probed_with_sudo(self):
         with mock.patch.object(local_vm, "_pid_alive", return_value=True), mock.patch.object(local_vm.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "/tmp/service\n", "")) as probe:
             self.assertTrue(local_vm._pid_matches(42, "/tmp/service"))
@@ -267,7 +296,7 @@ class LocalVMTests(unittest.TestCase):
             mock.patch.object(local_vm, "_run_native_ui", return_value=subprocess.CompletedProcess([], 0, b"", b"")),
         ):
             self.assertEqual(local_vm.run(args), 0)
-        self.assertEqual(order, ["stop", "start"])
+        self.assertEqual(order, ["stop", "start", "start"])
         state = json.loads((root / "platform.json").read_text(encoding="utf-8"))
         self.assertTrue(state["release"]["msi_service_stopped"])
 
@@ -289,22 +318,32 @@ class LocalVMTests(unittest.TestCase):
         unavailable = local_vm_windows.WindowsInteractiveDesktopUnavailable(
             "no Explorer desktop session for TEST\\dobby"
         )
+        initial_runtime = {
+            "pid": 42, "binary": descriptor["service"],
+            "socket": "127.0.0.1:50051", "network_interface": "7",
+        }
+        fresh_runtime = {
+            "pid": 84, "binary": descriptor["service"],
+            "socket": "127.0.0.1:50051", "network_interface": "7",
+        }
         with (
             mock.patch.object(local_vm, "_prepare_candidate", side_effect=fake_prepare),
-            mock.patch.object(local_vm, "_start_windows", return_value={
-                "pid": 42, "binary": descriptor["service"],
-                "socket": "127.0.0.1:50051", "network_interface": "7",
-            }),
+            mock.patch.object(
+                local_vm, "_start_windows", side_effect=[initial_runtime, fresh_runtime],
+            ) as start_windows,
             mock.patch.object(
                 local_vm, "_run_logged",
                 return_value=subprocess.CompletedProcess([], 0, b"", b""),
             ),
-            mock.patch.object(local_vm, "_native_ui_command", return_value=["native-ui"]),
+            mock.patch.object(local_vm, "_native_ui_command", return_value=["native-ui"]) as native_command,
             mock.patch.object(local_vm, "_run_native_ui", side_effect=unavailable),
         ):
             self.assertEqual(local_vm.run(args), 1)
 
         state = json.loads((root / "platform.json").read_text(encoding="utf-8"))
+        self.assertEqual(start_windows.call_count, 2)
+        self.assertIs(native_command.call_args.args[2], fresh_runtime)
+        self.assertEqual(state["runtime"]["pid"], 84)
         self.assertEqual(state["functional_exit_code"], 0)
         self.assertEqual(state["native_ui_status"], "unavailable")
         self.assertEqual(state["status"], "native-ui-unavailable")
@@ -427,6 +466,31 @@ class LocalVMTests(unittest.TestCase):
         self.assertIn(str(root / "service.pid"), command)
         self.assertIn("--service-identity-file", command)
         self.assertIn(str(root / "service.identity"), command)
+
+    def test_native_full_command_layers_driver_before_task_deadline(self) -> None:
+        root, descriptor = self._run_directory()
+        smoke = root / "source" / ".github" / "scripts"
+        smoke.mkdir(parents=True)
+        (smoke / "native_ui_smoke.py").write_text("# candidate\n", encoding="utf-8")
+        native_module = root / "source" / "torturer" / "torturer_checks" / "hosted"
+        native_module.mkdir(parents=True)
+        (native_module / "native_ui.py").write_text("# candidate\n", encoding="utf-8")
+        ui = root / "source" / "dobby-vpn-ui.exe"
+        ui.write_text("candidate", encoding="utf-8")
+        descriptor.update({"cli": str(root / "source" / "dobby-cli"), "ui": str(ui)})
+        runtime = {
+            "pid": 42,
+            "binary": str(root / "source" / "ubuntu_grpcvpnserver"),
+            "socket": "127.0.0.1:50051",
+        }
+        task_timeout = 120.0
+        command = local_vm._native_ui_command(
+            root, descriptor, runtime, "windows", task_timeout,
+        )
+        inner = float(command[command.index("--timeout") + 1])
+        self.assertGreater(inner, 0)
+        self.assertLess(inner, task_timeout)
+        self.assertEqual(inner, local_vm._native_ui_driver_timeout(task_timeout))
 
     def test_release_manifest_rejects_hash_mismatch_before_install(self) -> None:
         root, _ = self._run_directory()
@@ -552,6 +616,22 @@ class LocalVMTests(unittest.TestCase):
         )
         self.assertEqual(result.stdout, b"probe-output\n")
         self.assertEqual((root / "logs" / "probe.stdout.log").read_bytes(), result.stdout)
+
+    def test_command_runner_passes_bounded_stdin_to_interactive_probe(self) -> None:
+        root, _ = self._run_directory()
+        result = local_vm._run_logged(
+            ["python3", "-c", "import sys; print(sys.stdin.read(), end='')"],
+            cwd=root,
+            logs=root / "logs",
+            label="interactive-probe",
+            timeout=10,
+            input_data=b"show State:/Users/ConsoleUser\nquit\n",
+        )
+        self.assertEqual(result.stdout, b"show State:/Users/ConsoleUser\nquit\n")
+        self.assertEqual(
+            (root / "logs" / "interactive-probe.stdout.log").read_bytes(),
+            result.stdout,
+        )
 
     def test_linux_cleanup_prefers_pid_file_updated_by_process_loss(self) -> None:
         root, _ = self._run_directory()

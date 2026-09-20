@@ -1,13 +1,14 @@
 """A narrow adapter around DobbyVPN's public CLI.
 
-The adapter executes validated command vectors, retains complete command output,
-and leaves functional meaning to Torturer's canonical engine.
+The adapter executes validated command vectors and keeps their output in
+memory for parsing and assertions.  Functional runs do not retain command
+lines or command streams on disk; the result document is the only persisted
+run output.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import itertools
 import ipaddress
 import json
 import os
@@ -15,9 +16,7 @@ from pathlib import Path
 import re
 import signal
 import subprocess
-import sys
 import time
-import traceback
 from collections.abc import Mapping
 from typing import Callable, Protocol, Sequence
 from urllib.parse import urlparse
@@ -103,13 +102,18 @@ def _parse_external_ip(raw: str) -> str:
 
 
 def _append_command_result_notes(error: BaseException, result: CommandResult) -> None:
-    """Keep the complete command outcome on the propagated exception."""
+    """Attach bounded command metadata without copying private values.
 
-    error.add_note(f"command={result.command!r}")
-    error.add_note(f"command_returncode={result.returncode!r}")
-    error.add_note(f"command_timed_out={result.timed_out!r}")
-    error.add_note(f"command_stdout={result.stdout!r}")
-    error.add_note(f"command_stderr={result.stderr!r}")
+    ``CommandResult`` remains available to the caller for the one operation
+    that needs to parse it.  Exceptions are often serialized by a workflow,
+    however, so never put argv (which can contain profile paths/endpoints) or
+    stdout/stderr contents into their notes.
+    """
+
+    error.add_note(f"command_returncode={result.returncode}")
+    error.add_note(f"command_timed_out={result.timed_out}")
+    error.add_note(f"command_stdout_bytes={len(result.stdout)}")
+    error.add_note(f"command_stderr_bytes={len(result.stderr)}")
 
 
 class CommandRunner(Protocol):
@@ -123,14 +127,14 @@ class CommandRunner(Protocol):
 
 
 def _ensure_directory(path: Path) -> None:
-    """Prepare an evidence directory."""
+    """Prepare a disposable scratch directory."""
 
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as error:
-        raise HostedAdapterError("EVIDENCE_DIRECTORY_UNAVAILABLE") from error
+        raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE") from error
     if not path.is_dir():
-        raise HostedAdapterError("EVIDENCE_DIRECTORY_UNAVAILABLE")
+        raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
 
 
 def _process_group_kwargs() -> dict[str, int | bool]:
@@ -156,28 +160,13 @@ def _merge_output(first: bytes, second: bytes) -> bytes:
     return first + second
 
 
-def _error_bytes(label: str, error: BaseException) -> bytes:
-    payload = (
-        label.encode("ascii")
-        + b"_type="
-        + type(error).__name__.encode("utf-8", errors="replace")
-        + b"\n"
-        + label.encode("ascii")
-        + b"="
-        + repr(error).encode("utf-8", errors="replace")
-        + b"\n"
-    )
-    notes = getattr(error, "__notes__", ())
-    if notes:
-        payload += label.encode("ascii") + b"_notes=" + repr(tuple(notes)).encode(
-            "utf-8", errors="replace"
-        ) + b"\n"
-    return payload
-
-
 def _append_error_notes(error: BaseException, errors: Sequence[tuple[str, BaseException]]) -> None:
     for label, secondary in errors:
-        error.add_note(f"{label}: {type(secondary).__name__}: {secondary!r}")
+        code = getattr(secondary, "reason_code", None)
+        if not isinstance(code, str):
+            code = getattr(secondary, "code", None)
+        suffix = f" code={code}" if isinstance(code, str) else ""
+        error.add_note(f"{label}_error={type(secondary).__name__}{suffix}")
 
 
 def _terminate_process(
@@ -264,7 +253,7 @@ def _drain_after_termination(
 
 
 class SubprocessRunner:
-    """Run one command with one deadline and retain every output byte."""
+    """Run one command with one deadline and ephemeral in-memory output."""
 
     def __init__(
         self,
@@ -277,7 +266,6 @@ class SubprocessRunner:
         self.environment = dict(os.environ)
         if environment is not None:
             self.environment.update(environment)
-        self._sequence = itertools.count(1)
 
     def run(
         self,
@@ -320,24 +308,16 @@ class SubprocessRunner:
             except subprocess.TimeoutExpired as timeout_error:
                 stdout = _output_bytes(timeout_error.output)
                 stderr = _output_bytes(timeout_error.stderr)
-                diagnostics = bytearray(_error_bytes("primary_timeout", timeout_error))
                 errors: list[tuple[str, BaseException]] = []
                 cleanup_deadline = time.monotonic() + _PROCESS_CLEANUP_SECONDS
                 try:
-                    diagnostics.extend(
-                        b"termination_diagnostics="
-                        + repr(
-                            _terminate_process(
-                                process,
-                                deadline=cleanup_deadline,
-                                stage="hosted-cli-command-timeout",
-                            )
-                        ).encode("utf-8", errors="replace")
-                        + b"\n"
+                    _terminate_process(
+                        process,
+                        deadline=cleanup_deadline,
+                        stage="hosted-cli-command-timeout",
                     )
                 except BaseException as error:
                     errors.append(("termination", error))
-                    diagnostics.extend(_error_bytes("termination_error", error))
                 stdout, stderr, drain_errors = _drain_after_termination(
                     process,
                     deadline=cleanup_deadline,
@@ -345,67 +325,45 @@ class SubprocessRunner:
                     stderr=stderr,
                 )
                 errors.extend(drain_errors)
-                for label, error in drain_errors:
-                    diagnostics.extend(_error_bytes(label, error))
                 try:
-                    diagnostics.extend(
-                        b"close_diagnostics="
-                        + repr(
-                            _close_process_boundary(
-                                process,
-                                deadline=cleanup_deadline,
-                                stage="hosted-cli-command-timeout",
-                            )
-                        ).encode("utf-8", errors="replace")
-                        + b"\n"
+                    _close_process_boundary(
+                        process,
+                        deadline=cleanup_deadline,
+                        stage="hosted-cli-command-timeout",
                     )
                 except BaseException as error:
                     errors.append(("close", error))
-                    diagnostics.extend(_error_bytes("close_error", error))
                 result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
-                self._retain(result, bytes(diagnostics))
                 primary = HostedAdapterError("COMMAND_TIMEOUT")
                 _append_error_notes(primary, errors)
                 _append_command_result_notes(primary, result)
-                raise primary from timeout_error
-            diagnostics = bytearray()
+                raise primary from None
             try:
-                diagnostics.extend(
-                    b"close_diagnostics="
-                    + repr(
-                        _close_process_boundary(
-                            process,
-                            deadline=deadline,
-                            stage="hosted-cli-command",
-                        )
-                    ).encode("utf-8", errors="replace")
-                    + b"\n"
+                _close_process_boundary(
+                    process,
+                    deadline=deadline,
+                    stage="hosted-cli-command",
                 )
             except BaseException as error:
-                diagnostics.extend(_error_bytes("close_error", error))
                 result = CommandResult(argv, process.returncode, stdout, stderr)
-                self._retain(result, bytes(diagnostics))
                 primary = HostedAdapterError("PROCESS_CLEANUP_FAILED")
                 _append_error_notes(primary, (("close", error),))
                 _append_command_result_notes(primary, result)
-                raise primary from error
+                raise primary from None
             result = CommandResult(argv, process.returncode, stdout, stderr)
-            self._retain(result, bytes(diagnostics))
             return result
         except WindowsJobError as error:
             result = CommandResult(argv, -1, error.stdout, error.stderr)
-            self._retain(result, _error_bytes("windows_job", error))
             primary = HostedAdapterError("PROCESS_CONTAINMENT_UNAVAILABLE")
             _append_command_result_notes(primary, result)
-            raise primary from error
+            raise primary from None
         except OSError as error:
             stdout = _output_bytes(getattr(error, "stdout", None))
             stderr = _output_bytes(getattr(error, "stderr", None))
             result = CommandResult(argv, -1, stdout, stderr)
-            self._retain(result, _error_bytes("primary_os", error))
             primary = HostedAdapterError("COMMAND_UNAVAILABLE")
             _append_command_result_notes(primary, result)
-            raise primary from error
+            raise primary from None
 
     def run_detached(
         self, command: Sequence[str], *, timeout_seconds: float
@@ -434,24 +392,16 @@ class SubprocessRunner:
             except subprocess.TimeoutExpired as timeout_error:
                 stdout = _output_bytes(timeout_error.output)
                 stderr = _output_bytes(timeout_error.stderr)
-                diagnostics = bytearray(_error_bytes("primary_timeout", timeout_error))
                 errors: list[tuple[str, BaseException]] = []
                 cleanup_deadline = time.monotonic() + _PROCESS_CLEANUP_SECONDS
                 try:
-                    diagnostics.extend(
-                        b"termination_diagnostics="
-                        + repr(
-                            _terminate_process(
-                                process,
-                                deadline=cleanup_deadline,
-                                stage="hosted-detached-command-timeout",
-                            )
-                        ).encode("utf-8", errors="replace")
-                        + b"\n"
+                    _terminate_process(
+                        process,
+                        deadline=cleanup_deadline,
+                        stage="hosted-detached-command-timeout",
                     )
                 except BaseException as error:
                     errors.append(("termination", error))
-                    diagnostics.extend(_error_bytes("termination_error", error))
                 stdout, stderr, drain_errors = _drain_after_termination(
                     process,
                     deadline=cleanup_deadline,
@@ -459,63 +409,36 @@ class SubprocessRunner:
                     stderr=stderr,
                 )
                 errors.extend(drain_errors)
-                for label, error in drain_errors:
-                    diagnostics.extend(_error_bytes(label, error))
                 result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
-                self._retain(result, bytes(diagnostics))
                 primary = HostedAdapterError("COMMAND_TIMEOUT")
                 _append_error_notes(primary, errors)
                 _append_command_result_notes(primary, result)
-                raise primary from timeout_error
+                raise primary from None
             result = CommandResult(argv, process.returncode, stdout, stderr)
-            self._retain(result, b"")
             return result
         except OSError as error:
             stdout = _output_bytes(getattr(error, "stdout", None))
             stderr = _output_bytes(getattr(error, "stderr", None))
             result = CommandResult(argv, -1, stdout, stderr)
-            self._retain(result, _error_bytes("primary_os", error))
             primary = HostedAdapterError("COMMAND_UNAVAILABLE")
             _append_command_result_notes(primary, result)
-            raise primary from error
+            raise primary from None
 
-    def retain_external_evidence(self, path: Path, *, evidence_kind: str) -> None:
-        del evidence_kind
-        _verify_evidence_file(path)
-
-    def _retain(self, result: CommandResult, diagnostics: bytes) -> None:
-        sequence = next(self._sequence)
-        path = self.raw_directory / f"command-{sequence:03d}.raw.log"
-        payload = (
-            b"argv="
-            + " ".join(result.command).encode("utf-8", errors="replace")
-            + b"\nreturncode="
-            + str(result.returncode).encode("ascii")
-            + b"\nstdout-begin\n"
-            + result.stdout
-            + b"\nstdout-end\nstderr-begin\n"
-            + result.stderr
-            + b"\nstderr-end\n"
-        )
-        if diagnostics:
-            payload += b"runner-diagnostics-begin\n" + diagnostics
-            if not diagnostics.endswith(b"\n"):
-                payload += b"\n"
-            payload += b"runner-diagnostics-end\n"
-        try:
-            path.write_bytes(payload)
-        except OSError as error:
-            print(
-                f"warning: could not retain subprocess diagnostics: {error}",
-                file=sys.stderr,
-            )
-
-def _verify_evidence_file(path: Path) -> None:
+def _require_scratch_file(path: Path) -> None:
     if not path.is_file():
-        raise HostedAdapterError("EVIDENCE_UNAVAILABLE")
+        raise HostedAdapterError("SCRATCH_FILE_UNAVAILABLE")
 
 
-def _allocate_evidence_path(
+def _discard_scratch_file(path: Path) -> None:
+    """Delete a temporary helper stream or script after its operation."""
+    _require_scratch_file(path)
+    try:
+        path.unlink()
+    except OSError:
+        raise HostedAdapterError("SCRATCH_CLEANUP_FAILED") from None
+
+
+def _allocate_scratch_path(
     directory: Path,
     stem: str,
     suffix: str,
@@ -862,8 +785,7 @@ class RoutingProofMixin:
                 )
             except (HostedAdapterError, ScenarioExecutionError) as cleanup_error:
                 error.add_note(
-                    "Routing-firewall cleanup also failed:\n"
-                    + "".join(traceback.format_exception(cleanup_error)).rstrip()
+                    f"routing_firewall_cleanup_error={type(cleanup_error).__name__}"
                 )
             raise
 
@@ -887,8 +809,7 @@ class RoutingProofMixin:
                 )
             except (HostedAdapterError, ScenarioExecutionError) as cleanup_error:
                 error.add_note(
-                    "Routing-firewall cleanup also failed:\n"
-                    + "".join(traceback.format_exception(cleanup_error)).rstrip()
+                    f"routing_firewall_cleanup_error={type(cleanup_error).__name__}"
                 )
             raise
         return {
@@ -1261,6 +1182,25 @@ class HostedCLIAdapter:
     def prepare_native_connect(self, timeout: float) -> None:
         """Capture the observation baseline before a native UI Connect."""
         self._capture_baseline(timeout)
+
+    def restart_service_for_native_ui(self, timeout: float) -> dict[str, object]:
+        """Restart a desktop service without issuing a CLI session command.
+
+        The native-window full lane must prove that its visible recovery action
+        reconnects the VPN.  Calling ``_process_loss`` here would restart the
+        service and then use ``connect-profile`` as a hidden recovery shortcut.
+        Keep the destructive service operation separate; the native UI owns
+        configuration and Connect, while the caller performs the independent
+        tunnel, routing, stability, and throughput observations afterward.
+        """
+        service = getattr(self, "service", None)
+        if service is None:
+            raise CapabilityUnavailable()
+        deadline = time.monotonic() + timeout
+        self._emit_progress("native-state", kind="vpn-service", state="loss-started")
+        service.restart_after_loss(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
+        self._emit_progress("native-state", kind="vpn-service", state="restarted")
+        return {"process_loss_verified": True}
 
     def _routing_identity_changed(self, timeout: float) -> bool:
         current = self._external_ip(timeout)

@@ -11,7 +11,7 @@ import unittest
 
 from unittest import mock
 import torturer_checks.hosted.windows as hosted_windows
-from torturer_checks.hosted.cli import CommandResult, HostedAdapterError, _verify_evidence_file
+from torturer_checks.hosted.cli import CommandResult, HostedAdapterError
 from torturer_checks.hosted.factory import adapter_for_platform
 from torturer_checks.hosted.macos import (
     MacOSHostedAdapter,
@@ -93,16 +93,8 @@ class HostedDesktopProcessRunner:
         self.tree_partial = False
         self.tree_late_descendant = False
         self.mac_descendant_binary: Path | None = None
-        self.external_evidence: list[dict[str, object]] = []
         self.connected = False
         self.external_calls = 0
-
-    def retain_external_evidence(self, path: Path, *, evidence_kind: str) -> None:
-        _verify_evidence_file(path)
-        self.external_evidence.append({
-            "evidence_file": path.name,
-            "evidence_kind": evidence_kind,
-        })
 
     def run(self, command, *, timeout_seconds):
         argv = tuple(command)
@@ -421,12 +413,8 @@ class HostedDesktopAdapterTests(unittest.TestCase):
         assert runner is not None
         process = _FakeWindowsReplacementProcess()
         self.windows_launches.append((popen, tuple(command), kwargs))
-        stdout = kwargs["stdout"]
-        stderr = kwargs["stderr"]
-        stdout.write(b"windows service stdout\n")
-        stdout.flush()
-        stderr.write(b"windows service stderr\n")
-        stderr.flush()
+        self.assertIs(kwargs["stdout"], hosted_windows.subprocess.DEVNULL)
+        self.assertIs(kwargs["stderr"], hosted_windows.subprocess.DEVNULL)
         runner.service_alive = True
         runner.service_pid = process.pid
         return process
@@ -513,6 +501,27 @@ class HostedDesktopAdapterTests(unittest.TestCase):
                 self.assertFalse(any(call[0] in {"sh", "kill"} for call in runner.calls))
                 self.assertTrue(any(call[:2] == ("python3", "-c") for call in runner.calls))
 
+    def test_native_ui_process_loss_restarts_service_without_cli_reconnect(self) -> None:
+        for platform in ("windows", "macos"):
+            runner = HostedDesktopProcessRunner(platform=platform, binary=self.cli)
+            runner.raw_directory = Path(self.directory.name) / f"{platform}-native-loss-raw"
+            adapter = self._adapter(platform, runner)
+            connections = adapter.discover_connections()
+            adapter.select_connection(connections[0])
+            runner.calls.clear()
+
+            result = adapter.restart_service_for_native_ui(5.0)
+
+            self.assertEqual(result, {"process_loss_verified": True})
+            self.assertFalse(any(
+                call[0] == str(self.cli) and "connect-profile" in call
+                for call in runner.calls
+            ))
+            if platform == "windows":
+                self.assertTrue(self.windows_launches)
+            else:
+                self.assertIn(_MACOS_LAUNCHD_KILL, runner.calls)
+
     def test_macos_launchd_parser_requires_program_pid_and_runs(self) -> None:
         job = _parse_macos_launchd_job(
             "program = /candidate\npid = 123\nruns = 2\n"
@@ -553,8 +562,10 @@ class HostedDesktopAdapterTests(unittest.TestCase):
         ) as raised:
             error_adapter.service._terminate(5.0)
         notes = "\n".join(getattr(raised.exception, "__notes__", ()))
-        self.assertIn("command_stdout=b'kill stdout\\n'", notes)
-        self.assertIn("command_stderr=b'kill stderr\\n'", notes)
+        self.assertIn("command_stdout_bytes=12", notes)
+        self.assertIn("command_stderr_bytes=12", notes)
+        self.assertNotIn("kill stdout", notes)
+        self.assertNotIn("kill stderr", notes)
 
     def test_windows_process_probes_preserve_diagnostics(self) -> None:
         self.assertNotIn("Out-Null", _WINDOWS_PROCESS_ALIVE_SCRIPT)
@@ -614,60 +625,27 @@ class HostedDesktopAdapterTests(unittest.TestCase):
         self.assertTrue(adapter.service._external_tree_cleanup_proven)
         self.assertTrue(any(call[0] == "powershell.exe" for call in runner.calls))
 
-    def test_windows_service_restart_preserves_previous_attempt_files(self) -> None:
+    def test_windows_service_restart_does_not_create_raw_stream_files(self) -> None:
         runner = HostedDesktopProcessRunner(platform="windows", binary=self.cli)
-        raw = Path(self.directory.name) / "windows-exclusive-raw"
+        raw = Path(self.directory.name) / "windows-no-raw"
         raw.mkdir(mode=0o700)
-        sentinel_stdout = raw / "service-restart-001.stdout.raw.log"
-        sentinel_stderr = raw / "service-restart-001.stderr.raw.log"
-        sentinel_stdout.write_bytes(b"old stdout evidence\n")
-        sentinel_stderr.write_bytes(b"old stderr evidence\n")
-        sentinel_stdout.chmod(0o600)
-        sentinel_stderr.chmod(0o600)
         runner.raw_directory = raw
         adapter = self._adapter("windows", runner)
         adapter.service._start(10.0)
-        launch = self.windows_launches[-1]
-        paths = adapter.service._service_evidence_paths
-        assert paths is not None
-        stdout_path, stderr_path = paths
-        self.assertEqual(stdout_path, raw / "service-restart-001-2.stdout.raw.log")
-        self.assertEqual(stderr_path, raw / "service-restart-001-2.stderr.raw.log")
-        self.assertEqual(sentinel_stdout.read_bytes(), b"old stdout evidence\n")
-        self.assertEqual(sentinel_stderr.read_bytes(), b"old stderr evidence\n")
-        self.assertEqual(stdout_path.read_bytes(), b"windows service stdout\n")
-        self.assertEqual(stderr_path.read_bytes(), b"windows service stderr\n")
+        self.assertIs(self.windows_launches[-1][2]["stdout"], hosted_windows.subprocess.DEVNULL)
+        self.assertIs(self.windows_launches[-1][2]["stderr"], hosted_windows.subprocess.DEVNULL)
+        self.assertEqual(list(raw.glob("*.raw.log")), [])
         adapter.service._terminate(5.0)
-        adapter.service.finalize_evidence()
-        self.assertEqual(len(runner.external_evidence), 3)
-        for record, path in zip(runner.external_evidence[:2], (stdout_path, stderr_path)):
-            data = path.read_bytes()
-            self.assertEqual(path.read_bytes(), data)
 
-    def test_windows_restart_deadline_covers_predecessor_evidence_finalization(self) -> None:
+    def test_windows_restart_deadline_has_no_stream_finalization_stage(self) -> None:
         runner = HostedDesktopProcessRunner(platform="windows", binary=self.cli)
-        runner.raw_directory = Path(self.directory.name) / "windows-deadline-raw"
+        runner.raw_directory = Path(self.directory.name) / "windows-deadline-no-raw"
         adapter = self._adapter("windows", runner)
         service = adapter.service
         self.assertIsNotNone(service)
         assert service is not None
-        service._service_evidence_paths = (
-            runner.raw_directory / "old.stdout.raw.log",
-            runner.raw_directory / "old.stderr.raw.log",
-        )
-        service._tree_proof_for_evidence = True
-        observed_deadlines: list[float | None] = []
-
-        def finalize(deadline: float | None = None) -> None:
-            observed_deadlines.append(deadline)
-            self.assertIsNotNone(deadline)
-            assert deadline is not None
-            self.assertGreater(deadline, time.monotonic())
-            service._service_evidence_paths = None
-
-        with mock.patch.object(service, "_finalize_service_evidence", side_effect=finalize):
-            service._start(5.0)
-        self.assertEqual(len(observed_deadlines), 1)
+        service._start(5.0)
+        self.assertEqual(list(runner.raw_directory.glob("*.raw.log")), [])
 
     def test_windows_service_process_loss_rejects_surviving_descendant(self) -> None:
         runner = HostedDesktopProcessRunner(platform="windows", binary=self.cli)
@@ -715,8 +693,6 @@ class HostedDesktopAdapterTests(unittest.TestCase):
                     self.assertFalse(any(call[0] == "taskkill.exe" for call in runner.calls))
                 else:
                     self.assertFalse(any(call[0] == "kill" for call in runner.calls))
-                if platform == "windows":
-                    self.assertEqual(len(runner.external_evidence), 3)
 
     def test_desktop_finalization_refuses_same_path_reused_root_pid(self) -> None:
         for platform in ("windows",):
@@ -730,14 +706,6 @@ class HostedDesktopAdapterTests(unittest.TestCase):
                 service = adapter.service
                 service._restart_number = 1
                 service._replacement_identity = "123|100"
-                if platform == "windows":
-                    stdout = raw / "service.stdout.raw.log"
-                    stderr = raw / "service.stderr.raw.log"
-                    stdout.write_bytes(b"stdout\n")
-                    stderr.write_bytes(b"stderr\n")
-                    stdout.chmod(0o600)
-                    stderr.chmod(0o600)
-                    service._service_evidence_paths = (stdout, stderr)
                 runner.identity_reused = True
                 with self.assertRaisesRegex(
                     (ScenarioExecutionError, HostedAdapterError),
@@ -936,15 +904,16 @@ class HostedDesktopAdapterTests(unittest.TestCase):
         ):
             self.assertEqual(_default_control_socket(), Path("/tmp/runtime/control.sock"))
 
-    def test_macos_workflow_retains_installer_owned_daemon_streams(self) -> None:
+    def test_macos_workflow_uses_disposable_daemon_scratch(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[3]
             / ".github"
             / "workflows"
             / "qualification_platform.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn('"$EVIDENCE_DIR/service.log.stdout"', workflow)
-        self.assertIn('"$EVIDENCE_DIR/service.log.stderr"', workflow)
+        self.assertIn('"$RUN_DIR/service.log.stdout"', workflow)
+        self.assertIn('"$RUN_DIR/service.log.stderr"', workflow)
+        self.assertIn('rm -rf "$RUN_DIR"', workflow)
         self.assertNotIn("macos-launchd-service.stdout", workflow)
         self.assertNotIn("macos-launchd-service.stderr", workflow)
         self.assertNotIn("append_macos_daemon_stream", workflow)

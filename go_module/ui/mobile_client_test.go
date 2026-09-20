@@ -134,3 +134,12 @@ func TestMobileClientRejectsCancelledRequests(t *testing.T) {
 		t.Fatal("cancelled snapshot unexpectedly called the transport")
 	}
 }
+
+func TestMobileInt64RejectsValuesOutsideNativeRange(t *testing.T) {
+	if got, err := mobileInt64(42, "sequence"); err != nil || got != 42 {
+		t.Fatalf("mobileInt64(42) = %d, %v; want 42, nil", got, err)
+	}
+	if _, err := mobileInt64(^uint64(0), "sequence"); err == nil {
+		t.Fatal("mobileInt64 accepted a value outside the native signed range")
+	}
+}

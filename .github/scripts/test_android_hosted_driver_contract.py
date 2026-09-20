@@ -37,21 +37,15 @@ def test_workflow_proves_android_routing_chain_cleanup() -> None:
     assert step < always < remove < flush < delete < inventory < residual < failure
 
 
-def test_workflow_collects_the_fixed_android_diagnostic_files() -> None:
+def test_workflow_does_not_collect_android_diagnostic_files() -> None:
     source = (ROOT / ".github/workflows/qualification_platform.yml").read_text(
         encoding="utf-8"
     )
-    start = source.index("- name: Collect Android logs")
-    end = source.index("- name: Remove Android standalone probe staging", start)
-    step = source[start:end]
-
-    for name in ("ui_diagnostics.jsonl", "native_logs.jsonl", "go_app_logs.jsonl"):
-        assert f"/files/diagnostics/{name}" in step
-        assert f'"$EVIDENCE_DIR/{name}"' in step
-    assert "/files/app_logs.txt" not in step
-    assert "/files/go_android_logs.jsonl" not in step
-    assert "dobbyvpn-ui-failure.png" not in step
-    assert "dobbyvpn-ui-failure.xml" not in step
+    assert "- name: Collect Android logs" not in source
+    assert "/files/diagnostics/" not in source
+    assert "adb pull" not in source
+    assert "dobbyvpn-ui-failure.png" not in source
+    assert "dobbyvpn-ui-failure.xml" not in source
 
 
 def test_android_failure_diagnostics_keep_only_fixed_result_vocabulary() -> None:

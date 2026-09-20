@@ -88,6 +88,35 @@ func (c fakeCore) Disconnect() error {
 	return c.disconnectErr
 }
 
+type cancelableBlockingCore struct {
+	record        *recorded
+	started       chan struct{}
+	release       chan struct{}
+	connectDone   chan struct{}
+	cancelOnce    sync.Once
+	startOnce     sync.Once
+	cancelRequest chan struct{}
+}
+
+func (c *cancelableBlockingCore) Connect() error {
+	c.record.add("connect")
+	c.startOnce.Do(func() { close(c.started) })
+	<-c.release
+	close(c.connectDone)
+	return errors.New("test startup released after cancellation")
+}
+
+func (c *cancelableBlockingCore) CancelConnect() {
+	c.record.add("connect-cancel")
+	c.cancelOnce.Do(func() { close(c.cancelRequest) })
+}
+
+func (c *cancelableBlockingCore) Disconnect() error {
+	<-c.connectDone
+	c.record.add("core-stop")
+	return nil
+}
+
 type fakeDevice struct{}
 
 func (fakeDevice) Open(int, string) error { return nil }
@@ -192,6 +221,83 @@ func TestInitialReadinessCancellationRollsBackLIFO(t *testing.T) {
 	want := []string{"inputs", "device", "connect", "core-stop", "inputs-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("order=%v, want=%v", got, want)
+	}
+}
+
+func TestStartCancellationTransfersLeaseUntilNativeConnectReturns(t *testing.T) {
+	record := &recorded{}
+	core := &cancelableBlockingCore{
+		record:        record,
+		started:       make(chan struct{}),
+		release:       make(chan struct{}),
+		connectDone:   make(chan struct{}),
+		cancelRequest: make(chan struct{}),
+	}
+	o := options(record)
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore { return core }
+	r := New(o).(*runtime)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type startResult struct {
+		lease sessionapi.RuntimeLease
+		err   error
+	}
+	started := make(chan startResult, 1)
+	go func() {
+		lease, err := r.Start(ctx, sessionapi.SessionRef{Generation: 30}, profile())
+		started <- startResult{lease: lease, err: err}
+	}()
+	<-core.started
+	cancel()
+
+	var result startResult
+	select {
+	case result = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("canceled Start did not return ownership promptly")
+	}
+	if !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("Start error=%v, want cancellation", result.err)
+	}
+	if result.lease == nil {
+		t.Fatal("canceled Start dropped the still-active runtime lease")
+	}
+	select {
+	case <-core.cancelRequest:
+	default:
+		t.Fatal("canceled Start did not request native connect cancellation")
+	}
+	r.mu.Lock()
+	active := r.active
+	r.mu.Unlock()
+	if !active {
+		t.Fatal("runtime became reusable before the native startup lease was cleaned")
+	}
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- result.lease.Stop(context.Background()) }()
+	select {
+	case err := <-stopDone:
+		t.Fatalf("lease cleanup returned while Connect was blocked: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	if got := record.got(); same(got, []string{"inputs", "device", "connect", "connect-cancel"}) == false {
+		t.Fatalf("cleanup mutated resources while Connect was blocked: %v", got)
+	}
+
+	close(core.release)
+	if err := <-stopDone; err != nil {
+		t.Fatalf("transferred lease cleanup failed: %v", err)
+	}
+	r.mu.Lock()
+	active = r.active
+	r.mu.Unlock()
+	if active {
+		t.Fatal("runtime remained active after transferred lease cleanup")
+	}
+	want := []string{"inputs", "device", "connect", "connect-cancel", "core-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("cleanup order=%v, want=%v", got, want)
 	}
 }
 

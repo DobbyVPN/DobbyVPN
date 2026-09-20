@@ -47,6 +47,19 @@ class IosNativeShellContractTests(unittest.TestCase):
         self.assertIn('if [[ -n "${SOURCE_COMMIT:-}" ]]', script)
         self.assertIn("source commit unavailable; using the local-candidate sentinel", script)
 
+    def test_supplied_runtime_is_authoritative_over_stale_swift_staging(self) -> None:
+        script = (self.root / "go_module/scripts/package_ios_app.sh").read_text()
+        self.assertIn('runtime_staged=0', script)
+        self.assertIn('runtime_replaced=0', script)
+        self.assertIn('if [[ "$fixed_runtime_real" != "$runtime_real" ]]; then', script)
+        self.assertIn('mv "$fixed_runtime" "$runtime_backup"', script)
+        self.assertIn('mv "$runtime_stage" "$fixed_runtime"', script)
+        self.assertIn('if [[ "$runtime_replaced" == 1 ]]; then', script)
+        self.assertNotIn(
+            'if [[ ! -e "$swift_root/DobbyVPNRuntime.xcframework" ]]; then',
+            script,
+        )
+
     def test_ui_test_target_is_simulator_only(self) -> None:
         project = (self.root / "swift_module/iosApp.xcodeproj/project.pbxproj").read_text()
         target_start = project.index('E00000000000000000000009 /* Debug */')

@@ -24,7 +24,7 @@ func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
 	if strings.Contains(initial, "SessionID") || !strings.Contains(initial, `"session_id"`) {
 		t.Fatalf("snapshot did not use stable snake_case: %s", initial)
 	}
-	sessionID := jsonField(t, initial, "session_id")
+	sessionID := jsonSessionID(t, initial)
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
 	for _, field := range []string{`"sequence"`, `"source_kind":"INLINE"`, `"profiles"`, `"warnings"`} {
 		if !strings.Contains(configured, field) || strings.Contains(configured, `"Profiles"`) {
@@ -68,7 +68,7 @@ func TestURLFetchFailureDoesNotEchoSourceCredentials(t *testing.T) {
 	url := "https://alice:secret@example.invalid/profile?token=private"
 	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Loader: failingURLLoader{}}))
 	initial := binding.Snapshot("")
-	result := binding.Configure(jsonField(t, initial, "session_id"), int64Field(t, initial, "sequence"), []byte(url))
+	result := binding.Configure(jsonSessionID(t, initial), int64Field(t, initial, "sequence"), []byte(url))
 	for _, sensitive := range []string{"alice", "secret", "example.invalid", "private", url} {
 		if strings.Contains(result, sensitive) {
 			t.Fatalf("validation response leaked %q: %s", sensitive, result)
@@ -82,7 +82,7 @@ func TestURLFetchFailureDoesNotEchoSourceCredentials(t *testing.T) {
 func TestSnapshotCarriesAcceptedConfigurationAndResetClearsIt(t *testing.T) {
 	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
-	sessionID := jsonField(t, initial, "session_id")
+	sessionID := jsonSessionID(t, initial)
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
 	if strings.Contains(configured, "super-secret-token") {
 		t.Fatalf("configuration bytes leaked in Configure result: %s", configured)
@@ -97,7 +97,7 @@ func TestSnapshotCarriesAcceptedConfigurationAndResetClearsIt(t *testing.T) {
 		t.Fatalf("configuration bytes leaked in Snapshot: %s", snapshot)
 	}
 	reset := binding.Reset(sessionID, int64Field(t, snapshot, "sequence"))
-	if !strings.Contains(reset, `"state":"IDLE"`) || !strings.Contains(reset, `"configured":false`) || jsonField(t, reset, "session_id") != sessionID {
+	if !strings.Contains(reset, `"state":"IDLE"`) || !strings.Contains(reset, `"configured":false`) || jsonSessionID(t, reset) != sessionID {
 		t.Fatalf("Reset did not retain identity and clear accepted state: %s", reset)
 	}
 }
@@ -106,7 +106,7 @@ func TestBindingPreservesStaleStopAndIdempotentStop(t *testing.T) {
 	runtime := &blockingRuntime{}
 	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime}))
 	initial := binding.Snapshot("")
-	sessionID := jsonField(t, initial, "session_id")
+	sessionID := jsonSessionID(t, initial)
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
 	if !strings.Contains(configured, `"ok":true`) {
 		t.Fatalf("configure failed: %s", configured)
@@ -130,7 +130,7 @@ func TestCallbacksCarryTheSessionAndGeneration(t *testing.T) {
 	manager := sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime, Platform: platform})
 	binding := NewForTest(manager)
 	initial := binding.Snapshot("")
-	sessionID := jsonField(t, initial, "session_id")
+	sessionID := jsonSessionID(t, initial)
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
 	started := binding.Start(sessionID, int64Field(t, configured, "sequence"), string(sessionapi.ProfileIndex), 0)
 	generation := int64Field(t, started, "generation")
@@ -208,9 +208,10 @@ type noopLease struct{}
 
 func (noopLease) Release(context.Context) error { return nil }
 
-func jsonField(t *testing.T, input, name string) string {
+func jsonSessionID(t *testing.T, input string) string {
 	t.Helper()
-	needle := `"` + name + `":"`
+	const name = "session_id"
+	needle := `"session_id":"`
 	start := strings.Index(input, needle)
 	if start < 0 {
 		t.Fatalf("%q absent from %s", name, input)

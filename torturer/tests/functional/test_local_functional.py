@@ -11,7 +11,6 @@ from unittest import mock
 
 from torturer_checks.functional import (
     _local_exit_code,
-    _create_log,
     build_parser,
     main,
     _supervised_request_root,
@@ -20,7 +19,6 @@ from torturer_checks.functional import (
 from torturer_checks.hosted.cli import (
     HostedAdapterError,
     SubprocessRunner,
-    _allocate_evidence_path,
 )
 from torturer_checks.hosted.run import _write_json
 from torturer_contract.functional.results import ConnectionIdentity
@@ -148,7 +146,7 @@ class LocalRunTests(unittest.TestCase):
             self.assertIs(raised.exception, error)
             self.assertFalse(output.exists())
 
-    def test_main_creates_required_logs_before_candidate_setup_and_retains_observations(self) -> None:
+    def test_main_prepares_scratch_before_candidate_setup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             profile = root / "profile.toml"
@@ -170,9 +168,8 @@ class LocalRunTests(unittest.TestCase):
 
             def setup(*_args, **_kwargs):
                 logs = root / "logs"
-                self.assertTrue((logs / "app.log").is_file())
-                self.assertTrue((logs / "service.log").is_file())
-                (logs / "app.log").write_bytes(b"VPN application started\n")
+                self.assertTrue(logs.is_dir())
+                self.assertEqual(list(logs.iterdir()), [])
                 return adapter
 
             with (
@@ -224,7 +221,7 @@ class LocalRunTests(unittest.TestCase):
 
             def setup(*_args, **_kwargs):
                 events.append("setup")
-                (logs / "app.log").write_bytes(b"VPN application started\n")
+                self.assertTrue(logs.is_dir())
                 return adapter
 
             def discover(*_args, **_kwargs):
@@ -260,7 +257,7 @@ class LocalRunTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertLess(events.index("reset"), events.index("discover"))
 
-    def test_failed_selected_reset_preserves_error_and_application_evidence(self) -> None:
+    def test_failed_selected_reset_preserves_error_without_log_retention(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             request = root / "request"
@@ -278,8 +275,8 @@ class LocalRunTests(unittest.TestCase):
             error = HostedAdapterError("HELD_SESSION_RESET_FAILED")
 
             def reset() -> None:
-                self.assertTrue((logs / "app.log").is_file())
-                self.assertTrue((logs / "service.log").is_file())
+                self.assertTrue(logs.is_dir())
+                self.assertEqual(list(logs.iterdir()), [])
                 raise error
 
             adapter = SimpleNamespace(
@@ -320,16 +317,14 @@ class LocalRunTests(unittest.TestCase):
             self.assertFalse(output.exists())
             finalize.assert_called_once()
 
-class LocalLogTests(unittest.TestCase):
-    def test_required_logs_are_created_before_setup(self) -> None:
+class LocalScratchTests(unittest.TestCase):
+    def test_command_runner_does_not_create_raw_log_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            app = root / "app.log"
-            service = root / "service.log"
-            _create_log(app)
-            _create_log(service)
-            self.assertTrue(app.is_file())
-            self.assertTrue(service.is_file())
+            runner = SubprocessRunner(root)
+            result = runner.run((sys.executable, "-c", "print('ok')"), timeout_seconds=5)
+            self.assertEqual(result.stdout.strip(), b"ok")
+            self.assertEqual(list(root.iterdir()), [])
 
     def test_result_path_can_replace_previous_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -355,14 +350,8 @@ class LocalLogTests(unittest.TestCase):
             logs.chmod(0o700)
             output.chmod(0o770)
             profile = input_directory / "profile"
-            app = logs / "app.log"
-            service = logs / "service.log"
             profile.write_bytes(b"profile")
-            app.write_bytes(b"app")
-            service.write_bytes(b"service")
             profile.chmod(0o640)
-            app.chmod(0o660)
-            service.chmod(0o660)
             with mock.patch.dict(
                 os.environ,
                 {
@@ -373,20 +362,11 @@ class LocalLogTests(unittest.TestCase):
             ):
                 supervised = _supervised_request_root()
                 self.assertEqual(supervised, request.resolve())
-                _create_log(app)
-                _create_log(service)
                 _prepare_output_path(output / "functional.json")
-                executable = str(Path(sys.executable).resolve())
                 runner = SubprocessRunner(output)
-                self.assertEqual(app.read_bytes(), b"app")
-                existing = output / "supervised.raw.log"
-                existing.write_bytes(b"earlier evidence")
-                allocated = _allocate_evidence_path(
-                    output, "supervised", ".raw.log"
-                )
-                self.assertEqual(allocated, output / "supervised-2.raw.log")
-                self.assertTrue(allocated.is_file())
-                self.assertEqual(existing.read_bytes(), b"earlier evidence")
+                self.assertEqual(list(output.iterdir()), [])
+                runner.run((sys.executable, "-c", "print('passed')"), timeout_seconds=5)
+                self.assertEqual(list(output.glob("*.raw.log")), [])
                 _write_json(output / "functional.json", {"kind": "test"})
                 self.assertEqual(
                     json.loads((output / "functional.json").read_text()),

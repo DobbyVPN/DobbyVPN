@@ -113,11 +113,6 @@ public func dobbyUIFreeString(_ value: UnsafeMutablePointer<CChar>?) {
     free(value)
 }
 
-@_cdecl("dobby_ui_await_event")
-public func dobbyUIAwaitEvent(_ timeoutMillis: Int64) -> Bool {
-    IOSAppCompositionRoot.sessionShell.awaitEvent(timeoutMillis: timeoutMillis)
-}
-
 extension IOSAppCompositionRoot {
     static func vpnManagerFailure(code: String, message: String) -> String {
         String(decoding: VpnManagerImpl.transportFailure(code, message: message), as: UTF8.self)

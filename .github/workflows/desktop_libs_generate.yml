@@ -57,35 +57,17 @@ jobs:
             exit 1
           fi
 
-      - name: Cache desktop VPN library
-        id: desktop_lib_cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: |
-            go_module/windows_grpcvpnserver.exe
-            go_module/ubuntu_grpcvpnserver
-            go_module/macos_grpcvpnserver
-            go_module/trusttunnel_client
-            go_module/dobby_bridge.dll
-            go_module/libdobby_bridge.so
-            go_module/libc++.so.1
-            go_module/libc++abi.so.1
-            go_module/wintun.dll
-            go_module/dobby-cli
-            go_module/dobby-cli.exe
-          key: ${{ runner.os }}-${{ matrix.arch }}-desktop-vpn-lib-${{ hashFiles('.go-version', 'go_module/**', '.github/scripts/desktop_build.py', '.github/workflows/desktop_libs_generate.yml') }}
-
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
-          cache-dependency-path: go_module/go.sum
+          cache: false
 
       # Intel macOS deliberately uses the official CLI helper rather than the
       # arm64-only go-go-tunnel static archive. The release is universal, but
       # it is packaged only with the amd64 service artifact.
       - name: Download official TrustTunnel macOS universal helper
-        if: matrix.os == 'macos' && matrix.arch == 'amd64' && steps.desktop_lib_cache.outputs.cache-hit != 'true'
+        if: matrix.os == 'macos' && matrix.arch == 'amd64'
         working-directory: go_module
         shell: bash
         run: |
@@ -100,7 +82,6 @@ jobs:
           rm trusttunnel_client-v1.0.49-macos-universal.tar.gz
 
       - name: Build desktop VPN library
-        if: steps.desktop_lib_cache.outputs.cache-hit != 'true'
         run: |
           if [ "${{ matrix.os }}" == "macos" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
             export CGO_LDFLAGS="-lc++ -framework SystemConfiguration -framework CoreFoundation -framework Security -framework Network"
@@ -112,22 +93,6 @@ jobs:
           fi
           python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy --with-cli
         shell: bash
-
-      - name: Install Linux Fyne build dependencies
-        if: matrix.platform == 'linux'
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgl1-mesa-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libxxf86vm-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxrandr-dev \
-            libxi-dev
 
       - name: Build shared Go/Fyne UI
         run: |

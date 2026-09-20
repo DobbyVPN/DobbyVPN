@@ -24,6 +24,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate-root", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument(
+        "--runtime-framework",
+        type=Path,
+        help=(
+            "already-built DobbyVPNRuntime.xcframework; when omitted, the "
+            "local pinned Simulator framework build is used"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -41,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             runner=runner,
             contract=contract,
             budget=budget,
+            runtime_framework=args.runtime_framework,
         )
         evidence = run_ios_simulator_app_contract(
             candidate_root=args.candidate_root,
@@ -48,7 +57,6 @@ def main(argv: list[str] | None = None) -> int:
             runner=runner,
             contract=contract,
             budget=budget,
-            diagnostic_dir=args.work_dir / "diagnostics",
         )
     except IOSSimulatorAppContractError as error:
         print(f"error: {error}", file=sys.stderr)

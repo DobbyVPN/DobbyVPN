@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -138,12 +137,12 @@ func runServiceCommand(ctx context.Context, client grpcproto.VpnClient, args []s
 }
 
 func parseProfileIndex(value string) (int32, error) {
-	index, err := strconv.Atoi(value)
+	index, err := strconv.ParseInt(value, 10, 32)
 	if err != nil {
 		return 0, fmt.Errorf("parse profile index: %w", err)
 	}
-	if index < 0 || index > math.MaxInt32 {
-		return 0, fmt.Errorf("profile index must fit in int32")
+	if index < 0 {
+		return 0, fmt.Errorf("profile index must be non-negative")
 	}
 	return int32(index), nil
 }
@@ -319,9 +318,8 @@ func checkConfig(ctx context.Context, client grpcproto.VpnClient, source string)
 	result, err := client.ValidateConfig(ctx, &grpcproto.SessionValidateConfigRequest{RawConfig: raw})
 	if err != nil || result == nil || result.GetFailure() != nil {
 		return reportFailure(err, failureOf(result))
-	} else {
-		fmt.Printf("profiles=%d source=%s\n", len(result.GetProfiles()), result.GetSourceKind().String())
 	}
+	fmt.Printf("profiles=%d source=%s\n", len(result.GetProfiles()), result.GetSourceKind().String())
 	return exitOK
 }
 
@@ -548,27 +546,16 @@ func cleanupSession(client grpcproto.VpnClient, sessionID string, generation uin
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	snapshot, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
-	switch {
-	case snapshotErr != nil:
-		return fmt.Errorf("read cleanup session snapshot: %w", snapshotErr)
-	case snapshot == nil:
-		return errors.New("cleanup session snapshot response is nil")
-	case snapshot.GetFailure() != nil:
-		return sessionFailureError("read cleanup session snapshot", snapshot.GetFailure())
-	}
-	current := snapshot.GetSnapshot()
-	if current == nil {
-		return errors.New("cleanup session snapshot payload is nil")
+	current, err := readCleanupSnapshot(ctx, client, sessionID, "read cleanup session")
+	if err != nil {
+		return err
 	}
 	if current.GetGeneration() != generation {
 		return nil
 	}
-	if current.GetCleanupComplete() {
-		if failure := cleanupFailure(current); failure != nil {
-			return sessionFailureError("cleanup session", failure)
-		}
-		return nil
+	complete, err := cleanupCompleted(current, "cleanup session")
+	if err != nil || complete {
+		return err
 	}
 	stopped, stopErr := client.Stop(ctx, &grpcproto.SessionStopRequest{
 		SessionId: sessionID, Generation: generation,
@@ -588,30 +575,51 @@ func cleanupSession(client grpcproto.VpnClient, sessionID string, generation uin
 			return fmt.Errorf("wait for cleanup session: %w", ctx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
-		currentSnapshot, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
+		completed, snapshotErr := readCleanupSnapshot(ctx, client, sessionID, "poll cleanup session")
 		if snapshotErr != nil {
-			return fmt.Errorf("poll cleanup session snapshot: %w", snapshotErr)
+			return snapshotErr
 		}
-		if currentSnapshot == nil {
-			return errors.New("poll cleanup session snapshot response is nil")
-		}
-		if currentSnapshot.GetFailure() != nil {
-			return sessionFailureError("poll cleanup session snapshot", currentSnapshot.GetFailure())
-		}
-		if currentSnapshot.GetSnapshot() == nil {
-			return errors.New("poll cleanup session snapshot payload is nil")
-		}
-		completed := currentSnapshot.GetSnapshot()
 		if completed.GetGeneration() != generation {
 			return nil
 		}
-		if completed.GetCleanupComplete() {
-			if failure := cleanupFailure(completed); failure != nil {
-				return sessionFailureError("wait for cleanup session", failure)
-			}
-			return nil
+		done, completionErr := cleanupCompleted(completed, "wait for cleanup session")
+		if completionErr != nil || done {
+			return completionErr
 		}
 	}
+}
+
+func readCleanupSnapshot(
+	ctx context.Context,
+	client grpcproto.VpnClient,
+	sessionID string,
+	action string,
+) (*grpcproto.SessionSnapshot, error) {
+	response, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
+	if err != nil {
+		return nil, fmt.Errorf("%s snapshot: %w", action, err)
+	}
+	if response == nil {
+		return nil, fmt.Errorf("%s snapshot response is nil", action)
+	}
+	if response.GetFailure() != nil {
+		return nil, sessionFailureError(action+" snapshot", response.GetFailure())
+	}
+	snapshot := response.GetSnapshot()
+	if snapshot == nil {
+		return nil, fmt.Errorf("%s snapshot payload is nil", action)
+	}
+	return snapshot, nil
+}
+
+func cleanupCompleted(snapshot *grpcproto.SessionSnapshot, action string) (bool, error) {
+	if !snapshot.GetCleanupComplete() {
+		return false, nil
+	}
+	if failure := cleanupFailure(snapshot); failure != nil {
+		return false, sessionFailureError(action, failure)
+	}
+	return true, nil
 }
 
 func cleanupFailure(snapshot *grpcproto.SessionSnapshot) *grpcproto.SessionFailure {

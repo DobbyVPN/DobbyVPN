@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--raw-log-dir", type=Path, required=True,
-        help="Directory for command output and diagnostics",
+        help="Disposable scratch directory for the functional run",
     )
     parser.add_argument("--platform-version", default="local")
     parser.add_argument(
@@ -113,16 +113,6 @@ def _supervised_request_root() -> Path | None:
     return root
 
 
-def _create_log(path: Path) -> None:
-    """Create or reopen one VPN log."""
-
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch(exist_ok=True)
-    except OSError as error:
-        raise ValueError("LOG_UNAVAILABLE") from error
-
-
 def _prepare_output_path(path: Path) -> None:
     """Prepare the result directory."""
 
@@ -150,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
             "FULL_SUITE_REQUIRES_LOCAL_VM_ORCHESTRATOR: "
             "run local_vm --suite full for the Windows/macOS native-window lane"
         )
-    # Validate before touching logs, candidate setup, or the adapter.
+    # Validate before touching scratch, candidate setup, or the adapter.
     validate_suite(args.suite, platform=args.platform, entrypoint="local")
     lane_deadline = time.monotonic() + args.lane_timeout_seconds
     local_architecture = args.architecture or (
@@ -168,23 +158,12 @@ def main(argv: list[str] | None = None) -> int:
     raw_dir = args.raw_log_dir
     supervised_root = _supervised_request_root()
     _ensure_directory(raw_dir)
-    app_log = None if args.platform == "android" else raw_dir / "app.log"
-    service_log = raw_dir / "service.log" if args.platform == "linux" else None
-    for path in (app_log, service_log):
-        if path is None:
-            continue
-        _create_log(path)
     _prepare_output_path(args.output)
     if args.source_sha is not None and _SHA40.fullmatch(args.source_sha) is None:
         raise ValueError("source SHA must be a full lowercase SHA")
     cli = args.cli
     runner = SubprocessRunner(
         supervised_root / "output" if supervised_root is not None else raw_dir,
-        environment=(
-            {"DOBBY_CLI_LOG_PATH": str(app_log)}
-            if args.platform != "android" and cli is not None
-            else None
-        ),
     )
     adb = args.adb or (Path(shutil.which("adb")) if shutil.which("adb") else None)
     if args.platform == "linux" and args.routing_firewall_helper is None:
@@ -204,7 +183,6 @@ def main(argv: list[str] | None = None) -> int:
         service_library_path=args.service_library_path,
         service_pid_file=args.service_pid_file,
         service_identity_file=args.service_identity_file,
-        service_log=service_log,
         network_interface=args.network_interface,
         routing_firewall_helper=args.routing_firewall_helper,
         network_transition_helper=args.network_transition_helper,

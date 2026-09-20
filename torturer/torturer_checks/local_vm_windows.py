@@ -1,18 +1,20 @@
 """Native Windows candidate lifecycle used by :mod:`local_vm`.
 
-The SSH session itself is the privileged SYSTEM boundary on Windows.  The
-candidate service is therefore an ordinary child process of that boundary;
-there is no second Task Scheduler task to leak when setup fails.  All process
-ownership needed by a later cleanup is recorded in ``platform.json`` before
-the corresponding side effect.
+The SSH session itself is the privileged SYSTEM boundary on Windows, so the
+initial candidate service is an ordinary child process of that boundary.  A
+full native journey may restart the exact service under the configured
+interactive account; cleanup records that bounded owner allowance together
+with the PID, creation ticks, and executable path before each side effect.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import time
@@ -24,8 +26,20 @@ from .local_vm import LocalVMError
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
 _INTERFACE = re.compile(r"^[1-9][0-9]*$")
+_NATIVE_UI_CREATION_TICK_TOLERANCE = 10  # one microsecond in 100-ns ticks
 _CONTROL_ADDRESS = "127.0.0.1:50051"
 _FIREWALL_RULE = "DobbyVPN-Torturer-Routing-Probe"
+_MESA_LLVMPIPE_URL = (
+    "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.0/"
+    "mesa3d-26.2.0-release-msvc.7z"
+)
+_MESA_LLVMPIPE_SHA256 = "dcb2719ef346dab5b609fcb193a5f13cfc4b0502e3f4de1ad43d349477402f47"
+_MESA_LLVMPIPE_MEMBERS = (
+    "x64/opengl32.dll",
+    "x64/libgallium_wgl.dll",
+)
+_MESA_LLVMPIPE_STAGING_NAME = "native-ui-staging"
+_MESA_LLVMPIPE_ARCHIVE_NAME = "mesa3d-26.2.0-release-msvc.7z"
 _NATIVE_UI_ENVIRONMENT = frozenset({
     "PROGRAMDATA",
     "DOBBYVPN_CONTROL_ADDRESS",
@@ -34,6 +48,10 @@ _NATIVE_UI_ENVIRONMENT = frozenset({
     "DOBBY_LOG_ROOT",
     "DOBBY_LOG_PRECREATED",
     "GODEBUG",
+    # The Windows full lane's disposable Mesa fixture is scoped to the
+    # interactive controller and the production UI child.  It must never be
+    # copied into service/runtime or machine environment state.
+    "GALLIUM_DRIVER",
     # native_ui_smoke.py resolves PowerShell through shutil.which() for
     # clipboard and UI Automation operations.  The scheduled task runs with
     # the interactive account's environment, but ProcessStartInfo receives a
@@ -126,29 +144,324 @@ def _powershell_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _mesa_llvmpipe_staging_path(run_dir: Path) -> Path:
+    """Return the one disposable directory used by the Windows full lane."""
+
+    root = run_dir.resolve()
+    staging = root / _MESA_LLVMPIPE_STAGING_NAME
+    try:
+        staging.relative_to(root)
+    except ValueError as error:  # pragma: no cover - fixed child path
+        raise _error("Windows Mesa staging path escaped the run directory") from error
+    return staging
+
+
+def _remove_mesa_llvmpipe_staging(run_dir: Path) -> None:
+    """Remove only the fixed disposable Mesa staging path."""
+
+    staging = _mesa_llvmpipe_staging_path(run_dir)
+    try:
+        if staging.is_symlink() or staging.is_file():
+            staging.unlink()
+        elif staging.exists():
+            shutil.rmtree(staging)
+    except OSError as error:
+        raise _error("Windows Mesa staging cleanup failed") from error
+
+
+def _run_mesa_fixture_command(
+    command: list[str], *, cwd: Path, timeout: float,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one shell-free, disposable fixture command with a hard bound."""
+
+    if timeout <= 0:
+        raise _error("Windows Mesa fixture command timeout is exhausted")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        raise _error(f"Windows Mesa fixture tool is unavailable: {command[0]}") from error
+    except subprocess.TimeoutExpired as error:
+        raise _error(f"Windows Mesa fixture command timed out: {command[0]}") from error
+    except OSError as error:
+        raise _error(f"Windows Mesa fixture command could not start: {command[0]}") from error
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        message = f"Windows Mesa fixture command failed: {command[0]} exited {result.returncode}"
+        if detail:
+            # Keep command diagnostics bounded and avoid retaining the whole
+            # archive/tool output as a fixture artifact.
+            message += f": {detail[-512:]}"
+        raise _error(message)
+    return result
+
+
+def _mesa_archive_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as error:
+        raise _error("Windows Mesa fixture archive could not be hashed") from error
+    return digest.hexdigest()
+
+
+def _prepare_mesa_llvmpipe_fixture(
+    command: list[str], *, run_dir: Path, timeout: float,
+) -> tuple[list[str], Path | None]:
+    """Stage the exact Windows UI beside Mesa's two WGL DLLs.
+
+    This is intentionally limited to the Windows full native-window command.
+    The production UI is copied byte-for-byte to a disposable run directory;
+    no installed file, registry value, System32 file, or machine environment
+    variable is changed.  The archive is checksum-verified before ``tar.exe``
+    sees it and only the two required archive members are extracted.
+    """
+
+    if "--ui" not in command:
+        # The real full command always carries --ui.  Keeping this helper
+        # tolerant makes focused process-wrapper tests independent of a
+        # network download and does not weaken the production command builder,
+        # which validates the candidate UI path before reaching this boundary.
+        return list(command), None
+    ui_index = command.index("--ui")
+    if ui_index + 1 >= len(command) or not command[ui_index + 1]:
+        raise _error("Windows native UI binary argument is missing")
+    source = Path(command[ui_index + 1])
+    if source.is_symlink() or not source.is_file():
+        raise _error("Windows production UI binary is unavailable for Mesa staging")
+    if timeout <= 0:
+        raise _error("Windows native UI timeout must be positive")
+
+    run_dir = run_dir.resolve()
+    staging = _mesa_llvmpipe_staging_path(run_dir)
+    archive = staging / _MESA_LLVMPIPE_ARCHIVE_NAME
+    extraction = staging / ".extract"
+    try:
+        # A previous worker can have been terminated by the supervisor before
+        # its finally block.  Remove that exact stale path before rebuilding.
+        _remove_mesa_llvmpipe_staging(run_dir)
+        staging.mkdir(parents=True, exist_ok=False)
+        deadline = time.monotonic() + timeout
+
+        def remaining() -> float:
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise _error("Windows Mesa fixture preparation timed out")
+            return value
+
+        _run_mesa_fixture_command(
+            [
+                "curl.exe", "--fail", "--location", "--silent", "--show-error",
+                "--retry", "2", "--connect-timeout", "15",
+                "--max-time", str(max(1, int(remaining()))),
+                "--output", str(archive), _MESA_LLVMPIPE_URL,
+            ],
+            cwd=run_dir,
+            timeout=remaining(),
+        )
+        if archive.is_symlink() or not archive.is_file() or archive.stat().st_size <= 0:
+            raise _error("Windows Mesa fixture download did not produce an archive")
+        observed_sha256 = _mesa_archive_sha256(archive)
+        if observed_sha256 != _MESA_LLVMPIPE_SHA256:
+            raise _error("Windows Mesa fixture archive checksum mismatch")
+
+        # Supplying the two member names to tar is deliberate: no archive
+        # wildcard or whole-archive extraction can add an unreviewed DLL.
+        extraction.mkdir()
+        _run_mesa_fixture_command(
+            [
+                "tar.exe", "-xf", str(archive), "-C", str(extraction),
+                *_MESA_LLVMPIPE_MEMBERS,
+            ],
+            cwd=run_dir,
+            timeout=remaining(),
+        )
+        for member in _MESA_LLVMPIPE_MEMBERS:
+            extracted = extraction.joinpath(*member.split("/"))
+            if extracted.is_symlink() or not extracted.is_file():
+                raise _error(f"Windows Mesa fixture member is missing: {member}")
+            destination = staging / Path(member).name
+            shutil.copy2(extracted, destination)
+            if destination.is_symlink() or not destination.is_file():
+                raise _error(f"Windows Mesa fixture member could not be staged: {member}")
+
+        destination_ui = staging / source.name
+        shutil.copy2(source, destination_ui)
+        if destination_ui.is_symlink() or not destination_ui.is_file():
+            raise _error("Windows production UI copy did not complete")
+
+        # The archive and temporary extraction tree are not needed while the
+        # GUI runs.  Keeping only the UI and the two DLLs minimizes cleanup
+        # surface and ensures no downloaded artifact is retained on success.
+        archive.unlink()
+        shutil.rmtree(extraction)
+        staged_command = list(command)
+        staged_command[ui_index + 1] = str(destination_ui)
+        return staged_command, staging
+    except Exception as error:
+        try:
+            _remove_mesa_llvmpipe_staging(run_dir)
+        except Exception as cleanup_error:
+            raise _error(
+                f"{error}; Windows Mesa fixture cleanup failed: {cleanup_error}"
+            ) from error
+        raise
+
+
+def _creation_ticks_match(expected: int, observed: int) -> bool:
+    """Match Win32/.NET process times within WMI's sub-microsecond loss."""
+
+    if (
+        isinstance(expected, bool)
+        or isinstance(observed, bool)
+        or not isinstance(expected, int)
+        or not isinstance(observed, int)
+        or expected < 0
+        or observed < 0
+    ):
+        return False
+    return abs(expected - observed) < _NATIVE_UI_CREATION_TICK_TOLERANCE
+
+
+def _validated_interactive_account(value: object, *, context: str) -> str:
+    """Validate the configured non-SYSTEM Windows account used by the UI.
+
+    The account is resolved by Windows during cleanup, so both ``user`` and
+    ``DOMAIN\\user``/``.\\user`` forms remain valid.  Keep the value bounded
+    before passing it to PowerShell and reject the built-in SYSTEM identity;
+    cleanup must never turn a missing or SYSTEM alternate into a broad owner
+    match.
+    """
+
+    if not isinstance(value, str):
+        raise _error(f"{context} is not configured safely")
+    account = value.strip()
+    if not account or any(ord(character) < 0x20 or ord(character) == 0x7F for character in account):
+        raise _error(f"{context} is not configured safely")
+    if account.count("\\") > 1:
+        raise _error(f"{context} is not configured safely")
+    if "\\" in account:
+        domain, user = (part.strip() for part in account.split("\\", 1))
+        if not domain or not user:
+            raise _error(f"{context} is not configured safely")
+        account = f"{domain}\\{user}"
+    else:
+        user = account
+    if user.casefold() == "system":
+        raise _error(f"{context} is not configured safely")
+    return account
+
+
 _NATIVE_UI_PREFLIGHT_SCRIPT = r'''$ErrorActionPreference = "Stop"
 $target = [string]$env:DOBBYVPN_CONTROL_TOKEN_USER
 if ([string]::IsNullOrWhiteSpace($target)) {
   Write-Error "interactive user is not configured"
   exit 3
 }
-$shortName = ($target -split "\\")[-1]
-$explorers = @(Get-Process -Name "explorer" -IncludeUserName -ErrorAction SilentlyContinue |
-  Where-Object {
-    $session = [int]$_.SessionId
-    $owner = [string]$_.UserName
-    $session -gt 0 -and (
-      $owner -ieq $target -or
-      $owner -ieq ("{0}\{1}" -f $env:COMPUTERNAME, $shortName) -or
-      $owner -imatch ("\\{0}$" -f [regex]::Escape($shortName))
-    )
-  })
-if ($explorers.Count -eq 0) {
-  Write-Error ("no Explorer desktop session for {0}" -f $target)
+try {
+  $targetAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $target
+  $targetSid = $targetAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  Write-Error "interactive user cannot be resolved"
   exit 3
 }
-$session = [int]$explorers[0].SessionId
-Write-Output ("ready|{0}|{1}" -f $session, $explorers.Count)
+
+# Do not parse localized session-list output: it can report a disconnected
+# session even while the user's Explorer processes are still present.  Resolve
+# the configured account to a SID and use the unique Explorer session as the
+# exact target for the console handoff.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class DobbyVpnWts {
+  [DllImport("kernel32.dll")]
+  public static extern uint WTSGetActiveConsoleSessionId();
+}
+'@
+
+function Get-ConfiguredExplorerProbe {
+  $explorerMatches = @(Get-Process -Name "explorer" -IncludeUserName -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $session = [int]$_.SessionId
+      $owner = [string]$_.UserName
+      if ($session -le 0 -or [string]::IsNullOrWhiteSpace($owner)) { return }
+      try {
+        $ownerAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $owner
+        $ownerSid = $ownerAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+      } catch {
+        return
+      }
+      if ($ownerSid -eq $targetSid) {
+        [pscustomobject]@{
+          ProcessId = [int]$_.Id
+          SessionId = $session
+        }
+      }
+    })
+  [pscustomobject]@{
+    Processes = @($explorerMatches)
+    Sessions = @($explorerMatches | Select-Object -ExpandProperty SessionId -Unique)
+  }
+}
+
+function Get-ActiveConsoleSessionId {
+  [uint32][DobbyVpnWts]::WTSGetActiveConsoleSessionId()
+}
+
+$probe = Get-ConfiguredExplorerProbe
+$sessions = @($probe.Sessions)
+if ($sessions.Count -ne 1) {
+  Write-Error ("expected exactly one Explorer session for configured user; found {0}" -f $sessions.Count)
+  exit 3
+}
+$session = [int]$sessions[0]
+$activeConsole = Get-ActiveConsoleSessionId
+if ($activeConsole -ne [uint32]$session) {
+  # This command runs in the SYSTEM boundary.  Pass only the already validated
+  # session ID and the fixed console destination; never disconnect or target a
+  # broad user/session set.
+  $tscon = Join-Path $env:SystemRoot "System32\tscon.exe"
+  & $tscon ([string]$session) "/dest:console" *> $null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Error ("validated Explorer session {0} could not be attached to the console" -f $session)
+    exit 3
+  }
+}
+
+# tscon is asynchronous from the point of view of WTS and Explorer.  Re-read
+# both sides until the same validated user/session is the active console, so a
+# scheduled task is never launched into a disconnected desktop.
+$deadline = [DateTime]::UtcNow.AddSeconds(15)
+$ready = $false
+$explorerCount = 0
+while ([DateTime]::UtcNow -lt $deadline) {
+  $probe = Get-ConfiguredExplorerProbe
+  $sessions = @($probe.Sessions)
+  if ($sessions.Count -eq 1) {
+    $observedSession = [int]$sessions[0]
+    $activeConsole = Get-ActiveConsoleSessionId
+    if ($observedSession -eq $session -and $activeConsole -eq [uint32]$session) {
+      $ready = $true
+      $explorerCount = @($probe.Processes).Count
+      break
+    }
+  }
+  Start-Sleep -Milliseconds 250
+}
+if (-not $ready) {
+  Write-Error ("Explorer session {0} did not become the active console session" -f $session)
+  exit 3
+}
+Write-Output ("ready|{0}|{1}" -f $session, $explorerCount)
 '''
 
 
@@ -165,7 +478,10 @@ def _preflight_interactive_desktop(
             cwd=run_dir,
             logs=logs,
             label="native-ui-preflight",
-            timeout=min(timeout, 15.0),
+            # The script has a bounded 15-second WTS/Explorer convergence
+            # wait; leave process startup and tscon cleanup headroom around
+            # that inner deadline.
+            timeout=min(timeout, 30.0),
             environment=environment,
             check=False,
         )
@@ -221,6 +537,7 @@ def _native_ui_wrapper(
     stdout: Path,
     stderr: Path,
     pid: Path,
+    child_pid: Path,
     exit_code: Path,
 ) -> str:
     """Build the user-session PowerShell wrapper for the native UI smoke.
@@ -246,7 +563,6 @@ def _native_ui_wrapper(
         f"  $info.Arguments = {arguments}",
         f"  $info.WorkingDirectory = {_powershell_literal(str(cwd))}",
         "  $info.UseShellExecute = $false",
-        "  $info.CreateNoWindow = $true",
         "  $info.RedirectStandardOutput = $true",
         "  $info.RedirectStandardError = $true",
         "  $userEnvironment = @{}",
@@ -261,6 +577,11 @@ def _native_ui_wrapper(
         # settings cannot leak into the product smoke process.
         "  $info.EnvironmentVariables.Clear()",
         "  foreach ($entry in $userEnvironment.GetEnumerator()) { $info.EnvironmentVariables[$entry.Key] = $entry.Value }",
+        # The controller records the exact production UI PID immediately
+        # after Popen.  The SYSTEM worker can therefore clean up an orphaned
+        # UI even when the controller is killed before it sends ``ready``.
+        f"  $info.EnvironmentVariables['DOBBYVPN_NATIVE_UI_CHILD_PID_FILE'] = "
+        f"{_powershell_literal(str(child_pid))}",
     ]
     for key in sorted(_NATIVE_UI_ENVIRONMENT):
         value = environment.get(key)
@@ -270,11 +591,14 @@ def _native_ui_wrapper(
                 f"{_powershell_literal(value)}"
             )
     lines.extend([
+        "  $process = $null",
         "  $process = New-Object System.Diagnostics.Process",
         "  $process.StartInfo = $info",
         "  if (-not $process.Start()) { throw 'native UI process did not start' }",
+        "  $creationTicks = $process.StartTime.ToUniversalTime().Ticks",
         f"  Set-Content -LiteralPath {_powershell_literal(str(pid))} "
-        "-Value ([string]$process.Id) -Encoding ASCII -NoNewline",
+        "-Value (([string]$process.Id) + '|' + ([string]$creationTicks)) "
+        "-Encoding ASCII -NoNewline",
         "  $stdoutTask = $process.StandardOutput.ReadToEndAsync()",
         "  $stderrTask = $process.StandardError.ReadToEndAsync()",
         "  $process.WaitForExit()",
@@ -282,6 +606,9 @@ def _native_ui_wrapper(
         f"  [IO.File]::WriteAllText({_powershell_literal(str(stderr))}, $stderrTask.Result)",
         "  $exitCode = $process.ExitCode",
         "} catch {",
+        "  if ($null -ne $process -and -not $process.HasExited) {",
+        "    try { $process.Kill() } catch { }",
+        "  }",
         f"  [IO.File]::AppendAllText({_powershell_literal(str(stderr))}, "
         "($_ | Out-String) + [Environment]::NewLine)",
         "}",
@@ -312,15 +639,140 @@ def _native_ui_register_script(
         f"$principal = New-ScheduledTaskPrincipal -UserId {_powershell_literal(user)} "
         # ScheduledTasks names TASK_LOGON_INTERACTIVE_TOKEN "Interactive";
         # "InteractiveToken" is valid in task XML, not for this cmdlet enum.
-        "-LogonType Interactive -RunLevel Limited",
+        # The hosted native journey also owns routing-firewall preparation and
+        # service-only process-loss recovery.  On the dedicated qualification
+        # VM the configured interactive account is an administrator, so use
+        # its existing elevated token rather than adding a second SYSTEM/UI
+        # command boundary.
+        "-LogonType Interactive -RunLevel Highest",
         f"$action = New-ScheduledTaskAction -Execute 'powershell.exe' "
         f"-Argument {_powershell_literal(action_arguments)} "
         f"-WorkingDirectory {_powershell_literal(str(cwd))}",
         f"Register-ScheduledTask -TaskName {_powershell_literal(task_name)} "
         "-Action $action -Principal $principal -Force | Out-Null",
         f"Start-ScheduledTask -TaskName {_powershell_literal(task_name)}",
+        # Start-ScheduledTask is asynchronous and normally returns success
+        # even when Task Scheduler cannot create the user-session process.
+        # Poll the fresh task's first run record so errors such as
+        # ERROR_DIRECTORY (0x8007010b) fail at launch instead of looking like
+        # a native UI timeout several minutes later.
+        "$launchDeadline = (Get-Date).AddSeconds(5)",
+        "$started = $false",
+        "while ((Get-Date) -lt $launchDeadline) {",
+        f"  $task = Get-ScheduledTask -TaskName {_powershell_literal(task_name)} "
+        "-ErrorAction Stop",
+        f"  $info = Get-ScheduledTaskInfo -TaskName {_powershell_literal(task_name)} "
+        "-ErrorAction Stop",
+        "  if ($task.State -eq 'Running') {",
+        "    $started = $true",
+        "    break",
+        "  }",
+        "  if ($info.LastRunTime -gt [DateTime]::MinValue) {",
+        "    $result = [uint32]$info.LastTaskResult",
+        "    if ($result -ne 0) {",
+        "      throw (\"scheduled native UI task failed before launch: 0x{0:X8}\" -f $result)",
+        "    }",
+        "    $started = $true",
+        "    break",
+        "  }",
+        "  Start-Sleep -Milliseconds 100",
+        "}",
+        "if (-not $started) { throw 'scheduled native UI task did not start' }",
         "",
     ])
+
+
+def _native_ui_access_script(
+    *,
+    user: str,
+    run_dir: Path,
+    cwd: Path,
+    logs: Path,
+    wrapper: Path,
+    profile: Path,
+    command: list[str],
+    read_directories: tuple[Path, ...] = (),
+) -> str:
+    """Grant the interactive account bounded access to the disposable UI tree.
+
+    The SYSTEM SSH worker creates the extracted run tree with an owner-only
+    ACL.  Task Scheduler can therefore register an Interactive task but its
+    user token cannot traverse the wrapper's directory, which surfaces as the
+    opaque ``ERROR_DIRECTORY`` last-task result.  Grant access only to this
+    run's source/profile/log paths and the concrete command paths; the source
+    is read/execute, logs are modify, service PID/identity sidecars are
+    modify, and the run root receives direct write access for the PID/exit
+    markers.  The run tree is disposable and is removed by the normal SYSTEM
+    cleanup boundary.
+    """
+
+    if not user:
+        raise _error("Windows native UI access user is missing")
+    source = cwd.parent if cwd.name.lower() == "torturer" else cwd
+    read_path_flags = frozenset({
+        "--cli", "--ui", "--profile", "--smoke-script", "--service-binary",
+        "--service-library-path", "--raw-log-dir", "--output",
+    })
+    write_path_flags = frozenset({"--service-pid-file", "--service-identity-file"})
+    read_paths: list[str] = [str(command[0]), str(wrapper)]
+    write_paths: list[str] = []
+    for index, value in enumerate(command[:-1]):
+        if value in read_path_flags:
+            read_paths.append(command[index + 1])
+        elif value in write_path_flags:
+            write_paths.append(command[index + 1])
+    # These are mandatory paths whose existence is already established by the
+    # local-VM run.  Command-derived paths are optional here so a later native
+    # process check reports a missing candidate with its normal diagnostics.
+    required_paths = (run_dir, source, logs, profile, wrapper)
+    optional_paths = tuple(read_paths)
+    lines = [
+        '$ErrorActionPreference = "Stop"',
+        f"$user = {_powershell_literal(user)}",
+        "function Grant-Access {",
+        "  param([string]$Path, [string]$Permission, [bool]$Recurse)",
+        "  if (-not (Test-Path -LiteralPath $Path)) { throw \"native UI access path is missing\" }",
+        "  $grant = \"{0}:{1}\" -f $user, $Permission",
+        "  $arguments = @($Path, '/grant', $grant)",
+        "  if ($Recurse) { $arguments += '/T' }",
+        "  $arguments += '/C'",
+        "  & \"$env:SystemRoot\\System32\\icacls.exe\" @arguments | Out-Null",
+        "  if ($LASTEXITCODE -ne 0) { throw \"native UI access grant failed\" }",
+        "}",
+    ]
+    for path in required_paths:
+        lines.append(
+            f"Grant-Access {_powershell_literal(str(path))} "
+            f"{_powershell_literal('(OI)(CI)RX' if path in (source, logs) else 'RX')} "
+            f"{'$true' if path in (source, logs) else '$false'}"
+        )
+    # Logs must be writable by the user-session process.  The source and
+    # profile remain read-only; the run root's direct W grant permits only the
+    # marker files created by the wrapper (no inherited write permission).
+    lines.extend([
+        f"Grant-Access {_powershell_literal(str(logs))} {_powershell_literal('(OI)(CI)M')} $true",
+        f"Grant-Access {_powershell_literal(str(run_dir))} {_powershell_literal('W')} $false",
+    ])
+    for path in read_directories:
+        lines.append(
+            f"Grant-Access {_powershell_literal(str(path))} "
+            f"{_powershell_literal('(OI)(CI)RX')} $true"
+        )
+    for path in optional_paths:
+        lines.append(
+            f"if (Test-Path -LiteralPath {_powershell_literal(path)}) {{ "
+            f"Grant-Access {_powershell_literal(path)} {_powershell_literal('RX')} $false }}"
+        )
+    # The user-session process-loss controller rewrites these sidecars and
+    # atomically replaces the identity marker after each service restart.
+    # Grant only the existing files Modify; their parent is already writable
+    # for creation of the temporary replacement file.
+    for path in write_paths:
+        lines.append(
+            f"if (Test-Path -LiteralPath {_powershell_literal(path)}) {{ "
+            f"Grant-Access {_powershell_literal(path)} {_powershell_literal('M')} $false }}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _native_ui_unregister_script(task_name: str) -> str:
@@ -339,15 +791,126 @@ def _native_ui_unregister_script(task_name: str) -> str:
 
 
 _NATIVE_UI_KILL_SCRIPT = r'''$ErrorActionPreference = "Stop"
-$pidValue = [int]$env:DOBBYVPN_NATIVE_UI_PID
-if ($pidValue -le 0) { throw "native UI PID is invalid" }
-$process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
-if ($null -ne $process) {
-  & "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
-  if ($LASTEXITCODE -ne 0 -and $null -ne (Get-Process -Id $pidValue -ErrorAction SilentlyContinue)) {
-    throw "native UI process tree did not terminate"
-  }
+$expectedPathValue = [string]$env:DOBBYVPN_NATIVE_UI_CONTROLLER_BINARY
+$expectedOwner = [string]$env:DOBBYVPN_NATIVE_UI_CONTROLLER_OWNER
+if ([string]::IsNullOrWhiteSpace($expectedPathValue) -or [string]::IsNullOrWhiteSpace($expectedOwner)) {
+  throw "native UI controller identity is not configured"
 }
+$expectedPath = [IO.Path]::GetFullPath($expectedPathValue)
+try {
+  $expectedAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $expectedOwner
+  $expectedSid = $expectedAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  throw "native UI controller owner is invalid"
+}
+if ($expectedSid -eq "S-1-5-18") { throw "native UI controller owner must not be SYSTEM" }
+$rawIdentity = [string]$env:DOBBYVPN_NATIVE_UI_PID
+$parts = $rawIdentity -split '\|', 2
+if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[1-9][0-9]*$' -or $parts[1] -notmatch '^[1-9][0-9]+$') {
+  throw "native UI controller identity is invalid"
+}
+$pidValue = [int]$parts[0]
+$expectedCreationTicks = [int64]$parts[1]
+$record = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction Stop
+if ($null -eq $record) { exit 0 }
+if ($null -eq $record.CreationDate -or [string]::IsNullOrWhiteSpace([string]$record.ExecutablePath)) {
+  throw "native UI controller identity is unavailable"
+}
+if ([IO.Path]::GetFullPath([string]$record.ExecutablePath) -ine $expectedPath) {
+  throw "native UI controller identity did not match the launcher"
+}
+$owner = Invoke-CimMethod -InputObject $record -MethodName GetOwner -ErrorAction Stop
+if ($owner.ReturnValue -ne 0) { throw "native UI controller owner is unavailable" }
+$ownerName = "{0}\{1}" -f [string]$owner.Domain, [string]$owner.User
+try {
+  $ownerAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $ownerName
+  $ownerSid = $ownerAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  throw "native UI controller owner is unavailable"
+}
+if ($ownerSid -ne $expectedSid) { throw "native UI controller owner did not match the configured account" }
+$observedCreationTicks = [int64]$record.CreationDate.ToUniversalTime().Ticks
+$creationDelta = $observedCreationTicks - $expectedCreationTicks
+if ($creationDelta -lt 0) { $creationDelta = -$creationDelta }
+if ($creationDelta -ge 10) { throw "native UI controller identity did not match the launched process" }
+& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  if ($null -ne $still) { throw "native UI controller process tree did not terminate" }
+}
+$deadline = [DateTime]::UtcNow.AddSeconds(15)
+while ([DateTime]::UtcNow -lt $deadline) {
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  if ($null -eq $still) { exit 0 }
+  Start-Sleep -Milliseconds 100
+}
+throw "native UI controller process did not terminate"
+'''
+
+
+_NATIVE_UI_CHILD_KILL_SCRIPT = r'''$ErrorActionPreference = "Stop"
+$pidPath = [string]$env:DOBBYVPN_NATIVE_UI_CHILD_PID_FILE
+$expectedPathValue = [string]$env:DOBBYVPN_NATIVE_UI_CHILD_BINARY
+$expectedOwner = [string]$env:DOBBYVPN_NATIVE_UI_CHILD_OWNER
+if (
+  [string]::IsNullOrWhiteSpace($pidPath) -or
+  [string]::IsNullOrWhiteSpace($expectedPathValue) -or
+  [string]::IsNullOrWhiteSpace($expectedOwner)
+) {
+  throw "native UI child identity is not configured"
+}
+$expectedPath = [IO.Path]::GetFullPath($expectedPathValue)
+try {
+  $expectedAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $expectedOwner
+  $expectedSid = $expectedAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  throw "native UI child owner is invalid"
+}
+if ($expectedSid -eq "S-1-5-18") { throw "native UI child owner must not be SYSTEM" }
+if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) { exit 0 }
+$rawIdentity = (Get-Content -LiteralPath $pidPath -Raw -ErrorAction Stop).Trim()
+$parts = $rawIdentity -split '\|', 2
+if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[1-9][0-9]*$' -or $parts[1] -notmatch '^[1-9][0-9]+$') {
+  throw "native UI child identity is invalid"
+}
+$pidValue = [int]$parts[0]
+$expectedCreationTicks = [int64]$parts[1]
+$record = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction Stop
+if ($null -eq $record) { exit 0 }
+if ($null -eq $record.CreationDate -or [string]::IsNullOrWhiteSpace([string]$record.ExecutablePath)) {
+  throw "native UI child identity is unavailable"
+}
+if ([IO.Path]::GetFullPath([string]$record.ExecutablePath) -ine $expectedPath) {
+  throw "native UI child identity did not match the launched binary"
+}
+$owner = Invoke-CimMethod -InputObject $record -MethodName GetOwner -ErrorAction Stop
+if ($owner.ReturnValue -ne 0) { throw "native UI child owner is unavailable" }
+$ownerName = "{0}\{1}" -f [string]$owner.Domain, [string]$owner.User
+try {
+  $ownerAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $ownerName
+  $ownerSid = $ownerAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  throw "native UI child owner is unavailable"
+}
+if ($ownerSid -ne $expectedSid) { throw "native UI child owner did not match the configured account" }
+$observedCreationTicks = [int64]$record.CreationDate.ToUniversalTime().Ticks
+$creationDelta = $observedCreationTicks - $expectedCreationTicks
+if ($creationDelta -lt 0) { $creationDelta = -$creationDelta }
+if ($creationDelta -ge 10) {
+  throw "native UI child identity did not match the launched process"
+}
+& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  if ($null -ne $still) { throw "native UI child process tree did not terminate" }
+}
+$deadline = [DateTime]::UtcNow.AddSeconds(15)
+while ([DateTime]::UtcNow -lt $deadline) {
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  if ($null -eq $still) { exit 0 }
+  Start-Sleep -Milliseconds 100
+}
+throw "native UI child process did not terminate"
 '''
 
 
@@ -362,10 +925,11 @@ def run_interactive_ui(
 ) -> subprocess.CompletedProcess[bytes]:
     """Run the real Windows UI in the logged-in user's interactive session.
 
-    The local VM worker remains SYSTEM and owns the VPN service.  Only this
-    short-lived UI smoke is delegated to the configured installed user through
-    Task Scheduler's existing interactive token; no password or second service
-    boundary is introduced.
+    The local VM worker remains SYSTEM and owns the supervised session and
+    cleanup.  The bounded native journey runs through the configured installed
+    administrator's interactive token so its real window, routing preparation,
+    and service-only recovery share one desktop context.  No password or second
+    service boundary is introduced.
     """
 
     from .local_vm import LocalVMError
@@ -376,9 +940,10 @@ def run_interactive_ui(
     cwd = cwd.resolve()
     logs = logs.resolve()
     logs.mkdir(parents=True, exist_ok=True)
-    user = str(environment.get("DOBBYVPN_CONTROL_TOKEN_USER", "")).strip()
-    if not user or user.upper() in {"SYSTEM", "NT AUTHORITY\\SYSTEM"}:
-        raise LocalVMError("Windows interactive UI user is not configured")
+    user = _validated_interactive_account(
+        environment.get("DOBBYVPN_CONTROL_TOKEN_USER"),
+        context="Windows interactive UI user",
+    )
     # Keep the task and all markers inside this disposable candidate.  The
     # wrapper itself is never exposed outside the VM run directory.
     suffix = uuid.uuid4().hex
@@ -387,14 +952,30 @@ def run_interactive_ui(
     stdout = logs / "native-ui.stdout.log"
     stderr = logs / "native-ui.stderr.log"
     pid = run_dir / "native-ui.pid"
+    child_pid = run_dir / "native-ui-child.pid"
     exit_code = run_dir / "native-ui.exit"
+    controller_binary = command[0] if command else ""
+    try:
+        ui_flag = command.index("--ui")
+        requested_ui_binary = command[ui_flag + 1]
+    except (ValueError, IndexError):
+        requested_ui_binary = None
+    if requested_ui_binary is not None and (
+        not isinstance(requested_ui_binary, str) or not requested_ui_binary
+    ):
+        raise LocalVMError("Windows native UI binary argument is invalid")
     filtered_environment = {
         key: str(value)
         for key, value in environment.items()
-        if key in _NATIVE_UI_ENVIRONMENT and isinstance(value, str)
+        if key in _NATIVE_UI_ENVIRONMENT
+        and key != "GALLIUM_DRIVER"
+        and isinstance(value, str)
     }
     if filtered_environment.get("DOBBYVPN_CONTROL_TOKEN_USER") != user:
         raise LocalVMError("Windows interactive UI control-token user is invalid")
+    # A previous supervisor timeout can leave only the disposable Mesa tree
+    # behind.  Remove that fixed path before probing or downloading anything.
+    _remove_mesa_llvmpipe_staging(run_dir)
     # A SYSTEM worker can register an interactive task even when the target
     # account has no visible shell.  Prove the user's Explorer session first;
     # otherwise the wait for the task's exit marker can consume the full lane
@@ -402,28 +983,81 @@ def run_interactive_ui(
     _preflight_interactive_desktop(
         run_dir=run_dir, logs=logs, timeout=timeout, user=user,
     )
-    for path in (pid, exit_code, stdout, stderr):
+    for path in (pid, child_pid, exit_code, stdout, stderr):
         try:
             path.unlink()
         except FileNotFoundError:
             pass
         except OSError as error:
             raise LocalVMError(f"Windows native UI marker is not removable: {path.name}") from error
-    wrapper.write_text(
-        _native_ui_wrapper(
-            command,
-            cwd=cwd,
-            environment=filtered_environment,
-            stdout=stdout,
-            stderr=stderr,
-            pid=pid,
-            exit_code=exit_code,
-        ),
-        encoding="utf-8",
+    staged_command, staging = _prepare_mesa_llvmpipe_fixture(
+        command, run_dir=run_dir, timeout=timeout,
     )
+    if staging is not None:
+        filtered_environment["GALLIUM_DRIVER"] = "llvmpipe"
+    try:
+        staged_ui_flag = staged_command.index("--ui")
+        ui_binary = staged_command[staged_ui_flag + 1]
+    except (ValueError, IndexError):
+        ui_binary = None
+    if ui_binary is not None and (
+        not isinstance(ui_binary, str) or not ui_binary
+    ):
+        raise LocalVMError("Windows native UI binary argument is invalid")
     registered = False
     failure: Exception | None = None
+    child_cleanup_attempted = False
+
+    def cleanup_child() -> None:
+        nonlocal child_cleanup_attempted
+        if child_cleanup_attempted or not child_pid.is_file() or ui_binary is None:
+            return
+        child_cleanup_attempted = True
+        child_environment = os.environ.copy()
+        child_environment.update({
+            "DOBBYVPN_NATIVE_UI_CHILD_PID_FILE": str(child_pid),
+            "DOBBYVPN_NATIVE_UI_CHILD_BINARY": ui_binary,
+            "DOBBYVPN_NATIVE_UI_CHILD_OWNER": user,
+        })
+        _powershell(
+            _NATIVE_UI_CHILD_KILL_SCRIPT,
+            cwd=run_dir,
+            logs=logs,
+            label="native-ui-child-kill",
+            timeout=min(timeout, 20.0),
+            environment=child_environment,
+        )
+
     try:
+        wrapper.write_text(
+            _native_ui_wrapper(
+                staged_command,
+                cwd=cwd,
+                environment=filtered_environment,
+                stdout=stdout,
+                stderr=stderr,
+                pid=pid,
+                child_pid=child_pid,
+                exit_code=exit_code,
+            ),
+            encoding="utf-8",
+        )
+        _powershell(
+            _native_ui_access_script(
+                user=user,
+                run_dir=run_dir,
+                cwd=cwd,
+                logs=logs,
+                wrapper=wrapper,
+                profile=run_dir / "profile",
+                command=staged_command,
+                read_directories=(staging,) if staging is not None else (),
+            ),
+            cwd=run_dir,
+            logs=logs,
+            label="native-ui-access",
+            timeout=min(timeout, 60.0),
+        )
         # Register-ScheduledTask and Start-ScheduledTask are one PowerShell
         # operation.  Mark the task as potentially present before entering it
         # so a successful registration followed by a failed Start is still
@@ -447,10 +1081,12 @@ def run_interactive_ui(
                     value = pid.read_text(encoding="ascii").strip()
                 except OSError as error:
                     raise LocalVMError("Windows native UI PID marker is unreadable") from error
-                if not _PID.fullmatch(value):
-                    raise LocalVMError("Windows native UI PID marker is invalid")
+                if not _IDENTITY.fullmatch(value):
+                    raise LocalVMError("Windows native UI controller identity marker is invalid")
                 kill_environment = os.environ.copy()
                 kill_environment["DOBBYVPN_NATIVE_UI_PID"] = value
+                kill_environment["DOBBYVPN_NATIVE_UI_CONTROLLER_BINARY"] = controller_binary
+                kill_environment["DOBBYVPN_NATIVE_UI_CONTROLLER_OWNER"] = user
                 _powershell(
                     _NATIVE_UI_KILL_SCRIPT,
                     cwd=run_dir,
@@ -459,6 +1095,7 @@ def run_interactive_ui(
                     timeout=min(timeout, 15.0),
                     environment=kill_environment,
                 )
+            cleanup_child()
             raise LocalVMError("Windows native UI task timed out")
         try:
             raw_exit_code = exit_code.read_text(encoding="ascii").strip()
@@ -468,7 +1105,7 @@ def run_interactive_ui(
             raise LocalVMError("Windows native UI exit marker is invalid")
         returncode = int(raw_exit_code)
         return subprocess.CompletedProcess(
-            command,
+            staged_command,
             returncode,
             stdout.read_bytes() if stdout.is_file() else b"",
             stderr.read_bytes() if stderr.is_file() else b"",
@@ -477,6 +1114,11 @@ def run_interactive_ui(
         failure = error
         raise
     finally:
+        cleanup_failures: list[str] = []
+        try:
+            cleanup_child()
+        except Exception as cleanup_error:
+            cleanup_failures.append(f"child cleanup failed: {cleanup_error}")
         if registered:
             try:
                 _powershell(
@@ -487,16 +1129,8 @@ def run_interactive_ui(
                     timeout=min(timeout, 30.0),
                 )
             except Exception as cleanup_error:
-                if failure is None:
-                    raise LocalVMError(
-                        f"Windows native UI task cleanup failed: {cleanup_error}"
-                    ) from cleanup_error
-                # Preserve the original UI error while retaining cleanup
-                # diagnostics in the command log produced by _powershell.
-                raise LocalVMError(
-                    f"{failure}; Windows native UI task cleanup failed: {cleanup_error}"
-                ) from failure
-        for path in (wrapper, pid, exit_code):
+                cleanup_failures.append(f"task cleanup failed: {cleanup_error}")
+        for path in (wrapper, pid, child_pid, exit_code):
             try:
                 path.unlink()
             except FileNotFoundError:
@@ -505,6 +1139,15 @@ def run_interactive_ui(
                 # These are disposable markers.  The task cleanup result and
                 # UI output remain authoritative diagnostics.
                 pass
+        try:
+            _remove_mesa_llvmpipe_staging(run_dir)
+        except Exception as cleanup_error:
+            cleanup_failures.append(f"Mesa fixture cleanup failed: {cleanup_error}")
+        if cleanup_failures:
+            detail = "; ".join(cleanup_failures)
+            if failure is None:
+                raise LocalVMError(f"Windows native UI cleanup failed: {detail}")
+            raise LocalVMError(f"{failure}; Windows native UI {detail}") from failure
 
 
 def _discover_network_interface(run_dir: Path, logs: Path, timeout: float) -> str:
@@ -631,9 +1274,10 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     # controlplane/token_windows.go rejects SYSTEM as the installed-user ACL
     # identity.  Provisioning supplies this value; fail before launch when a
     # SYSTEM task would otherwise make an unusable token.
-    token_user = environment.get("DOBBYVPN_CONTROL_TOKEN_USER", "").strip()
-    if not token_user or token_user.upper() in {"SYSTEM", "NT AUTHORITY\\SYSTEM"}:
-        raise _error("Windows control-token user is not configured for SYSTEM session")
+    token_user = _validated_interactive_account(
+        environment.get("DOBBYVPN_CONTROL_TOKEN_USER"),
+        context="Windows control-token user",
+    )
     # The functional CLI is launched by the same local-VM command but needs
     # the service's control-token and PROGRAMDATA settings as well.  Keep a
     # small allow-list in state instead of serializing the whole guest env.
@@ -681,6 +1325,15 @@ _STOP_SCRIPT = r'''$ErrorActionPreference = "Stop"
 $pidValue = [int]$env:DOBBYVPN_SERVICE_PID
 $expected = [string]$env:DOBBYVPN_SERVICE_IDENTITY
 $expectedPath = [IO.Path]::GetFullPath($env:DOBBYVPN_SERVICE_BINARY)
+$expectedOwner = [string]$env:DOBBYVPN_SERVICE_INTERACTIVE_OWNER
+if ([string]::IsNullOrWhiteSpace($expectedOwner)) { throw "service alternate owner is not configured" }
+try {
+  $expectedAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $expectedOwner
+  $expectedSid = $expectedAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  throw "service alternate owner is invalid"
+}
+if ($expectedSid -eq "S-1-5-18") { throw "service alternate owner must not be SYSTEM" }
 $record = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction Stop
 if ($null -eq $record) { exit 0 }
 if ($null -eq $record.CreationDate) { throw "service creation time unavailable" }
@@ -689,7 +1342,14 @@ if ($observed -ne $expected) { exit 0 }
 if ([IO.Path]::GetFullPath([string]$record.ExecutablePath) -ine $expectedPath) { exit 0 }
 $owner = Invoke-CimMethod -InputObject $record -MethodName GetOwner -ErrorAction Stop
 if ($owner.ReturnValue -ne 0) { throw "service owner unavailable" }
-if ([string]$owner.User -cne "SYSTEM" -or [string]$owner.Domain -cne "NT AUTHORITY") { exit 0 }
+$ownerName = "{0}\{1}" -f [string]$owner.Domain, [string]$owner.User
+try {
+  $ownerAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $ownerName
+  $ownerSid = $ownerAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  throw "service owner unavailable"
+}
+if ($ownerSid -ne "S-1-5-18" -and $ownerSid -ne $expectedSid) { exit 0 }
 & "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
 if ($LASTEXITCODE -ne 0) {
   $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
@@ -703,6 +1363,18 @@ while ([DateTime]::UtcNow -lt $deadline) {
 }
 throw "service did not terminate"
 '''
+
+
+def _cleanup_interactive_owner(runtime: dict[str, Any]) -> str:
+    """Return the exact non-SYSTEM account permitted for service cleanup."""
+
+    environment = runtime.get("environment")
+    if not isinstance(environment, dict):
+        raise _error("Windows cleanup interactive owner is not configured")
+    return _validated_interactive_account(
+        environment.get("DOBBYVPN_CONTROL_TOKEN_USER"),
+        context="Windows cleanup interactive owner",
+    )
 
 
 _REMOVE_FIREWALL_SCRIPT = rf'''$ErrorActionPreference = "Stop"
@@ -725,7 +1397,13 @@ if ($adapter.Status -ne "Up") { throw "recorded network adapter is not up" }
 
 
 def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) -> None:
-    """Stop only the recorded SYSTEM process and remove the exact test rule."""
+    """Stop only the recorded SYSTEM/UI-owner process and remove the test rule.
+
+    The process identity proof remains the recorded PID, creation ticks, and
+    exact executable path.  Its owner must be SYSTEM (the startup owner) or
+    the exact configured interactive test account; no other administrator or
+    user is eligible for termination.
+    """
 
     run_dir = run_dir.resolve()
     logs.mkdir(parents=True, exist_ok=True)
@@ -790,11 +1468,13 @@ def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) 
                 raise _error("Windows service identity file is invalid")
             if binary is None or not binary.is_file():
                 raise _error("Windows service binary is unavailable")
+            interactive_owner = _cleanup_interactive_owner(runtime)
             env = os.environ.copy()
             env.update({
                 "DOBBYVPN_SERVICE_PID": str(pid),
                 "DOBBYVPN_SERVICE_IDENTITY": identity,
                 "DOBBYVPN_SERVICE_BINARY": str(binary.resolve()),
+                "DOBBYVPN_SERVICE_INTERACTIVE_OWNER": interactive_owner,
             })
             _powershell(_STOP_SCRIPT, cwd=run_dir, logs=logs, label="cleanup-service", timeout=timeout, environment=env)
         except Exception as error:
@@ -821,5 +1501,12 @@ def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) 
                 )
             except Exception as error:
                 errors.append(f"cleanup-network-interface: {type(error).__name__}: {error}")
+    # The supervisor runs this cleanup command even when the native UI worker
+    # was terminated by its outer timeout.  Keep the fixed Mesa path out of
+    # retained run directories without touching any installed/release files.
+    try:
+        _remove_mesa_llvmpipe_staging(run_dir)
+    except Exception as error:
+        errors.append(f"cleanup-mesa-fixture: {type(error).__name__}: {error}")
     if errors:
         raise _error("; ".join(errors))

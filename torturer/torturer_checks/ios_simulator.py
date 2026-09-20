@@ -58,6 +58,11 @@ def simctl_terminate_command(device_udid: str, bundle_identifier: str) -> list[s
     return ["xcrun", "simctl", "terminate", _validate_udid(device_udid), bundle_identifier]
 
 
+def iphonesimulator_sdk_version_command() -> list[str]:
+    """Resolve the active iPhone Simulator SDK version without a shell."""
+    return ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]
+
+
 def xcodebuild_ui_test_command(
     device_udid: str,
     project: str | Path,

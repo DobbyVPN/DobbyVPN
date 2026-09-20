@@ -42,7 +42,6 @@ class LocalSimulatorTests(unittest.TestCase):
             runtime = local_vm_ios.run(self.root, self.logs, 300, None)
         self.assertEqual(prepare.call_args.kwargs["contract"].architecture, "amd64")
         self.assertNotIn("mode", prepare.call_args.kwargs)
-        self.assertEqual(run_contract.call_args.kwargs["diagnostic_dir"], self.logs / "ios")
         self.assertNotIn("mode", run_contract.call_args.kwargs)
         self.assertNotIn("existing_app", run_contract.call_args.kwargs)
         self.assertFalse(runtime["installed"])

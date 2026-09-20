@@ -10,7 +10,6 @@ from pathlib import Path
 import re
 import socket
 import time
-import traceback
 from urllib.parse import urlsplit
 
 from torturer_contract.functional.capabilities import Capability
@@ -22,6 +21,7 @@ from .cli import (
     HostedAdapterError,
     HostedCLIAdapter,
     RoutingProofMixin,
+    _append_error_notes,
     _append_command_result_notes,
     _call_with_deadline,
     _ensure_directory,
@@ -185,13 +185,13 @@ class LinuxServiceProcessController:
         # marker so private run-directory state stays scoped to the current
         # Harness invocation.
         self._supervised_request = supervised_request
-        default_log = (
-            self.raw_directory.parent / "logs" / "service.log"
-            if self._supervised_request
-            else self.raw_directory / "service.log"
-        )
-        self.service_log = service_log or default_log
         _ensure_directory(self.raw_directory)
+        # The product service still requires a regular log file on Linux, but
+        # it is a run-local scratch stream, never a retained qualification
+        # artifact.  Ignore caller-supplied paths so a hosted lane cannot
+        # accidentally write into a persistent log directory.
+        del service_log
+        self.service_log = self.raw_directory / f".service-{os.getpid()}-{pid}.log"
         self._restart_number = 0
         self._initial_identity: tuple[str, int] | None = None
         self._replacement_identity: tuple[str, int] | None = None
@@ -572,8 +572,11 @@ class LinuxServiceProcessController:
     def _start(self, timeout: float) -> None:
         self._restart_number += 1
         log_path = self.service_log
-        if not log_path.is_file():
-            raise ScenarioExecutionError("SERVICE_LOG_UNAVAILABLE")
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.touch(exist_ok=True)
+        except OSError as error:
+            raise ScenarioExecutionError("SERVICE_SCRATCH_UNAVAILABLE") from None
         deadline = time.monotonic() + timeout
         # Invalidate the predecessor token before launch.  A partial launch
         # must never leave an outer cleanup hook treating the old service as
@@ -673,6 +676,14 @@ class LinuxServiceProcessController:
             raise ScenarioExecutionError("SERVICE_KILL_FAILED")
         self._wait_dead(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
         self._start(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
+
+    def cleanup_scratch(self) -> None:
+        """Remove the service's ephemeral log after process cleanup."""
+
+        try:
+            self.service_log.unlink(missing_ok=True)
+        except OSError:
+            raise ScenarioExecutionError("SERVICE_SCRATCH_CLEANUP_FAILED") from None
 
     def stop_restarted_service(
         self, timeout: float, *, deadline: float | None = None
@@ -887,7 +898,6 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         service_library_path: Path | None = None,
         service_pid_file: Path | None = None,
         service_identity_file: Path | None = None,
-        service_log: Path | None = None,
         network_interface: str | None = None,
         routing_firewall_helper: Path | None = None,
     ) -> None:
@@ -910,14 +920,13 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 raise HostedAdapterError("SERVICE_CONTROL_INCOMPLETE")
             raw_directory = getattr(runner, "raw_directory", None)
             if not isinstance(raw_directory, Path):
-                raise HostedAdapterError("SERVICE_EVIDENCE_UNAVAILABLE")
+                raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
             self.service = LinuxServiceProcessController(
                 pid=service_pid, binary=service_binary, socket=service_socket,
                 library_path=service_library_path,
                 pid_file=service_pid_file if local_mode else None,
                 identity_file=service_identity_file,
                 runner=runner, raw_directory=raw_directory,
-                service_log=service_log,
                 supervised_request=local_mode,
             )
 
@@ -1059,28 +1068,41 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
     ) -> None:
         super().finalize(timeout_seconds, deadline=deadline)
         if self.service is not None:
-            if deadline is None:
-                # Direct callers have no outer lane deadline; the service
-                # controller owns the timeout clock in that case.
+            primary_error: BaseException | None = None
+            try:
+                if deadline is None:
+                    # Direct callers have no outer lane deadline; the service
+                    # controller owns the timeout clock in that case.
+                    _call_with_deadline(
+                        self.service.stop_restarted_service, timeout_seconds, None
+                    )
+                    return
+                # ``deadline`` is the outer lane deadline.  The timeout
+                # argument is the finalizer's own bounded budget and must
+                # remain effective even when the lane has much more time left.
+                now = time.monotonic()
+                effective_deadline = now + timeout_seconds
+                if deadline <= now:
+                    raise ScenarioExecutionError("SERVICE_FINALIZE_TIMEOUT")
+                effective_deadline = min(effective_deadline, deadline)
                 _call_with_deadline(
-                    self.service.stop_restarted_service, timeout_seconds, None
+                    self.service.stop_restarted_service,
+                    self._remaining(effective_deadline, "SERVICE_FINALIZE_TIMEOUT"),
+                    effective_deadline,
                 )
-                return
-            # ``deadline`` is the outer lane deadline.  The timeout argument
-            # is the finalizer's own bounded budget and must remain effective
-            # even when the lane has much more time left.  Otherwise a
-            # resistant replacement can keep the hosted lane blocked until
-            # its full 30-minute ceiling.
-            now = time.monotonic()
-            effective_deadline = now + timeout_seconds
-            if deadline <= now:
-                raise ScenarioExecutionError("SERVICE_FINALIZE_TIMEOUT")
-            effective_deadline = min(effective_deadline, deadline)
-            _call_with_deadline(
-                self.service.stop_restarted_service,
-                self._remaining(effective_deadline, "SERVICE_FINALIZE_TIMEOUT"),
-                effective_deadline,
-            )
+            except BaseException as error:
+                primary_error = error
+                raise
+            finally:
+                try:
+                    self.service.cleanup_scratch()
+                except BaseException as cleanup_error:
+                    if primary_error is None:
+                        raise
+                    _append_error_notes(
+                        primary_error,
+                        (("service_scratch_cleanup", cleanup_error),),
+                    )
 
     def _network_transition(self, timeout: float) -> dict[str, object]:
         if self.network_interface is None:
@@ -1128,8 +1150,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                         primary_error = error
                     else:
                         primary_error.add_note(
-                            "Network uplink restoration also failed:\n"
-                            + "".join(traceback.format_exception(error)).rstrip()
+                            f"network_uplink_restoration_error={type(error).__name__}"
                         )
             # Always let the fixed, one-shot emergency repair fire.  Its
             # --collect unit then disappears without a privileged stop path.
@@ -1165,16 +1186,14 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                     primary_error = cleanup_error
                 else:
                     primary_error.add_note(
-                        "Network repair cleanup also failed:\n"
-                        + "".join(traceback.format_exception(cleanup_error)).rstrip()
+                        f"network_repair_cleanup_error={type(cleanup_error).__name__}"
                     )
             except Exception as cleanup_error:
                 if primary_error is None:
                     primary_error = cleanup_error
                 else:
                     primary_error.add_note(
-                        "Network repair cleanup also failed:\n"
-                        + "".join(traceback.format_exception(cleanup_error)).rstrip()
+                        f"network_repair_cleanup_error={type(cleanup_error).__name__}"
                     )
         if primary_error is not None:
             raise primary_error

@@ -65,6 +65,20 @@ type sessionCore interface {
 	Disconnect() error
 }
 
+// connectCanceler is implemented by native runtimes whose Connect operation
+// owns a mutex while calling a platform API that does not accept a context.
+// Requesting cancellation must not call Disconnect: the latter may need the
+// same mutex and would deadlock behind the in-flight startup.  Connect remains
+// the sole owner of native mutations until it returns, after which the normal
+// lease rollback calls Disconnect.
+type connectCanceler interface{ CancelConnect() }
+
+// errConnectCancellationPending means Connect still owns the native startup
+// operation.  The acquired lease must be transferred to its caller so the
+// caller can fence later generations and run the ordinary LIFO cleanup only
+// after Connect has stopped mutating native resources.
+var errConnectCancellationPending = errors.New("native session connect cancellation pending")
+
 type ProbeFunc func(context.Context) (int64, error)
 
 // ConnectedHealthFunc runs one connected-readiness check for a specific lease.
@@ -159,6 +173,18 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	r.active = true
 	lease, err := r.startLocked(ctx, ref, profile)
 	if err != nil {
+		if lease != nil && errors.Is(err, errConnectCancellationPending) {
+			// The native startup is still the sole owner of its TUN/device.
+			// Keep r.active asserted until the transferred lease is stopped;
+			// the manager will retain it in the generation ledger even though
+			// Start returns the cancellation to its caller now.
+			lease.setOnDone(func() {
+				r.mu.Lock()
+				r.active = false
+				r.mu.Unlock()
+			})
+			return lease, err
+		}
 		r.active = false
 		return nil, err
 	}
@@ -204,6 +230,12 @@ func (r *runtime) Probe(ctx context.Context, ref sessionapi.SessionRef, profile 
 	// returning, even when the health seam or context fails.
 	lease, err := r.startLocked(ctx, ref, profile)
 	if err != nil {
+		if lease != nil {
+			// Probe has no generation ledger to retain a partially-started
+			// lease.  Stop waits for the native startup goroutine and then
+			// releases its dependent resources in LIFO order.
+			err = errors.Join(err, lease.Stop(context.Background()))
+		}
 		r.active = false
 		r.mu.Unlock()
 		return sessionapi.ProbeResult{}, err
@@ -294,6 +326,13 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 
 	owned := &lease{}
 	fail := func(cause error) (*lease, error) {
+		if errors.Is(cause, errConnectCancellationPending) {
+			// Connect was asked to stop but has not returned yet.  Returning the
+			// still-owned lease lets the manager retain this generation and run
+			// Stop after the native operation is quiescent; releasing the TUN or
+			// routing inputs here would race a blocked platform call.
+			return owned, cause
+		}
 		return nil, errors.Join(cause, owned.Stop(context.Background()))
 	}
 
@@ -410,12 +449,27 @@ func connectContext(ctx context.Context, client sessionCore) error {
 	case err := <-result:
 		return err
 	case <-ctx.Done():
-		disconnectErr := client.Disconnect()
+		var cancelErr error
+		if canceler, ok := client.(connectCanceler); ok {
+			// Native startup owns the lifecycle mutex while it is inside a
+			// non-context-aware platform call.  Its cancellation request is
+			// deliberately lock-free; cleanup remains serialized by Connect and
+			// the rollback below after Connect has returned.
+			canceler.CancelConnect()
+			// Do not run the lease rollback from this stack while Connect is
+			// still active.  startLocked transfers ownership to its caller;
+			// the caller fences the generation and invokes Stop after Connect
+			// has returned.
+			return errors.Join(ctx.Err(), errConnectCancellationPending)
+		} else {
+			cancelErr = client.Disconnect()
+		}
 		// Do not return a failed start while Connect can still publish a late
-		// successful core. The native runtime's Disconnect cancels its bounded startup;
-		// waiting here makes cancellation ownership deterministic.
+		// successful core. Waiting for its result preserves the ownership
+		// ordering: dependent TUN/input resources are released only after the
+		// native operation has stopped mutating them.
 		connectErr := <-result
-		return errors.Join(ctx.Err(), disconnectErr, connectErr)
+		return errors.Join(ctx.Err(), cancelErr, connectErr)
 	}
 }
 

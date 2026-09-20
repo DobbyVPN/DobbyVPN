@@ -73,15 +73,6 @@ jobs:
             --current-version "$EXPECTED_VERSION" \
             --log-dir "$RUNNER_TEMP/dobbyvpn-installer-migration/logs"
 
-      - name: Upload migration diagnostics on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobbyvpn-installer-migration-${{ matrix.platform }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/dobbyvpn-installer-migration/logs
-          if-no-files-found: ignore
-          retention-days: 3
-
       - name: Remove migration package and temporary state
         if: always()
         shell: bash

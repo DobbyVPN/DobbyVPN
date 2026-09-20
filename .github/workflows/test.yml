@@ -49,6 +49,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Run Python tooling tests
+        env:
+          PYTHONPATH: torturer
         run: |
           python3 -m venv "$RUNNER_TEMP/python-test-venv"
           "$RUNNER_TEMP/python-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2" "PyYAML==6.0.3"
@@ -66,22 +68,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
-          cache-dependency-path: go_module/go.sum
+          cache: false
 
       - name: Stage pinned Linux native dependencies for Go tests
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            libgl1-mesa-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libxxf86vm-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxrandr-dev \
-            libxi-dev
           python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
           test -f go_module/libdobby_bridge.so
           test -f go_module/libc++.so.1
@@ -97,20 +88,17 @@ jobs:
             -coverprofile="$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.out" ./...
           go tool cover -func="$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.out" \
             | tee "$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.txt"
+          {
+            echo '## Unified Go coverage'
+            echo '```text'
+            cat "$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Race-check lifecycle and routing
         working-directory: go_module
         run: |
           go test -race ./routing/... ./sessionapi/... ./tunnel/...
-
-      - name: Upload unified Go coverage
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: go-coverage
-          path: ${{ runner.temp }}/dobbyvpn-go-coverage
-          if-no-files-found: warn
-          retention-days: 7
 
   android:
     name: Android native shell and Go/Fyne tests
@@ -125,7 +113,7 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
-          cache-dependency-path: go_module/go.sum
+          cache: false
 
       - name: Verify pinned Go installation
         run: |
@@ -141,11 +129,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
-          cache-dependency-path: |
-            android_module/**/*.gradle.kts
-            android_module/gradle/wrapper/gradle-wrapper.properties
-            go_module/go.sum
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
@@ -168,42 +151,6 @@ jobs:
     uses: ./.github/workflows/ios_libs_generate.yml
     with:
       source_sha: ${{ github.sha }}
-
-  ios:
-    name: iOS unsigned build
-    needs: ios_libraries
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Select Xcode 26.3
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-
-      - name: Set up pinned Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: .go-version
-          cache-dependency-path: go_module/go.sum
-
-      - name: Download Go modules
-        working-directory: go_module
-        run: go mod download
-
-      - name: Download iOS native dependencies
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          pattern: DobbyVPNRuntime.xcframework
-          path: swift_module/DobbyVPNRuntime.xcframework
-          merge-multiple: true
-
-      - name: Build Go/Fyne iOS app without signing
-        run: |
-          ./go_module/scripts/package_ios_app.sh \
-            iossimulator "$RUNNER_TEMP/Dobby-Vpn.app" \
-            swift_module/DobbyVPNRuntime.xcframework arm64
 
   swift:
     name: iOS production lifecycle policy tests
@@ -239,17 +186,6 @@ jobs:
             --summary "$COVERAGE_SUMMARY"
           cat "$COVERAGE_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Swift lifecycle-core coverage
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: swift-lifecycle-core-coverage
-          path: |
-            ${{ runner.temp }}/swift-lifecycle-core.lcov
-            ${{ runner.temp }}/swift-lifecycle-core-coverage.md
-          if-no-files-found: error
-          retention-days: 7
-
   ios_simulator_mini:
     name: iOS Simulator Go/Fyne mini suite
     needs: ios_libraries
@@ -274,7 +210,7 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
-          cache-dependency-path: go_module/go.sum
+          cache: false
 
       - name: Download Go modules
         working-directory: go_module
@@ -287,13 +223,5 @@ jobs:
           set -euo pipefail
           python3 torturer/tests/ios_simulator/run_app_contract.py \
             --candidate-root "$GITHUB_WORKSPACE" \
-            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract"
-
-      - name: Upload Simulator launch diagnostics
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: ios-simulator-go-ui-diagnostics
-          path: ${{ runner.temp }}/ios-simulator-mini-contract/diagnostics
-          if-no-files-found: ignore
-          retention-days: 7
+            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
+            --runtime-framework "$GITHUB_WORKSPACE/swift_module/DobbyVPNRuntime.xcframework"

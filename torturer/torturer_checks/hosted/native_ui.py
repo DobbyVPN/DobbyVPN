@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -27,11 +29,34 @@ from .cli import SubprocessRunner, _ensure_directory
 from .factory import adapter_for_platform
 
 
+# The hosted journey waits for the smoke driver's response. Keep a small
+# explicit reserve inside that response deadline so cleanup can complete
+# before the caller's task deadline. The result JSON is the only retained
+# native-UI output.
 _REQUEST_TIMEOUT = 300.0
+_SMOKE_DIAGNOSTIC_RESERVE_SECONDS = 30.0
+_CONTEXT_VALUE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class NativeUIJourneyError(RuntimeError):
-    """A native UI or base-adapter journey failure."""
+    """A native UI or base-adapter journey failure.
+
+    ``operation`` and ``stage`` are deliberately short, fixed vocabulary
+    values supplied by the harness.  They make a bounded timeout actionable
+    without ever including the profile, command line, or another private
+    value in the retained failure record.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str | None = None,
+        stage: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.operation = operation
+        self.stage = stage
 
 
 _REQUIRED_TRUE_CHECKS = frozenset({
@@ -51,6 +76,14 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "reopen_connected",
     "process_loss_verified",
     "ui_process_loss_recovered",
+    "reconnect_tunnel_interface",
+    "reconnect_routing_verified",
+    "reconnect_stability_verified",
+    "reconnect_throughput_positive",
+    "process_loss_tunnel_interface",
+    "process_loss_routing_verified",
+    "process_loss_stability_verified",
+    "process_loss_throughput_positive",
     "final_disconnect_native",
     "final_cleanup_verified",
 })
@@ -82,6 +115,22 @@ def _path(value: str) -> Path:
     return result
 
 
+def _smoke_timeout(response_timeout: float) -> float:
+    """Bound the real-window driver below its response deadline.
+
+    ``native_ui_smoke.py`` owns the actual HWND/accessibility wait. If it
+    receives the same timeout as ``_NativeUIProcess._response``, the outer
+    reader can time out and kill the task before cleanup. Keep one bounded
+    reserve for the response and cleanup path while preserving a positive
+    timeout for focused/unit-test invocations.
+    """
+
+    if response_timeout <= 0:
+        raise ValueError("native UI response timeout must be positive")
+    reserve = min(_SMOKE_DIAGNOSTIC_RESERVE_SECONDS, response_timeout / 3.0)
+    return min(_REQUEST_TIMEOUT, response_timeout - reserve)
+
+
 class _NativeUIProcess:
     """Client for native_ui_smoke.py's bounded JSON command boundary."""
 
@@ -92,18 +141,28 @@ class _NativeUIProcess:
         self.binary = binary
         self.profile = profile
         self.timeout = timeout
+        # Keep the constructor boundary stable for callers that provide a
+        # disposable scratch root, but never turn it into a log sink.
         self.raw_directory = raw_directory
         self.process: subprocess.Popen[str] | None = None
-        self._stderr = None
         self._responses: queue.Queue[str | None] = queue.Queue()
         self._reader: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._operation = "start"
+        self._stage = "launching-driver"
+
+    def _error(self, message: str) -> NativeUIJourneyError:
+        operation = self._operation
+        stage = self._stage
+        return NativeUIJourneyError(
+            f"{message} (operation={operation}, stage={stage})",
+            operation=operation,
+            stage=stage,
+        )
 
     def start(self) -> None:
         if self.process is not None:
             return
-        stderr = (self.raw_directory / "native-ui-driver.stderr.log").open("ab")
-        self._stderr = stderr
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -111,13 +170,16 @@ class _NativeUIProcess:
                 "--platform", self.platform,
                 "--ui", str(self.binary),
                 "--profile", str(self.profile),
-                "--timeout", str(min(self.timeout, _REQUEST_TIMEOUT)),
+                "--timeout", str(_smoke_timeout(self.timeout)),
                 "--serve",
             ],
             cwd=str(self.script.parents[2]),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=stderr,
+            # JSON responses on stdout are the protocol. Native-driver stderr
+            # is intentionally discarded so it cannot become a retained
+            # diagnostic artifact.
+            stderr=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             bufsize=1,
@@ -138,29 +200,58 @@ class _NativeUIProcess:
 
         self._reader = threading.Thread(target=read, name="dobbyvpn-native-ui-reader", daemon=True)
         self._reader.start()
+        self._operation = "start"
+        self._stage = "waiting-for-ready-window"
         response = self._response(self.timeout)
         if response.get("ok") is not True or response.get("event") != "ready":
+            operation = self._operation
+            stage = self._stage
             self.close()
             raise NativeUIJourneyError(
-                "native UI did not become ready: " + str(response.get("error", response))
+                "native UI did not become ready: "
+                + str(response.get("error", response))
+                + f" (operation={operation}, stage={stage})",
+                operation=operation,
+                stage=stage,
             )
 
     def _response(self, timeout: float) -> dict[str, object]:
         try:
-            line = self._responses.get(timeout=max(0.1, timeout))
+            deadline = time.monotonic() + max(0.1, timeout)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise queue.Empty
+                line = self._responses.get(timeout=remaining)
+                if line is None:
+                    break
+                try:
+                    value = json.loads(line)
+                except (TypeError, ValueError) as error:
+                    raise self._error("native UI response is not valid JSON") from error
+                if not isinstance(value, dict):
+                    raise self._error("native UI response is not an object")
+                if value.get("event") == "progress":
+                    operation = value.get("operation")
+                    stage = value.get("stage")
+                    if isinstance(operation, str) and _CONTEXT_VALUE.fullmatch(operation):
+                        self._operation = operation
+                    if isinstance(stage, str) and _CONTEXT_VALUE.fullmatch(stage):
+                        self._stage = stage
+                    continue
+                return value
         except queue.Empty as error:
-            raise NativeUIJourneyError("native UI response timed out") from error
+            raise self._error("native UI response timed out") from error
         if line is None:
             process = self.process
             code = None if process is None else process.poll()
-            raise NativeUIJourneyError(f"native UI process exited before responding (code={code})")
-        try:
-            value = json.loads(line)
-        except (TypeError, ValueError) as error:
-            raise NativeUIJourneyError("native UI response is not valid JSON") from error
-        if not isinstance(value, dict):
-            raise NativeUIJourneyError("native UI response is not an object")
-        return value
+            raise self._error(
+                f"native UI process exited before responding (code={code})"
+            )
+        # The loop above either returns a response or raises.  Keep this
+        # defensive branch so a future queue implementation cannot silently
+        # turn a missing response into a successful operation.
+        raise self._error("native UI response was empty")
 
     def request(self, operation: str, *, timeout: float | None = None) -> dict[str, object]:
         limit = self.timeout if timeout is None else timeout
@@ -169,16 +260,17 @@ class _NativeUIProcess:
                 self.start()
             process = self.process
             if process is None or process.stdin is None:
-                raise NativeUIJourneyError("native UI process is unavailable")
+                raise self._error("native UI process is unavailable")
+            self._operation = operation
+            self._stage = "waiting-for-operation"
             try:
                 process.stdin.write(json.dumps({"op": operation}, separators=(",", ":")) + "\n")
                 process.stdin.flush()
             except (BrokenPipeError, OSError) as error:
-                raise NativeUIJourneyError("native UI command pipe failed") from error
+                raise self._error("native UI command pipe failed") from error
             response = self._response(limit)
             if response.get("ok") is not True:
-                error = NativeUIJourneyError(str(response.get("error", "native UI action failed")))
-                raise error
+                raise self._error(str(response.get("error", "native UI action failed")))
             return response
 
     def close(self) -> None:
@@ -210,14 +302,13 @@ class _NativeUIProcess:
                         process.kill()
                         process.wait(timeout=1)
         finally:
-            for stream in (process.stdin, process.stdout, process.stderr, self._stderr):
+            for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     try:
                         stream.close()
                     except OSError:
                         pass
             self.process = None
-            self._stderr = None
 
 
 def _step(identifier: str, operation: str, timeout: float) -> ScenarioStep:
@@ -236,11 +327,65 @@ def _base_execute(base: Any, identifier: str, operation: str, timeout: float) ->
     return value
 
 
+def _restart_service_for_native_ui(base: Any, timeout: float) -> dict[str, object]:
+    method = getattr(base, "restart_service_for_native_ui", None)
+    if not callable(method):
+        raise NativeUIJourneyError(
+            "base adapter has no service-only process-loss preparation"
+        )
+    try:
+        value = method(timeout)
+    except Exception as error:
+        raise NativeUIJourneyError(
+            f"base adapter service-only process loss failed: {error}"
+        ) from error
+    if not isinstance(value, dict):
+        raise NativeUIJourneyError(
+            "base adapter service-only process loss returned an invalid result"
+        )
+    return value
+
+
+def _positive_throughput(observations: dict[str, object]) -> bool:
+    """Derive the shared throughput assertion from measured values."""
+    values = tuple(observations.get(name) for name in (
+        "latency_ms", "download_mbps", "upload_mbps"
+    ))
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+        return all(math.isfinite(float(value)) and float(value) > 0 for value in values)
+    return False
+
+
+def _record_native_observations(
+    base: Any,
+    checks: dict[str, object],
+    timeout: float,
+    *,
+    prefix: str = "",
+) -> None:
+    """Run one independent tunnel/routing/stability/throughput observation set."""
+    def key(name: str) -> str:
+        return name if not prefix else f"{prefix}_{name}"
+
+    tunnel = _base_execute(base, f"{prefix or 'native'}-tunnel", "observe_tunnel", timeout)
+    checks[key("tunnel_interface")] = tunnel.get("tunnel_interface") is True
+    routing = _base_execute(base, f"{prefix or 'native'}-routing", "observe_routing_identity", timeout)
+    checks[key("routing_verified")] = routing.get("routing_verified") is True
+    stability = _base_execute(base, f"{prefix or 'native'}-stability", "measure_stability", timeout)
+    checks[key("stability_verified")] = stability.get("stability_verified") is True
+    if "stability_sample_count" in stability:
+        checks[key("stability_sample_count")] = stability["stability_sample_count"]
+    throughput = _base_execute(base, f"{prefix or 'native'}-throughput", "measure_throughput", timeout)
+    for name in ("latency_ms", "download_mbps", "upload_mbps"):
+        if name in throughput:
+            checks[key(name)] = throughput[name]
+    checks[key("throughput_positive")] = _positive_throughput(throughput)
+
+
 def run_journey(args: argparse.Namespace) -> dict[str, object]:
     _ensure_directory(args.raw_log_dir)
     runner = SubprocessRunner(
         args.raw_log_dir,
-        environment={"DOBBY_CLI_LOG_PATH": str(args.raw_log_dir / "app.log")},
     )
     service_socket: Path | str = args.service_socket
     if args.platform == "macos":
@@ -290,10 +435,7 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         prepare(args.timeout)
         ui.request("connect")
         checks["connect_native"] = True
-        checks.update(_base_execute(base, "native-tunnel", "observe_tunnel", args.timeout))
-        checks.update(_base_execute(base, "native-routing", "observe_routing_identity", args.timeout))
-        checks.update(_base_execute(base, "native-stability", "measure_stability", args.timeout))
-        checks.update(_base_execute(base, "native-throughput", "measure_throughput", args.timeout))
+        _record_native_observations(base, checks, args.timeout)
 
         ui.request("disconnect")
         checks["disconnect_native"] = True
@@ -311,6 +453,7 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if not connected(args.timeout):
             raise NativeUIJourneyError("base adapter did not observe native reconnect")
         checks["reconnect_completed"] = True
+        _record_native_observations(base, checks, args.timeout, prefix="reconnect")
 
         settings = ui.request("settings")
         checks["settings_version"] = settings.get("settings_version") is True
@@ -323,11 +466,19 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if not connected(args.timeout):
             raise NativeUIJourneyError("base adapter did not observe service continuity after UI reopen")
 
-        loss = _base_execute(base, "native-process-loss", "process_loss", args.timeout)
+        loss = _restart_service_for_native_ui(base, args.timeout)
         checks.update(loss)
+        prepare(args.timeout)
         recovery = ui.request("process_loss_recovery", timeout=args.timeout)
         checks["ui_process_loss_recovered"] = recovery.get("status") == "Connected"
         checks["ui_reconnecting_observed"] = recovery.get("reconnecting_seen") is True
+        if "reconnecting_probe_error" in recovery:
+            checks["ui_reconnecting_probe_error"] = recovery["reconnecting_probe_error"]
+        if not connected(args.timeout):
+            raise NativeUIJourneyError(
+                "base adapter did not observe native UI process-loss recovery"
+            )
+        _record_native_observations(base, checks, args.timeout, prefix="process_loss")
 
         ui.request("disconnect")
         checks["final_disconnect_native"] = True
@@ -394,6 +545,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run_journey(args)
     except Exception as error:
         if args.output is not None:
+            operation = getattr(error, "operation", None)
+            stage = getattr(error, "stage", None)
             failure = {
                 "suite": "full",
                 "action_driver": "native-window",
@@ -402,6 +555,10 @@ def main(argv: list[str] | None = None) -> int:
                 "error": f"{type(error).__name__}: {error}",
                 "notes": list(getattr(error, "__notes__", ())),
             }
+            if isinstance(operation, str) and operation:
+                failure["operation"] = operation
+            if isinstance(stage, str) and stage:
+                failure["stage"] = stage
             try:
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_text(json.dumps(failure, sort_keys=True) + "\n", encoding="utf-8")

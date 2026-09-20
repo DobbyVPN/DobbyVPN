@@ -82,8 +82,8 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	request = request.WithContext(requestCtx)
 	client := &http.Client{}
 	if l.Client != nil {
-		copy := *l.Client
-		client = &copy
+		clientCopy := *l.Client
+		client = &clientCopy
 	}
 	callerCheckRedirect := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -94,8 +94,9 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 			return errors.New("configuration URL stopped after 10 redirects")
 		}
 		if callerCheckRedirect != nil {
-			if err := callerCheckRedirect(req, via); err != nil {
-				return err
+			redirectErr := callerCheckRedirect(req, via)
+			if redirectErr != nil {
+				return redirectErr
 			}
 			// The caller's policy callback receives the mutable redirect request.
 			// Recheck afterward so it cannot turn an HTTPS redirect into HTTP.

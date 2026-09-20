@@ -41,8 +41,8 @@ definitions.
 At startup, the UI attaches with `Snapshot` and starts `Watch`. `Watch` sends
 the current snapshot first, then the latest snapshot after each change; slow
 clients may skip intermediate revisions and always render the complete newest
-state. Android and iOS use native callbacks only as wake hints and read a fresh
-Go snapshot after each wake.
+state. Android and iOS read a fresh Go snapshot on a bounded 500 ms loop while
+the foreground view is attached.
 
 Connect calls `Configure` with the entered HTTPS URL or transient inline
 configuration. Go fetches and validates the source before accepting it. URL
@@ -94,15 +94,15 @@ starts in `IDLE`, and no client replays stale local state.
 
 On iOS, the containing app sends opaque control commands to the Network
 Extension provider. Raw configuration passes through a one-shot encrypted
-Keychain mailbox and never enters the app message. Darwin notifications carry
-no state; the app follows each wake with a current Go snapshot.
+Keychain mailbox and never enters the app message. The foreground Go client
+polls current snapshots; Swift does not maintain a second event stream.
 
 ## Ownership
 
 - Go owns configuration acquisition and parsing, profile selection, automatic
   failover, protocol runtimes, and session state.
 - Platform shells own only VPN permission, foreground/extension lifetime,
-  tunnel creation, socket protection, and wake delivery.
+  tunnel creation, socket protection, and provider-message delivery.
 - The shared Go/Fyne UI maps snapshots to presentation state. It does not maintain an
   event ledger or synthesize connection state. While the view is attached, it
   refreshes retained diagnostics on a bounded 500 ms loop; the native

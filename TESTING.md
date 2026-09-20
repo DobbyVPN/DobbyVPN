@@ -1,7 +1,8 @@
 # Testing DobbyVPN
 
 Run checks relevant to the change. Tests are disposable: rerun them freely,
-keep useful diagnostics, and clean up resources on success or failure.
+keep only the compact structured result, and clean up resources and scratch
+files on success or failure.
 A missing tool or unavailable platform is not a passing test.
 Deferred qualification work is tracked in [docs/TODO.md](docs/TODO.md); those
 items are not accepted skips inside a passing suite.
@@ -27,7 +28,7 @@ The canonical semantic scenario membership and assertions are in the
 [functional contract](torturer/docs/contract.md). The native desktop window
 journey is cumulative full coverage, not a second semantic scenario set.
 Deferred work is listed in [docs/TODO.md](docs/TODO.md); an explicitly chosen
-diagnostic scenario is never qualification evidence.
+diagnostic scenario is never a qualification result.
 
 Optional Git hooks can be installed with:
 
@@ -93,7 +94,7 @@ skip.
 From the repository root:
 
 ```bash
-python3 -m pytest .github/scripts
+PYTHONPATH=torturer python3 -m pytest .github/scripts
 PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py'
 ```
 
@@ -110,20 +111,48 @@ full mode launches the binary installed from that Release package. The journey
 discovers Fyne controls through the platform accessibility tree, enters a fresh
 profile with native keyboard input, clicks Connect and Disconnect, observes
 rendered status, opens Settings, and closes/reopens the UI while the
-service-owned session remains available. If an interactive desktop or
+service-owned session remains available. It then proves the explicit native
+reconnect with a fresh tunnel/routing/stability/throughput observation set.
+For process-loss qualification the desktop service controller only kills and
+restarts the service; the UI re-enters the profile through native input and
+clicks Connect, followed by another independent tunnel/routing/public-IP,
+stability, and throughput proof. No CLI `connect-profile` command is allowed
+to recover that native-window lane. If an interactive desktop or
 accessibility permission is unavailable, the GUI lane is incomplete or failed;
 it is not converted to a pass. On Windows, the local runner first probes for
 an Explorer process owned by the configured interactive account; when that
 desktop is absent it records `native_ui_status: unavailable` and exits
 nonzero before registering a task. Linux remains CLI/service qualification
-only.
+only. On Windows full runs, the native journey copies the exact production UI
+into a disposable run-local staging directory, downloads the pinned MSVC Mesa
+archive, verifies its SHA-256, and extracts only `x64/opengl32.dll` and
+`x64/libgallium_wgl.dll` beside that copy. `GALLIUM_DRIVER=llvmpipe` is scoped
+to the GUI controller and its UI child; no registry, System32, machine
+environment, release, or installer state is changed, and the archive/staging
+tree is removed on every outcome.
+On macOS, the local full lane reads the authoritative
+`scutil` ConsoleUser dictionary (`show State:/Users/ConsoleUser` followed by
+`quit` on bounded stdin), requires that username and UID both match the SSH
+worker, verifies `launchctl print gui/<uid>`, requires
+WindowServer to report an unlocked screen, and starts the native smoke command
+through the bounded `sudo -n launchctl asuser <uid> sudo -n -u <user>` handoff.
+The preflight also requires a bounded System Events accessibility check against
+Finder; an absent WindowServer lock key is accepted only with that active
+console/Finder evidence, while conflicting or malformed values fail closed.
+`/dev/console` ownership is not used as the desktop decision because it can
+remain owned by `root` while a user's Aqua session is active. Native controls
+are bound to the launched window/process identity, and disposable macOS runs
+terminate pre-existing `Dobby Vpn` instances before starting a new one.
+The macOS full lane also requires a graphics-capable host with an accelerated
+NSGL/OpenGL context; a non-rendering VM is unavailable for real-window
+qualification and is not converted to a pass.
 GUI automation must drive visible controls and may not substitute CLI commands.
 
 The Go job emits one repository-wide coverage profile with
-`go test -coverpkg=./...` and uploads its `go tool cover -func` report as the
-`go-coverage` artifact. This is the shared Go coverage source; platform UI
-qualification is reported separately and does not invent per-platform
-coverage numbers.
+`go test -coverpkg=./...` and writes its `go tool cover -func` report to the
+job summary without retaining a coverage artifact. This is the shared Go
+coverage source; platform UI qualification is reported separately and does
+not invent per-platform coverage numbers.
 
 Mobile Go/Fyne qualification must use real Android/iOS rendering, keyboard,
 tap, and lifecycle interaction. Android mini combines the rendered emulator
@@ -156,7 +185,7 @@ an unaccepted inline value is not restored after reopen, clears diagnostics,
 and opens the app-owned export prompt, follows Save into the native document
 picker, then cancels back to Fyne. The Share action remains the production
 `UIActivityViewController` path for a user-selected export. App-owned startup logs
-are diagnostics only; a log marker cannot satisfy the check. This proves
+are not collected; a log marker cannot satisfy the check. This proves
 rendered UI and input/lifecycle/diagnostic wiring, not a physical
 NetworkExtension packet-tunnel or TrustTunnel connection.
 
@@ -171,10 +200,12 @@ On a Mac with Xcode and an installed Simulator runtime:
 swift test --enable-code-coverage --package-path swift_module
 ```
 
-The Test workflow covers Swift lifecycle policy tests and the Go runtime/app
-package. There is no Kotlin Multiplatform or Compose compile in this path;
-Swift remains only the thin iOS native/VPN boundary. The private Harness also
-runs the app-contract helper in `torturer/tests/ios_simulator/`.
+The Test workflow covers Swift lifecycle policy tests and the one iOS
+Simulator Go/Fyne mini contract. That contract downloads the generated runtime
+XCFramework, packages the app, and runs the rendered XCTest journey. There is
+no Kotlin Multiplatform or Compose compile in this path; Swift remains only the
+thin iOS native/VPN boundary. The private Harness also runs the app-contract
+helper in `torturer/tests/ios_simulator/`.
 Simulator qualification has one comprehensive non-Metal mini contract: it
 builds, launches, and drives the same rendered XCTest accessibility, input,
 lifecycle, and diagnostics journey on every supported host. It is not VPN
@@ -194,7 +225,7 @@ Product and functional tests live at one revision. See
 Pushes to `main` and pull requests run **Test** automatically. To check a
 feature branch before opening a pull request, use **Actions → Test → Run
 workflow** and select that branch. Its goal is source/build checks, including
-the iOS Simulator Go/Fyne app-startup smoke; it does not create a Render VPN
+the iOS Simulator Go/Fyne rendered UI mini contract; it does not create a Render VPN
 or publish anything.
 
 After the intended change is merged, use **Actions → Release → Run workflow**
@@ -257,9 +288,11 @@ window; exact-Release mode uses the installed package. Linux runs only the
 CLI/service contract. See the private
 Harness README for the launcher command.
 
-Keep available logs even when a test fails. Missing logs are reported, not
-used to prevent cleanup. A failed cleanup is reported separately and prevents
-a release from being treated as successful.
+Command, service, app, and device output is held in memory only as needed for
+assertions. Disposable scratch is removed after each run, including failed
+runs; cleanup failures are reported separately and prevent a release from
+being treated as successful. The structured result JSON is the only retained
+functional output.
 
 Release-only checks retain Android reproducibility and signing-certificate
 verification, and iOS signature, entitlement, provisioning, and version

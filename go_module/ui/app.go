@@ -12,6 +12,8 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+const statusDisconnected = "Disconnected"
+
 // Application owns only the Fyne window.  The VPN service and SessionClient
 // outlive the window, so closing and reopening the UI never stops a tunnel.
 type Application struct {
@@ -206,7 +208,7 @@ func newConnectionView(client SessionClient, exporter LogExporter, diagnostics D
 		store:          store,
 		exporter:       exporter,
 		diagnostics:    diagnostics,
-		renderedStatus: "Disconnected",
+		renderedStatus: statusDisconnected,
 		renderedButton: "Connect",
 	}
 	view.Input = NewAccessibleEntry(true, "Connection configuration")
@@ -214,7 +216,7 @@ func newConnectionView(client SessionClient, exporter LogExporter, diagnostics D
 	view.Input.SetMinRowsVisible(4)
 
 	view.Connect = widget.NewButton("Connect", nil)
-	view.Status = widget.NewLabel("Disconnected")
+	view.Status = widget.NewLabel(statusDisconnected)
 	view.Details = widget.NewLabel("")
 	view.Details.Wrapping = fyne.TextWrapWord
 	view.Logs = NewAccessibleEntry(true, "Connection logs")
@@ -460,15 +462,16 @@ func (v *ConnectionView) watch(ctx context.Context) {
 	for {
 		if !haveSnapshot {
 			snapshot, err := v.client.Snapshot(ctx)
-			if err == nil {
+			switch {
+			case err == nil:
 				v.loadSource(ctx)
 				last = snapshot
 				haveSnapshot = true
 				v.render(snapshot)
 				backoff = 100 * time.Millisecond
-			} else if !v.waitForReconnect(ctx, last, backoff) {
+			case !v.waitForReconnect(ctx, last, backoff):
 				return
-			} else {
+			default:
 				backoff = nextReconnectDelay(backoff)
 				continue
 			}
@@ -544,6 +547,7 @@ func (v *ConnectionView) toggle() {
 		generation := v.generation
 		ctx := v.ctx
 		v.mu.Unlock()
+		v.applyPresentation()
 		go v.disconnect(ctx, generation)
 		return
 	}
@@ -568,7 +572,7 @@ func (v *ConnectionView) toggle() {
 		// distinguish an empty/corrupted editor value from a native transport
 		// failure without reading or exporting the entered configuration.
 		v.showError(fmt.Errorf("INVALID_ARGUMENT: connection configuration is required"))
-		v.setBusy(false)
+		v.clearBusy()
 		return
 	}
 	if text == "" {
@@ -682,7 +686,7 @@ func (v *ConnectionView) connect(ctx context.Context, raw []byte, sequence uint6
 	if err != nil {
 		v.showError(err)
 	}
-	v.setBusy(false)
+	v.clearBusy()
 }
 
 func (v *ConnectionView) startConfigured(ctx context.Context, sequence uint64) {
@@ -690,7 +694,7 @@ func (v *ConnectionView) startConfigured(ctx context.Context, sequence uint64) {
 	if err != nil {
 		v.showError(err)
 	}
-	v.setBusy(false)
+	v.clearBusy()
 }
 
 func (v *ConnectionView) loadSource(ctx context.Context) {
@@ -716,26 +720,20 @@ func (v *ConnectionView) loadSource(ctx context.Context) {
 func (v *ConnectionView) disconnect(ctx context.Context, generation uint64) {
 	if generation == 0 {
 		v.showError(fmt.Errorf("no active VPN generation"))
-		v.setBusy(false)
+		v.clearBusy()
 		return
 	}
 	if _, err := v.client.Stop(ctx, generation); err != nil {
 		v.showError(err)
 	}
-	v.setBusy(false)
+	v.clearBusy()
 }
 
-func (v *ConnectionView) setBusy(busy bool) {
+func (v *ConnectionView) clearBusy() {
 	v.mu.Lock()
-	v.busy = busy
+	v.busy = false
 	v.mu.Unlock()
-	onUI(func() {
-		if busy {
-			v.Connect.Disable()
-		} else {
-			v.Connect.Enable()
-		}
-	})
+	onUI(func() { v.Connect.Enable() })
 }
 
 func (v *ConnectionView) render(snapshot Snapshot) {
@@ -797,9 +795,15 @@ func (v *ConnectionView) applyPresentation() {
 		details := v.renderedDetails
 		logs := v.renderedLogs
 		logStatus := v.renderedLogStatus
+		busy := v.busy
 		v.mu.Unlock()
 		v.Status.SetText(status)
 		v.Connect.SetText(button)
+		if busy {
+			v.Connect.Disable()
+		} else {
+			v.Connect.Enable()
+		}
 		v.Details.SetText(details)
 		v.Logs.SetText(logs)
 		v.LogStatus.SetText(logStatus)
@@ -827,8 +831,10 @@ func statusText(snapshot Snapshot) string {
 		return "Ready"
 	case StateFailed:
 		return "Failed"
+	case StateIdle:
+		return statusDisconnected
 	default:
-		return "Disconnected"
+		return statusDisconnected
 	}
 }
 

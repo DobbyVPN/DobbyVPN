@@ -1,5 +1,4 @@
 #import <Foundation/Foundation.h>
-#include <stdbool.h>
 
 //! Project version number for CommonDI.
 FOUNDATION_EXPORT double CommonDIVersionNumber;
@@ -19,7 +18,6 @@ FOUNDATION_EXPORT char *dobby_ui_snapshot(const char *);
 FOUNDATION_EXPORT char *dobby_ui_reset(const char *, long long);
 FOUNDATION_EXPORT void dobby_ui_export_logs(const unsigned char *, int);
 FOUNDATION_EXPORT void dobby_ui_free_string(char *);
-FOUNDATION_EXPORT bool dobby_ui_await_event(long long);
 FOUNDATION_EXPORT void dobby_ui_startup(const char *);
 FOUNDATION_EXPORT void dobby_ui_attached(void);
 FOUNDATION_EXPORT char *dobby_ui_diagnostic_paths(void);

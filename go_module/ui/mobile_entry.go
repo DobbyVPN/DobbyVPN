@@ -12,6 +12,31 @@ import (
 	applicationlog "go_module/log"
 )
 
+// mobileAPI adapts exported Go functions without exposing function values to
+// callers. It is only part of Android/iOS builds, where the platform files
+// provide the concrete transport methods.
+type mobileAPI struct {
+	configure func(string, int64, []byte) string
+	start     func(string, int64, string, int32) string
+	stop      func(string, int64) string
+	snapshot  func(string) string
+	reset     func(string, int64) string
+}
+
+func (a mobileAPI) Configure(session string, sequence int64, raw []byte) string {
+	return a.configure(session, sequence, raw)
+}
+func (a mobileAPI) Start(session string, sequence int64, mode string, index int32) string {
+	return a.start(session, sequence, mode, index)
+}
+func (a mobileAPI) Stop(session string, generation int64) string {
+	return a.stop(session, generation)
+}
+func (a mobileAPI) Snapshot(session string) string { return a.snapshot(session) }
+func (a mobileAPI) Reset(session string, sequence int64) string {
+	return a.reset(session, sequence)
+}
+
 // NewMobileClient constructs the shared client around the platform's narrow
 // native transport. The UI never owns platform session or sharing policy.
 func NewMobileClient() *MobileClient {

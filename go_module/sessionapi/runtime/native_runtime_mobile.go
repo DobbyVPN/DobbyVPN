@@ -30,13 +30,21 @@ type nativeRuntime struct {
 	tunCloseAttempted bool
 	tunCloseErr       error
 	mu                sync.Mutex
+
+	// connectCancel is deliberately separate from mu. Connect holds mu while
+	// invoking the non-context-aware native Open/engine-start calls; requesting
+	// cancellation must therefore only close this channel. Connect observes it
+	// at native-operation boundaries and remains the sole owner of cleanup.
+	cancelMu      sync.Mutex
+	connectCancel chan struct{}
 }
 
 func newNativeRuntime(device protocol.ProtocolDevice, tun io.ReadWriteCloser) *nativeRuntime {
 	c := &nativeRuntime{
-		device: device,
-		tun:    tun,
-		state:  stateIdle,
+		device:        device,
+		tun:           tun,
+		state:         stateIdle,
+		connectCancel: make(chan struct{}),
 	}
 	log.Debugf(nativeLogCategory, "mobile session runtime created (tun2socks version)")
 	return c
@@ -47,6 +55,41 @@ func (c *nativeRuntime) Connect() error {
 		return errors.New("mobile session runtime is not initialized")
 	}
 	return runLockedWithPanicRecovery("mobile session connect", &c.mu, c.connectLocked, c.disconnectLocked)
+}
+
+// CancelConnect requests cancellation without taking c.mu.  Connect owns the
+// native startup operation and must perform all device/engine cleanup itself;
+// calling Disconnect here would wait behind a blocked native Open and could
+// release dependent resources from the wrong goroutine.
+func (c *nativeRuntime) CancelConnect() {
+	if c == nil {
+		return
+	}
+	c.cancelMu.Lock()
+	defer c.cancelMu.Unlock()
+	if c.connectCancel == nil {
+		c.connectCancel = make(chan struct{})
+	}
+	select {
+	case <-c.connectCancel:
+	default:
+		close(c.connectCancel)
+	}
+}
+
+func (c *nativeRuntime) connectWasCanceled() bool {
+	c.cancelMu.Lock()
+	cancel := c.connectCancel
+	c.cancelMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	select {
+	case <-cancel:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *nativeRuntime) connectLocked() (err error) {
@@ -65,6 +108,9 @@ func (c *nativeRuntime) connectLocked() (err error) {
 		c.cleanupErr = cleanupErr
 		c.device, c.tun, c.engine = nil, nil, nil
 		return errors.Join(cause, cleanupErr)
+	}
+	if c.connectWasCanceled() {
+		return fail(errors.New("mobile session connect canceled before native startup"))
 	}
 
 	if c.device == nil {
@@ -93,6 +139,9 @@ func (c *nativeRuntime) connectLocked() (err error) {
 		return fail(fmt.Errorf("failed to open protocol device: %w", err))
 	}
 	c.deviceOpened = true
+	if c.connectWasCanceled() {
+		return fail(errors.New("mobile session connect canceled after protocol startup"))
+	}
 
 	log.Debugf(nativeLogCategory, "starting tun2socks engine proxy_ready=true")
 	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
@@ -103,6 +152,9 @@ func (c *nativeRuntime) connectLocked() (err error) {
 	if err != nil {
 		log.Debugf(nativeLogCategory, "Can't start tun2socks: %v", err)
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))
+	}
+	if c.connectWasCanceled() {
+		return fail(errors.New("mobile session connect canceled after tun2socks startup"))
 	}
 
 	if c.tun != nil {

@@ -16,6 +16,7 @@ type fakeClient struct {
 	snapshot  Snapshot
 	configure ConfigureResult
 	startGate <-chan struct{}
+	stopGate  <-chan struct{}
 	started   bool
 	stopped   bool
 	startedCh chan struct{}
@@ -172,9 +173,42 @@ func (f *fakeClient) Start(context.Context, uint64) (StartResult, error) {
 }
 func (f *fakeClient) Stop(context.Context, uint64) (StopResult, error) {
 	f.mu.Lock()
+	gate := f.stopGate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = true
 	return StopResult{Generation: 4, Sequence: 9}, nil
+}
+
+func TestConnectionViewDisablesControlWhileDisconnecting(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	gate := make(chan struct{})
+	client := &fakeClient{stopGate: gate}
+	view := NewConnectionView(client)
+	view.ctx = context.Background()
+	view.render(Snapshot{State: StateConnected, Generation: 4})
+
+	view.toggle()
+	if !view.Connect.Disabled() {
+		t.Fatal("Disconnect control remained enabled while session stop was in flight")
+	}
+
+	close(gate)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && view.Connect.Disabled() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if view.Connect.Disabled() {
+		t.Fatal("Disconnect control remained disabled after session stop completed")
+	}
+	if !client.stoppedValue() {
+		t.Fatal("session client was not stopped")
+	}
 }
 func (f *fakeClient) Snapshot(context.Context) (Snapshot, error) {
 	f.mu.Lock()
@@ -333,6 +367,9 @@ func TestConnectionViewPublishesConnectingBeforeStartingSession(t *testing.T) {
 	if status != "Connecting" || details != "" || button != "Disconnect" {
 		t.Fatalf("presentation during connect = (%q, %q, %q), want Connecting/empty/Disconnect", status, details, button)
 	}
+	if !view.Connect.Disabled() {
+		t.Fatal("Connect control remained enabled while session start was in flight")
+	}
 
 	close(gate)
 	deadline := time.Now().Add(time.Second)
@@ -341,6 +378,13 @@ func TestConnectionViewPublishesConnectingBeforeStartingSession(t *testing.T) {
 	}
 	if !client.startedValue() {
 		t.Fatal("session start did not complete")
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && view.Connect.Disabled() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if view.Connect.Disabled() {
+		t.Fatal("Connect control remained disabled after session start completed")
 	}
 }
 

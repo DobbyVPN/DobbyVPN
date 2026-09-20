@@ -107,7 +107,8 @@ not repeat those values or perform a cross-user permission handoff.
 The private Harness selects the `mini` or `full` suite. Hosted desktop runs
 use mini's headless widget/service boundary and semantic VPN checks. A local
 Windows/macOS full run executes mini once and then opens the native window for
-visible input and lifecycle actions; exact-Release full mode uses the binary
+visible input, lifecycle actions, and UI-driven service process-loss recovery;
+the service restart itself never issues a CLI reconnect. Exact-Release full mode uses the binary
 installed from the Release package. Android mini uses the rendered emulator
 and real VPN service; iOS Simulator has one rendered non-Metal mini contract;
 Linux remains CLI/service-only. The exact platform commands and coverage

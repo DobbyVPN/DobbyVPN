@@ -32,7 +32,6 @@ def adapter_for_platform(
     service_library_path: Path | None = None,
     service_pid_file: Path | None = None,
     service_identity_file: Path | None = None,
-    service_log: Path | None = None,
     network_interface: str | None = None,
     routing_firewall_helper: Path | None = None,
     network_transition_helper: Path | None = None,
@@ -44,8 +43,6 @@ def adapter_for_platform(
     | AndroidCompositeHostedAdapter
 ):
     if platform == "android":
-        if service_log is not None:
-            raise ValueError("android adapter does not use service_log")
         for name, value in (
             ("cli", cli),
             ("ui_test", ui_test),
@@ -98,7 +95,6 @@ def adapter_for_platform(
             service_library_path=service_library_path,
             service_pid_file=service_pid_file,
             service_identity_file=service_identity_file,
-            service_log=service_log,
             network_interface=network_interface,
             routing_firewall_helper=routing_firewall_helper,
         )
@@ -106,8 +102,6 @@ def adapter_for_platform(
     if platform == "windows":
         if routing_firewall_helper is not None:
             raise ValueError("windows adapter received unexpected routing_firewall_helper")
-        if service_log is not None:
-            raise ValueError("windows adapter received unexpected service_log")
         if network_transition_helper is not None:
             raise ValueError("windows adapter received unexpected network_transition_helper")
         adapter = WindowsHostedAdapter(
@@ -127,8 +121,6 @@ def adapter_for_platform(
         )
         return _wrap_ui(adapter, ui_test=ui_test, profile=profile, runner=runner)
 
-    if service_log is not None:
-        raise ValueError("macos adapter received unexpected service_log")
     adapter = MacOSHostedAdapter(
         cli=cli,
         profile=profile,

@@ -13,9 +13,10 @@ import (
 )
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
-// shell. State callbacks are wake hints; clients read Snapshot for the current
-// authoritative state. Every callback carries the owner and generation so a
-// delayed platform result cannot affect another connection attempt.
+// shell. PublishState synchronizes native tunnel lifecycle state; UI clients
+// independently read Snapshot as the authoritative state. Every callback
+// carries the owner and generation so a delayed platform result cannot affect
+// another connection attempt.
 // AcquireTunnel must return a fresh duplicated descriptor owned by Go. Go
 // closes that descriptor before ReleaseTunnel; a failed release prevents Go
 // from reporting cleanup as complete.

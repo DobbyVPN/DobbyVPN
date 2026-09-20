@@ -4,11 +4,6 @@ private func isJSONBoolean(_ number: NSNumber) -> Bool {
     String(cString: number.objCType) == "c"
 }
 
-/// Darwin notifications are a content-free wake channel; state comes from Go snapshots.
-public enum IOSDarwinEventSink {
-    public static let notificationName = "vpn.dobby.sessionapi.event-available"
-}
-
 /// The small message protocol used between the containing app
 /// and its NetworkExtension.  It is deliberately an opaque control channel:
 /// configuration bytes are never part of a message and responses are returned
@@ -90,14 +85,14 @@ public struct IOSProviderCommand: Equatable {
 
     public static func decode(_ data: Data) throws -> IOSProviderCommand {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = object["version"] as? NSNumber,
-              version.intValue == Self.version,
+              let version = try int64(object["version"]),
+              version == Int64(Self.version),
               let operationRaw = object["operation"] as? String,
               let operation = IOSProviderOperation(rawValue: operationRaw),
               let requestID = object["request_id"] as? String else {
             throw IOSProviderMessageError.malformed
         }
-        guard object["version"] is NSNumber, !isJSONBoolean(version), !requestID.isEmpty else {
+        guard !requestID.isEmpty else {
             throw IOSProviderMessageError.malformed
         }
 
@@ -105,10 +100,10 @@ public struct IOSProviderCommand: Equatable {
             operation: operation,
             requestID: requestID,
             sessionID: object["session_id"] as? String,
-            generation: int64(object["generation"]),
+            generation: try int64(object["generation"]),
             mode: object["mode"] as? String,
-            index: int32(object["index"]),
-            expectedSequence: int64(object["expected_sequence"])
+            index: try int32(object["index"]),
+            expectedSequence: try int64(object["expected_sequence"])
         )
     }
 
@@ -175,14 +170,26 @@ public struct IOSProviderCommand: Equatable {
         return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes])
     }
 
-    private static func int64(_ value: Any?) -> Int64? {
-        guard let number = value as? NSNumber, !isJSONBoolean(number) else { return nil }
-        return number.int64Value
+    fileprivate static func int64(_ value: Any?) throws -> Int64? {
+        guard let value else { return nil }
+        guard let number = value as? NSNumber,
+              !isJSONBoolean(number),
+              number.doubleValue.isFinite else {
+            throw IOSProviderMessageError.malformed
+        }
+        let integer = number.int64Value
+        guard number.compare(NSNumber(value: integer)) == .orderedSame else {
+            throw IOSProviderMessageError.malformed
+        }
+        return integer
     }
 
-    private static func int32(_ value: Any?) -> Int32? {
-        guard let number = value as? NSNumber, !isJSONBoolean(number), number.int64Value >= Int64(Int32.min), number.int64Value <= Int64(Int32.max) else { return nil }
-        return number.int32Value
+    private static func int32(_ value: Any?) throws -> Int32? {
+        guard let integer = try int64(value) else { return nil }
+        guard integer >= Int64(Int32.min), integer <= Int64(Int32.max) else {
+            throw IOSProviderMessageError.malformed
+        }
+        return Int32(integer)
     }
 
 }
@@ -219,9 +226,8 @@ public struct IOSProviderResponse: Equatable {
             throw IOSProviderMessageError.malformed
         }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = object["version"] as? NSNumber,
-              version.intValue == Self.version,
-              !isJSONBoolean(version),
+              let version = try IOSProviderCommand.int64(object["version"]),
+              version == Int64(Self.version),
               let requestID = object["request_id"] as? String,
               let kindRaw = object["kind"] as? String,
               let kind = IOSProviderResponseKind(rawValue: kindRaw),

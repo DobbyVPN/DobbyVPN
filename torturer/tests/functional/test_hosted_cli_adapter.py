@@ -192,7 +192,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.adapter.reset()
         self.assertFalse(self.runner.connected)
 
-    def test_command_failure_retains_exit_timeout_and_complete_streams(self) -> None:
+    def test_command_failure_reports_bounded_status_without_streams(self) -> None:
         command = (str(self.cli), "connect-profile", str(self.profile), "0")
         cases = (
             (
@@ -224,21 +224,20 @@ class HostedCLIAdapterTests(unittest.TestCase):
                 self.assertEqual(
                     caught.exception.__notes__,
                     [
-                        f"command={result.command!r}",
-                        f"command_returncode={result.returncode!r}",
-                        f"command_timed_out={result.timed_out!r}",
-                        f"command_stdout={result.stdout!r}",
-                        f"command_stderr={result.stderr!r}",
+                        f"command_returncode={result.returncode}",
+                        f"command_timed_out={result.timed_out}",
+                        f"command_stdout_bytes={len(result.stdout)}",
+                        f"command_stderr_bytes={len(result.stderr)}",
                     ],
                 )
 
-    def test_command_failure_retains_runner_cause_and_diagnostic_notes(self) -> None:
+    def test_command_failure_retains_runner_cause_and_safe_notes(self) -> None:
         underlying = RuntimeError("underlying command failure")
         runner_error = HostedAdapterError("COMMAND_UNAVAILABLE")
         runner_error.add_note("command_returncode=-1")
         runner_error.add_note("command_timed_out=False")
-        runner_error.add_note("command_stdout=b'partial stdout\\n'")
-        runner_error.add_note("command_stderr=b'partial stderr\\n'")
+        runner_error.add_note("command_stdout_bytes=15")
+        runner_error.add_note("command_stderr_bytes=16")
 
         class RaisingRunner:
             def run(self, command, *, timeout_seconds):
@@ -264,7 +263,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         for note in runner_error.__notes__:
             self.assertEqual(formatted.count(note), 1)
 
-    def test_linux_external_ip_probe_retains_curl_failure_details(self) -> None:
+    def test_linux_external_ip_probe_reports_bounded_curl_failure(self) -> None:
         adapter = LinuxHostedAdapter(
             cli=self.cli,
             profile=self.profile,
@@ -287,15 +286,14 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.__notes__,
             [
-                f"command={result.command!r}",
-                f"command_returncode={result.returncode!r}",
-                f"command_timed_out={result.timed_out!r}",
-                f"command_stdout={result.stdout!r}",
-                f"command_stderr={result.stderr!r}",
+                f"command_returncode={result.returncode}",
+                f"command_timed_out={result.timed_out}",
+                f"command_stdout_bytes={len(result.stdout)}",
+                f"command_stderr_bytes={len(result.stderr)}",
             ],
         )
 
-    def test_external_ip_probe_retains_curl_failure_details(self) -> None:
+    def test_external_ip_probe_reports_bounded_curl_failure(self) -> None:
         adapter = HostedCLIAdapter(
             cli=self.cli,
             profile=self.profile,
@@ -318,15 +316,14 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.__notes__,
             [
-                f"command={result.command!r}",
-                f"command_returncode={result.returncode!r}",
-                f"command_timed_out={result.timed_out!r}",
-                f"command_stdout={result.stdout!r}",
-                f"command_stderr={result.stderr!r}",
+                f"command_returncode={result.returncode}",
+                f"command_timed_out={result.timed_out}",
+                f"command_stdout_bytes={len(result.stdout)}",
+                f"command_stderr_bytes={len(result.stderr)}",
             ],
         )
 
-    def test_linux_routing_resolution_failure_retains_getent_details(self) -> None:
+    def test_linux_routing_resolution_failure_reports_bounded_getent_status(self) -> None:
         adapter = LinuxHostedAdapter(
             cli=self.cli,
             profile=self.profile,
@@ -349,11 +346,10 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.__notes__,
             [
-                f"command={result.command!r}",
-                f"command_returncode={result.returncode!r}",
-                f"command_timed_out={result.timed_out!r}",
-                f"command_stdout={result.stdout!r}",
-                f"command_stderr={result.stderr!r}",
+                f"command_returncode={result.returncode}",
+                f"command_timed_out={result.timed_out}",
+                f"command_stdout_bytes={len(result.stdout)}",
+                f"command_stderr_bytes={len(result.stderr)}",
             ],
         )
 
@@ -395,9 +391,9 @@ class HostedCLIAdapterTests(unittest.TestCase):
             network_interface="eth0",
         )
         first_failure = ScenarioExecutionError("ROUTING_PROBE_FAILED")
-        first_failure.add_note("command_stdout=b'first probe output'")
+        first_failure.add_note("command_stdout_bytes=18")
         last_failure = ScenarioExecutionError("ROUTING_PROBE_FAILED")
-        last_failure.add_note("command_stdout=b'last probe output'")
+        last_failure.add_note("command_stdout_bytes=17")
         with (
             mock.patch.object(
                 adapter,
@@ -422,7 +418,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
                 adapter._network_transition(30.0)
         self.assertIs(caught.exception, last_failure)
         self.assertEqual(
-            caught.exception.__notes__, ["command_stdout=b'last probe output'"]
+            caught.exception.__notes__, ["command_stdout_bytes=17"]
         )
 
     def test_desktop_inventory_and_profile_selection_are_fully_dynamic(self) -> None:
@@ -965,10 +961,6 @@ class HostedCLIAdapterTests(unittest.TestCase):
                 super().__init__()
                 self.raw_directory = Path(self_test.directory.name) / "macos-network-raw"
                 self.interface_up = True
-                self.external_evidence: list[tuple[str, str]] = []
-
-            def retain_external_evidence(self, path, *, evidence_kind):
-                self.external_evidence.append((path.name, evidence_kind))
 
             def run(self, command, *, timeout_seconds):
                 argv = tuple(command)
@@ -1014,7 +1006,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(result, {"network_transition_verified": True})
         operations = [call[3] if call[:3] == ("sudo", "-n", "/fixed/network-transition") else call[0] for call in runner.calls]
         self.assertEqual(operations[:5], ["arm", "/sbin/ifconfig", "finish", "/sbin/ifconfig", str(self.cli)])
-        self.assertEqual(len(runner.external_evidence), 2)
+        self.assertEqual(list(runner.raw_directory.iterdir()), [])
 
     def test_macos_network_transition_requires_interface_and_helper(self) -> None:
         for interface, helper in (("en0", None), (None, Path("/fixed/helper"))):
@@ -1039,9 +1031,6 @@ class HostedCLIAdapterTests(unittest.TestCase):
             def __init__(self) -> None:
                 super().__init__()
                 self.raw_directory = Path(self_test.directory.name) / "macos-network-failure-raw"
-
-            def retain_external_evidence(self, path, *, evidence_kind):
-                del path, evidence_kind
 
             def run(self, command, *, timeout_seconds):
                 argv = tuple(command)
@@ -1075,9 +1064,9 @@ class HostedCLIAdapterTests(unittest.TestCase):
         ) as caught:
             adapter._network_transition(30)
         notes = "\n".join(caught.exception.__notes__)
-        self.assertIn("Network uplink restoration also failed", notes)
-        self.assertIn("restore stdout", notes)
-        self.assertIn("ifconfig: restore failed", notes)
+        self.assertIn("network_uplink_restoration_error=ScenarioExecutionError", notes)
+        self.assertNotIn("restore stdout", notes)
+        self.assertNotIn("ifconfig: restore failed", notes)
 
     def test_windows_local_routing_uses_firewall_and_tunnel_counters(self) -> None:
         class WindowsRoutingProbeRunner(FakeRunner):
@@ -1198,7 +1187,6 @@ class HostedCLIAdapterTests(unittest.TestCase):
                         payload = repair.read_text()
                         self_test.assertNotIn('Unregister-ScheduledTask', payload)
                         self_test.assertNotIn('Remove-Item', payload)
-                        Path(str(repair) + '.stdout.raw.log').write_bytes(b'helper output')
                     self.calls.append(argv)
                     self.timeouts.append(float(timeout_seconds))
                     return CommandResult(argv, 0, b"", b"")
@@ -1231,7 +1219,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             )
             adapter._network_transition(30)
         self.assertEqual(result, {"network_transition_verified": True})
-        self.assertEqual(len(list(runner.raw_directory.glob('*.stdout.raw.log'))), 2)
+        self.assertEqual(list(runner.raw_directory.glob('*.raw.log')), [])
         powershell_calls = [
             call for call in runner.calls if call[0].lower().startswith("powershell")
         ]
@@ -1295,6 +1283,73 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(result, {"network_transition_verified": True})
         routing_wait.assert_called_once()
 
+    def test_windows_network_transition_retains_repair_pair_when_restore_fails(self) -> None:
+        runner = FakeRunner()
+        runner.raw_directory = Path(self.directory.name) / "windows-network-restore-failure"
+        adapter = WindowsHostedAdapter(
+            cli=self.cli,
+            profile=self.profile,
+            runner=runner,
+            local_mode=True,
+            network_interface="7",
+        )
+        calls: list[str] = []
+        restore_error = ScenarioExecutionError("NETWORK_UP_FAILED")
+
+        def network_command(script, *args):
+            del args
+            calls.append(script)
+            if "Enable-NetAdapter" in script:
+                raise restore_error
+            return CommandResult((), 0, b"", b"")
+
+        with mock.patch.object(adapter, "_network_command", side_effect=network_command):
+            with self.assertRaises(ScenarioExecutionError) as caught:
+                adapter._network_transition(30.0)
+
+        self.assertIs(caught.exception, restore_error)
+        self.assertFalse(any("Unregister-ScheduledTask" in script for script in calls))
+        self.assertEqual(
+            len(list(runner.raw_directory.glob("windows-uplink-repair-*.ps1"))), 1
+        )
+
+    def test_windows_network_transition_preserves_primary_when_task_cleanup_fails(self) -> None:
+        runner = FakeRunner()
+        runner.raw_directory = Path(self.directory.name) / "windows-network-cleanup-failure"
+        adapter = WindowsHostedAdapter(
+            cli=self.cli,
+            profile=self.profile,
+            runner=runner,
+            local_mode=True,
+            network_interface="7",
+        )
+        calls: list[str] = []
+        primary_error = ScenarioExecutionError("NETWORK_DOWN_FAILED")
+        cleanup_error = ScenarioExecutionError("NETWORK_REPAIR_CLEANUP_FAILED")
+
+        def network_command(script, *args):
+            del args
+            calls.append(script)
+            if "Disable-NetAdapter" in script:
+                raise primary_error
+            if "Unregister-ScheduledTask" in script:
+                raise cleanup_error
+            return CommandResult((), 0, b"", b"")
+
+        with mock.patch.object(adapter, "_network_command", side_effect=network_command):
+            with self.assertRaises(ScenarioExecutionError) as caught:
+                adapter._network_transition(30.0)
+
+        self.assertIs(caught.exception, primary_error)
+        self.assertIn(
+            "network_repair_cleanup_error=ScenarioExecutionError",
+            caught.exception.__notes__,
+        )
+        self.assertTrue(any("Unregister-ScheduledTask" in script for script in calls))
+        self.assertEqual(
+            len(list(runner.raw_directory.glob("windows-uplink-repair-*.ps1"))), 1
+        )
+
     def test_windows_network_command_preserves_native_failure(self) -> None:
         runner = mock.Mock()
         runner.run.side_effect = lambda command, **kwargs: CommandResult(
@@ -1308,8 +1363,10 @@ class HostedCLIAdapterTests(unittest.TestCase):
             adapter._network_command('native cleanup', 5, 'NETWORK_REPAIR_CLEANUP_FAILED')
         notes = '\n'.join(caught.exception.__notes__)
         self.assertIn('command_returncode=1', notes)
-        self.assertIn('complete stdout', notes)
-        self.assertIn('Unregister-ScheduledTask: task missing', notes)
+        self.assertIn('command_stdout_bytes=15', notes)
+        self.assertIn('command_stderr_bytes=38', notes)
+        self.assertNotIn('complete stdout', notes)
+        self.assertNotIn('Unregister-ScheduledTask: task missing', notes)
 
     def test_windows_routing_retries_a_bounded_probe_timeout(self) -> None:
         adapter = WindowsHostedAdapter(
@@ -1522,7 +1579,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         binary.chmod(0o700)
         raw_directory = root / "service-partial-raw"
         raw_directory.mkdir(mode=0o700)
-        (raw_directory / "service.log").touch(mode=0o600)
+        (raw_directory / "service-scratch.marker").touch(mode=0o600)
 
         class Launcher:
             def run(self, command, *, timeout_seconds):
@@ -1543,7 +1600,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         controller.pid_file = root / "partial.pid"
         controller.runner = Launcher()
         controller.raw_directory = raw_directory
-        controller.service_log = raw_directory / "service.log"
+        controller.service_log = raw_directory / ".service-test.log"
         controller._restart_number = 0
         controller._initial_identity = None
         controller._replacement_identity = None
@@ -1875,6 +1932,9 @@ class HostedCLIAdapterTests(unittest.TestCase):
             def stop_restarted_service(self, timeout: float, *, deadline: float | None = None) -> None:
                 self.timeouts.append(timeout)
 
+            def cleanup_scratch(self) -> None:
+                pass
+
         adapter = LinuxHostedAdapter(
             cli=self.cli,
             profile=self.profile,
@@ -1884,6 +1944,52 @@ class HostedCLIAdapterTests(unittest.TestCase):
         adapter.service = service  # type: ignore[assignment]
         adapter.finalize(12.5)
         self.assertEqual(service.timeouts, [12.5])
+
+    def test_linux_adapter_finalization_preserves_service_failure_when_scratch_cleanup_fails(self) -> None:
+        class FakeService:
+            def stop_restarted_service(self, timeout: float, *, deadline: float | None = None) -> None:
+                raise HostedAdapterError("SERVICE_STOP_FAILED")
+
+            def cleanup_scratch(self) -> None:
+                raise ScenarioExecutionError("SERVICE_SCRATCH_CLEANUP_FAILED")
+
+        adapter = LinuxHostedAdapter(
+            cli=self.cli,
+            profile=self.profile,
+            runner=self.runner,
+        )
+        adapter.service = FakeService()  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(HostedAdapterError, "SERVICE_STOP_FAILED") as raised:
+            adapter.finalize(12.5)
+
+        self.assertEqual(
+            raised.exception.__notes__,
+            [
+                "service_scratch_cleanup_error="
+                "ScenarioExecutionError code=SERVICE_SCRATCH_CLEANUP_FAILED"
+            ],
+        )
+
+    def test_linux_adapter_finalization_reports_scratch_only_failure(self) -> None:
+        class FakeService:
+            def stop_restarted_service(self, timeout: float, *, deadline: float | None = None) -> None:
+                pass
+
+            def cleanup_scratch(self) -> None:
+                raise ScenarioExecutionError("SERVICE_SCRATCH_CLEANUP_FAILED")
+
+        adapter = LinuxHostedAdapter(
+            cli=self.cli,
+            profile=self.profile,
+            runner=self.runner,
+        )
+        adapter.service = FakeService()  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "SERVICE_SCRATCH_CLEANUP_FAILED"
+        ):
+            adapter.finalize(12.5)
 
     def test_hosted_run_finalization_uses_the_remaining_lane_budget(self) -> None:
         class FakeAdapter:
@@ -2066,7 +2172,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(scenario_deadlines, [300.0])
         self.assertEqual(adapter.finalized, [30.0])
 
-    def test_hosted_run_failure_propagates_and_retains_finalizer_error(self) -> None:
+    def test_hosted_run_failure_propagates_and_reports_safe_finalizer_error(self) -> None:
         root = Path(self.directory.name)
         raw_directory = root / "main-catch-raw"
         raw_directory.mkdir(mode=0o700)
@@ -2115,14 +2221,9 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(len(scenario_deadlines), 1)
         self.assertAlmostEqual(adapter.finalized[0], 30.0, delta=0.5)
         self.assertEqual(len(raised.exception.__notes__), 1)
-        self.assertTrue(
-            raised.exception.__notes__[0].startswith(
-                "Adapter finalization also failed:\nTraceback"
-            )
-        )
-        self.assertIn(
-            "profile=/runner/input/profile.toml",
-            raised.exception.__notes__[0],
+        self.assertEqual(
+            raised.exception.__notes__,
+            ["adapter_finalization_error=ValueError"],
         )
 
     def test_linux_service_finalization_verifies_and_stops_the_exact_restart(self) -> None:
@@ -2431,9 +2532,9 @@ class HostedCLIAdapterTests(unittest.TestCase):
         pid_file = root / "service.pid"
         raw_directory = root / "service-raw"
         raw_directory.mkdir(mode=0o700)
-        service_log = raw_directory / "service.log"
-        service_log.write_bytes(b"previous service evidence\n")
-        service_log.chmod(0o600)
+        previous_log = raw_directory / "legacy-service.log"
+        previous_log.write_bytes(b"pre-existing scratch marker\n")
+        previous_log.chmod(0o600)
 
         class ServiceRunner:
             def __init__(self) -> None:
@@ -2503,12 +2604,16 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(launcher[7], str(socket_path))
         self.assertEqual(launcher[9], str(library))
         launched_log = Path(launcher[10])
-        self.assertEqual(launched_log, service_log)
+        self.assertEqual(launched_log.parent, raw_directory)
+        self.assertTrue(launched_log.name.startswith(".service-"))
+        self.assertNotEqual(launched_log, previous_log)
         self.assertEqual(launcher[11], str(raw_directory.parent))
         self.assertEqual(launcher[12], "0")
-        self.assertEqual(service_log.read_bytes(), b"previous service evidence\n")
+        self.assertEqual(previous_log.read_bytes(), b"pre-existing scratch marker\n")
+        controller.cleanup_scratch()
+        self.assertFalse(launched_log.exists())
 
-    def test_subprocess_runner_retains_complete_stdout_and_stderr_bytes(self) -> None:
+    def test_subprocess_runner_keeps_stdout_and_stderr_in_memory(self) -> None:
         raw = Path(self.directory.name) / "raw"
         runner = SubprocessRunner(raw)
         result = runner.run(
@@ -2516,23 +2621,21 @@ class HostedCLIAdapterTests(unittest.TestCase):
             timeout_seconds=5,
         )
         self.assertEqual(result.returncode, 0)
-        retained_path = next(raw.glob("command-001*.raw.log"))
-        retained = retained_path.read_bytes()
-        self.assertIn(b"198.51.100.10\n", retained)
-        self.assertIn(b"err\n", retained)
+        self.assertEqual(result.stdout, b"198.51.100.10\n")
+        self.assertEqual(result.stderr, b"err\n")
+        self.assertEqual(list(raw.iterdir()), [])
 
-    def test_subprocess_diagnostic_write_failure_does_not_fail_the_command(self) -> None:
-        runner = SubprocessRunner(Path(self.directory.name) / "missing-diagnostics")
-        with (
-            mock.patch.object(Path, "write_bytes", side_effect=OSError("read-only")),
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            result = runner.run(
-                (sys.executable, "-c", "print('passed')"),
-                timeout_seconds=5,
-            )
+    def test_subprocess_runner_never_persists_raw_command_output(self) -> None:
+        raw = Path(self.directory.name) / "no-raw-output"
+        runner = SubprocessRunner(raw)
+        result = runner.run(
+            (sys.executable, "-c", "print('passed'); print('private', file=__import__('sys').stderr)"),
+            timeout_seconds=5,
+        )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), b"passed")
+        self.assertEqual(result.stderr.strip(), b"private")
+        self.assertEqual(list(raw.iterdir()), [])
 
     def test_subprocess_runner_does_not_synthesize_an_application_log(self) -> None:
         raw = Path(self.directory.name) / "application-log-raw"
@@ -2551,9 +2654,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(app_log.read_bytes(), b"product-owned application event\n")
-        retained = next(raw.glob("command-001.raw.log")).read_bytes()
-        self.assertIn(b"stdout-begin\nout\nstdout-end", retained)
-        self.assertIn(b"stderr-begin\nerr\nstderr-end", retained)
+        self.assertEqual(list(raw.glob("*.raw.log")), [])
 
         other = Path("/bin/echo")
         if other.is_file():
@@ -2564,7 +2665,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         os.name == "posix" and Path("/proc").is_dir(),
         "Linux subreaper assertion requires procfs",
     )
-    def test_subprocess_runner_preserves_stdin_and_nonzero_status(self) -> None:
+    def test_subprocess_runner_preserves_stdin_and_nonzero_status_in_memory(self) -> None:
         raw = Path(self.directory.name) / "stdin-status-raw"
         runner = SubprocessRunner(raw)
         result = runner.run(
@@ -2578,9 +2679,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 23)
         self.assertEqual(result.stdout, b"private-stdin-marker\n")
-        retained = next(raw.glob("command-001*.raw.log")).read_bytes()
-        self.assertIn(b"returncode=23", retained)
-        self.assertNotIn(b"linux_subreaper.py", retained)
+        self.assertEqual(list(raw.glob("*.raw.log")), [])
 
     @unittest.skipUnless(
         os.name == "posix" and Path("/proc").is_dir(),
@@ -2598,38 +2697,36 @@ class HostedCLIAdapterTests(unittest.TestCase):
             timeout_seconds=5,
         )
         self.assertEqual(result.returncode, -signal.SIGKILL)
-        retained = next(raw.glob("command-001*.raw.log")).read_bytes()
-        self.assertIn(b"returncode=-9", retained)
+        self.assertEqual(list(raw.glob("*.raw.log")), [])
 
     @unittest.skipUnless(
         os.name == "posix" and Path("/proc").is_dir(),
         "Linux subreaper assertion requires procfs",
     )
-    def test_subprocess_runner_missing_command_fails_closed_after_retention(self) -> None:
+    def test_subprocess_runner_missing_command_reports_bounded_error(self) -> None:
         raw = Path(self.directory.name) / "missing-command-raw"
         runner = SubprocessRunner(raw)
         missing = "/dobbyvpn/synthetic-command-does-not-exist"
-        with self.assertRaisesRegex(HostedAdapterError, "COMMAND_UNAVAILABLE"):
+        with self.assertRaisesRegex(HostedAdapterError, "COMMAND_UNAVAILABLE") as caught:
             runner.run((missing,), timeout_seconds=5)
-        retained = next(raw.glob("command-001*.raw.log")).read_bytes()
-        self.assertIn(f"argv={missing}".encode(), retained)
-        self.assertIn(b"primary_os_type=FileNotFoundError", retained)
+        notes = "\n".join(caught.exception.__notes__)
+        self.assertNotIn(missing, notes)
+        self.assertIn("command_returncode=-1", caught.exception.__notes__)
+        self.assertEqual(list(raw.iterdir()), [])
 
     def test_subprocess_runner_timeout_terminates_the_command_group(self) -> None:
         raw = Path(self.directory.name) / "timeout-raw"
         runner = SubprocessRunner(raw)
+        child_pid_path = raw / "child.pid"
         script = (
             "import subprocess,sys,time; "
             "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
-            "print(child.pid, flush=True); time.sleep(30)"
+            "open(sys.argv[1], 'w').write(str(child.pid)); time.sleep(30)"
         )
         with self.assertRaisesRegex(HostedAdapterError, "COMMAND_TIMEOUT"):
-            runner.run((sys.executable, "-c", script), timeout_seconds=0.3)
-        retained = next(raw.glob("command-001*.raw.log")).read_bytes()
-        self.assertIn(b"primary_timeout_type=TimeoutExpired", retained)
-        child_pid = int(
-            retained.split(b"stdout-begin\n", 1)[1].split(b"\nstdout-end", 1)[0]
-        )
+            runner.run((sys.executable, "-c", script, str(child_pid_path)), timeout_seconds=0.3)
+        child_pid = int(child_pid_path.read_text(encoding="ascii"))
+        self.assertEqual(list(raw.glob("*.raw.log")), [])
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             try:
@@ -2641,7 +2738,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             os.kill(child_pid, signal.SIGKILL)
             self.fail("command-group descendant survived timeout")
 
-    def test_subprocess_runner_timeout_retains_primary_and_cleanup_error(self) -> None:
+    def test_subprocess_runner_timeout_reports_primary_and_cleanup_error_safely(self) -> None:
         raw = Path(self.directory.name) / "cleanup-error-raw"
         runner = SubprocessRunner(raw)
 
@@ -2671,28 +2768,18 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertTrue(any("termination" in note for note in caught.exception.__notes__))
         self.assertIn("command_returncode=124", caught.exception.__notes__)
         self.assertIn("command_timed_out=True", caught.exception.__notes__)
-        self.assertIn("command_stdout=b'out-final'", caught.exception.__notes__)
-        self.assertIn("command_stderr=b'err-final'", caught.exception.__notes__)
-        retained = next(raw.glob("command-001*.raw.log")).read_bytes()
-        self.assertIn(b"primary_timeout_type=TimeoutExpired", retained)
-        self.assertIn(b"termination_error_type=OSError", retained)
-        self.assertIn(b"out-final", retained)
-        self.assertIn(b"err-final", retained)
+        self.assertIn("command_stdout_bytes=9", caught.exception.__notes__)
+        self.assertIn("command_stderr_bytes=9", caught.exception.__notes__)
+        self.assertEqual(list(raw.iterdir()), [])
 
-    def test_subprocess_runner_allocates_distinct_sequential_evidence(self) -> None:
+    def test_subprocess_runner_does_not_allocate_raw_files_for_reused_directory(self) -> None:
         raw = Path(self.directory.name) / "reused-raw"
         runner = SubprocessRunner(raw)
         runner.run((sys.executable, "-c", "print('first')"), timeout_seconds=5)
         runner.run((sys.executable, "-c", "print('second')"), timeout_seconds=5)
-        retained = sorted(raw.glob("command-*.raw.log"))
-        self.assertEqual(
-            [path.name for path in retained],
-            ["command-001.raw.log", "command-002.raw.log"],
-        )
-        self.assertIn(b"first", retained[0].read_bytes())
-        self.assertIn(b"second", retained[1].read_bytes())
+        self.assertEqual(list(raw.glob("*.raw.log")), [])
 
-    def test_subprocess_runner_retains_concurrent_completion_order_without_overwrite(
+    def test_subprocess_runner_keeps_concurrent_results_in_memory(
         self,
     ) -> None:
         raw = Path(self.directory.name) / "concurrent-raw"
@@ -2739,15 +2826,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
 
         self.assertEqual(slow_result.stdout, b"slow-stdout\n")
         self.assertEqual(slow_result.stderr, b"slow-stderr\n")
-        retained = sorted(raw.glob("command-*.raw.log"))
-        self.assertEqual(
-            [path.name for path in retained],
-            ["command-001.raw.log", "command-002.raw.log"],
-        )
-        self.assertIn(b"fast-stdout\n", retained[0].read_bytes())
-        self.assertIn(b"fast-stderr\n", retained[0].read_bytes())
-        self.assertIn(b"slow-stdout\n", retained[1].read_bytes())
-        self.assertIn(b"slow-stderr\n", retained[1].read_bytes())
+        self.assertEqual(list(raw.glob("*.raw.log")), [])
 
     def test_throughput_urls_reject_fragment_and_userinfo(self) -> None:
         for invalid in (

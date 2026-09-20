@@ -85,6 +85,73 @@ class HostedRunPreflightTests(unittest.TestCase):
                 ConnectionIdentity(0, "OUTLINE"),
             )
 
+    def test_scenario_exception_resets_and_preserves_primary(self):
+        primary = RuntimeError("synthetic scenario failure")
+
+        class FailingScenario(Adapter):
+            def execute_scenario(self, scenario):
+                del scenario
+                raise primary
+
+        adapter = FailingScenario()
+        with self.assertRaises(RuntimeError) as raised:
+            hosted_run._run_scenarios(
+                FunctionalEngine(), (get_scenario("functional.configure"),), adapter,
+                provenance(), ConnectionIdentity(0, "OUTLINE"),
+            )
+
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(adapter.reset_calls, 1)
+        self.assertEqual(getattr(raised.exception, "__notes__", ()), ())
+
+    def test_scenario_exception_preserves_primary_when_reset_fails(self):
+        primary = RuntimeError("synthetic scenario failure")
+
+        class FailingScenarioAndReset(Adapter):
+            def execute_scenario(self, scenario):
+                del scenario
+                raise primary
+
+            def reset(self, *, timeout_seconds=5):
+                del timeout_seconds
+                self.reset_calls += 1
+                raise RuntimeError("synthetic reset failure")
+
+        adapter = FailingScenarioAndReset()
+        with self.assertRaises(RuntimeError) as raised:
+            hosted_run._run_scenarios(
+                FunctionalEngine(), (get_scenario("functional.configure"),), adapter,
+                provenance(), ConnectionIdentity(0, "OUTLINE"),
+            )
+
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(adapter.reset_calls, 1)
+        self.assertEqual(
+            raised.exception.__notes__, ["scenario_cleanup_error=RuntimeError"]
+        )
+
+    def test_engine_cleanup_is_not_repeated_when_engine_raises_after_cleanup(self):
+        primary = RuntimeError("synthetic engine failure")
+
+        class EngineThatCleansThenFails:
+            def run(self, scenario, adapter, provenance, connection, *, cleanup_provider):
+                del scenario, adapter, provenance, connection
+                cleanup_provider()
+                raise primary
+
+        adapter = Adapter()
+        with self.assertRaises(RuntimeError) as raised:
+            hosted_run._run_scenarios(
+                EngineThatCleansThenFails(),
+                (get_scenario("functional.configure"),),
+                adapter,
+                provenance(),
+                ConnectionIdentity(0, "OUTLINE"),
+            )
+
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(adapter.reset_calls, 1)
+
     def test_result_writer_replaces_previous_attempt(self):
         with tempfile.TemporaryDirectory(prefix="hosted-run-result-") as temporary:
             output = Path(temporary) / "result.json"

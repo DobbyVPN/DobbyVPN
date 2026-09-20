@@ -86,25 +86,14 @@ jobs:
         id: android_go
         run: echo "version=$(cat .go-version)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache trusted Gradle distribution archive
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ${{ runner.temp }}/dobbyvpn-gradle-cache
-          key: android-gradle-8.13-${{ hashFiles('.github/android/dependency-spec.json') }}
-
-      - name: Restore Gradle distribution
+      - name: Download trusted Gradle distribution
         run: |
           set -euo pipefail
-          cache_root="$RUNNER_TEMP/dobbyvpn-gradle-cache"
-          mkdir -p "$cache_root"
-          archive="$cache_root/gradle-8.13-bin.zip"
+          download_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle.XXXXXX")"
+          archive="$download_root/gradle-8.13-bin.zip"
           gradle_url="$(python3 .github/scripts/android_dependency_provenance.py \
             --spec .github/android/dependency-spec.json --print-gradle-url)"
-          if [[ ! -f "$archive" ]]; then
-            temporary_archive="$(mktemp "$cache_root/gradle-8.13-bin.zip.XXXXXX")"
-            curl --fail --show-error --location --output "$temporary_archive" "$gradle_url"
-            mv "$temporary_archive" "$archive"
-          fi
+          curl --fail --show-error --location --output "$archive" "$gradle_url"
           extraction_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle-root.XXXXXX")"
           unzip "$archive" -d "$extraction_root"
           gradle_root="$extraction_root/gradle-8.13"
@@ -148,11 +137,6 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
-          cache-dependency-path: |
-            android_module/**/*.gradle.kts
-            android_module/gradle/wrapper/gradle-wrapper.properties
-            go_module/go.sum
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import sys
@@ -19,7 +20,9 @@ from torturer_checks.ios_simulator_app import (
     RunBudget,
     STAGE_TIMEOUT_SECONDS,
     SubprocessCommandRunner,
-    _app_container,
+    _validate_runtime_framework,
+    validate_runtime_framework,
+    IOSSimulatorStageError,
     prepare_ios_simulator_candidate,
     public_ios_simulator_app_contract,
     run_ios_simulator_app_contract,
@@ -55,22 +58,18 @@ class FakeRunner:
         root: Path,
         *,
         fail: dict[tuple[str, ...], CommandResult | BaseException] | None = None,
-        write_startup_marker: bool = True,
-        app_logs: bytes = b'{"message":"old run"}\n',
-        app_data_output: str | None = None,
+        lipo_arches: str = "arm64 x86_64",
+        sdk_version: str = "26.2",
     ) -> None:
         self.root = root
         self.fail = fail or {}
-        self.write_startup_marker = write_startup_marker
-        self.app_data_output = app_data_output
+        self.sdk_version = sdk_version
+        # Framework fixtures intentionally contain non-Mach-O bytes. The
+        # injected runner is the unit-test seam for macOS `xcrun lipo -archs`;
+        # production validation never treats these bytes as proof.
+        self.lipo_arches = lipo_arches
         self.commands: list[list[str]] = []
         self.calls: list[tuple[list[str], Path | None, float | None]] = []
-        self.data_container = root / "simulator-data"
-        self.container = self.data_container / "tmp"
-        self.log_at_launch: bytes | None = None
-        self.container.mkdir(parents=True, exist_ok=True)
-        (self.container / "app_logs.txt").write_bytes(app_logs)
-        (self.container / "go_app_logs.jsonl").write_bytes(b"go log\n")
 
     def run(self, command, *, cwd=None, timeout_seconds=None):
         command = list(command)
@@ -85,24 +84,33 @@ class FakeRunner:
             app = self.root / "work" / "derived-data" / "Build" / "Products" / "Release-iphonesimulator" / "Dobby-Vpn.app"
             app.mkdir(parents=True, exist_ok=True)
             return CommandResult(0, json.dumps(inventory()))
-        if command[:3] == ["xcrun", "simctl", "get_app_container"]:
-            return CommandResult(
-                0,
-                self.app_data_output
-                if self.app_data_output is not None
-                else f"{self.data_container}\n",
-            )
+        if command == ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]:
+            return CommandResult(0, f"{self.sdk_version}\n")
+        if command[:3] == ["xcrun", "lipo", "-archs"]:
+            return CommandResult(0, self.lipo_arches)
         if command[:1] == ["xcodebuild"]:
-            self.log_at_launch = (self.container / "app_logs.txt").read_bytes()
-            if self.write_startup_marker:
-                marker = b"startup.ui_attached mode=normal"
-                with (self.container / "app_logs.txt").open("ab") as output:
-                    output.write(b'{"message":"' + marker + b'"}\n')
             return CommandResult(0)
         if command[:2] == ["/usr/bin/defaults", "read"]:
             return CommandResult(1, stderr="The domain/default pair does not exist")
         if command[:2] == ["/bin/bash", "scripts/build_ios_xcframework.sh"]:
-            (Path(cwd) / "DobbyVPNRuntime.xcframework").mkdir(parents=True, exist_ok=True)
+            architecture = "arm64" if command[-1] == "arm64" else "x86_64"
+            framework = Path(cwd) / "DobbyVPNRuntime.xcframework"
+            slice_path = framework / f"ios-{architecture}-simulator" / "DobbyVPNRuntime.framework"
+            slice_path.mkdir(parents=True, exist_ok=True)
+            (slice_path / "DobbyVPNRuntime").write_bytes(b"synthetic framework binary")
+            with (framework / "Info.plist").open("wb") as output:
+                plistlib.dump(
+                    {
+                        "AvailableLibraries": [{
+                            "LibraryIdentifier": f"ios-{architecture}-simulator",
+                            "LibraryPath": "DobbyVPNRuntime.framework",
+                            "SupportedArchitectures": [architecture],
+                            "SupportedPlatform": "ios",
+                            "SupportedPlatformVariant": "simulator",
+                        }],
+                    },
+                    output,
+                )
             return CommandResult(0)
         if command[:2] == ["/bin/bash", "scripts/package_ios_app.sh"]:
             Path(command[3]).mkdir(parents=True, exist_ok=True)
@@ -134,6 +142,29 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         (self.candidate / "swift_module" / "iosApp.xcodeproj").mkdir(parents=True, exist_ok=True)
         self.contract = public_ios_simulator_app_contract("amd64")
 
+    def make_runtime_framework(self, *, architectures: list[str] | None = None) -> Path:
+        architectures = architectures or ["x86_64"]
+        framework = self.root / "artifact" / "DobbyVPNRuntime.xcframework"
+        slice_path = framework / "ios-x86_64-simulator" / "DobbyVPNRuntime.framework"
+        slice_path.mkdir(parents=True, exist_ok=True)
+        # This is a path fixture only. The FakeRunner's mocked lipo result,
+        # not these bytes, supplies the Mach-O architecture proof.
+        (slice_path / "DobbyVPNRuntime").write_bytes(b"synthetic framework binary")
+        with (framework / "Info.plist").open("wb") as output:
+            plistlib.dump(
+                {
+                    "AvailableLibraries": [{
+                        "LibraryIdentifier": "ios-x86_64-simulator",
+                        "LibraryPath": "DobbyVPNRuntime.framework",
+                        "SupportedArchitectures": architectures,
+                        "SupportedPlatform": "ios",
+                        "SupportedPlatformVariant": "simulator",
+                    }],
+                },
+                output,
+            )
+        return framework
+
     def test_run_budget_reserves_cleanup(self) -> None:
         self.assertEqual(MAX_RUN_SECONDS, 1800)
         self.assertEqual(CLEANUP_RESERVE_SECONDS, 120)
@@ -153,20 +184,51 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         )
 
     def test_device_selection_and_packaging_command_are_small_and_deterministic(self) -> None:
-        selected = select_available_iphone(json.dumps(inventory()))
+        selected = select_available_iphone(json.dumps(inventory()), "26.2")
         self.assertEqual((selected.name, selected.udid, selected.runtime), (
             "iPhone 17", UDID, "com.apple.CoreSimulator.SimRuntime.iOS-26-2",
         ))
         command = xcodebuild_app_command(
-            self.contract, candidate_root=self.candidate, device_udid=UDID,
+            self.contract, candidate_root=self.candidate,
             work_dir=self.root / "work",
         )
         self.assertEqual(command[:4], ["/bin/bash", "scripts/package_ios_app.sh", "iossimulator", str(self.root / "work" / "derived-data" / "Build" / "Products" / "Release-iphonesimulator" / "Dobby-Vpn.app")])
         self.assertEqual(command[-1], "amd64")
 
+    def test_device_selection_requires_the_sdk_major_minor(self) -> None:
+        mismatched = {
+            "devices": {
+                "com.apple.CoreSimulator.SimRuntime.iOS-26-3": [{
+                    "isAvailable": True,
+                    "name": "iPhone 18",
+                    "udid": UDID,
+                }],
+            },
+        }
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            "no available iPhone Simulator matches active iphonesimulator SDK 26.2",
+        ):
+            select_available_iphone(json.dumps(mismatched), "26.2")
+
+    def test_contract_queries_active_sdk_before_device_selection(self) -> None:
+        runner = FakeRunner(self.root)
+        run_ios_simulator_app_contract(
+            candidate_root=self.candidate,
+            work_dir=self.root / "work",
+            runner=runner,
+            contract=self.contract,
+        )
+        sdk_query = next(
+            (command, timeout)
+            for command, _, timeout in runner.calls
+            if command == ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]
+        )
+        self.assertEqual(sdk_query[1], STAGE_TIMEOUT_SECONDS["read-sdk-version"])
+
     def test_simulator_build_is_single_contract_and_native_arch(self) -> None:
         command = xcodebuild_app_command(
-            self.contract, candidate_root=self.candidate, device_udid=UDID,
+            self.contract, candidate_root=self.candidate,
             work_dir=self.root / "work",
         )
         self.assertEqual(command[-1], "amd64")
@@ -175,13 +237,11 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
     def test_mini_runs_real_xctest_ui_contract_and_cleans_up(self) -> None:
         work = self.root / "work"
         runner = FakeRunner(self.root)
-        diagnostics = self.root / "logs" / "ios"
         evidence = run_ios_simulator_app_contract(
             candidate_root=self.candidate,
             work_dir=work,
             runner=runner,
             contract=self.contract,
-            diagnostic_dir=diagnostics,
         )
         self.assertTrue(evidence.app.app_path.is_dir())
         self.assertFalse(any(command[:2] == ["swift", "-e"] for command in runner.commands))
@@ -209,23 +269,22 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         )
         self.assertEqual(terminate_timeout, STAGE_TIMEOUT_SECONDS["terminate"])
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
-        self.assertIn(b"startup.ui_attached mode=normal", (diagnostics / "app_logs.txt").read_bytes())
-        self.assertEqual((diagnostics / "go_app_logs.jsonl").read_bytes(), b"go log\n")
+        self.assertFalse((self.root / "logs").exists())
 
     def test_ui_test_failure_still_shuts_down(self) -> None:
         runner = FakeRunner(
             self.root,
             fail={("xcodebuild",): CommandResult(1, stderr="XCTest accessibility failure")},
         )
-        diagnostics = self.root / "diagnostics"
-        with self.assertRaisesRegex(IOSSimulatorAppContractError, r"(?s)stage 'xctest-ui'.*XCTest accessibility failure"):
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            r"stage 'xctest-ui'.*stdout_bytes=0; stderr_bytes=28",
+        ):
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-                contract=self.contract, diagnostic_dir=diagnostics,
+                contract=self.contract,
             )
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
-        self.assertIn("stage 'xctest-ui'", (diagnostics / "failure.txt").read_text())
-        self.assertEqual((diagnostics / "failure-stage.txt").read_text(), "xctest-ui\n")
 
     def test_ui_test_failure_accepts_already_terminated_app_cleanup(self) -> None:
         runner = FakeRunner(
@@ -238,17 +297,15 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
                 ),
             },
         )
-        diagnostics = self.root / "diagnostics"
         with self.assertRaisesRegex(
             IOSSimulatorAppContractError,
-            r"(?s)stage 'xctest-ui'.*XCTest accessibility failure",
+            r"stage 'xctest-ui'.*stdout_bytes=0; stderr_bytes=28",
         ) as raised:
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate,
                 work_dir=self.root / "work",
                 runner=runner,
                 contract=self.contract,
-                diagnostic_dir=diagnostics,
             )
         self.assertNotIn("cleanup also failed", str(raised.exception))
         self.assertTrue(any(
@@ -261,27 +318,23 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
             self.root,
             fail={
                 ("xcodebuild",): IOSSimulatorAppContractError(
-                    "iOS command timed out after 600s; stdout=compile complete; stderr=runner hung"
+                    "iOS command timed out after 900s; stdout=compile complete; stderr=runner hung"
                 )
             },
         )
-        diagnostics = self.root / "diagnostics"
         with self.assertRaisesRegex(
             IOSSimulatorAppContractError,
-            r"stage 'xctest-ui' timed out after 600s.*runner hung",
+            r"stage 'xctest-ui' timed out after 900s",
         ):
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate,
                 work_dir=self.root / "work",
                 runner=runner,
                 contract=self.contract,
-                diagnostic_dir=diagnostics,
             )
         self.assertEqual(sum(command[:1] == ["xcodebuild"] for command in runner.commands), 1)
         xctest_timeout = next(timeout for command, _, timeout in runner.calls if command[:1] == ["xcodebuild"])
-        self.assertEqual(xctest_timeout, 600)
-        self.assertIn("stage 'xctest-ui'", (diagnostics / "failure.txt").read_text())
-        self.assertEqual((diagnostics / "failure-stage.txt").read_text(), "xctest-ui\n")
+        self.assertEqual(xctest_timeout, 900)
 
     def test_keyboard_preference_read_failure_is_not_treated_as_unset(self) -> None:
         runner = FakeRunner(
@@ -325,7 +378,10 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         runner = FakeRunner(self.root, fail={
             ("xcodebuild",): CommandResult(1, stderr="app failed to launch"),
         })
-        with self.assertRaisesRegex(IOSSimulatorAppContractError, r"(?s)stage 'xctest-ui'.*app failed to launch"):
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            r"stage 'xctest-ui'.*stdout_bytes=0; stderr_bytes=20",
+        ):
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
                 contract=self.contract,
@@ -333,48 +389,42 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_ui_test_is_not_satisfied_by_a_stale_startup_marker(self) -> None:
-        runner = FakeRunner(
-            self.root,
-            write_startup_marker=False,
-            app_logs=b'{"message":"startup.ui_attached mode=normal"}\n',
-        )
+    def test_ui_test_does_not_collect_app_logs(self) -> None:
+        runner = FakeRunner(self.root)
         evidence = run_ios_simulator_app_contract(
             candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
             contract=self.contract,
         )
+        self.assertTrue(evidence.app.app_path.is_dir())
         self.assertTrue(any(command[:1] == ["xcodebuild"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_ui_test_does_not_require_app_log_container(self) -> None:
-        runner = FakeRunner(self.root, fail={
-            ("xcrun", "simctl", "get_app_container"): CommandResult(1, stderr="not available"),
-        })
-        run_ios_simulator_app_contract(
-            candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-            contract=self.contract,
-            diagnostic_dir=self.root / "diagnostics",
-        )
-        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
-
-    def test_app_log_lookup_uses_simctl_data_container_kind(self) -> None:
-        runner = FakeRunner(self.root)
-        run_ios_simulator_app_contract(
-            candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
-            contract=self.contract,
-        )
-        lookup = next(command for command in runner.commands if command[:3] == ["xcrun", "simctl", "get_app_container"])
-        self.assertEqual(lookup[-1], "data")
-
-    def test_app_log_lookup_uses_the_data_container_temporary_directory(self) -> None:
-        runner = FakeRunner(
-            self.root,
-            app_data_output=f"{self.root / 'simulator-data'}\n",
-        )
+    def test_shared_runtime_validator_accepts_a_physical_ios_slice(self) -> None:
+        framework = self.root / "device-artifact" / "DobbyVPNRuntime.xcframework"
+        slice_path = framework / "ios-arm64" / "DobbyVPNRuntime.framework"
+        slice_path.mkdir(parents=True)
+        (slice_path / "DobbyVPNRuntime").write_bytes(b"synthetic framework binary")
+        with (framework / "Info.plist").open("wb") as output:
+            plistlib.dump(
+                {
+                    "AvailableLibraries": [{
+                        "LibraryIdentifier": "ios-arm64",
+                        "LibraryPath": "DobbyVPNRuntime.framework",
+                        "SupportedArchitectures": ["arm64"],
+                        "SupportedPlatform": "ios",
+                    }],
+                },
+                output,
+            )
         self.assertEqual(
-            _app_container(runner, UDID, budget=RunBudget()),
-            self.root / "simulator-data" / "tmp",
+            validate_runtime_framework(
+                framework,
+                "arm64",
+                platform_variant="device",
+                runner=FakeRunner(self.root),
+            ),
+            framework.resolve(),
         )
 
     def test_prepare_builds_the_go_runtime_and_packages_the_fyne_app(self) -> None:
@@ -394,6 +444,116 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertEqual(framework_timeout, IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS)
         self.assertFalse(any(command and command[0] == "./gradlew" for command in runner.commands))
         self.assertFalse(any(command[:3] == ["xcrun", "simctl", "list"] for command in runner.commands))
+
+    def test_prepare_reuses_a_valid_hosted_framework_without_rebuilding(self) -> None:
+        runner = FakeRunner(self.root)
+        runtime_framework = self.make_runtime_framework()
+        prepare_ios_simulator_candidate(
+            candidate_root=self.candidate,
+            work_dir=self.root / "work",
+            runner=runner,
+            contract=self.contract,
+            budget=RunBudget(),
+            runtime_framework=runtime_framework,
+        )
+        self.assertFalse(any(
+            command[:2] == ["/bin/bash", "scripts/build_ios_xcframework.sh"]
+            for command in runner.commands
+        ))
+        package = next(
+            command for command in runner.commands
+            if command[:2] == ["/bin/bash", "scripts/package_ios_app.sh"]
+        )
+        self.assertEqual(package[4], str(runtime_framework.resolve()))
+        self.assertTrue((self.root / "work" / "derived-data" / "Build" / "Products" / "Release-iphonesimulator" / "Dobby-Vpn.app").is_dir())
+
+    def test_supplied_framework_must_contain_requested_simulator_architecture(self) -> None:
+        runtime_framework = self.make_runtime_framework(architectures=["arm64"])
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            r"validate-ios-framework.*x86_64",
+        ):
+            prepare_ios_simulator_candidate(
+                candidate_root=self.candidate,
+                work_dir=self.root / "work",
+                runner=FakeRunner(self.root),
+                contract=self.contract,
+                budget=RunBudget(),
+                runtime_framework=runtime_framework,
+            )
+
+    def test_supplied_framework_must_contain_real_binary_architecture(self) -> None:
+        runtime_framework = self.make_runtime_framework()
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            r"does not contain the required x86_64 architecture",
+        ):
+            _validate_runtime_framework(
+                runtime_framework,
+                "amd64",
+                runner=FakeRunner(self.root, lipo_arches="arm64"),
+            )
+
+    def test_supplied_framework_rejects_binary_symlink_escape(self) -> None:
+        runtime_framework = self.make_runtime_framework()
+        binary = (
+            runtime_framework
+            / "ios-x86_64-simulator"
+            / "DobbyVPNRuntime.framework"
+            / "DobbyVPNRuntime"
+        )
+        outside = self.root / "outside-binary"
+        outside.write_bytes(b"not a Mach-O")
+        binary.unlink()
+        binary.symlink_to(outside)
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            "framework binary escapes",
+        ):
+            _validate_runtime_framework(
+                runtime_framework, "amd64", runner=FakeRunner(self.root)
+            )
+
+    def test_supplied_framework_rejects_metadata_path_traversal(self) -> None:
+        runtime_framework = self.make_runtime_framework()
+        with (runtime_framework / "Info.plist").open("wb") as output:
+            plistlib.dump(
+                {
+                    "AvailableLibraries": [{
+                        "LibraryIdentifier": "ios-x86_64-simulator",
+                        "LibraryPath": "../outside/DobbyVPNRuntime.framework",
+                        "SupportedArchitectures": ["x86_64"],
+                        "SupportedPlatform": "ios",
+                        "SupportedPlatformVariant": "simulator",
+                    }],
+                },
+                output,
+            )
+        with self.assertRaisesRegex(IOSSimulatorAppContractError, "safe relative path"):
+            _validate_runtime_framework(
+                runtime_framework, "amd64", runner=FakeRunner(self.root)
+            )
+
+    def test_supplied_framework_wraps_symlink_resolution_errors(self) -> None:
+        runtime_framework = self.make_runtime_framework()
+        slice_path = runtime_framework / "ios-x86_64-simulator"
+        framework_path = slice_path / "DobbyVPNRuntime.framework"
+        shutil.rmtree(framework_path)
+        framework_path.symlink_to(slice_path / "loop-a")
+        (slice_path / "loop-a").symlink_to(framework_path)
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            "could not be resolved",
+        ):
+            _validate_runtime_framework(
+                runtime_framework, "amd64", runner=FakeRunner(self.root)
+            )
+
+    def test_runtime_framework_validation_requires_xcframework_metadata(self) -> None:
+        runtime_framework = self.root / "missing-metadata.xcframework"
+        runtime_framework.mkdir()
+        with self.assertRaisesRegex(IOSSimulatorAppContractError, "metadata"):
+            _validate_runtime_framework(runtime_framework, "amd64")
 
     @unittest.skipUnless(os.name == "posix", "process-group cleanup requires POSIX")
     def test_command_runner_timeout_kills_group_and_keeps_no_sidecars(self) -> None:

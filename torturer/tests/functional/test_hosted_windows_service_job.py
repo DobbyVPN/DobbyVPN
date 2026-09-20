@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import torturer_checks.hosted.windows as hosted_windows
-from torturer_checks.hosted.cli import CommandResult, HostedAdapterError, _verify_evidence_file
+from torturer_checks.hosted.cli import CommandResult, HostedAdapterError
 from torturer_checks.windows_job import WindowsJobCleanup
 from torturer_contract.functional.engine import ScenarioExecutionError
 
@@ -56,21 +56,6 @@ class _FakeProcess:
         self.returncode = -9
 
 
-class _CloseFailingStream:
-    def __init__(self, path: Path) -> None:
-        self._stream = path.open("wb")
-
-    def write(self, data: bytes) -> int:
-        return self._stream.write(data)
-
-    def flush(self) -> None:
-        self._stream.flush()
-
-    def close(self) -> None:
-        self._stream.close()
-        raise OSError("synthetic pipe close failure")
-
-
 class _ServiceRunner:
     def __init__(self, binary: Path, raw_directory: Path) -> None:
         self.binary = binary
@@ -81,7 +66,6 @@ class _ServiceRunner:
         self.tree_late_descendant = False
         self.calls: list[tuple[str, ...]] = []
         self.launch_kwargs: dict[str, object] | None = None
-        self.external_evidence: list[dict[str, object]] = []
 
     def run(self, command, *, timeout_seconds: float) -> CommandResult:
         argv = tuple(command)
@@ -135,15 +119,6 @@ class _ServiceRunner:
             return CommandResult(argv, 0, output, b"")
         raise AssertionError(argv)
 
-    def retain_external_evidence(self, path: Path, *, evidence_kind: str) -> None:
-        _verify_evidence_file(path)
-        self.external_evidence.append(
-            {
-                "evidence_file": path.name,
-                "evidence_kind": evidence_kind,
-            }
-        )
-
 
 class HostedWindowsServiceJobTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -152,15 +127,15 @@ class HostedWindowsServiceJobTests(unittest.TestCase):
         self.binary = root / "service.exe"
         self.binary.write_bytes(b"synthetic executable")
         self.binary.chmod(0o700)
-        self.raw = root / "raw"
-        self.raw.mkdir(mode=0o700)
-        self.runner = _ServiceRunner(self.binary, self.raw)
+        self.scratch = root / "scratch"
+        self.scratch.mkdir(mode=0o700)
+        self.runner = _ServiceRunner(self.binary, self.scratch)
         self.controller = hosted_windows.WindowsServiceProcessController(
             pid=123,
             binary=self.binary,
             pid_file=root / "service.pid",
             runner=self.runner,
-            raw_directory=self.raw,
+            raw_directory=self.scratch,
             control_address="127.0.0.1:50051",
         )
         self.process: _FakeProcess | None = None
@@ -241,7 +216,7 @@ class HostedWindowsServiceJobTests(unittest.TestCase):
                 binary=self.binary,
                 pid_file=Path(self.directory.name) / "mismatch.pid",
                 runner=self.runner,
-                raw_directory=self.raw,
+                raw_directory=self.scratch,
                 control_address="127.0.0.1:50051",
                 expected_initial_identity="123|999",
             )
@@ -252,14 +227,10 @@ class HostedWindowsServiceJobTests(unittest.TestCase):
     def _popen(self, popen, command, **kwargs):
         self.assertIs(popen, subprocess.Popen)
         self.assertEqual(command, [str(self.binary), "-port", "50051"])
+        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
         self.runner.launch_kwargs = kwargs
         process = _FakeProcess()
-        stdout = kwargs["stdout"]
-        stderr = kwargs["stderr"]
-        stdout.write(b"service stdout\x00\xff\n")
-        stdout.flush()
-        stderr.write(b"service stderr\x00\xfe\n")
-        stderr.flush()
         self.process = process
         return process
 
@@ -276,59 +247,25 @@ class HostedWindowsServiceJobTests(unittest.TestCase):
             delattr(process, "_torturer_windows_job")
         return diagnostics
 
-    def test_replacement_is_direct_popen_and_parent_handles_close_after_launch(self) -> None:
+    def test_replacement_is_direct_popen_with_discarded_output(self) -> None:
         self.controller._start(2.0)
         self.assertIsNotNone(self.process)
         assert self.process is not None
         self.assertEqual(self.runner.launch_kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(self.runner.launch_kwargs["stdout"], subprocess.DEVNULL)
+        self.assertEqual(self.runner.launch_kwargs["stderr"], subprocess.DEVNULL)
         self.assertFalse(any(call[0] == "powershell.exe" and "Start-Process" in call for call in self.runner.calls))
-        paths = self.controller._service_evidence_paths
-        self.assertIsNotNone(paths)
-        assert paths is not None
-        self.assertEqual(paths[0].read_bytes(), b"service stdout\x00\xff\n")
-        self.assertEqual(paths[1].read_bytes(), b"service stderr\x00\xfe\n")
-        # The direct-launch parent closes its copies immediately.  The child
-        # still owns valid inherited handles and its complete bytes remain.
-        self.assertTrue(self.runner.launch_kwargs["stdout"].closed)
-        self.assertTrue(self.runner.launch_kwargs["stderr"].closed)
 
-    def test_pipe_close_failure_is_exact_and_cleans_launched_process(self) -> None:
-        with mock.patch.object(
-            self.controller,
-            "_open_service_stream",
-            side_effect=_CloseFailingStream,
-        ):
-            with self.assertRaisesRegex(
-                ScenarioExecutionError, "SERVICE_EVIDENCE_INCOMPLETE"
-            ) as caught:
-                self.controller._start(2.0)
-        self.assertIsInstance(caught.exception.__cause__, OSError)
-        self.assertIn("synthetic pipe close failure", repr(caught.exception.__cause__))
-        self.assertEqual(len(caught.exception.__notes__), 2)
-        self.assertIn("terminate-job", self.cleanup_order)
-
-    def test_stop_orders_job_proof_reap_then_close_and_retains_all_streams(self) -> None:
+    def test_stop_orders_job_proof_reap_then_close(self) -> None:
         self.controller._start(2.0)
         self.controller._terminate(2.0)
         self.assertEqual(self.cleanup_order, ["terminate-job", "close-job"])
         assert self.process is not None
         self.assertEqual(len(self.process.wait_calls), 1)
         self.assertIsNone(getattr(self.process, "_torturer_windows_job", None))
-        self.controller.finalize_evidence()
         self.assertEqual(
-            [item["evidence_kind"] for item in self.runner.external_evidence],
-            [
-                "windows-service-stdout",
-                "windows-service-stderr",
-                "windows-service-diagnostics",
-            ],
-        )
-        diagnostics = next(
-            path for path in self.raw.glob("*.diagnostics.raw.log")
-        ).read_bytes()
-        self.assertEqual(
-            diagnostics,
-            b"api=QueryInformationJobObject winerror=0\n",
+            self.controller._service_diagnostics,
+            ["api=QueryInformationJobObject winerror=0"],
         )
 
     def test_identity_failure_immediately_attempts_owned_job_cleanup(self) -> None:
@@ -359,12 +296,13 @@ class HostedWindowsServiceJobTests(unittest.TestCase):
             self.controller._terminate(2.0)
         assert self.process is not None
         self.assertIsNotNone(getattr(self.process, "_torturer_windows_job", None))
-        diagnostics = next(self.raw.glob("*.diagnostics.raw.log")).read_bytes()
         self.assertEqual(
-            diagnostics,
-            b"api=QueryInformationJobObject winerror=0\n"
-            b"api=CloseHandle winerror=6\n"
-            b"api=CloseHandle winerror=6 detail=replacement-job-still-attached\n",
+            self.controller._service_diagnostics,
+            [
+                "api=QueryInformationJobObject winerror=0",
+                "api=CloseHandle winerror=6",
+                "api=CloseHandle winerror=6 detail=replacement-job-still-attached",
+            ],
         )
         self.controller._terminate(2.0)
         self.assertIsNone(getattr(self.process, "_torturer_windows_job", None))

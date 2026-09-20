@@ -15,9 +15,13 @@ import base64
 from collections.abc import Callable
 import ctypes
 from ctypes import wintypes
+from dataclasses import dataclass
 import getpass
+import json
 import os
 from pathlib import Path
+import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -26,6 +30,36 @@ import time
 
 class NativeUISmokeError(RuntimeError):
     pass
+
+
+class NativeUIWaitTimeout(NativeUISmokeError):
+    """A requested UI state was not observed within its bounded wait."""
+
+
+_FILETIME_TO_DATETIME_TICKS = 504911232000000000
+_MACOS_UI_PROCESS_NAME = "Dobby Vpn"
+_MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
+    if not (exists process "Finder") then error "Finder is unavailable"
+    if (visible of process "Finder") is false then error "Finder is not visible"
+    return "Finder"
+end tell'''
+
+
+@dataclass(frozen=True)
+class _MacOSProcessIdentity:
+    """Stable enough identity for one product process between two observations.
+
+    macOS does not expose a process handle that can be retained by this Python
+    helper.  The PID alone is therefore unsafe: the kernel may recycle it
+    after the product exits.  ``lstart`` is the process start identity exposed
+    by ``ps``; pairing it with the exact executable path and owner makes a
+    replacement process fail closed before any signal is sent.
+    """
+
+    pid: int
+    uid: int
+    executable: str
+    start: str
 
 
 def _windows_interactive_identity() -> str:
@@ -68,6 +102,59 @@ Write-Output ("{0}|session={1}|userInteractive={2}" -f $identity, $process.Sessi
     return identity
 
 
+def _parse_macos_console_user_state(stdout: bytes) -> tuple[str, int] | None:
+    """Extract the authoritative SystemConfiguration ConsoleUser identity."""
+
+    if len(stdout) > 64 * 1024:
+        return None
+    user: str | None = None
+    uid: int | None = None
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        if ":" not in line:
+            continue
+        key, value = (part.strip() for part in line.split(":", 1))
+        if key == "kCGSSessionUserNameKey":
+            if user is not None or re.fullmatch(r"[^\s:{}]+", value) is None:
+                return None
+            user = value
+        elif key == "kCGSSessionUserIDKey":
+            if uid is not None or re.fullmatch(r"[1-9][0-9]*", value) is None:
+                return None
+            try:
+                uid = int(value)
+            except ValueError:
+                return None
+    if user is None or uid is None:
+        return None
+    return user, uid
+
+
+def _macos_accessibility_preflight(timeout: float = 5.0) -> None:
+    """Require System Events accessibility before launching the production UI."""
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", _MACOS_ACCESSIBILITY_PROBE],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(
+            "macOS native UI is unavailable: System Events accessibility preflight failed"
+        ) from error
+    output = (
+        result.stdout.decode("utf-8", errors="replace")
+        if isinstance(result.stdout, bytes)
+        else str(result.stdout)
+    )
+    if result.returncode != 0 or output.strip() != "Finder":
+        raise NativeUISmokeError(
+            "macOS native UI is unavailable: System Events accessibility permission is unavailable"
+        )
+
+
 def _macos_interactive_identity() -> str:
     """Return the Aqua console user after checking the current launch context."""
     if os.name != "posix":
@@ -75,26 +162,36 @@ def _macos_interactive_identity() -> str:
     current_user = getpass.getuser()
     try:
         console = subprocess.run(
-            ["stat", "-f", "%Su", "/dev/console"],
+            ["scutil"],
+            input=b"show State:/Users/ConsoleUser\nquit\n",
             check=False,
-            text=True,
             capture_output=True,
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"could not inspect the macOS console user: {error}") from error
-    console_user = console.stdout.strip()
-    if console.returncode != 0 or not console_user or console_user in {"root", "loginwindow"}:
+    console_output = console.stdout
+    if isinstance(console_output, str):
+        console_bytes = console_output.encode("utf-8")
+    elif isinstance(console_output, bytes):
+        console_bytes = console_output
+    else:
+        console_bytes = b""
+    parsed_console = (
+        _parse_macos_console_user_state(console_bytes)
+        if console.returncode == 0
+        else None
+    )
+    if parsed_console is None:
+        raise NativeUISmokeError("macOS native UI is unavailable: no logged-in Aqua console user")
+    console_user, console_uid = parsed_console
+    if console_user.lower() in {"root", "loginwindow"} or console_uid <= 0:
+        raise NativeUISmokeError("macOS native UI is unavailable: no logged-in Aqua console user")
+    if current_user != console_user or os.getuid() != console_uid:
         raise NativeUISmokeError(
-            "macOS native UI is unavailable: no logged-in Aqua console user "
-            f"(observed {console_user or 'none'})"
+            "macOS native UI is unavailable: helper identity does not own the console"
         )
-    if current_user != console_user:
-        raise NativeUISmokeError(
-            "macOS native UI is unavailable: helper identity does not own the console "
-            f"(process={current_user!r}, console={console_user!r})"
-        )
-    uid = str(os.getuid())
+    uid = str(console_uid)
     try:
         session = subprocess.run(
             ["launchctl", "print", f"gui/{uid}"],
@@ -106,8 +203,8 @@ def _macos_interactive_identity() -> str:
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"macOS GUI session inspection failed: {error}") from error
     if session.returncode != 0:
-        detail = session.stderr.strip() or "launchctl has no GUI session for the current user"
-        raise NativeUISmokeError(f"macOS native UI is unavailable: {detail}")
+        raise NativeUISmokeError("macOS native UI is unavailable: no Aqua GUI launchd session")
+    _macos_accessibility_preflight()
     return f"{current_user}|uid={uid}|console={console_user}"
 
 
@@ -117,7 +214,7 @@ def _wait_until(predicate, timeout: float, message: str) -> None:
         if predicate():
             return
         time.sleep(0.1)
-    raise NativeUISmokeError(message)
+    raise NativeUIWaitTimeout(message)
 
 
 def _windows_rect(hwnd: int) -> tuple[int, int, int, int]:
@@ -125,9 +222,98 @@ def _windows_rect(hwnd: int) -> tuple[int, int, int, int]:
         _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
     rect = RECT()
-    if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+    if not _windows_user32().GetWindowRect(hwnd, ctypes.byref(rect)):
         raise NativeUISmokeError("GetWindowRect failed")
     return rect.left, rect.top, rect.right, rect.bottom
+
+
+def _windows_user32() -> object:
+    """Return user32 with pointer-sized window APIs declared explicitly.
+
+    ``ctypes`` otherwise converts undeclared integer arguments to C ``int``.
+    HWND values are pointer-sized on 64-bit Windows, so that implicit
+    conversion can truncate the handle before ``IsWindowVisible`` or
+    ``GetWindowThreadProcessId`` sees it.  The resulting false negative looks
+    exactly like a production UI that never created a window.
+    """
+
+    user32 = ctypes.windll.user32
+    callback_factory = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+    user32.EnumWindows.argtypes = [
+        callback_factory(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM),
+        wintypes.LPARAM,
+    ]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.IsWindow.restype = wintypes.BOOL
+    # The RECT structure is local to ``_windows_rect``; a void pointer keeps
+    # this declaration independent of that implementation detail while still
+    # preserving the pointer-sized HWND argument.
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    return user32
+
+
+def _windows_process_creation_ticks(pid: int) -> str:
+    """Return the process creation time in the WMI/.NET tick epoch."""
+
+    if pid <= 0:
+        raise NativeUISmokeError("Windows native UI process identity is invalid")
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME),
+        ctypes.POINTER(FILETIME), ctypes.POINTER(FILETIME),
+    ]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        raise NativeUISmokeError("Windows native UI process identity is unavailable")
+    creation = FILETIME()
+    exit_time = FILETIME()
+    kernel_time = FILETIME()
+    user_time = FILETIME()
+    try:
+        if not kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation), ctypes.byref(exit_time),
+            ctypes.byref(kernel_time), ctypes.byref(user_time),
+        ):
+            raise NativeUISmokeError("Windows native UI process identity is unavailable")
+        value = (int(creation.dwHighDateTime) << 32) | int(creation.dwLowDateTime)
+    finally:
+        kernel32.CloseHandle(handle)
+    return _windows_filetime_to_datetime_ticks(value)
+
+
+def _windows_filetime_to_datetime_ticks(filetime: int) -> str:
+    """Convert Win32 FILETIME units to ``DateTime.Ticks``.
+
+    FILETIME is measured from 1601-01-01, while .NET ``DateTime`` ticks are
+    measured from year 1.  The offset is therefore the 1601-to-year-1 value,
+    not the smaller 1601-to-Unix-epoch offset.
+    """
+
+    if isinstance(filetime, bool) or not isinstance(filetime, int) or filetime < 0:
+        raise NativeUISmokeError("Windows native UI process identity is invalid")
+    return str(filetime + _FILETIME_TO_DATETIME_TICKS)
 
 
 def _windows_accessibility_rect(
@@ -141,7 +327,19 @@ def _windows_accessibility_rect(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$env:DOBBY_UI_HWND)
+$rawHwnd = [string]$env:DOBBY_UI_HWND
+if ($rawHwnd -notmatch '^[1-9][0-9]*$') {
+    throw "invalid positive HWND"
+}
+try {
+    $hwndValue = [Int64]::Parse($rawHwnd, [Globalization.CultureInfo]::InvariantCulture)
+} catch {
+    throw "invalid positive HWND"
+}
+if ($hwndValue -le 0) {
+    throw "invalid positive HWND"
+}
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new($hwndValue))
 $condition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
     [System.Windows.Automation.AutomationElement]::NameProperty, $env:DOBBY_UI_NAME)
 if ($env:DOBBY_UI_PREFIX -eq "1") {
@@ -296,13 +494,21 @@ def _windows_paste(profile: Path) -> Callable[[], None]:
 
 
 def _macos_accessibility_rect(
-    name: str, timeout: float, *, prefix: bool = False
+    process_pid: int,
+    name: str,
+    timeout: float,
+    *,
+    prefix: bool = False,
 ) -> tuple[int, int, int, int]:
+    """Get a Fyne element from the exact launched System Events process."""
+
+    if process_pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
     apple_name = '"' + name.replace('"', '\\"') + '"'
     match = f'name begins with {apple_name}' if prefix else f'name is {apple_name}'
     script = f'''tell application "System Events"
-    tell process "Dobby Vpn"
-        set matches to every UI element of entire contents of window 1 whose {match}
+    tell (first process whose unix id is {process_pid})
+        set matches to every UI element of entire contents whose {match}
         if (count of matches) is 0 then error "accessibility element not found: {name}"
         set target to item 1 of matches
         set p to position of target
@@ -325,10 +531,15 @@ def _macos_accessibility_rect(
     return values  # type: ignore[return-value]
 
 
-def _macos_click(bounds: tuple[int, int, int, int]) -> None:
+def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
+    if process_pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
     x = (bounds[0] + bounds[2]) // 2
     y = (bounds[1] + bounds[3]) // 2
-    script = f'tell application "System Events" to click at {{{x}, {y}}}'
+    script = f'''tell application "System Events"
+    tell (first process whose unix id is {process_pid}) to set frontmost to true
+    click at {{{x}, {y}}}
+end tell'''
     try:
         completed = subprocess.run(["osascript", "-e", script], check=False, text=True, capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError) as error:
@@ -337,9 +548,32 @@ def _macos_click(bounds: tuple[int, int, int, int]) -> None:
         raise NativeUISmokeError(completed.stderr.strip() or "macOS native click failed")
 
 
-def _macos_has_element(name: str, *, prefix: bool = False) -> bool:
+def _macos_keystroke(process_pid: int, key: str) -> None:
+    if process_pid <= 0 or len(key) != 1 or key not in {"a", "v"}:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    script = f'''tell application "System Events"
+    tell (first process whose unix id is {process_pid})
+        set frontmost to true
+        keystroke "{key}" using command down
+    end tell
+end tell'''
     try:
-        _macos_accessibility_rect(name, 10, prefix=prefix)
+        completed = subprocess.run(
+            ["osascript", "-e", script],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS native keystroke failed for {key!r}: {error}") from error
+    if completed.returncode != 0:
+        raise NativeUISmokeError(completed.stderr.strip() or "macOS native keystroke failed")
+
+
+def _macos_has_element(process_pid: int, name: str, *, prefix: bool = False) -> bool:
+    try:
+        _macos_accessibility_rect(process_pid, name, 10, prefix=prefix)
         return True
     except NativeUISmokeError:
         return False
@@ -394,6 +628,177 @@ def _macos_paste(profile: Path) -> Callable[[], None]:
     return restore
 
 
+def _macos_current_uid() -> int:
+    """Return a usable non-root UID for scoped macOS process operations."""
+
+    getuid = getattr(os, "getuid", None)
+    if not callable(getuid):
+        raise NativeUISmokeError("macOS native UI process ownership is unavailable")
+    try:
+        uid = getuid()
+    except OSError as error:
+        raise NativeUISmokeError("macOS native UI process ownership is unavailable") from error
+    if isinstance(uid, bool) or not isinstance(uid, int) or uid <= 0:
+        raise NativeUISmokeError("macOS native UI process ownership is unavailable")
+    return uid
+
+
+def _macos_process_pids() -> tuple[int, ...]:
+    """Return exact product UI PIDs owned by this user, failing closed."""
+
+    uid = _macos_current_uid()
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "-u", str(uid), _MACOS_UI_PROCESS_NAME],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError("macOS native UI process discovery failed") from error
+    if result.returncode not in {0, 1}:
+        raise NativeUISmokeError("macOS native UI process discovery failed")
+    if not isinstance(result.stdout, str):
+        raise NativeUISmokeError("macOS native UI process discovery returned invalid output")
+    if result.returncode == 1:
+        if not isinstance(result.stderr, str) or result.stdout.strip() or result.stderr.strip():
+            raise NativeUISmokeError("macOS native UI process discovery returned invalid output")
+    pids: list[int] = []
+    for line in result.stdout.splitlines():
+        value = line.strip()
+        if not value or not value.isdigit() or int(value) <= 0:
+            raise NativeUISmokeError("macOS native UI process discovery returned invalid identity")
+        pids.append(int(value))
+    return tuple(dict.fromkeys(pids))
+
+
+def _macos_process_identity(pid: int) -> _MacOSProcessIdentity | None:
+    """Read one process's exact path/start identity, or ``None`` if it exited.
+
+    ``comm`` is truncated/path-like on macOS, so it cannot identify the
+    executable.  ``ps -ww`` with ``command`` gives the complete executable
+    path; because the path may contain spaces, the output is parsed from the
+    fixed ``lstart`` field rather than split into shell-like words.  The
+    resulting command field is intentionally retained as one exact string:
+    an expected bundle path is compared by the caller, so a command with
+    arguments or another same-name executable cannot pass.
+    """
+
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "pid=,uid=,lstart=,command="],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError("macOS native UI process identity check failed") from error
+    if not isinstance(result.stdout, str) or not isinstance(result.stderr, str):
+        raise NativeUISmokeError("macOS native UI process identity check returned invalid output")
+    if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+        # ps uses status 1 with no output when the process exited between the
+        # scoped discovery and this identity check.
+        return None
+    if result.returncode != 0:
+        raise NativeUISmokeError("macOS native UI process identity check failed")
+    values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(values) != 1:
+        raise NativeUISmokeError("macOS native UI process identity check returned invalid output")
+    match = re.fullmatch(
+        r"\s*(?P<pid>[1-9][0-9]*)\s+"
+        r"(?P<uid>[1-9][0-9]*)\s+"
+        r"(?P<start>(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+"
+        r"[A-Za-z]{3}\s+[0-9]{1,2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2}\s+[0-9]{4})\s+"
+        r"(?P<command>/\S.*)\s*",
+        values[0],
+    )
+    if match is None:
+        raise NativeUISmokeError("macOS native UI process identity check returned invalid identity")
+    pid_text = match.group("pid")
+    uid_text = match.group("uid")
+    executable = match.group("command")
+    start = match.group("start")
+    if int(pid_text) != pid:
+        raise NativeUISmokeError("macOS native UI process identity check returned invalid PID")
+    return _MacOSProcessIdentity(pid, int(uid_text), executable, start)
+
+
+def _macos_process_identities(expected_executable: str) -> tuple[_MacOSProcessIdentity, ...]:
+    """Snapshot exact product identities without widening the process scope."""
+
+    uid = _macos_current_uid()
+    identities: list[_MacOSProcessIdentity] = []
+    for pid in _macos_process_pids():
+        identity = _macos_process_identity(pid)
+        if identity is None:
+            continue
+        if identity.executable != expected_executable:
+            raise NativeUISmokeError(
+                "macOS native UI process identity returned an unexpected executable"
+            )
+        # A PID can have changed between pgrep and ps.  Treat that process as
+        # gone rather than ever allowing a different owner to be signalled.
+        if identity.uid != uid:
+            continue
+        identities.append(identity)
+    return tuple(identities)
+
+
+def _macos_identity_is_alive(identity: _MacOSProcessIdentity) -> bool:
+    current = _macos_process_identity(identity.pid)
+    return current is not None and current == identity
+
+
+def _terminate_macos_process(identity: _MacOSProcessIdentity, sig: int) -> None:
+    if sig not in {signal.SIGTERM, signal.SIGKILL}:
+        raise NativeUISmokeError("macOS native UI process signal is invalid")
+    if not isinstance(identity, _MacOSProcessIdentity):
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    current = _macos_process_identity(identity.pid)
+    if current is None or current != identity:
+        # The expected process exited, or its PID was reused.  In both cases
+        # the original process is gone and the replacement must not be touched.
+        return
+    if current.uid != _macos_current_uid():
+        raise NativeUISmokeError("macOS native UI process ownership could not be verified")
+    try:
+        os.kill(identity.pid, sig)
+    except ProcessLookupError:
+        return
+    except OSError as error:
+        raise NativeUISmokeError("macOS native UI process cleanup failed") from error
+
+
+def _terminate_existing_macos_instances(timeout: float, expected_executable: str) -> None:
+    """Clear exact product UI instances before starting a disposable run."""
+
+    existing = _macos_process_identities(expected_executable)
+    for identity in existing:
+        _terminate_macos_process(identity, signal.SIGTERM)
+    if not existing:
+        return
+    try:
+        _wait_until(
+            lambda: not any(_macos_identity_is_alive(identity) for identity in existing),
+            timeout,
+            "pre-existing macOS Dobby Vpn process did not exit",
+        )
+    except NativeUIWaitTimeout:
+        remaining = [identity for identity in existing if _macos_identity_is_alive(identity)]
+        for identity in remaining:
+            _terminate_macos_process(identity, signal.SIGKILL)
+        _wait_until(
+            lambda: not any(_macos_identity_is_alive(identity) for identity in existing),
+            timeout,
+            "pre-existing macOS Dobby Vpn process could not be terminated",
+        )
+
+
 class NativeUIController:
     """Keep one real desktop window available to a functional adapter.
 
@@ -416,41 +821,120 @@ class NativeUIController:
         self.timeout = timeout
         self.process: subprocess.Popen[bytes] | None = None
         self.hwnd = 0
+        self.macos_pid: int | None = None
+        self.macos_process_identity: _MacOSProcessIdentity | None = None
+        self.macos_expected_executable: str | None = None
         self._reconnecting_seen = False
+        marker = os.environ.get("DOBBYVPN_NATIVE_UI_CHILD_PID_FILE")
+        self._windows_child_pid_file = (
+            Path(marker) if platform == "windows" and marker else None
+        )
 
     def _wait(self, predicate, message: str, timeout: float | None = None) -> None:
         _wait_until(predicate, self.timeout if timeout is None else timeout, message)
 
-    def _windows_process_window(self) -> int:
+    def _windows_matching_windows(self) -> list[dict[str, object]]:
         if self.process is None:
-            return 0
-        user32 = ctypes.windll.user32
-        found = 0
-        process_id = wintypes.DWORD()
-        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            return []
+        user32 = _windows_user32()
+        matched: list[dict[str, object]] = []
+        callback_factory = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+        callback_type = callback_factory(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         @callback_type
         def callback(candidate: int, _lparam: int) -> bool:
-            nonlocal found
+            process_id = wintypes.DWORD()
             user32.GetWindowThreadProcessId(candidate, ctypes.byref(process_id))
-            if process_id.value == self.process.pid and user32.IsWindowVisible(candidate):
-                found = int(candidate)
-                return False
+            if process_id.value != self.process.pid:
+                return True
+            is_window = bool(user32.IsWindow(candidate))
+            is_visible = bool(user32.IsWindowVisible(candidate))
+            matched.append({
+                "hwnd": int(candidate),
+                "is_window": is_window,
+                "is_visible": is_visible,
+            })
             return True
 
-        user32.EnumWindows(callback, 0)
-        return found
+        if not user32.EnumWindows(callback, 0):
+            raise NativeUISmokeError("EnumWindows failed during native UI discovery")
+        return matched
+
+    def _windows_process_window(self) -> int:
+        for candidate in self._windows_matching_windows():
+            if candidate["is_window"] and candidate["is_visible"]:
+                return int(candidate["hwnd"])
+        return 0
+
+    def _windows_window_diagnostics(self) -> dict[str, object]:
+        """Describe only the launched process's top-level windows."""
+
+        process = self.process
+        diagnostics: dict[str, object] = {
+            "child_alive": bool(process is not None and process.poll() is None),
+            "matching_window_count": 0,
+            "matching_windows": [],
+        }
+        try:
+            matched = self._windows_matching_windows()
+        except Exception:
+            diagnostics["matching_window_count"] = None
+            diagnostics["window_enumeration"] = "failed"
+            return diagnostics
+        diagnostics["window_enumeration"] = "ok"
+        diagnostics["matching_window_count"] = len(matched)
+        windows: list[dict[str, object]] = []
+        for candidate in matched[:8]:
+            record = dict(candidate)
+            if record.get("is_window") is True:
+                try:
+                    record["rect"] = _windows_rect(int(record["hwnd"]))
+                except Exception:
+                    record["rect"] = None
+            else:
+                record["rect"] = None
+            windows.append(record)
+        diagnostics["matching_windows"] = windows
+        diagnostics["matching_windows_truncated"] = len(matched) > len(windows)
+        return diagnostics
 
     def _windows_find_window(self) -> bool:
-        user32 = ctypes.windll.user32
+        user32 = _windows_user32()
         self.hwnd = self._windows_process_window()
-        if not self.hwnd:
-            # A launcher may hand the window to a short-lived child.  The
-            # title fallback is retained only after process ownership lookup.
-            self.hwnd = int(user32.FindWindowW(None, "Dobby VPN"))
         return self.hwnd != 0 and bool(user32.IsWindowVisible(self.hwnd))
 
+    def _windows_validate_window(self) -> None:
+        """Reject a dead child or HWND no longer owned by that exact child."""
+
+        process = self.process
+        if process is None:
+            raise NativeUISmokeError("Windows native UI process is unavailable")
+        try:
+            if process.poll() is not None:
+                raise NativeUISmokeError("Windows native UI process has exited")
+        except NativeUISmokeError:
+            raise
+        except Exception as error:
+            raise NativeUISmokeError("Windows native UI process state is unavailable") from error
+        if not self.hwnd:
+            raise NativeUISmokeError("Windows native UI window is unavailable")
+        try:
+            matched = self._windows_matching_windows()
+        except NativeUISmokeError:
+            raise
+        except Exception as error:
+            raise NativeUISmokeError("Windows native UI window ownership is unavailable") from error
+        current = next(
+            (candidate for candidate in matched if int(candidate.get("hwnd", 0)) == self.hwnd),
+            None,
+        )
+        if current is None or current.get("is_window") is not True or current.get("is_visible") is not True:
+            raise NativeUISmokeError(
+                "Windows native UI window is stale or is not owned by the launched process"
+            )
+
     def _windows_key(self, *virtual_keys: int) -> None:
+        self._windows_validate_window()
         user32 = ctypes.windll.user32
         for key in virtual_keys:
             user32.keybd_event(key, 0, 0, 0)
@@ -458,17 +942,35 @@ class NativeUIController:
             user32.keybd_event(key, 0, 2, 0)
 
     def _windows_click_name(self, name: str, *, prefix: bool = False) -> None:
+        self._windows_validate_window()
         user32 = ctypes.windll.user32
-        if not self.hwnd:
-            raise NativeUISmokeError("Windows native UI window is unavailable")
-        _windows_click(user32, _windows_accessibility_rect(self.hwnd, name, prefix=prefix))
+        bounds = _windows_accessibility_rect(self.hwnd, name, prefix=prefix)
+        self._windows_validate_window()
+        _windows_click(user32, bounds)
 
     def _windows_has_name(self, name: str, *, prefix: bool = False) -> bool:
-        return bool(self.hwnd and _windows_has_element(self.hwnd, name, prefix=prefix))
+        if not self.hwnd:
+            return False
+        self._windows_validate_window()
+        return bool(_windows_has_element(self.hwnd, name, prefix=prefix))
 
     def _launch_windows(self) -> None:
-        user32 = ctypes.windll.user32
+        user32 = _windows_user32()
         self.process = subprocess.Popen([str(self.binary)])
+        if self._windows_child_pid_file is not None:
+            try:
+                creation_ticks = _windows_process_creation_ticks(self.process.pid)
+                self._windows_child_pid_file.write_text(
+                    f"{self.process.pid}|{creation_ticks}", encoding="ascii"
+                )
+            except (OSError, NativeUISmokeError) as error:
+                process = self.process
+                if process.poll() is None:
+                    process.terminate()
+                self.process = None
+                raise NativeUISmokeError(
+                    "Windows native UI process identity could not be recorded"
+                ) from error
 
         def visible() -> bool:
             if self.process is not None and self.process.poll() is not None:
@@ -477,20 +979,80 @@ class NativeUIController:
                 )
             return self._windows_find_window()
 
-        self._wait(visible, "Dobby VPN window did not become visible")
+        try:
+            self._wait(visible, "Dobby VPN window did not become visible")
+        except NativeUISmokeError as error:
+            diagnostic = json.dumps(
+                self._windows_window_diagnostics(),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            raise NativeUISmokeError(
+                f"{error}; window-discovery={diagnostic}"
+            ) from error
+        self._windows_validate_window()
         left, top, right, bottom = _windows_rect(self.hwnd)
         if right - left < 300 or bottom - top < 300:
             raise NativeUISmokeError("Dobby VPN window is unexpectedly small")
+        self._windows_validate_window()
         user32.SetForegroundWindow(self.hwnd)
 
     def _launch_macos(self) -> None:
         bundle = self.binary
         if self.binary.parent.name == "MacOS" and self.binary.parent.parent.name == "Contents":
             bundle = self.binary.parent.parent.parent
-        launch = ["open", "-W", "-n", str(bundle)] if bundle.suffix == ".app" else [str(self.binary)]
+        if bundle.suffix == ".app":
+            self.macos_expected_executable = str(
+                (bundle / "Contents" / "MacOS" / _MACOS_UI_PROCESS_NAME).resolve()
+            )
+        else:
+            self.macos_expected_executable = str(self.binary.resolve())
+        if self.macos_expected_executable is None:
+            raise NativeUISmokeError("macOS native UI executable identity is unavailable")
+        _terminate_existing_macos_instances(self.timeout, self.macos_expected_executable)
+        if bundle.suffix == ".app":
+            launch = ["open", "-W", "-n", str(bundle)]
+        else:
+            launch = [str(self.binary)]
         self.process = subprocess.Popen(launch)
+
+        if bundle.suffix != ".app" and self.process.pid:
+            self.macos_pid = self.process.pid
+
+        def visible() -> bool:
+            if self.process is not None and self.process.poll() is not None:
+                raise NativeUISmokeError(
+                    f"Dobby VPN exited with code {self.process.returncode} before creating a window"
+                )
+            if self.macos_pid is None:
+                if self.macos_expected_executable is None:
+                    raise NativeUISmokeError("macOS native UI executable identity is unavailable")
+                identities = _macos_process_identities(self.macos_expected_executable)
+                if len(identities) > 1:
+                    raise NativeUISmokeError("multiple Dobby Vpn processes appeared during launch")
+                if len(identities) == 1:
+                    self.macos_process_identity = identities[0]
+                    self.macos_pid = identities[0].pid
+            elif self.macos_process_identity is None:
+                identity = _macos_process_identity(self.macos_pid)
+                if identity is not None:
+                    if (
+                        self.macos_expected_executable is None
+                        or identity.executable != self.macos_expected_executable
+                    ):
+                        raise NativeUISmokeError(
+                            "macOS native UI process identity returned an unexpected executable"
+                        )
+                    if identity.uid != _macos_current_uid():
+                        raise NativeUISmokeError("macOS native UI process ownership could not be verified")
+                    self.macos_process_identity = identity
+            if self.macos_process_identity is None:
+                return False
+            process_pid = self._macos_pid_or_error()
+            return _macos_has_element(process_pid, "Connection configuration")
+
         self._wait(
-            lambda: _macos_has_element("Connection configuration"),
+            visible,
             "macOS UI did not expose the configuration input",
         )
 
@@ -509,7 +1071,17 @@ class NativeUIController:
             status = next((name for name in names if self._windows_has_name(name)), "Unknown")
         else:
             names = ("Connected", "Connecting", "Reconnecting", "Disconnected", "Failed", "Error")
-            status = next((name for name in names if _macos_has_element(name)), "Unknown")
+            status = "Unknown"
+            for name in names:
+                if self.macos_pid is None:
+                    break
+                try:
+                    process_pid = self._macos_pid_or_error()
+                except NativeUISmokeError:
+                    break
+                if _macos_has_element(process_pid, name):
+                    status = name
+                    break
         return {
             "status": status,
             "reconnecting_seen": self._reconnecting_seen,
@@ -521,22 +1093,24 @@ class NativeUIController:
             restore_clipboard = _windows_paste(self.profile)
             try:
                 self._windows_click_name("Connection configuration")
+                self._windows_key(0x11, 0x41)  # Ctrl+A
                 self._windows_key(0x11, 0x56)  # Ctrl+V
             finally:
                 restore_clipboard()
         else:
             restore_clipboard = _macos_paste(self.profile)
             try:
-                _macos_click(_macos_accessibility_rect("Connection configuration", 10))
-                completed = subprocess.run(
-                    ["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down'],
-                    check=False,
-                    text=True,
-                    capture_output=True,
-                    timeout=10,
+                process_pid = self._macos_pid_or_error()
+                bounds = _macos_accessibility_rect(process_pid, "Connection configuration", 10)
+                process_pid = self._macos_pid_or_error()
+                _macos_click(
+                    bounds,
+                    process_pid,
                 )
-                if completed.returncode != 0:
-                    raise NativeUISmokeError("macOS native paste failed")
+                process_pid = self._macos_pid_or_error()
+                _macos_keystroke(process_pid, "a")
+                process_pid = self._macos_pid_or_error()
+                _macos_keystroke(process_pid, "v")
             finally:
                 restore_clipboard()
         return self.snapshot()
@@ -547,35 +1121,74 @@ class NativeUIController:
         if self.platform == "windows":
             self._wait(lambda: self._windows_has_name(status), f"Windows UI did not display {status}", timeout)
         else:
-            self._wait(lambda: _macos_has_element(status), f"macOS UI did not display {status}", timeout)
+            self._wait(
+                lambda: _macos_has_element(self._macos_pid_or_error(), status),
+                f"macOS UI did not display {status}",
+                timeout,
+            )
         if status == "Reconnecting":
             self._reconnecting_seen = True
         return self.snapshot()
 
-    def wait_recovered(self) -> dict[str, object]:
-        # A very fast service replacement can leave the visible status at
-        # Connected.  Record Reconnecting when it is observable, while still
-        # requiring the authoritative post-loss Connected state.
+    def _connect_control_visible(self) -> bool:
+        if self.platform == "windows":
+            return self._windows_has_name("Connect")
+        if self.macos_pid is None:
+            return False
+        try:
+            return _macos_has_element(self._macos_pid_or_error(), "Connect")
+        except NativeUISmokeError:
+            return False
+
+    def recover_after_process_loss(self) -> dict[str, object]:
+        """Reconfigure and reconnect through the visible production UI.
+
+        Restarting the desktop service invalidates its predecessor session;
+        merely waiting for a rendered Connected label would therefore prove
+        only stale UI state.  Wait for the replacement session to expose its
+        Connect control, enter the profile through the real native input path,
+        and click that control.  The caller owns the independent VPN
+        observations after this action.
+        """
+        self._reconnecting_seen = False
         reconnect_timeout = min(2.0, self.timeout)
+        reconnect_probe_error: NativeUIWaitTimeout | None = None
         try:
             self.wait_status("Reconnecting", timeout=reconnect_timeout)
-        except NativeUISmokeError:
-            pass
-        self.wait_status("Connected")
-        return self.snapshot()
+        except NativeUIWaitTimeout as error:
+            # A fast replacement may never render this intermediate state.
+            # Keep the bounded probe diagnostic without making it a pass
+            # condition; non-timeout driver/accessibility errors still abort.
+            reconnect_probe_error = error
+        self._wait(
+            self._connect_control_visible,
+            f"{self.platform} UI did not expose Connect after service recovery",
+        )
+        self.configure()
+        result = self.connect()
+        result["reconnecting_seen"] = self._reconnecting_seen
+        if reconnect_probe_error is not None:
+            result["reconnecting_probe_error"] = str(reconnect_probe_error)
+        return result
 
     def connect(self) -> dict[str, object]:
         if self.platform == "windows":
             self._windows_click_name("Connect")
         else:
-            _macos_click(_macos_accessibility_rect("Connect", 10))
+            process_pid = self._macos_pid_or_error()
+            bounds = _macos_accessibility_rect(process_pid, "Connect", 10)
+            process_pid = self._macos_pid_or_error()
+            _macos_click(bounds, process_pid)
         return self.wait_status("Connected")
 
     def disconnect(self) -> dict[str, object]:
         if self.platform == "windows":
             self._windows_click_name("Disconnect")
         else:
-            _macos_click(_macos_accessibility_rect("Disconnect", 10))
+            process_pid = self._macos_pid_or_error()
+            bounds = _macos_accessibility_rect(process_pid, "Disconnect", 10)
+            process_pid = self._macos_pid_or_error()
+            _macos_click(bounds, process_pid)
         return self.wait_status("Disconnected")
 
     def settings(self) -> dict[str, object]:
@@ -586,11 +1199,24 @@ class NativeUIController:
             commit = self._windows_has_name("Source commit:", prefix=True)
             self._windows_click_name("Back")
         else:
-            _macos_click(_macos_accessibility_rect("Settings", 10))
-            self._wait(lambda: _macos_has_element("Back"), "macOS UI did not open Settings")
-            version = _macos_has_element("Version:", prefix=True)
-            commit = _macos_has_element("Source commit:", prefix=True)
-            _macos_click(_macos_accessibility_rect("Back", 10))
+            process_pid = self._macos_pid_or_error()
+            bounds = _macos_accessibility_rect(process_pid, "Settings", 10)
+            process_pid = self._macos_pid_or_error()
+            _macos_click(bounds, process_pid)
+            self._wait(
+                lambda: _macos_has_element(self._macos_pid_or_error(), "Back"),
+                "macOS UI did not open Settings",
+            )
+            version = _macos_has_element(
+                self._macos_pid_or_error(), "Version:", prefix=True
+            )
+            commit = _macos_has_element(
+                self._macos_pid_or_error(), "Source commit:", prefix=True
+            )
+            process_pid = self._macos_pid_or_error()
+            bounds = _macos_accessibility_rect(process_pid, "Back", 10)
+            process_pid = self._macos_pid_or_error()
+            _macos_click(bounds, process_pid)
         if not version or not commit:
             raise NativeUISmokeError("Settings did not expose version and source-commit metadata")
         return {"settings_version": True, "settings_source_commit": True, **self.snapshot()}
@@ -602,8 +1228,17 @@ class NativeUIController:
         if self.platform == "windows":
             self._windows_key(0x12, 0x73)  # Alt+F4
         else:
+            process_pid = self._macos_pid_or_error()
             completed = subprocess.run(
-                ["osascript", "-e", 'tell application "System Events" to keystroke "w" using command down'],
+                [
+                    "osascript", "-e",
+                    f'''tell application "System Events"
+    tell (first process whose unix id is {process_pid})
+        set frontmost to true
+        keystroke "w" using command down
+    end tell
+end tell''',
+                ],
                 check=False,
                 text=True,
                 capture_output=True,
@@ -616,6 +1251,9 @@ class NativeUIController:
             raise NativeUISmokeError(f"{self.platform} UI exited with code {process.returncode}")
         self.process = None
         self.hwnd = 0
+        self.macos_pid = None
+        self.macos_process_identity = None
+        self.macos_expected_executable = None
         return self.snapshot()
 
     def reopen(self) -> dict[str, object]:
@@ -632,18 +1270,48 @@ class NativeUIController:
             process = self.process
             if process is not None and process.poll() is None:
                 if self.platform == "macos":
-                    subprocess.run(
-                        ["osascript", "-e", 'tell application "Dobby Vpn" to quit'],
-                        check=False,
-                        timeout=5,
-                    )
-                process.terminate()
-                try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
+                    if self.macos_process_identity is None:
+                        raise NativeUISmokeError(
+                            "macOS native UI process identity is unavailable during cleanup"
+                        )
+                    _terminate_macos_process(self.macos_process_identity, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired as error:
+                        # The Popen object is the ``open`` launcher for an
+                        # app bundle, not the product process.  Never signal
+                        # that PID without an independently verified identity.
+                        raise NativeUISmokeError(
+                            "macOS native UI launcher did not exit after verified cleanup"
+                        ) from error
+                else:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
             self.process = None
             self.hwnd = 0
+            self.macos_pid = None
+            self.macos_process_identity = None
+            self.macos_expected_executable = None
+
+    def _macos_pid_or_error(self) -> int:
+        identity = self.macos_process_identity
+        if self.macos_pid is None or self.macos_pid <= 0 or identity is None:
+            raise NativeUISmokeError("macOS native UI process identity is unavailable")
+        if identity.pid != self.macos_pid:
+            raise NativeUISmokeError("macOS native UI process identity is inconsistent")
+        current = _macos_process_identity(self.macos_pid)
+        if current is None:
+            raise NativeUISmokeError("macOS native UI process has exited")
+        if current != identity:
+            raise NativeUISmokeError("macOS native UI process identity changed")
+        if self.macos_expected_executable is not None and current.executable != self.macos_expected_executable:
+            raise NativeUISmokeError("macOS native UI process executable changed")
+        if current.uid != _macos_current_uid():
+            raise NativeUISmokeError("macOS native UI process ownership could not be verified")
+        return self.macos_pid
 
 
 def _controller_for(platform: str, binary: Path, profile: Path, timeout: float) -> NativeUIController:
@@ -659,11 +1327,20 @@ def serve_native_ui(
     output_stream,
 ) -> int:
     """Serve native actions for the local full adapter over JSON lines."""
-    import json
-
     controller = _controller_for(platform, binary, profile, timeout)
     encoder = json.JSONEncoder(separators=(",", ":"))
+
+    def progress(operation: str, stage: str) -> None:
+        output_stream.write(encoder.encode({
+            "ok": True,
+            "event": "progress",
+            "operation": operation,
+            "stage": stage,
+        }) + "\n")
+        output_stream.flush()
+
     try:
+        progress("start", "window-discovery")
         controller.start()
         output_stream.write(encoder.encode({"ok": True, "event": "ready", **controller.snapshot()}) + "\n")
         output_stream.flush()
@@ -673,6 +1350,20 @@ def serve_native_ui(
                 if not isinstance(request, dict):
                     raise ValueError("request is not an object")
                 operation = request.get("op")
+                stages = {
+                    "configure": "native-input",
+                    "connect": "visible-connect",
+                    "disconnect": "visible-disconnect",
+                    "reconnect": "visible-reconnect",
+                    "settings": "settings-window",
+                    "wait": "visible-status",
+                    "process_loss_recovery": "process-loss-recovery",
+                    "close-window": "close-window",
+                    "reopen": "window-reopen",
+                    "close": "close-window",
+                }
+                if operation in stages:
+                    progress(str(operation), stages[operation])
                 if operation == "configure":
                     result = controller.configure()
                 elif operation == "connect":
@@ -685,8 +1376,8 @@ def serve_native_ui(
                     result = controller.settings()
                 elif operation == "wait":
                     result = controller.wait_status(str(request.get("state", "")))
-                elif operation in {"recovery", "process_loss_recovery"}:
-                    result = controller.wait_recovered()
+                elif operation == "process_loss_recovery":
+                    result = controller.recover_after_process_loss()
                 elif operation == "close-window":
                     result = controller.close()
                 elif operation == "reopen":

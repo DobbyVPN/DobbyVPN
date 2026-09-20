@@ -24,3 +24,19 @@ func New(callbacks PlatformCallbacks) *Binding {
 	})
 	return &Binding{manager: manager, platform: platform}
 }
+
+func (p *platformAdapter) publishStateChanges() {
+	for event := range p.stateChanges {
+		p.mu.Lock()
+		callbacks := p.callbacks
+		p.mu.Unlock()
+		if callbacks == nil {
+			continue
+		}
+		generation, err := generationAsInt64(event.Generation)
+		if err != nil {
+			continue
+		}
+		callbacks.PublishState(event.SessionID, generation, string(event.State), string(event.Failure))
+	}
+}

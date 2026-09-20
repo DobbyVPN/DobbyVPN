@@ -41,9 +41,9 @@ class HostedWindowsJobRunnerTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
 
-    def test_subprocess_runner_retains_exact_streams(self) -> None:
-        raw = Path(self.directory.name) / "raw"
-        result = SubprocessRunner(raw).run(
+    def test_subprocess_runner_returns_exact_streams_without_retaining_logs(self) -> None:
+        scratch = Path(self.directory.name) / "scratch"
+        result = SubprocessRunner(scratch).run(
             (
                 sys.executable,
                 "-c",
@@ -56,19 +56,17 @@ class HostedWindowsJobRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"out\x00\xff")
         self.assertEqual(result.stderr, b"err\x00\xfe")
-        retained = (raw / "command-001.raw.log").read_bytes()
-        self.assertIn(b"stdout-begin\nout\x00\xff\nstdout-end", retained)
-        self.assertIn(b"stderr-begin\nerr\x00\xfe\nstderr-end", retained)
+        self.assertEqual(tuple(scratch.iterdir()), ())
 
     def test_subprocess_runner_does_not_synthesize_an_application_log(self) -> None:
-        raw = Path(self.directory.name) / "application-log-raw"
-        raw.mkdir()
-        app_log = raw / "app.log"
+        scratch = Path(self.directory.name) / "application-log-scratch"
+        scratch.mkdir()
+        app_log = scratch / "app.log"
         app_log.write_bytes(b"product-owned application event\n")
         executable = Path(sys.executable).resolve()
 
         result = SubprocessRunner(
-            raw,
+            scratch,
         ).run(
             (
                 str(executable),
@@ -81,11 +79,10 @@ class HostedWindowsJobRunnerTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0)
         self.assertEqual(app_log.read_bytes(), b"product-owned application event\n")
-        retained = (raw / "command-001.raw.log").read_bytes()
-        self.assertIn(b"stdout-begin\nouterr\nstdout-end", retained)
+        self.assertEqual(tuple(scratch.iterdir()), (app_log,))
 
-    def test_timeout_uses_windows_job_cleanup_and_retains_output(self) -> None:
-        raw = Path(self.directory.name) / "timeout-raw"
+    def test_timeout_uses_windows_job_cleanup(self) -> None:
+        scratch = Path(self.directory.name) / "timeout-scratch"
         process = _FakeProcess(timeout=True)
         terminate = mock.Mock(
             return_value=WindowsJobCleanup(
@@ -102,18 +99,16 @@ class HostedWindowsJobRunnerTests(unittest.TestCase):
             mock.patch.object(hosted_cli, "terminate_windows_job", terminate),
             mock.patch.object(hosted_cli, "close_windows_job", close),
         ):
-            with self.assertRaisesRegex(HostedAdapterError, "COMMAND_TIMEOUT"):
-                SubprocessRunner(raw).run(("synthetic-command",), timeout_seconds=1.0)
+            with self.assertRaisesRegex(HostedAdapterError, "COMMAND_TIMEOUT") as caught:
+                SubprocessRunner(scratch).run(("synthetic-command",), timeout_seconds=1.0)
 
         terminate.assert_called_once()
         close.assert_called_once()
-        retained = (raw / "command-001.raw.log").read_bytes()
-        self.assertIn(b"timeout-stdout\x00-final", retained)
-        self.assertIn(b"timeout-stderr\x00-final", retained)
-        self.assertIn(b"api=TerminateJobObject winerror=0", retained)
+        self.assertIn("command_returncode=124", caught.exception.__notes__)
+        self.assertIn("command_timed_out=True", caught.exception.__notes__)
 
-    def test_timeout_retains_primary_and_cleanup_errors(self) -> None:
-        raw = Path(self.directory.name) / "cleanup-error-raw"
+    def test_timeout_preserves_primary_and_cleanup_errors(self) -> None:
+        scratch = Path(self.directory.name) / "cleanup-error-scratch"
         process = _FakeProcess(timeout=True)
         with (
             mock.patch.object(hosted_cli.os, "name", "nt"),
@@ -131,19 +126,13 @@ class HostedWindowsJobRunnerTests(unittest.TestCase):
             ),
         ):
             with self.assertRaisesRegex(HostedAdapterError, "COMMAND_TIMEOUT") as caught:
-                SubprocessRunner(raw).run(("synthetic-command",), timeout_seconds=1.0)
+                SubprocessRunner(scratch).run(("synthetic-command",), timeout_seconds=1.0)
 
         self.assertTrue(any("termination" in note for note in caught.exception.__notes__))
         self.assertTrue(any("close" in note for note in caught.exception.__notes__))
-        retained = (raw / "command-001.raw.log").read_bytes()
-        self.assertIn(b"primary_timeout_type=TimeoutExpired", retained)
-        self.assertIn(b"termination_error_type=OSError", retained)
-        self.assertIn(b"close_error_type=OSError", retained)
-        self.assertIn(b"timeout-stdout\x00-final", retained)
-        self.assertIn(b"timeout-stderr\x00-final", retained)
 
-    def test_windows_job_setup_failure_retains_original_output_and_diagnostics(self) -> None:
-        raw = Path(self.directory.name) / "setup-failure-raw"
+    def test_windows_job_setup_failure_reports_containment_code(self) -> None:
+        scratch = Path(self.directory.name) / "setup-failure-scratch"
         error = WindowsJobError(
             "hosted-cli-command",
             ("api=AssignProcessToJobObject winerror=5",),
@@ -157,12 +146,7 @@ class HostedWindowsJobRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 HostedAdapterError, "PROCESS_CONTAINMENT_UNAVAILABLE"
             ):
-                SubprocessRunner(raw).run(("synthetic-command",), timeout_seconds=1.0)
-
-        retained = (raw / "command-001.raw.log").read_bytes()
-        self.assertIn(b"setup-stdout\x00\xff", retained)
-        self.assertIn(b"setup-stderr\x00\xfe", retained)
-        self.assertIn(b"api=AssignProcessToJobObject winerror=5", retained)
+                SubprocessRunner(scratch).run(("synthetic-command",), timeout_seconds=1.0)
 
 
 if __name__ == "__main__":

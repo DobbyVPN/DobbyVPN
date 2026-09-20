@@ -405,7 +405,9 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertNotIn("Download TrustTunnel Windows lib", workflow)
         self.assertNotIn("Download TrustTunnel Linux lib", workflow)
         self.assertNotIn("go-go-tunnel/releases/download/v1.0.", workflow)
-        self.assertIn("'.github/scripts/desktop_build.py'", workflow)
+        self.assertIn("python .github/scripts/desktop_build.py libs --platform", workflow)
+        self.assertIn("python .github/scripts/desktop_build.py ui \\", workflow)
+        self.assertIn("python .github/scripts/desktop_build.py ui-test \\", workflow)
 
     def test_wait_for_socket_accepts_unix_domain_socket(self) -> None:
         path = Path("/tmp/dobbyvpn-test/control.sock")
@@ -633,6 +635,11 @@ class DesktopBuildTests(unittest.TestCase):
                 ),
                 mock.patch.object(
                     desktop_build,
+                    "install_linux_gui_packages",
+                    side_effect=lambda skip: calls.append(("gui", skip)),
+                ),
+                mock.patch.object(
+                    desktop_build,
                     "install_linux_trusttunnel_bridge",
                     side_effect=lambda skip: calls.append(("bridge", skip)),
                 ),
@@ -656,7 +663,10 @@ class DesktopBuildTests(unittest.TestCase):
                 desktop_build.prepare_go_test_dependencies(True, True)
 
         self.assertEqual(calls[0], ("deps", ("linux", True), {}))
-        self.assertEqual(calls[1:], [("bridge", True), ("libcxx", True), ("modules", True)])
+        self.assertEqual(
+            calls[1:],
+            [("gui", True), ("bridge", True), ("libcxx", True), ("modules", True)],
+        )
         self.assertEqual(environment_updates["CGO_ENABLED"], "1")
         self.assertIn(f"-L{desktop_build.GO_MODULE_DIR}", environment_updates["CGO_LDFLAGS"])
         self.assertIn(f"-L{runtime}", environment_updates["CGO_LDFLAGS"])
@@ -710,6 +720,29 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertEqual(command[-1], "./cmd/dobbyui/")
         self.assertEqual(run.call_args.kwargs["env"]["CGO_ENABLED"], "1")
         self.assertEqual(run.call_args.kwargs["env"]["GOOS"], "linux")
+
+    def test_linux_gui_package_probe_accepts_empty_pkg_config_output(self) -> None:
+        with (
+            mock.patch.object(desktop_build, "host_platform", return_value="linux"),
+            mock.patch.object(desktop_build.shutil, "which", return_value="/usr/bin/pkg-config"),
+            mock.patch.object(desktop_build, "run_capture", return_value=""),
+            mock.patch.object(desktop_build, "run") as run,
+        ):
+            desktop_build.install_linux_gui_packages(True)
+
+        run.assert_not_called()
+
+    def test_linux_dependency_probe_requires_pkg_config(self) -> None:
+        with (
+            mock.patch.object(desktop_build, "host_platform", return_value="linux"),
+            mock.patch.object(
+                desktop_build,
+                "command_exists",
+                side_effect=lambda name: name != "pkg-config",
+            ),
+        ):
+            with self.assertRaisesRegex(SystemExit, "Missing required commands: pkg-config"):
+                desktop_build.install_linux_packages(True)
 
     def test_macos_go_ui_build_receives_deployment_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -870,7 +903,8 @@ class DesktopBuildTests(unittest.TestCase):
         )
 
         for name in ("windows_grpcvpnserver.exe", "dobby_bridge.dll", "wintun.dll"):
-            self.assertEqual(desktop_libraries.count(f"go_module/{name}"), 2)
+            self.assertIn(f"            {name}", desktop_libraries)
+            self.assertIn(f"            go_module/{name}\n", desktop_libraries)
             self.assertIn(name, build_batch)
             self.assertIn(f'"{name}"', installers)
         self.assertIn("WINTUN_AMD64_DLL_SHA256", desktop_build.__dict__)

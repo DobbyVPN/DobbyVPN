@@ -43,7 +43,7 @@ succeed; a failure is not converted into a skip or a pass.
 `functional.network-transition` remains defined for focused diagnostics but is
 deferred from both qualification suites. Suspend/resume is not yet defined as
 a qualification scenario. A focused or explicitly selected scenario is
-diagnostic evidence only, not a claim that the suite passed. The default
+diagnostic output only, not a claim that the suite passed. The default
 qualification suites have no accepted unavailable skips.
 
 ## Hosted boundaries
@@ -52,6 +52,12 @@ Hosted Windows/macOS runs use the production Go/Fyne widgets and authenticated
 service boundary through the headless Fyne driver; they do not claim that a
 hosted runner displayed a native desktop window. The real native-window journey
 belongs to local full qualification and requires an interactive desktop.
+The local native-window journey keeps service fault injection separate from UI
+recovery: process-loss control kills/restarts only the desktop service, then
+the visible Go/Fyne window re-enters the profile and clicks Connect. The lane
+repeats tunnel, routed public-IP, stability, and throughput observations after
+both explicit reconnect and UI-driven process-loss recovery; a CLI
+`connect-profile` shortcut is not qualification coverage.
 
 Android hosted mini uses a rendered emulator and the real VPN service. Its
 `gui-auto` lane takes the first complete `Outline` or `Xray` protocol block
@@ -98,9 +104,11 @@ observed.
 ## Results, diagnostics, and cleanup
 
 The engine decides pass/fail from behavior and required reset/cleanup.
-Logs are diagnostics: retain available output and report collection problems,
-but do not gate cleanup or test success on log filenames, completeness, or
-heuristic inspection.
+Command, service, app, and device output is ephemeral. Adapters keep output in
+memory only for parsing and assertions, and use disposable scratch files only
+when an external tool requires a regular file. Scratch is removed after each
+run, including failed runs; the compact structured result is the only retained
+functional output.
 
 A failed test remains failed even if cleanup succeeds. A failed cleanup is
 reported separately and blocks successful release completion.

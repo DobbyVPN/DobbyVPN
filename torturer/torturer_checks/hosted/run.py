@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import re
 import time
-import traceback
 
 from torturer_contract.functional.engine import FunctionalEngine
 from torturer_contract.functional.results import (
@@ -88,7 +87,7 @@ def _coverage_contract(
 ) -> dict[str, object]:
     """Summarize results; only a complete suite can qualify.
 
-    Unavailable results are never accepted as hosted qualification evidence.
+    Unavailable results are never accepted by the hosted coverage contract.
     A focused ``--scenario`` invocation remains useful for diagnostics, but
     is explicitly incomplete even if it names every scenario by hand.
     """
@@ -224,7 +223,7 @@ def _run_scenarios(
         )
         reset_called = False
 
-        def finalize_evidence() -> None:
+        def cleanup_scenario() -> None:
             nonlocal reset_called
             if reset_called:
                 return
@@ -263,13 +262,26 @@ def _run_scenarios(
             if reset_error is not None:
                 raise reset_error
 
-        result = engine.run(
-            scenario,
-            adapter,
-            provenance,
-            connection,
-            cleanup_provider=finalize_evidence,
-        )
+        try:
+            result = engine.run(
+                scenario,
+                adapter,
+                provenance,
+                connection,
+                cleanup_provider=cleanup_scenario,
+            )
+        except BaseException as primary_error:
+            # FunctionalEngine invokes the provider on ordinary result paths,
+            # but adapter execution errors are deliberately propagated before
+            # it can build a result.  Make the same reset guarantee hold for
+            # those paths without replacing the useful primary exception.
+            try:
+                cleanup_scenario()
+            except BaseException as cleanup_error:
+                primary_error.add_note(
+                    f"scenario_cleanup_error={type(cleanup_error).__name__}"
+                )
+            raise
         payload = result.to_dict()
         results.append(payload)
         assertions = payload.get("assertions")
@@ -388,8 +400,7 @@ def _execute_lane(
                 _finalize_adapter(adapter, deadline)
             except Exception as finalization_error:
                 error.add_note(
-                    "Adapter finalization also failed:\n"
-                    + "".join(traceback.format_exception(finalization_error)).rstrip()
+                    f"adapter_finalization_error={type(finalization_error).__name__}"
                 )
         raise
 
@@ -438,8 +449,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--raw-log-dir", type=Path)
-    parser.add_argument("--app-log", type=Path, help="Complete application log")
-    parser.add_argument("--service-log", type=Path, help="Complete VPN service log")
     parser.add_argument("--adb", type=Path)
     parser.add_argument("--scenario", action="append", dest="scenario_ids", help="Run one canonical scenario; repeat to select a diagnostic subset.")
     parser.add_argument("--service-pid", type=int)
@@ -454,7 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    # Reject unsupported suite requests before creating logs, constructing an
+    # Reject unsupported suite requests before creating scratch, constructing an
     # adapter, or doing any candidate setup.  In particular, Android full is
     # a physical-device extension and must not silently become mini.
     validate_suite(args.suite, platform=args.platform, entrypoint="hosted")
@@ -475,23 +484,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.source_sha is not None
             else None
         )
-        raw_dir = args.raw_log_dir or args.output.parent / "hosted-command-raw"
+        raw_dir = args.raw_log_dir or args.output.parent / "hosted-scratch"
         _ensure_directory(raw_dir)
-        app_log = args.app_log if args.platform != "android" else None
-        service_log = args.service_log if args.platform == "linux" else None
-        for path in (app_log, service_log):
-            if path is None:
-                continue
-            if not path.is_file():
-                raise ValueError("VPN log must be a pre-created regular file")
-        runner = SubprocessRunner(
-            raw_dir,
-            environment=(
-                {"DOBBY_CLI_LOG_PATH": str(app_log)}
-                if args.platform != "android" and app_log is not None
-                else None
-            ),
-        )
+        runner = SubprocessRunner(raw_dir)
         adapter = adapter_for_platform(
             args.platform,
             cli=args.cli,
@@ -507,7 +502,6 @@ def main(argv: list[str] | None = None) -> int:
             network_interface=args.network_interface,
             routing_firewall_helper=args.routing_firewall_helper,
             network_transition_helper=args.network_transition_helper,
-            service_log=service_log,
         )
         set_progress_sink = getattr(adapter, "set_progress_sink", None)
         if callable(set_progress_sink):
@@ -566,10 +560,7 @@ def main(argv: list[str] | None = None) -> int:
                 _finalize_adapter(adapter, lane_deadline)
             except Exception as finalization_error:
                 error.add_note(
-                    "Adapter finalization also failed:\n"
-                    + "".join(
-                        traceback.format_exception(finalization_error)
-                    ).rstrip()
+                    f"adapter_finalization_error={type(finalization_error).__name__}"
                 )
         raise
 

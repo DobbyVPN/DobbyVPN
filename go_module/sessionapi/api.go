@@ -384,25 +384,17 @@ func safeConfigError(raw []byte, err error) error {
 	return failure(FailureInvalidArgument, "configuration could not be loaded")
 }
 
-func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSequence uint64, rawConfig []byte) (result ConfigureResult, err error) {
+func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSequence uint64, rawConfig []byte) (ConfigureResult, error) {
 	s, err := m.get(sessionID)
 	if err != nil {
 		return ConfigureResult{}, err
 	}
 	s.mu.Lock()
-	if s.sequence != expectedSequence {
-		s.mu.Unlock()
-		return ConfigureResult{}, failure(FailureConflict, "session changed; refresh its snapshot before configuring")
-	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed {
-		s.mu.Unlock()
-		return ConfigureResult{}, failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
-	}
-	if err := ctx.Err(); err != nil {
-		s.mu.Unlock()
-		return ConfigureResult{}, failureWithCause(FailureCanceled, "configuration was canceled before loading", err)
-	}
+	preloadErr := validateConfigureBeforeLoad(ctx, s, expectedSequence)
 	s.mu.Unlock()
+	if preloadErr != nil {
+		return ConfigureResult{}, preloadErr
+	}
 
 	loaded, parsed, loadErr := m.loadConfig(ctx, rawConfig)
 	if loadErr != nil {
@@ -411,21 +403,45 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.sequence != expectedSequence {
-		return ConfigureResult{}, failure(FailureConflict, "session changed while configuration was loading; refresh its snapshot")
-	}
-	if err := ctx.Err(); err != nil {
-		return ConfigureResult{}, failureWithCause(FailureCanceled, "configuration was canceled before it was accepted", err)
-	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed {
-		return ConfigureResult{}, failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
+	if acceptErr := validateConfigureBeforeAccept(ctx, s, expectedSequence); acceptErr != nil {
+		return ConfigureResult{}, acceptErr
 	}
 	s.profiles, s.digest, s.sourceKind, s.warnings, s.configured = parsed.profiles, parsed.digest, loaded.Kind, parsed.warnings, true
 	s.active, s.lastFailure, s.lastFailureMessage, s.state, s.cleanupDone, s.cleanupFailed = nil, "", "", StateConfigured, true, false
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
 	m.appendLocked(s)
-	result = ConfigureResult{Digest: s.digest, Sequence: s.sequence, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings), SourceKind: s.sourceKind}
+	result := ConfigureResult{Digest: s.digest, Sequence: s.sequence, Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings), SourceKind: s.sourceKind}
 	return cloneConfigure(result), nil
+}
+
+func validateConfigureBeforeLoad(ctx context.Context, s *session, expectedSequence uint64) error {
+	if s.sequence != expectedSequence {
+		return failure(FailureConflict, "session changed; refresh its snapshot before configuring")
+	}
+	if configurationBlocked(s) {
+		return failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
+	}
+	if err := ctx.Err(); err != nil {
+		return failureWithCause(FailureCanceled, "configuration was canceled before loading", err)
+	}
+	return nil
+}
+
+func validateConfigureBeforeAccept(ctx context.Context, s *session, expectedSequence uint64) error {
+	if s.sequence != expectedSequence {
+		return failure(FailureConflict, "session changed while configuration was loading; refresh its snapshot")
+	}
+	if err := ctx.Err(); err != nil {
+		return failureWithCause(FailureCanceled, "configuration was canceled before it was accepted", err)
+	}
+	if configurationBlocked(s) {
+		return failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
+	}
+	return nil
+}
+
+func configurationBlocked(s *session) bool {
+	return s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed
 }
 
 func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSequence uint64, target StartTarget) (result StartResult, err error) {
@@ -570,30 +586,7 @@ func (m *Manager) reportHealthFailure(s *session, generation uint64) {
 	if generation == 0 || generation != s.generation || s.state != StateConnected {
 		return
 	}
-	if s.activeTarget.Mode == AutoSelect {
-		now := m.now()
-		if s.hasConnectedAt && now.Sub(s.lastConnectedAt) >= autoRecoveryStable {
-			s.recoveryCount = 0
-			s.recoveryOriginGeneration = 0
-		}
-		if s.recoveryCount < autoRecoveryLimit {
-			s.recoveryCount++
-			s.restartAfterCleanup = true
-			s.recovering = true
-			if s.recoveryOriginGeneration == 0 {
-				s.recoveryOriginGeneration = generation
-			}
-		} else {
-			s.failureAfterCleanup = FailureRuntime
-			s.failureMessageAfterCleanup = autoRecoveryMessage
-			s.recovering = false
-			s.recoveryOriginGeneration = 0
-		}
-	} else {
-		s.failureAfterCleanup = FailureRuntime
-		s.recovering = false
-		s.recoveryOriginGeneration = 0
-	}
+	m.prepareHealthRecoveryLocked(s, generation)
 	s.state = StateStopping
 	m.appendLocked(s)
 	if s.cancel != nil {
@@ -604,6 +597,32 @@ func (m *Manager) reportHealthFailure(s *session, generation uint64) {
 		<-done
 		m.finishAfterStop(s, generation, failure(FailureCanceled, "health check requested failover"))
 	}()
+}
+
+func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64) {
+	if s.activeTarget.Mode != AutoSelect {
+		s.failureAfterCleanup = FailureRuntime
+		s.recovering = false
+		s.recoveryOriginGeneration = 0
+		return
+	}
+	if s.hasConnectedAt && m.now().Sub(s.lastConnectedAt) >= autoRecoveryStable {
+		s.recoveryCount = 0
+		s.recoveryOriginGeneration = 0
+	}
+	if s.recoveryCount < autoRecoveryLimit {
+		s.recoveryCount++
+		s.restartAfterCleanup = true
+		s.recovering = true
+		if s.recoveryOriginGeneration == 0 {
+			s.recoveryOriginGeneration = generation
+		}
+		return
+	}
+	s.failureAfterCleanup = FailureRuntime
+	s.failureMessageAfterCleanup = autoRecoveryMessage
+	s.recovering = false
+	s.recoveryOriginGeneration = 0
 }
 
 func (m *Manager) Snapshot(_ context.Context, sessionID string) (result SnapshotResult, err error) {

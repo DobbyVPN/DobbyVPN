@@ -16,6 +16,7 @@ class _FakeBase:
         self.process_loss_verified = process_loss_verified
         self.executed: list[str] = []
         self.native_preparations = 0
+        self.native_service_restarts = 0
         self.reset_calls = 0
         self.finalize_calls = 0
 
@@ -30,6 +31,11 @@ class _FakeBase:
 
     def prepare_native_connect(self, _timeout: float) -> None:
         self.native_preparations += 1
+
+    def restart_service_for_native_ui(self, _timeout: float):
+        self.native_service_restarts += 1
+        self.connected = False
+        return {"process_loss_verified": self.process_loss_verified}
 
     def _connected(self, _timeout: float) -> bool:
         return self.connected
@@ -49,7 +55,11 @@ class _FakeBase:
         if step.operation == "measure_stability":
             return {"stability_verified": True}
         if step.operation == "measure_throughput":
-            return {"throughput_positive": True}
+            return {
+                "latency_ms": 1.0,
+                "download_mbps": 2.0,
+                "upload_mbps": 3.0,
+            }
         return {}
 
     def reset(self, timeout_seconds: float) -> None:
@@ -82,6 +92,9 @@ class _FakeUI:
                 "settings_source_commit": self.settings_verified,
             }
         if operation == "process_loss_recovery":
+            self.operations.extend(("configure", "connect"))
+            if self.base is not None:
+                self.base.connected = True
             return {
                 "status": "Connected" if self.recovery_verified else "Disconnected",
                 "reconnecting_seen": self.recovery_verified,
@@ -93,6 +106,19 @@ class _FakeUI:
 
 
 class NativeUIJourneyTests(unittest.TestCase):
+    def test_throughput_proof_requires_positive_measured_values(self) -> None:
+        self.assertTrue(native_ui._positive_throughput({
+            "latency_ms": 1.0,
+            "download_mbps": 2.0,
+            "upload_mbps": 3.0,
+        }))
+        self.assertFalse(native_ui._positive_throughput({"throughput_positive": True}))
+        self.assertFalse(native_ui._positive_throughput({
+            "latency_ms": 1.0,
+            "download_mbps": float("nan"),
+            "upload_mbps": 3.0,
+        }))
+
     def test_native_actions_wrap_base_observations_and_fault_injection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -131,10 +157,11 @@ class NativeUIJourneyTests(unittest.TestCase):
                 result = native_ui.run_journey(args)
             self.assertTrue(result["complete"])
             self.assertIn("measure_throughput", base.executed)
-            self.assertIn("process_loss", base.executed)
+            self.assertNotIn("process_loss", base.executed)
+            self.assertEqual(base.native_service_restarts, 1)
             self.assertNotIn("connect", base.executed)
             self.assertNotIn("disconnect", base.executed)
-            self.assertEqual(base.native_preparations, 2)
+            self.assertEqual(base.native_preparations, 3)
             self.assertIn("connect", fake_ui.operations)
             self.assertIn("disconnect", fake_ui.operations)
             self.assertIn("reconnect", fake_ui.operations)

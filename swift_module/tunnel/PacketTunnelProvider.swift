@@ -6,7 +6,6 @@ import Foundation
 import Darwin
 import SystemConfiguration
 import Network
-import CoreFoundation
 
 private enum GomobileProviderSessionClient {
     static func configured(sessionID: String, sequence: Int64, rawConfiguration: Data) -> Data {
@@ -18,7 +17,7 @@ private enum GomobileProviderSessionClient {
     }
 }
 
-/// Go snapshots are authoritative; this callback only wakes the observers.
+/// Go snapshots are authoritative; callbacks synchronize native tunnel state.
 // gomobile emits both an Objective-C protocol and a proxy class with the
 // same name. Swift imports the protocol as `DobbyvpnPlatformCallbacksProtocol`
 // to disambiguate it from the proxy class; conforming to the class name would
@@ -79,14 +78,6 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         state: String?,
         failureCode: String?
     ) {
-        let name = CFNotificationName(rawValue: IOSDarwinEventSink.notificationName as CFString)
-        CFNotificationCenterPostNotification(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            name,
-            nil,
-            nil,
-            true
-        )
         stateHandler(sessionID, generation, state, failureCode)
     }
 }

@@ -178,8 +178,8 @@ func TestDefaultConfigLoaderEnforcesOneMiBForInlineAndURL(t *testing.T) {
 	if err != nil || len(loaded.Raw) != maxConfigBytes {
 		t.Fatalf("exact-limit inline load size=%d, error=%v", len(loaded.Raw), err)
 	}
-	if _, err := parseConfig(exact); err != nil {
-		t.Fatalf("exact-limit parser rejected input: %v", err)
+	if _, parseErr := parseConfig(exact); parseErr != nil {
+		t.Fatalf("exact-limit parser rejected input: %v", parseErr)
 	}
 	exactServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(exact)
@@ -190,11 +190,11 @@ func TestDefaultConfigLoaderEnforcesOneMiBForInlineAndURL(t *testing.T) {
 		t.Fatalf("exact-limit URL load size=%d, error=%v", len(loaded.Raw), err)
 	}
 	tooLarge := append(exact, '#')
-	if _, err := (DefaultConfigLoader{}).Load(context.Background(), tooLarge); CodeOf(err) != FailureInvalidArgument {
-		t.Fatalf("oversized inline error = %v", err)
+	if _, inlineErr := (DefaultConfigLoader{}).Load(context.Background(), tooLarge); CodeOf(inlineErr) != FailureInvalidArgument {
+		t.Fatalf("oversized inline error = %v", inlineErr)
 	}
-	if _, err := parseConfig(tooLarge); CodeOf(err) != FailureMalformedConfig {
-		t.Fatalf("oversized parser error = %v", err)
+	if _, parseErr := parseConfig(tooLarge); CodeOf(parseErr) != FailureMalformedConfig {
+		t.Fatalf("oversized parser error = %v", parseErr)
 	}
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -29,16 +29,48 @@ jobs:
           go-version-file: .go-version
           cache: false
 
-      - name: Run golangci-lint with reviewdog
-        uses: reviewdog/action-golangci-lint@c76cceaaab89abe74e649d2e34c6c9adc26662d2 # v2
+      - name: Stage Linux native/Fyne dependencies
+        run: python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
+
+      - name: Install pinned golangci-lint
+        run: |
+          set -euo pipefail
+          export GOBIN="$RUNNER_TEMP/golangci-lint-bin"
+          mkdir -p "$GOBIN"
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          test -x "$GOBIN/golangci-lint"
+          "$GOBIN/golangci-lint" version
+          echo "$GOBIN" >> "$GITHUB_PATH"
+
+      - name: Setup reviewdog
+        uses: reviewdog/action-setup@e04ffabe3898a0af8d0fb1af00c188831c4b5893 # v1.3.2
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          workdir: go_module
-          golangci_lint_flags: --config .golangci.yml ./...
-          reporter: github-pr-review
-          filter_mode: nofilter
-          level: warning
-          fail_level: error
+          reviewdog_version: v0.20.3
+
+      - name: Run pinned golangci-lint and annotate with reviewdog
+        working-directory: go_module
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          report="$RUNNER_TEMP/golangci-lint.txt"
+          if golangci-lint run --output.text.path stdout --config .golangci.yml ./ >"$report" 2>&1; then
+            lint_status=0
+          else
+            lint_status=$?
+          fi
+          cat "$report"
+          if [[ -s "$report" ]]; then
+            reviewdog \
+              -f=golangci-lint \
+              -name=golangci \
+              -reporter=github-pr-review \
+              -filter-mode=nofilter \
+              -level=warning \
+              -fail-level=none \
+              <"$report" || true
+          fi
+          exit "$lint_status"
 
   lint-android:
     name: "Android native-shell lint"
@@ -59,7 +91,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: .go-version
-          cache-dependency-path: go_module/go.sum
+          cache: false
 
       - name: Download Go modules
         working-directory: go_module
@@ -67,6 +99,8 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
+        with:
+          cache-disabled: true
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4

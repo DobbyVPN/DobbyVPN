@@ -671,7 +671,9 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
 
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("missing kernel module", notes)
+        self.assertIn("command_stdout_bytes=0", notes)
+        self.assertIn("command_stderr_bytes=58", notes)
+        self.assertNotIn("missing kernel module", notes)
         finish = [
             value
             for _name, value in self.runner.staged_control_payloads
@@ -767,10 +769,13 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
         notes = "\n".join(raised.exception.__notes__)
         self.assertIn("command_returncode=0", notes)
-        self.assertIn("NoBeanDefFoundException", notes)
-        self.assertIn("PermissionEventsChannel", notes)
-        self.assertIn(b"INSTRUMENTATION_RESULT: shortMsg=Process crashed.", notes.encode())
-        self.assertIn("command_stderr=b''", notes)
+        self.assertIn(
+            f"command_stdout_bytes={len(self.runner.instrumentation)}",
+            notes,
+        )
+        self.assertIn("command_stderr_bytes=0", notes)
+        self.assertNotIn("NoBeanDefFoundException", notes)
+        self.assertNotIn("PermissionEventsChannel", notes)
         self.assertFalse(any(call[1:2] == ("exec-out",) for call in self.runner.calls))
 
     def test_junit_failure_is_rejected_even_with_instrumentation_code_minus_one(self) -> None:
@@ -791,8 +796,13 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 self.connection,
             )
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn(b"FAILURES!!!", notes.encode())
-        self.assertIn(b"INSTRUMENTATION_CODE: -1", notes.encode())
+        self.assertIn(
+            f"command_stdout_bytes={len(self.runner.instrumentation)}",
+            notes,
+        )
+        self.assertIn("command_stderr_bytes=0", notes)
+        self.assertNotIn("FAILURES!!!", notes)
+        self.assertNotIn("INSTRUMENTATION_CODE: -1", notes)
 
     def test_junit_zero_or_empty_summary_is_not_success(self) -> None:
         for output in (
@@ -880,13 +890,16 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             "ANDROID_OBSERVATION_SOURCE_INVALID",
         )
 
-    def test_command_evidence_uses_distinct_names_when_raw_directory_is_reused(self) -> None:
+    def test_command_staging_is_unique_and_removed_after_use(self) -> None:
         scenario = get_scenario("functional.core-connection")
         first, _profile_one, _output_one = self.adapter._write_command(scenario)
         first_bytes = first.read_bytes()
         second, _profile_two, _output_two = self.adapter._write_command(scenario)
         self.assertNotEqual(first, second)
         self.assertEqual(first.read_bytes(), first_bytes)
+        self.adapter._cleanup_local_scratch()
+        self.assertFalse(first.exists())
+        self.assertFalse(second.exists())
 
     def test_advanced_android_operations_have_unique_token_bound_controls(self) -> None:
         scenario = get_scenario("functional.network-transition")
@@ -1040,11 +1053,10 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 self.assertIsNone(adapter._validated_physical_interface)
                 self.assertIsNone(adapter._validated_physical_transport)
                 notes = "\n".join(getattr(raised.exception, "__notes__", ()))
-                if suffix == "direct-success":
-                    self.assertIn('"status": 200', notes)
-                if suffix == "vpn-invalid":
-                    self.assertIn("not-an-ip", notes)
-                    self.assertIn('\\"not-an-ip\\"', notes)
+                if suffix in {"direct-success", "vpn-invalid"}:
+                    self.assertIn("android_routing_phase=blocked", notes)
+                    self.assertNotIn("status", notes)
+                    self.assertNotIn("not-an-ip", notes)
                 if suffix == "rule-not-hit":
                     self.assertIn("packets=0", str(raised.exception))
                 self.assertTrue(
@@ -1124,9 +1136,9 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         ) as raised:
             adapter._routing_proof("routing.json", time.monotonic() + 5.0)
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("ANDROID_ROUTING_RULE_REMOVE_FAILED", notes)
-        self.assertIn("remove stdout", notes)
-        self.assertIn("remove stderr", notes)
+        self.assertIn("android_routing_secondary_error=ANDROID_ROUTING_RULE_REMOVE_FAILED", notes)
+        self.assertNotIn("remove stdout", notes)
+        self.assertNotIn("remove stderr", notes)
         finish = [
             value for _name, value in runner.staged_control_payloads
             if value.get("phase") == "finish"
@@ -1352,7 +1364,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         ]
         self.assertEqual(len(absent_probes), 2)
 
-    def test_process_loss_probe_retains_nonzero_stdout_and_stderr(self) -> None:
+    def test_process_loss_probe_reports_bounded_status(self) -> None:
         with self.assertRaisesRegex(
             ScenarioExecutionError, "ANDROID_PROCESS_LOSS_PROBE_FAILED"
         ) as raised:
@@ -1362,15 +1374,12 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 "ANDROID_PROCESS_LOSS_PROBE_FAILED",
             )
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn(
-            f"command=({str(self.adb)!r}, 'shell', 'pidof', 'com.dobby.vpn')",
-            notes,
-        )
         self.assertIn("command_returncode=1", notes)
-        self.assertIn("adb pidof: no matching process", notes)
-        self.assertIn("command_stderr=b'adb pidof: no matching process\\n'", notes)
+        self.assertIn("command_stdout_bytes=0", notes)
+        self.assertIn("command_stderr_bytes=31", notes)
+        self.assertNotIn("adb pidof: no matching process", notes)
 
-    def test_preserve_active_start_failure_retains_full_command_result(self) -> None:
+    def test_preserve_active_start_failure_reports_bounded_status(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "start-failure-raw")
         runner.activity_start_result = CommandResult(
             ("synthetic", "am", "start"),
@@ -1395,10 +1404,11 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 "command.json", time.monotonic() + 5.0, preserve_active=True
             )
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("command=", notes)
         self.assertIn("command_returncode=8", notes)
-        self.assertIn("start stdout diagnostic", notes)
-        self.assertIn("start stderr diagnostic", notes)
+        self.assertIn("command_stdout_bytes=24", notes)
+        self.assertIn("command_stderr_bytes=24", notes)
+        self.assertNotIn("start stdout diagnostic", notes)
+        self.assertNotIn("start stderr diagnostic", notes)
         self.assertFalse(any("instrument" in call for call in runner.calls))
 
     def test_android_advertises_transition_without_limitations(self) -> None:
@@ -1507,7 +1517,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         )
         self.assertEqual(ethernet_transition[-2:], ("ethernet", "eth0"))
 
-    def test_android_external_control_retains_primary_and_secondary_output(self) -> None:
+    def test_android_external_control_reports_bounded_primary_status(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "external-errors")
         runner.transition_failure = CommandResult(
             ("synthetic",),
@@ -1534,8 +1544,10 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 "network_transition", time.monotonic() + 5.0
             )
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("primary diagnostic", notes)
-        self.assertIn("secondary restore failure", notes)
+        self.assertIn("command_stdout_bytes=19", notes)
+        self.assertIn("command_stderr_bytes=42", notes)
+        self.assertNotIn("primary diagnostic", notes)
+        self.assertNotIn("secondary restore failure", notes)
 
     def test_cleanup_failure_does_not_replace_product_failure(self) -> None:
         self.runner.observation = _observation("DRIVER_ERROR")
@@ -1548,12 +1560,10 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 self.connection,
             )
         self.assertEqual(len(raised.exception.__notes__), 1)
-        self.assertTrue(
-            raised.exception.__notes__[0].startswith(
-                "Android cleanup also failed:\nTraceback"
-            )
+        self.assertEqual(
+            raised.exception.__notes__,
+            ["android_cleanup_error=ANDROID_CLEANUP_FAILED"],
         )
-        self.assertIn("ANDROID_CLEANUP_FAILED", raised.exception.__notes__[0])
 
     def test_cleanup_removes_owned_chain_left_by_killed_run(self) -> None:
         self.assertIsNone(
@@ -1586,7 +1596,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIsNotNone(failure)
         self.assertIn("ANDROID_ROUTING_RULE_CLEANUP_FAILED", str(failure))
 
-    def test_cleanup_retains_routing_and_app_cleanup_failures(self) -> None:
+    def test_cleanup_reports_routing_and_app_cleanup_failures_safely(self) -> None:
         self.runner.routing_cleanup_residual = True
         self.runner.fail_cleanup = True
 
@@ -1595,7 +1605,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIsNotNone(failure)
         self.assertIn("ANDROID_ROUTING_RULE_CLEANUP_FAILED", str(failure))
         self.assertIn(
-            "ANDROID_CLEANUP_FAILED", "\n".join(failure.__notes__)
+            "android_app_cleanup_error=ANDROID_CLEANUP_FAILED",
+            "\n".join(failure.__notes__),
         )
 
     def test_missing_seam_inputs_are_rejected_and_headless_contract_is_explicit(self) -> None:
@@ -1759,8 +1770,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         gui_discover.assert_called_once()
         matrix_discover.assert_called_once()
         discovery_notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("gui discovery boom", discovery_notes)
-        self.assertIn("matrix discovery boom", discovery_notes)
+        self.assertIn("gui-auto discovery failure=RuntimeError", discovery_notes)
+        self.assertIn("protocol-matrix discovery failure=RuntimeError", discovery_notes)
 
         with (
             patch.object(
@@ -1781,8 +1792,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         gui_finalize.assert_called_once()
         matrix_finalize.assert_called_once()
         finalize_notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("gui finalize boom", finalize_notes)
-        self.assertIn("matrix finalize boom", finalize_notes)
+        self.assertIn("gui-auto finalize failure=RuntimeError", finalize_notes)
+        self.assertIn("protocol-matrix finalize failure=RuntimeError", finalize_notes)
 
     def test_gui_auto_configure_contract_requires_visible_acceptance(self) -> None:
         java_path = (
@@ -2227,8 +2238,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                         **{argument: value},
                     )
 
-    def test_factory_rejects_android_service_log(self) -> None:
-        with self.assertRaisesRegex(ValueError, "does not use service_log"):
+    def test_factory_has_no_service_log_argument(self) -> None:
+        with self.assertRaisesRegex(TypeError, "service_log"):
             adapter_for_platform(
                 "android",
                 profile=self.profile,

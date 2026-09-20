@@ -474,7 +474,7 @@ def install_go(skip_deps: bool) -> None:
 def install_linux_packages(skip_deps: bool) -> None:
     if host_platform() != "linux":
         return
-    required_commands = ["curl", "unzip", "zip", "git", "gcc", "g++"]
+    required_commands = ["curl", "unzip", "zip", "git", "gcc", "g++", "pkg-config"]
     missing_commands = [name for name in required_commands if not command_exists(name)]
     if not missing_commands:
         return
@@ -829,18 +829,23 @@ def go_mod_download(run_tidy: bool) -> None:
 
 
 def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> None:
-    """Materialize the exact native closure required by Linux Go tests.
+    """Materialize the exact native closure required by Linux Go checks.
 
     The pinned go-go-tunnel module embeds its Linux cgo search path in the
-    module cache. The public bridge and libc++ runtimes are therefore staged
-    in the checkout and added through CGO_LDFLAGS/LD_LIBRARY_PATH before the
-    test process starts. This keeps hosted CI on the same dependency contract
-    as the desktop service build without compiling a service as a side effect.
+    module cache. The Fyne desktop headers, public bridge, and libc++ runtimes
+    are therefore staged in one place and added through
+    CGO_LDFLAGS/LD_LIBRARY_PATH before a check starts. This keeps hosted CI on
+    the same dependency contract as the desktop service build without
+    compiling a service as a side effect.
     """
     if host_platform() != "linux":
         fail("prepare-go-test-deps is supported only on Linux CI runners")
 
     ensure_build_dependencies("linux", skip_deps)
+    # Go package loading reaches the shared Fyne UI as well as the VPN
+    # runtime. Keep the native desktop headers in this one dependency owner so
+    # CI lint and tests cannot drift into different cgo environments.
+    install_linux_gui_packages(skip_deps)
     install_linux_trusttunnel_bridge(skip_deps)
     runtime = install_linux_libcxx_runtime(skip_deps)
     go_mod_download(run_go_mod_tidy)
@@ -903,8 +908,18 @@ def install_linux_gui_packages(skip_deps: bool) -> None:
         "wayland-client": "libwayland-dev",
         "xkbcommon": "libxkbcommon-dev",
         "xxf86vm": "libxxf86vm-dev",
+        "x11": "libx11-dev",
+        "xcursor": "libxcursor-dev",
+        "xinerama": "libxinerama-dev",
+        "xrandr": "libxrandr-dev",
+        "xi": "libxi-dev",
     }
-    missing = [name for name in required if not shutil.which("pkg-config") or not run_capture(["pkg-config", "--exists", name])]
+    missing = [
+        name
+        for name in required
+        if not shutil.which("pkg-config")
+        or run_capture(["pkg-config", "--exists", name]) is None
+    ]
     if not missing:
         return
     packages = sorted({required[name] for name in missing})

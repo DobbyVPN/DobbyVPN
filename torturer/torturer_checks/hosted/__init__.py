@@ -2,7 +2,8 @@
 
 The desktop adapter drives the product's public CLI, with an optional
 production Fyne UI wrapper for Windows/macOS GUI qualification; Android
-remains capability-gated until a product-facing profile/session seam exists.
+uses the rendered Go/Fyne activity together with the native VPN-service
+adapter for its hosted UI and functional lanes.
 Scenario meaning and assertions stay in ``torturer_contract.functional``;
 provider credentials and profiles are supplied by a separate trusted workflow
 boundary.

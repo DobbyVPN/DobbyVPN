@@ -52,23 +52,39 @@ func InspectProfiles(raw []byte) ([]ProfileSummary, error) {
 }
 
 func parseConfig(raw []byte) (parsedConfig, error) {
+	root, headers, err := decodeConfig(raw)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	profiles, err := parseProfiles(root, headers)
+	if err != nil {
+		return parsedConfig{}, err
+	}
+	if len(profiles) == 0 {
+		return parsedConfig{}, failure(FailureMalformedConfig, "configuration contains no protocol profiles")
+	}
+	digest := sha256.Sum256(raw)
+	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles}, nil
+}
+
+func decodeConfig(raw []byte) (configRoot, [][]string, error) {
 	if len(raw) > maxConfigBytes {
-		return parsedConfig{}, failure(FailureMalformedConfig, "configuration exceeds the 1 MiB size limit")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "configuration exceeds the 1 MiB size limit")
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return parsedConfig{}, failure(FailureMalformedConfig, "configuration is blank")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "configuration is blank")
 	}
 	text := string(raw)
 	var root configRoot
 	metadata, err := toml.Decode(text, &root)
 	if err != nil {
-		return parsedConfig{}, failure(FailureMalformedConfig, "TOML could not be parsed")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "TOML could not be parsed")
 	}
 	if err := validateRootKeys(metadata.Keys()); err != nil {
-		return parsedConfig{}, err
+		return configRoot{}, nil, err
 	}
 	if !protocolHeaderRE.MatchString(text) {
-		return parsedConfig{}, failure(FailureMalformedConfig, "expected one or more [[Outline]], [[Xray]], or [[TrustTunnel]] sections")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "expected one or more [[Outline]], [[Xray]], or [[TrustTunnel]] sections")
 	}
 
 	headers := protocolHeaderRE.FindAllStringSubmatch(text, -1)
@@ -77,61 +93,71 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 		counts[header[1]]++
 	}
 	if counts["Outline"] != len(root.Outline) || counts["Xray"] != len(root.Xray) || counts["TrustTunnel"] != len(root.TrustTunnel) {
-		return parsedConfig{}, failure(FailureMalformedConfig, "protocol section count does not match TOML data")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "protocol section count does not match TOML data")
 	}
+	return root, headers, nil
+}
 
+func parseProfiles(root configRoot, headers [][]string) ([]RuntimeProfile, error) {
 	next := map[string]int{}
 	profiles := make([]RuntimeProfile, 0, len(headers))
 	var profileIndex int32
 	for _, header := range headers {
-		name := header[1]
-		var block map[string]interface{}
-		var protocol Protocol
-		switch name {
-		case "Outline":
-			block, protocol = root.Outline[next[name]], ProtocolOutline
-		case "Xray":
-			block, protocol = root.Xray[next[name]], ProtocolXray
-		case "TrustTunnel":
-			block, protocol = root.TrustTunnel[next[name]], ProtocolTrustTunnel
-		}
-		next[name]++
-		if cloakValue, present := block["Cloak"]; present {
-			cloak, ok := cloakValue.(bool)
-			if !ok {
-				return parsedConfig{}, failure(FailureMalformedConfig, "Cloak must be a boolean")
-			}
-			if cloak {
-				return parsedConfig{}, failure(FailureUnsupported, "configuration contains a removed Cloak profile")
-			}
-		}
-		if protocol == ProtocolTrustTunnel {
-			if err := validateTrustTunnelVerification(block); err != nil {
-				return parsedConfig{}, err
-			}
-		}
-		payload, err := encodeProfile(block)
+		profile, err := parseProfile(root, next, header[1], profileIndex)
 		if err != nil {
-			return parsedConfig{}, failure(FailureMalformedConfig, "a protocol profile could not be encoded")
+			return nil, err
 		}
-		description, _ := block["Description"].(string)
-		normalized, format, err := normalizeProfile(protocol, block, payload)
-		if err != nil {
-			return parsedConfig{}, err
-		}
-		profiles = append(profiles, RuntimeProfile{
-			Summary:          ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
-			NormalizedFormat: format,
-			NormalizedConfig: normalized,
-			ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),
-		})
+		profiles = append(profiles, profile)
 		profileIndex++
 	}
-	if len(profiles) == 0 {
-		return parsedConfig{}, failure(FailureMalformedConfig, "configuration contains no protocol profiles")
+	return profiles, nil
+}
+
+func parseProfile(root configRoot, next map[string]int, name string, profileIndex int32) (RuntimeProfile, error) {
+	block, protocol := nextProfile(root, next, name)
+	next[name]++
+	if cloakValue, present := block["Cloak"]; present {
+		cloak, ok := cloakValue.(bool)
+		if !ok {
+			return RuntimeProfile{}, failure(FailureMalformedConfig, "Cloak must be a boolean")
+		}
+		if cloak {
+			return RuntimeProfile{}, failure(FailureUnsupported, "configuration contains a removed Cloak profile")
+		}
 	}
-	digest := sha256.Sum256(raw)
-	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles}, nil
+	if protocol == ProtocolTrustTunnel {
+		if err := validateTrustTunnelVerification(block); err != nil {
+			return RuntimeProfile{}, err
+		}
+	}
+	payload, err := encodeProfile(block)
+	if err != nil {
+		return RuntimeProfile{}, failure(FailureMalformedConfig, "a protocol profile could not be encoded")
+	}
+	description, _ := block["Description"].(string)
+	normalized, format, err := normalizeProfile(protocol, block, payload)
+	if err != nil {
+		return RuntimeProfile{}, err
+	}
+	return RuntimeProfile{
+		Summary:          ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
+		NormalizedFormat: format,
+		NormalizedConfig: normalized,
+		ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),
+	}, nil
+}
+
+func nextProfile(root configRoot, next map[string]int, name string) (map[string]interface{}, Protocol) {
+	switch name {
+	case "Outline":
+		return root.Outline[next[name]], ProtocolOutline
+	case "Xray":
+		return root.Xray[next[name]], ProtocolXray
+	case "TrustTunnel":
+		return root.TrustTunnel[next[name]], ProtocolTrustTunnel
+	default:
+		return nil, ""
+	}
 }
 
 func validateRootKeys(keys []toml.Key) error {

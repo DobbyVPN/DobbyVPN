@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import re
 import time
-import traceback
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
@@ -21,9 +20,10 @@ from .cli import (
     HostedCLIAdapter,
     HostedServiceProcessController,
     RoutingProofMixin,
-    _allocate_evidence_path,
+    _allocate_scratch_path,
     _append_command_result_notes,
     _call_with_deadline,
+    _discard_scratch_file,
 )
 
 
@@ -316,7 +316,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 raise HostedAdapterError("SERVICE_CONTROL_INCOMPLETE")
             raw_directory = getattr(runner, "raw_directory", None)
             if not isinstance(raw_directory, Path):
-                raise HostedAdapterError("SERVICE_EVIDENCE_UNAVAILABLE")
+                raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
             control_socket = service_socket or _default_control_socket()
             self.service: MacOSServiceProcessController | None = MacOSServiceProcessController(
                 pid=service_pid,
@@ -338,7 +338,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         self.network_transition_helper = network_transition_helper
         raw_directory = getattr(runner, "raw_directory", None)
         if network_transition_helper is not None and not isinstance(raw_directory, Path):
-            raise HostedAdapterError("NETWORK_TRANSITION_EVIDENCE_UNAVAILABLE")
+            raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
         self.raw_directory = raw_directory
 
     @property
@@ -545,9 +545,9 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             raise ScenarioExecutionError("NETWORK_INTERFACE_STATE_INVALID")
         return "UP" in match.group(1).split(",")
 
-    def _retain_network_repair_evidence(self, paths: tuple[Path, Path]) -> None:
-        for path, kind in zip(paths, ("macos-network-repair-stdout", "macos-network-repair-stderr")):
-            self.runner.retain_external_evidence(path, evidence_kind=kind)
+    def _discard_network_repair_scratch(self, paths: tuple[Path, Path, Path]) -> None:
+        for path in paths:
+            _discard_scratch_file(path)
 
     def _network_transition(self, timeout: float) -> dict[str, object]:
         if (
@@ -558,14 +558,14 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         ):
             raise CapabilityUnavailable()
         deadline = time.monotonic() + timeout
-        state = _allocate_evidence_path(
+        state = _allocate_scratch_path(
             self.raw_directory, "macos-network-repair", ".state"
         )
-        stdout = _allocate_evidence_path(
-            self.raw_directory, "macos-network-repair", ".stdout.raw.log",
+        stdout = _allocate_scratch_path(
+            self.raw_directory, "macos-network-repair", ".stdout.tmp",
         )
-        stderr = _allocate_evidence_path(
-            self.raw_directory, "macos-network-repair", ".stderr.raw.log",
+        stderr = _allocate_scratch_path(
+            self.raw_directory, "macos-network-repair", ".stderr.tmp",
         )
         primary: Exception | None = None
         try:
@@ -599,18 +599,17 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                         primary = error
                     else:
                         primary.add_note(
-                            "Network uplink restoration also failed:\n"
-                            + "".join(traceback.format_exception(error)).rstrip()
+                            f"network_uplink_restoration_error={type(error).__name__}"
                         )
             try:
-                self._retain_network_repair_evidence((stdout, stderr))
+                self._discard_network_repair_scratch((state, stdout, stderr))
             except Exception as error:
                 if primary is None:
                     primary = error
                 else:
                     primary.add_note(
-                        "Network repair evidence retention also failed:\n"
-                        + "".join(traceback.format_exception(error)).rstrip()
+                        "Network repair scratch cleanup also failed: "
+                        + type(error).__name__
                     )
         if primary is not None:
             raise primary

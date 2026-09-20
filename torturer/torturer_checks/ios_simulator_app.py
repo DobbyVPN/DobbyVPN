@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,12 +13,12 @@ import signal
 import subprocess
 import sys
 import time
-import traceback
 from typing import Protocol, Sequence
 
 from torturer_checks.ios_simulator import (
     IOSSimulatorContractError,
     SimulatorApp,
+    iphonesimulator_sdk_version_command,
     simctl_boot_command,
     simctl_bootstatus_command,
     simctl_install_command,
@@ -26,28 +27,56 @@ from torturer_checks.ios_simulator import (
 )
 
 
+def _load_build_runtime_framework_validator():
+    """Load the validator owned by the product's iOS build scripts.
+
+    The functional suite consumes this module for the same preflight that the
+    package script runs.  Loading by source path keeps the test package from
+    becoming a production/build dependency while preserving one validator.
+    """
+    validator_path = (
+        Path(__file__).resolve().parents[2]
+        / "go_module"
+        / "scripts"
+        / "ios_runtime_framework.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "dobbyvpn_ios_runtime_framework", validator_path
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load iOS runtime validator: {validator_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_IOS_RUNTIME_FRAMEWORK = _load_build_runtime_framework_validator()
+IOSRuntimeFrameworkError = _IOS_RUNTIME_FRAMEWORK.IOSRuntimeFrameworkError
+validate_runtime_framework = _IOS_RUNTIME_FRAMEWORK.validate_runtime_framework
+
+
 _RUNTIME = re.compile(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-(\d+(?:-\d+)*)\Z")
+_SDK_VERSION = re.compile(r"\A\s*(\d+)\.(\d+)(?:\.\d+)?\s*\Z")
 _PROJECT_PATH = Path("swift_module/iosApp.xcodeproj")
 _CONFIGURATION = "Release"
 _APP_PRODUCT = "Dobby-Vpn.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
-_APP_LOG_NAME = "app_logs.txt"
-_GO_APP_LOG_NAME = "go_app_logs.jsonl"
 _DEFAULT_ARCHITECTURE = "arm64"
 _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
-_XCODE_ARCHITECTURES = {"arm64": "arm64", "amd64": "x86_64"}
-_DIAGNOSTIC_TAIL_BYTES = 1024 * 1024
-_SIMULATOR_LOG_TAIL_BYTES = 256 * 1024
-_FAILURE_DIAGNOSTIC_TAIL_BYTES = 128 * 1024
-_SIMULATOR_DIAGNOSTIC_TIMEOUT_SECONDS = 30
 _SIMULATOR_PREFERENCE_DOMAIN = "com.apple.iphonesimulator"
 _HARDWARE_KEYBOARD_PREFERENCE = "ConnectHardwareKeyboard"
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS = 15 * 60
+IOS_RUNTIME_FRAMEWORK_VALIDATION_TIMEOUT_SECONDS = 30
 IOS_GO_UI_BUILD_TIMEOUT_SECONDS = 15 * 60
-IOS_UI_TEST_TIMEOUT_SECONDS = 10 * 60
+# A cold Xcode 26 build on the local x86_64 VM can spend almost ten minutes
+# compiling and signing the XCTest runner before the first UI assertion runs.
+# Keep one bounded attempt, but leave enough time for the actual interaction
+# contract; RunBudget still enforces the 30-minute lane and cleanup reserve.
+IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
 
 # These are deliberately stage-specific.  The old contract gave every
@@ -57,6 +86,7 @@ COMMAND_TERMINATION_GRACE_SECONDS = 15
 # keeps the original stage/error visible.
 STAGE_TIMEOUT_SECONDS = {
     "list-devices": 30,
+    "read-sdk-version": 30,
     "read-hardware-keyboard": 10,
     "write-hardware-keyboard": 10,
     "restore-hardware-keyboard": 15,
@@ -66,13 +96,11 @@ STAGE_TIMEOUT_SECONDS = {
     # single bounded wait; the lane budget still reserves cleanup time.
     "bootstatus": 360,
     "install": 180,
-    "locate-app-logs": 30,
-    "clear-app-logs": 30,
     "xctest-ui": IOS_UI_TEST_TIMEOUT_SECONDS,
     "terminate": 60,
-    "collect-core-simulator-diagnostics": 30,
     "shutdown": 120,
     "build-ios-framework": IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
+    "validate-ios-framework": IOS_RUNTIME_FRAMEWORK_VALIDATION_TIMEOUT_SECONDS,
     "package-ios-app": IOS_GO_UI_BUILD_TIMEOUT_SECONDS,
 }
 
@@ -84,9 +112,9 @@ class IOSSimulatorAppContractError(RuntimeError):
 class IOSSimulatorStageError(IOSSimulatorAppContractError):
     """A failure tied to one Simulator lifecycle/build stage.
 
-    ``stage`` is intentionally machine-readable for local result consumers,
-    while the string includes the original command diagnostic so a timeout or
-    non-zero exit is never replaced by a generic "Simulator failed" message.
+    ``stage`` is intentionally machine-readable for local result consumers.
+    Command output stays in memory for assertions and is represented in errors
+    only by bounded status metadata, never by a full stream or command line.
     """
 
     def __init__(
@@ -224,7 +252,9 @@ class SubprocessCommandRunner:
                 start_new_session=(os.name == "posix"),
             )
         except OSError as error:
-            raise IOSSimulatorAppContractError(f"iOS command could not start: {error}") from error
+            raise IOSSimulatorAppContractError(
+                f"iOS command could not start: {type(error).__name__}"
+            ) from None
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as error:
@@ -237,22 +267,19 @@ class SubprocessCommandRunner:
                 stdout = error.output or b""
                 stderr = error.stderr or b""
                 raise IOSSimulatorAppContractError(
-                    f"iOS command timed out after {timeout:g}s; cleanup failed: {cleanup_error}; "
-                    f"stdout={_decode(stdout)}\nstderr={_decode(stderr)}"
-                ) from error
+                    f"iOS command timed out after {timeout:g}s; cleanup failed: "
+                    f"{type(cleanup_error).__name__}; stdout_bytes={len(stdout)} "
+                    f"stderr_bytes={len(stderr)}"
+                ) from None
             raise IOSSimulatorAppContractError(
                 f"iOS command timed out after {timeout:g}s; "
-                f"stdout={_decode(stdout)}\nstderr={_decode(stderr)}"
-            ) from error
+                f"stdout_bytes={len(stdout)} stderr_bytes={len(stderr)}"
+            ) from None
         result = CommandResult(
             returncode=process.returncode if process.returncode is not None else -1,
             stdout=_decode(stdout or b""),
             stderr=_decode(stderr or b""),
         )
-        if result.stdout:
-            print(result.stdout, end="")
-        if result.stderr:
-            print(result.stderr, file=sys.stderr, end="")
         return result
 
 
@@ -302,7 +329,18 @@ class IOSSimulatorAppEvidence:
     app: SimulatorApp
 
 
-def select_available_iphone(simctl_devices_json: str) -> AvailableSimulator:
+def select_available_iphone(
+    simctl_devices_json: str,
+    sdk_version: str,
+) -> AvailableSimulator:
+    sdk_version_text = sdk_version.strip() if isinstance(sdk_version, str) else ""
+    sdk_match = _SDK_VERSION.fullmatch(sdk_version_text)
+    if sdk_match is None:
+        raise IOSSimulatorAppContractError(
+            "active iphonesimulator SDK version is invalid: "
+            f"{sdk_version_text or '<empty>'}"
+        )
+    sdk_major_minor = (int(sdk_match.group(1)), int(sdk_match.group(2)))
     try:
         devices = json.loads(simctl_devices_json)["devices"]
     except (KeyError, TypeError, ValueError) as error:
@@ -315,6 +353,8 @@ def select_available_iphone(simctl_devices_json: str) -> AvailableSimulator:
         if match is None or not isinstance(entries, list):
             continue
         version = tuple(int(part) for part in match.group(1).split("-"))
+        if version[:2] != sdk_major_minor:
+            continue
         for entry in entries:
             if not isinstance(entry, dict) or entry.get("isAvailable") is not True:
                 continue
@@ -327,40 +367,69 @@ def select_available_iphone(simctl_devices_json: str) -> AvailableSimulator:
                 continue
             candidates.append((version, name, udid, runtime))
     if not candidates:
-        raise IOSSimulatorAppContractError("no available iPhone Simulator was found")
+        raise IOSSimulatorAppContractError(
+            "no available iPhone Simulator matches active iphonesimulator SDK "
+            f"{sdk_version_text}"
+        )
     version, name, udid, runtime = max(candidates, key=lambda item: (item[0], item[1], item[2]))
     del version
     return AvailableSimulator(udid=udid, name=name, runtime=runtime)
 
 
+def _active_iphonesimulator_sdk_version(
+    runner: CommandRunner,
+    *,
+    budget: RunBudget,
+) -> str:
+    result = _require_success(
+        runner,
+        iphonesimulator_sdk_version_command(),
+        "read-sdk-version",
+        budget=budget,
+    )
+    sdk_version = result.stdout.strip()
+    if _SDK_VERSION.fullmatch(sdk_version) is None:
+        raise IOSSimulatorStageError(
+            "read-sdk-version",
+            "xcrun returned an invalid active iphonesimulator SDK version: "
+            f"{sdk_version or '<empty>'}",
+        )
+    return sdk_version
+
+
 def xcodebuild_app_command(
     contract: IOSSimulatorAppContract,
     *, candidate_root: Path,
-    device_udid: str,
     work_dir: Path,
+    runtime_framework: Path | None = None,
 ) -> list[str]:
-    try:
-        udid = simctl_boot_command(device_udid)[-1]
-    except IOSSimulatorContractError as error:
-        raise IOSSimulatorAppContractError(str(error)) from error
-    del udid
-    go_framework = candidate_root / "go_module" / "DobbyVPNRuntime.xcframework"
+    go_framework = runtime_framework or candidate_root / "go_module" / "DobbyVPNRuntime.xcframework"
     return [
         "/bin/bash", "scripts/package_ios_app.sh", "iossimulator",
         str(contract.app_path(work_dir)), str(go_framework), contract.architecture,
     ]
 
 
-def simctl_get_app_container_command(device_udid: str) -> list[str]:
+def _validate_runtime_framework(
+    runtime_framework: Path,
+    architecture: str,
+    *,
+    runner: CommandRunner | None = None,
+    timeout_seconds: float = IOS_RUNTIME_FRAMEWORK_VALIDATION_TIMEOUT_SECONDS,
+) -> Path:
     try:
-        udid = simctl_boot_command(device_udid)[-1]
-    except IOSSimulatorContractError as error:
-        raise IOSSimulatorAppContractError(str(error)) from error
-    # A provisioning-free Simulator app cannot receive a real App Group
-    # container. The native shell deliberately uses FileManager's temporary
-    # directory for Simulator builds, which lives below the app data
-    # container. Physical iOS builds continue to use the App Group boundary.
-    return ["xcrun", "simctl", "get_app_container", udid, _BUNDLE_IDENTIFIER, "data"]
+        return validate_runtime_framework(
+            runtime_framework,
+            architecture,
+            platform_variant="simulator",
+            runner=runner,
+            timeout_seconds=timeout_seconds,
+        )
+    except IOSRuntimeFrameworkError as error:
+        # This validator reports bounded metadata/path failures, not command
+        # streams. Keep its actionable classification while the command
+        # runner itself remains stream-free.
+        raise IOSSimulatorAppContractError(str(error)[:240]) from error
 
 
 def _stage_timeout(
@@ -382,11 +451,18 @@ def _stage_error(
 ) -> IOSSimulatorStageError:
     if isinstance(error, IOSSimulatorStageError) and error.stage == stage:
         return error
-    return IOSSimulatorStageError(
-        stage,
-        str(error) or error.__class__.__name__,
-        timeout_seconds=timeout_seconds,
-    )
+    if isinstance(error, IOSSimulatorAppContractError):
+        text = str(error).strip()
+        lowered = text.lower()
+        if "timed out" in lowered:
+            detail = "command timed out"
+        elif any(marker in lowered for marker in ("stdout", "stderr", "\n", "\r")):
+            detail = type(error).__name__
+        else:
+            detail = text[:240] or type(error).__name__
+    else:
+        detail = type(error).__name__
+    return IOSSimulatorStageError(stage, detail, timeout_seconds=timeout_seconds)
 
 
 def _require_success(
@@ -415,159 +491,25 @@ def _require_success(
             )
         result = runner.run(command, cwd=cwd, timeout_seconds=effective_timeout)
     except BaseException as error:
-        # Preserve the command runner's stdout/stderr and timeout wording, but
-        # make the failed lifecycle/build stage unambiguous to callers.
+        # Keep the failed lifecycle/build stage unambiguous to callers without
+        # copying a command stream into the error or any result file.
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise
         raise _stage_error(stage, error, timeout_seconds=effective_timeout) from error
     if result.returncode:
-        output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
-        detail = f"exit code {result.returncode}" + (f":\n{output}" if output else "")
+        detail = (
+            f"exit code {result.returncode}; stdout_bytes={len(result.stdout)}; "
+            f"stderr_bytes={len(result.stderr)}"
+        )
         raise IOSSimulatorStageError(stage, detail, timeout_seconds=effective_timeout)
     return result
-
-
-def _app_container(
-    runner: CommandRunner,
-    device_udid: str,
-    *,
-    budget: RunBudget,
-    best_effort: bool = False,
-) -> Path | None:
-    try:
-        result = _require_success(
-            runner,
-            simctl_get_app_container_command(device_udid),
-            "locate-app-logs",
-            budget=budget,
-        )
-        # `simctl get_app_container ... data` returns one absolute data
-        # container path. The native Simulator logger writes to its
-        # app-owned temporary directory below that path. Accepting a lone
-        # absolute path keeps the parsing independent of simctl's wording.
-        paths: list[Path] = []
-        for raw_line in result.stdout.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            candidate = line
-            path = Path(candidate)
-            if path.is_absolute():
-                paths.append(path)
-        if len(paths) != 1:
-            raise IOSSimulatorStageError(
-                "locate-app-logs",
-                "simctl data output did not contain exactly one absolute "
-                "app data container path",
-            )
-        return paths[0] / "tmp"
-    except (IOSSimulatorAppContractError, OSError) as error:
-        if best_effort:
-            return None
-        if isinstance(error, IOSSimulatorStageError):
-            raise
-        raise _stage_error("locate-app-logs", error) from error
-
-
-def _log_bytes(path: Path) -> bytes:
-    try:
-        return path.read_bytes()
-    except OSError:
-        return b""
-
-
-def _retain_diagnostics(container: Path | None, diagnostic_dir: Path | None) -> None:
-    """Copy a bounded tail of app-owned logs when available; diagnostics never decide pass/fail."""
-    if container is None or diagnostic_dir is None:
-        return
-    for name in (_APP_LOG_NAME, _GO_APP_LOG_NAME):
-        source = container / name
-        try:
-            if not source.is_file():
-                continue
-            payload = source.read_bytes()[-_DIAGNOSTIC_TAIL_BYTES:]
-            diagnostic_dir.mkdir(parents=True, exist_ok=True)
-            (diagnostic_dir / name).write_bytes(payload)
-        except OSError:
-            pass
-
-
-def _collect_simulator_diagnostics(
-    runner: CommandRunner,
-    simulator: AvailableSimulator,
-    *,
-    budget: RunBudget,
-    diagnostic_dir: Path | None,
-) -> str | None:
-    """Capture bounded CoreSimulator logs when launch or UI interaction fails.
-
-    XCTest owns the app launch for this lane. A successful test-runner launch
-    still only proves that SpringBoard accepted the bundle: the process can
-    exit during native initialization or fail its accessibility actions, and
-    the app-owned log is then legitimately empty. CoreSimulator's unified log
-    is the useful diagnostic in that case. Collection is best effort and never
-    replaces the original failure.
-    """
-    command = [
-        "xcrun", "simctl", "spawn", simulator.udid, "log", "show",
-        "--last", "90s", "--style", "compact",
-        "--predicate",
-        "process == \"Dobby-Vpn\" OR process == \"main\" OR "
-        "process == \"vpn.dobby.app\" OR process == \"SpringBoard\" OR "
-        "process == \"ReportCrash\" OR process == \"runningboardd\"",
-    ]
-    try:
-        result = runner.run(
-            command,
-            timeout_seconds=min(
-                _SIMULATOR_DIAGNOSTIC_TIMEOUT_SECONDS,
-                budget.cleanup_timeout(),
-            ),
-        )
-    except BaseException as error:
-        return f"stage=collect-core-simulator-diagnostics failed: {error}"
-    payload = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
-    if not payload:
-        return "stage=collect-core-simulator-diagnostics detail=empty"
-    encoded = payload.encode("utf-8", errors="replace")
-    bounded = encoded[-_SIMULATOR_LOG_TAIL_BYTES:]
-    text = bounded.decode("utf-8", errors="replace")
-    if diagnostic_dir is not None:
-        try:
-            diagnostic_dir.mkdir(parents=True, exist_ok=True)
-            (diagnostic_dir / "simulator.log.txt").write_bytes(bounded)
-        except OSError:
-            pass
-    return "stage=collect-core-simulator-diagnostics\n" + text
 
 
 def _add_note(failure: BaseException | None, label: str, error: BaseException) -> BaseException:
     if failure is None:
         return error
-    failure.add_note(f"{label}:\n" + "".join(traceback.format_exception(error)).rstrip())
+    failure.add_note(f"{label}: {type(error).__name__}")
     return failure
-
-
-def _retain_failure_diagnostic(
-    diagnostic_dir: Path | None,
-    failure: BaseException | None,
-) -> None:
-    """Retain the stage and cleanup notes without replacing the raised error."""
-    if diagnostic_dir is None or failure is None:
-        return
-    try:
-        payload = "".join(traceback.format_exception(failure))
-        encoded = payload.encode("utf-8", errors="replace")[-_FAILURE_DIAGNOSTIC_TAIL_BYTES:]
-        diagnostic_dir.mkdir(parents=True, exist_ok=True)
-        stage = getattr(failure, "stage", "unknown")
-        (diagnostic_dir / "failure-stage.txt").write_text(
-            str(stage) + "\n",
-            encoding="utf-8",
-        )
-        (diagnostic_dir / "failure.txt").write_bytes(encoded)
-    except OSError:
-        # Diagnostics are useful but never become a second test result.
-        pass
 
 
 def _shutdown_simulator(
@@ -617,8 +559,13 @@ def _terminate_app(
         # exit 3 with this stable message; do not turn it into a second error.
         if "found nothing to terminate" in output.lower():
             return
-        detail = f"exit code {result.returncode}" + (f":\n{output}" if output else "")
-        raise IOSSimulatorStageError("terminate", detail, timeout_seconds=timeout)
+        del output
+        raise IOSSimulatorStageError(
+            "terminate",
+            f"exit code {result.returncode}; stdout_bytes={len(result.stdout)}; "
+            f"stderr_bytes={len(result.stderr)}",
+            timeout_seconds=timeout,
+        )
 
 
 def _disable_simulator_hardware_keyboard(
@@ -645,12 +592,10 @@ def _disable_simulator_hardware_keyboard(
     elif "does not exist" in read.stderr:
         previous = None
     else:
-        output = "\n".join(
-            part for part in (read.stdout, read.stderr) if part
-        ).strip()
         raise IOSSimulatorStageError(
             "read-hardware-keyboard",
-            "exit code 1" + (f":\n{output}" if output else ""),
+            f"exit code {read.returncode}; stdout_bytes={len(read.stdout)}; "
+            f"stderr_bytes={len(read.stderr)}",
             timeout_seconds=read_timeout,
         )
     if previous not in {None, "0", "1"}:
@@ -703,7 +648,6 @@ def run_ios_simulator_app_contract(
     runner: CommandRunner,
     contract: IOSSimulatorAppContract = PUBLIC_IOS_SIMULATOR_APP_CONTRACT,
     budget: RunBudget | None = None,
-    diagnostic_dir: Path | None = None,
 ) -> IOSSimulatorAppEvidence:
     """Run the one comprehensive, rendered Go/Fyne Simulator mini contract.
 
@@ -714,7 +658,6 @@ def run_ios_simulator_app_contract(
     budget = budget or RunBudget()
     work_dir.mkdir(parents=True, exist_ok=True)
     simulator: AvailableSimulator | None = None
-    container: Path | None = None
     app_installed = False
     boot_started = False
     keyboard_preference_configured = False
@@ -730,8 +673,9 @@ def run_ios_simulator_app_contract(
             "list-devices",
             budget=budget,
         )
+        sdk_version = _active_iphonesimulator_sdk_version(runner, budget=budget)
         try:
-            simulator = select_available_iphone(inventory.stdout)
+            simulator = select_available_iphone(inventory.stdout, sdk_version)
         except BaseException as error:
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise
@@ -752,10 +696,10 @@ def run_ios_simulator_app_contract(
                 raise
             raise _stage_error("boot", error, timeout_seconds=boot_timeout) from error
         if boot.returncode and "current state: Booted" not in (boot.stdout + boot.stderr):
-            output = "\n".join(part for part in (boot.stdout, boot.stderr) if part).strip()
             raise IOSSimulatorStageError(
                 "boot",
-                f"exit code {boot.returncode}" + (f":\n{output}" if output else ""),
+                f"exit code {boot.returncode}; stdout_bytes={len(boot.stdout)}; "
+                f"stderr_bytes={len(boot.stderr)}",
                 timeout_seconds=boot_timeout,
             )
         _require_success(
@@ -777,17 +721,6 @@ def run_ios_simulator_app_contract(
             budget=budget,
         )
         app_installed = True
-        # App-owned logs are diagnostic only. The UI test below is the pass
-        # condition, so a missing sandbox path must not turn a real accessible
-        # UI into a marker-based claim or block cleanup.
-        container = _app_container(runner, simulator.udid, budget=budget, best_effort=True)
-        if container is not None:
-            log_path = container / _APP_LOG_NAME
-            try:
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                log_path.write_bytes(b"")
-            except OSError:
-                container = None
         project = candidate_root / _PROJECT_PATH
         if not project.is_dir():
             raise IOSSimulatorStageError(
@@ -825,21 +758,6 @@ def run_ios_simulator_app_contract(
                     _terminate_app(runner, simulator, contract, budget=budget)
                 except BaseException as error:
                     failure = _add_note(failure, "Simulator app cleanup also failed", error)
-            if diagnostic_dir is not None:
-                if container is None and boot_started:
-                    container = _app_container(
-                        runner, simulator.udid, budget=budget, best_effort=True,
-                    )
-                _retain_diagnostics(container, Path(diagnostic_dir))
-            if failure is not None and boot_started:
-                diagnostics = _collect_simulator_diagnostics(
-                    runner,
-                    simulator,
-                    budget=budget,
-                    diagnostic_dir=Path(diagnostic_dir) if diagnostic_dir is not None else None,
-                )
-                if diagnostics:
-                    failure.add_note("CoreSimulator diagnostics:\n" + diagnostics)
             if boot_started:
                 try:
                     _shutdown_simulator(runner, simulator, budget=budget)
@@ -854,14 +772,10 @@ def run_ios_simulator_app_contract(
                 failure = _add_note(
                     failure, "Simulator keyboard preference cleanup also failed", error
                 )
-        _retain_failure_diagnostic(
-            Path(diagnostic_dir) if diagnostic_dir is not None else None,
-            failure,
-        )
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
     if evidence is None:
-        raise IOSSimulatorAppContractError("iOS Simulator check produced no evidence")
+        raise IOSSimulatorAppContractError("iOS Simulator check produced no result")
     budget.assert_within_deadline()
     return evidence
 
@@ -873,30 +787,55 @@ def prepare_ios_simulator_candidate(
     runner: CommandRunner,
     contract: IOSSimulatorAppContract,
     budget: RunBudget,
+    runtime_framework: Path | None = None,
 ) -> None:
-    """Build and stage the native frameworks needed by the Simulator app."""
+    """Build or consume the native framework needed by the Simulator app.
+
+    Local runs omit ``runtime_framework`` and keep the pinned, simulator-only
+    Go build. Hosted runs provide the already-qualified XCFramework artifact so
+    this stage never needs gomobile/gobind installed on the UI runner.
+    """
     candidate_root = Path(candidate_root).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     go_root = candidate_root / "go_module"
-    go_framework = go_root / "DobbyVPNRuntime.xcframework"
     app_path = contract.app_path(work_dir)
+
+    if runtime_framework is None:
+        go_framework = go_root / "DobbyVPNRuntime.xcframework"
+        _require_success(
+            runner,
+            ["/bin/bash", "scripts/build_ios_xcframework.sh", "--simulator-architecture", contract.architecture],
+            "build-ios-framework",
+            cwd=go_root,
+            budget=budget,
+            timeout_seconds=IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
+        )
+        if not go_framework.is_dir():
+            raise IOSSimulatorStageError(
+                "build-ios-framework",
+                f"iOS Go build produced no XCFramework: {go_framework}",
+            )
+    else:
+        go_framework = Path(runtime_framework)
+
+    try:
+        go_framework = _validate_runtime_framework(
+            go_framework,
+            contract.architecture,
+            runner=runner,
+            timeout_seconds=_stage_timeout(budget, "validate-ios-framework"),
+        )
+    except IOSSimulatorAppContractError as error:
+        raise IOSSimulatorStageError("validate-ios-framework", str(error)) from error
 
     _require_success(
         runner,
-        ["/bin/bash", "scripts/build_ios_xcframework.sh", "--simulator-architecture", contract.architecture],
-        "build-ios-framework",
-        cwd=go_root,
-        budget=budget,
-        timeout_seconds=IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
-    )
-    if not go_framework.is_dir():
-        raise IOSSimulatorStageError(
-            "build-ios-framework",
-            f"iOS Go build produced no XCFramework: {go_framework}",
-        )
-    _require_success(
-        runner,
-        ["/bin/bash", "scripts/package_ios_app.sh", "iossimulator", str(app_path), str(go_framework), contract.architecture],
+        xcodebuild_app_command(
+            contract,
+            candidate_root=candidate_root,
+            work_dir=work_dir,
+            runtime_framework=go_framework,
+        ),
         "package-ios-app",
         cwd=go_root,
         timeout_seconds=IOS_GO_UI_BUILD_TIMEOUT_SECONDS,

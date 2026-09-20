@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 
@@ -54,7 +55,12 @@ func (p *platformAdapter) Acquire(_ context.Context, ref sessionapi.SessionRef) 
 	if err != nil {
 		return nil, err
 	}
-	file := os.NewFile(uintptr(fd), "mobile-tun")
+	fileDescriptor, err := descriptorAsUintptr(fd)
+	if err != nil {
+		_ = closeFD(fd)
+		return nil, err
+	}
+	file := os.NewFile(fileDescriptor, "mobile-tun")
 	if file == nil {
 		_ = closeFD(fd)
 		return nil, fmt.Errorf("could not own tunnel descriptor")
@@ -69,7 +75,10 @@ func (p *platformAdapter) acquire(ref sessionapi.SessionRef) (int32, PlatformCal
 	if callbacks == nil {
 		return 0, nil, fmt.Errorf("platform tunnel callback is not registered")
 	}
-	generation := int64(ref.Generation)
+	generation, err := generationAsInt64(ref.Generation)
+	if err != nil {
+		return 0, nil, err
+	}
 	fd := callbacks.AcquireTunnel(ref.SessionID, generation)
 	if fd < 0 {
 		return 0, nil, fmt.Errorf("platform failed to acquire a fresh tunnel")
@@ -95,7 +104,10 @@ func (p *platformAdapter) release(ref sessionapi.SessionRef, fd int32, callbacks
 	if callbacks == nil {
 		return fmt.Errorf("platform tunnel cleanup callback is unavailable")
 	}
-	generation := int64(ref.Generation)
+	generation, err := generationAsInt64(ref.Generation)
+	if err != nil {
+		return err
+	}
 	if !callbacks.ReleaseTunnel(ref.SessionID, generation, fd) {
 		return fmt.Errorf("platform tunnel cleanup failed")
 	}
@@ -112,8 +124,15 @@ func (p *platformAdapter) ProtectSocket(_ context.Context, ref sessionapi.Sessio
 	if callbacks == nil {
 		return fmt.Errorf("platform socket protector is not registered")
 	}
-	generation := int64(ref.Generation)
-	if !callbacks.ProtectSocket(ref.SessionID, generation, int32(fd)) {
+	generation, err := generationAsInt64(ref.Generation)
+	if err != nil {
+		return err
+	}
+	descriptor, err := descriptorAsInt32(fd)
+	if err != nil {
+		return err
+	}
+	if !callbacks.ProtectSocket(ref.SessionID, generation, descriptor) {
 		return fmt.Errorf("platform rejected socket protection")
 	}
 	return nil
@@ -137,7 +156,11 @@ func (p *platformAdapter) protectActive(fd int32) bool {
 	if callbacks == nil {
 		return false
 	}
-	return callbacks.ProtectSocket(ref.SessionID, int64(ref.Generation), fd)
+	generation, err := generationAsInt64(ref.Generation)
+	if err != nil {
+		return false
+	}
+	return callbacks.ProtectSocket(ref.SessionID, generation, fd)
 }
 
 func (p *platformAdapter) PublishState(_ context.Context, event sessionapi.StateChange) {
@@ -152,18 +175,6 @@ func (p *platformAdapter) PublishState(_ context.Context, event sessionapi.State
 		case p.stateChanges <- event:
 		default:
 		}
-	}
-}
-
-func (p *platformAdapter) publishStateChanges() {
-	for event := range p.stateChanges {
-		p.mu.Lock()
-		callbacks := p.callbacks
-		p.mu.Unlock()
-		if callbacks == nil {
-			continue
-		}
-		callbacks.PublishState(event.SessionID, int64(event.Generation), string(event.State), string(event.Failure))
 	}
 }
 
@@ -215,5 +226,30 @@ func closeFD(fd int32) error {
 	if fd < 0 {
 		return nil
 	}
-	return os.NewFile(uintptr(fd), "mobile-tun-close").Close()
+	fileDescriptor, err := descriptorAsUintptr(fd)
+	if err != nil {
+		return err
+	}
+	return os.NewFile(fileDescriptor, "mobile-tun-close").Close()
+}
+
+func generationAsInt64(generation uint64) (int64, error) {
+	if generation > math.MaxInt64 {
+		return 0, fmt.Errorf("generation exceeds the native callback range")
+	}
+	return int64(generation), nil
+}
+
+func descriptorAsUintptr(fd int32) (uintptr, error) {
+	if fd < 0 {
+		return 0, fmt.Errorf("descriptor must be non-negative")
+	}
+	return uintptr(fd), nil
+}
+
+func descriptorAsInt32(fd int) (int32, error) {
+	if fd < 0 || fd > math.MaxInt32 {
+		return 0, fmt.Errorf("socket descriptor exceeds the native callback range")
+	}
+	return int32(fd), nil
 }

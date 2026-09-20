@@ -63,9 +63,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
         // accessibility value is renderer-dependent, so the subsequent
         // malformed-configuration result is the portable proof that the
         // edited value reached the production Connect callback.
+        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, deleteCount: 1)
+        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, text: "x")
+        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, deleteCount: 3)
+        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, text: "bad")
 
         dismissSoftwareKeyboard()
@@ -153,7 +157,8 @@ final class GoFyneUIInteractionTests: XCTestCase {
         // native element tap is preferred; the frame-anchored tap is a
         // bounded fallback for Simulator runtimes that expose the virtual
         // Fyne element without a reliable hit point. The resulting app-owned
-        // UIKit prompt must expose real Share/Save/Close actions.
+        // UIKit prompt must expose real Share/Save/Close actions; Save then
+        // exercises the supported native document-picker flow.
         dismissExportPrompt(returningTo: export)
     }
 
@@ -340,22 +345,24 @@ final class GoFyneUIInteractionTests: XCTestCase {
 
     private func dismissSoftwareKeyboard() {
         // A coordinate tap in the rendered GL view resigns Fyne's native
-        // responder after the final physical key event.
+        // responder after the final physical key event. Wait for the real
+        // keyboard to leave the accessibility tree before the next edit
+        // refocuses the Entry; iOS 26 can otherwise retain an empty keyboard
+        // container whose key children never become tappable.
+        let keyboard = app.keyboards.firstMatch
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.06)).tap()
+        let gone = expectation(
+            for: NSPredicate(format: "exists == false"),
+            evaluatedWith: keyboard
+        )
+        _ = XCTWaiter.wait(for: [gone], timeout: 5)
     }
 
     private func dismissExportPrompt(returningTo export: XCUIElement) {
         let owners: [(String, XCUIApplication)] = [
-            // iOS 26 can host UIActivityViewController in the app process as a
-            // native sheet. Keep the app first so this path is exercised
-            // before looking for the legacy out-of-process hosts.
+            // Keep the app first because iOS 26 hosts the app-owned export
+            // prompt in the product process.
             ("DobbyVPN", app),
-            ("UIKit activity view service", XCUIApplication(bundleIdentifier: "com.apple.UIKit.activityViewService")),
-            ("legacy UIKit activity view service", XCUIApplication(bundleIdentifier: "com.apple.UIKit.activity-view-service")),
-            ("compact UIKit activity view service", XCUIApplication(bundleIdentifier: "com.apple.UIKit.activity-viewservice")),
-            // iOS 26 presents UIActivityViewController through this
-            // lower-case system service rather than the older UIKit aliases.
-            ("SharingUIService", XCUIApplication(bundleIdentifier: "com.apple.sharinguiservice")),
             // UIDocumentPickerViewController may be hosted by the app or by
             // one of the Files/FileProvider system owners. On iOS 26 the
             // picker is hosted in this app-owned UI scene extension; it is
@@ -366,42 +373,22 @@ final class GoFyneUIInteractionTests: XCTestCase {
             ("FileProviderUI", XCUIApplication(bundleIdentifier: "com.apple.fileproviderui")),
             ("SpringBoard", XCUIApplication(bundleIdentifier: "com.apple.springboard")),
         ]
-        // The production export entry point is an app-owned UIKit prompt. Its
-        // Share action continues into UIActivityViewController and its Save
-        // action into UIDocumentPickerViewController; the prompt itself stays
-        // visible/testable even when SharingUIService is suspended by a
-        // headless Simulator.
-        let dismissal = NSPredicate(format: "label == 'Cancel' OR label == 'Close' OR label == 'Dismiss'")
+        // The production export entry point is an app-owned UIKit prompt. The
+        // prompt's Share/Save/Close controls are the supported Simulator
+        // boundary; exercise Save as the representative native export flow.
         let tapDeadline = Date().addingTimeInterval(20)
         export.tap()
-        if waitForNativeExportPrompt(in: app, owners: owners, until: tapDeadline) {
-            return
+        if !waitForNativeExportPrompt(in: app, owners: owners, until: tapDeadline) {
+            // A virtual Fyne button can expose a usable label but an unusable
+            // XCTest action point. A second physical frame tap is limited to
+            // the no-prompt case.
+            export.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            let deadline = Date().addingTimeInterval(20)
+            guard waitForNativeExportPrompt(in: app, owners: owners, until: deadline) else {
+                XCTFail("native log export prompt did not present Share, Save, and Close")
+                return
+            }
         }
-
-        // A virtual Fyne button can expose a usable label but an unusable
-        // XCTest action point. A second, physical frame tap is intentionally
-        // limited to the no-prompt case above.
-        export.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        let deadline = Date().addingTimeInterval(20)
-        if waitForNativeExportPrompt(in: app, owners: owners, until: deadline) {
-            return
-        }
-        if waitForShareDismissal(in: owners, matching: dismissal, until: deadline) {
-            return
-        }
-
-        let discovered = owners
-            .filter { $0.1.state == .runningForeground }
-            .flatMap { $0.1.buttons.allElementsBoundByIndex.map(\.label) }
-            .filter { !$0.isEmpty }
-            .sorted()
-        let ownerNames = owners
-            .filter { $0.1.state == .runningForeground }
-            .map { $0.0 }
-        XCTFail(
-            "native log export did not present a dismissible UIKit export surface; "
-                + "running owners: \(ownerNames), discovered button labels: \(discovered)"
-        )
     }
 
     private func waitForNativeExportPrompt(
@@ -421,15 +408,16 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 XCTAssertTrue(share.waitForExistence(timeout: 2), "native export prompt did not expose Share")
                 XCTAssertTrue(save.waitForExistence(timeout: 2), "native export prompt did not expose Save")
                 XCTAssertTrue(close.waitForExistence(timeout: 2), "native export prompt did not expose Close")
-                // Exercise the real production export path. Save opens the
-                // native document picker; canceling that picker returns to
-                // the same Fyne window without accepting or sharing a file.
+                // Exercise the supported native export path. Canceling the
+                // document picker returns to the same Fyne window without
+                // accepting or exporting a file.
                 save.tap()
                 let pickerDeadline = Date().addingTimeInterval(20)
-                guard waitForDocumentPickerAndCancel(in: owners, until: pickerDeadline) else {
-                    XCTFail("native export Save action did not present a dismissible document picker")
-                    return true
-                }
+                let pickerCompleted = waitForDocumentPickerAndCancel(in: owners, until: pickerDeadline)
+                XCTAssertTrue(
+                    pickerCompleted,
+                    "native log export Save action did not present a dismissible document picker"
+                )
                 return true
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
@@ -461,7 +449,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 guard save.waitForExistence(timeout: 0.2) else { continue }
                 guard !cancel.frame.isEmpty, !save.frame.isEmpty else { continue }
                 cancel.tap()
-                return waitForShareReturn(
+                return waitForDocumentPickerReturn(
                     after: cancel,
                     owner: owner.1,
                     message: "native document picker remained visible after tapping Cancel"
@@ -491,91 +479,15 @@ final class GoFyneUIInteractionTests: XCTestCase {
         return owner.descendants(matching: .any).matching(semanticLabel).firstMatch
     }
 
-    private func waitForShareDismissal(
-        in owners: [(String, XCUIApplication)],
-        matching predicate: NSPredicate,
-        until deadline: Date
-    ) -> Bool {
-        while Date() < deadline {
-            for owner in owners {
-                // A UIActivityViewController is a real UIKit view controller,
-                // but on current iOS Simulator runtimes its native close
-                // affordance is not consistently exposed as a Button. First
-                // require the native sheet (or its accessibility-marked
-                // activity/share container), then dismiss that surface with a
-                // real close action or the same pull-down gesture a user uses.
-                if let surface = nativeShareSurface(in: owner.1, timeout: 0.15) {
-                    let close = surface.buttons.matching(predicate).firstMatch
-                    if close.waitForExistence(timeout: 0.15) {
-                        close.tap()
-                        return waitForShareReturn(
-                            after: close,
-                            owner: owner.1,
-                            message: "native export dismissal control remained visible after tapping \(close.label)"
-                        )
-                    }
-
-                    surface.swipeDown()
-                    return waitForShareReturn(
-                        after: surface,
-                        owner: owner.1,
-                        message: "native export surface remained visible after swipe dismissal"
-                    )
-                }
-
-                // Older UIKit activity hosts sometimes expose the native close
-                // control without an XCUI sheet container. This is still
-                // restricted to the actual host owner; the Go/Fyne app itself
-                // cannot satisfy this branch with its Export logs control.
-                let button = owner.1.buttons.matching(predicate).firstMatch
-                if !button.waitForExistence(timeout: 0.15) {
-                    continue
-                }
-                let label = button.label
-                button.tap()
-                return waitForShareReturn(
-                    after: button,
-                    owner: owner.1,
-                    message: "native export dismissal control remained visible after tapping \(label)"
-                )
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-        }
-        return false
-    }
-
-    private func nativeShareSurface(in owner: XCUIApplication, timeout: TimeInterval) -> XCUIElement? {
-        let sheet = owner.sheets.firstMatch
-        if sheet.waitForExistence(timeout: timeout) {
-            return sheet
-        }
-
-        // Some iOS 26 accessibility trees expose the same native controller as
-        // an `other` container rather than XCUIElementTypeSheet. Do not accept
-        // an arbitrary Fyne canvas: require the system's activity/share marker
-        // in the element's identifier or label.
-        let marker = NSPredicate(
-            format: "identifier CONTAINS[c] 'activity' OR identifier CONTAINS[c] 'share' OR label CONTAINS[c] 'activity' OR label CONTAINS[c] 'share'"
-        )
-        let container = owner.otherElements.matching(marker).firstMatch
-        if container.waitForExistence(timeout: timeout) {
-            return container
-        }
-        return nil
-    }
-
-    private func waitForShareReturn(
+    private func waitForDocumentPickerReturn(
         after dismissedElement: XCUIElement,
         owner: XCUIApplication,
         message: String
     ) -> Bool {
         // A dismissed remote UIKit scene can leave the original XCUIElement
-        // proxy reporting `exists == true` indefinitely even after its process
-        // has gone away. Treating that proxy's disappearance as the pass
-        // condition makes a real Cancel tap fail spuriously. The native
-        // surface is considered dismissed only after the Go/Fyne app is back
-        // in the foreground and the previously tapped native element is no
-        // longer hittable (or its remote owner is no longer foreground).
+        // proxy reporting `exists == true` indefinitely after its process has
+        // gone away. Require the Go/Fyne app to return to the foreground and
+        // the picker control to stop being hittable instead.
         let export = element(named: "Export logs")
         let appReturned = export.waitForExistence(timeout: 5)
             && !export.frame.isEmpty

@@ -9,30 +9,40 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
-	"go_module/desktop_exports/client"
+	desktopclient "go_module/desktop_exports/client"
 	"go_module/grpcproto"
 	"go_module/ui"
 )
 
-func newDesktopApplication(runtime fyne.App, client ui.SessionClient, store ui.SourceStore) *ui.Application {
-	application := ui.NewApplication(runtime, client, store)
+func newDesktopApplication(runtime fyne.App, sessionClient ui.SessionClient, store ui.SourceStore) *ui.Application {
+	application := ui.NewApplication(runtime, sessionClient, store)
 	application.Connection.SetLogExporter(newDesktopLogExporter(application.Window))
 	return application
 }
 
 func main() {
-	connection, err := client.Dial()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "could not connect to DobbyVPN service:", err)
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer connection.Close()
+}
 
-	client := ui.NewGRPCClient(grpcproto.NewVpnClient(connection))
+func run() error {
+	connection, err := desktopclient.Dial()
+	if err != nil {
+		return fmt.Errorf("could not connect to DobbyVPN service: %w", err)
+	}
+	defer func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			fmt.Fprintln(os.Stderr, "could not close DobbyVPN service connection:", closeErr)
+		}
+	}()
+
+	sessionClient := ui.NewGRPCClient(grpcproto.NewVpnClient(connection))
 	store, err := ui.NewFileSourceStore()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "could not initialize connection source storage:", err)
-		os.Exit(1)
+		return fmt.Errorf("could not initialize connection source storage: %w", err)
 	}
-	newDesktopApplication(app.NewWithID("com.dobby.vpn"), client, store).Run()
+	newDesktopApplication(app.NewWithID("com.dobby.vpn"), sessionClient, store).Run()
+	return nil
 }

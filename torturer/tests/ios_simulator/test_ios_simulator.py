@@ -12,6 +12,7 @@ from torturer_checks.ios_simulator import (
     simctl_install_command,
     simctl_launch_command,
     simctl_terminate_command,
+    iphonesimulator_sdk_version_command,
     xcodebuild_ui_test_command,
 )
 
@@ -20,9 +21,19 @@ UDID = "A12B34C5-1234-5678-9ABC-123456789ABC"
 BUNDLE = "vpn.dobby.app"
 UI_TEST_SOURCE = Path(__file__).parents[3] / "swift_module" / "iosAppUITests" / "GoFyneUIInteractionTests.swift"
 EXPORT_SOURCE = Path(__file__).parents[3] / "swift_module" / "CommonDI" / "ExportLogsInteractorImpl.swift"
+PACKAGE_SOURCE = Path(__file__).parents[3] / "go_module" / "scripts" / "package_ios_app.sh"
 
 
 class IOSSimulatorCommandsTest(unittest.TestCase):
+    def test_package_lane_uses_shared_runtime_framework_validator(self) -> None:
+        source = PACKAGE_SOURCE.read_text(encoding="utf-8")
+        self.assertIn(
+            'python3 "$go_root/scripts/ios_runtime_framework.py"',
+            source,
+        )
+        self.assertNotIn("torturer_checks.ios_runtime_framework", source)
+        self.assertIn("validation_architecture", source)
+
     def test_log_export_uses_the_existing_active_app_presenter(self) -> None:
         source = EXPORT_SOURCE.read_text(encoding="utf-8")
         self.assertIn("UIActivityViewController", source)
@@ -93,6 +104,12 @@ class IOSSimulatorCommandsTest(unittest.TestCase):
         self.assertIn("dismissExportPrompt", source)
         self.assertIn("waitForNativeExportPrompt", source)
         self.assertIn("waitForDocumentPickerAndCancel", source)
+        self.assertIn("save.tap()", source)
+        self.assertNotIn("private enum ExportAction", source)
+        self.assertNotIn("exerciseExportAction(", source)
+        self.assertNotIn("share.tap()", source)
+        self.assertNotIn("waitForShareDismissal", source)
+        self.assertNotIn("nativeShareSurface", source)
         self.assertIn(
             'XCUIApplication(bundleIdentifier: "com.apple.DocumentManagerUICore.Service")',
             source,
@@ -154,6 +171,10 @@ class IOSSimulatorCommandsTest(unittest.TestCase):
             ["xcrun", "simctl", "launch", "--console", "--terminate-running-process", UDID, BUNDLE],
         )
         self.assertEqual(simctl_terminate_command(UDID, BUNDLE)[-1], BUNDLE)
+        self.assertEqual(
+            iphonesimulator_sdk_version_command(),
+            ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"],
+        )
         ui_command = xcodebuild_ui_test_command(UDID, "swift_module/iosApp.xcodeproj", "/tmp/ios-ui-tests")
         self.assertIn("-scheme", ui_command)
         self.assertIn("iosAppUITests", ui_command)

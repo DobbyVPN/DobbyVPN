@@ -41,9 +41,70 @@ _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _RELEASE_REPOSITORY = "DobbyVPN/DobbyVPN"
 _RELEASE_WORKFLOW = ".github/workflows/release.yml"
 
+# A desktop full lane is supervised by the VM worker's task deadline.  Give
+# the hosted journey an inner deadline so it can emit its failure JSON and
+# leave enough time for the exact-process/task cleanup boundary to run.  The
+# hosted journey has its own reserve before it waits on the real-window smoke
+# process (see hosted/native_ui.py).
+_NATIVE_UI_TASK_TIMEOUT_RESERVE_SECONDS = 90.0
+_NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS = 900.0
+
+# The native desktop journey runs in an interactive user session rather than
+# the SSH worker's process environment.  Keep only values with a concrete
+# runtime purpose here.  In particular, do not let CI credentials, endpoints,
+# or arbitrary tool configuration cross the desktop boundary.
+_NATIVE_UI_HOST_ENVIRONMENT = frozenset({
+    # native_ui_smoke.py resolves macOS helpers (and Windows PowerShell) by
+    # name, while the Go UI/CLI use HOME for their user-owned stores.
+    "PATH",
+    "HOME",
+})
+_NATIVE_UI_RUNTIME_ENVIRONMENT = {
+    "windows": frozenset({
+        "PROGRAMDATA",
+        "DOBBYVPN_CONTROL_ADDRESS",
+        "DOBBYVPN_CONTROL_TOKEN_USER",
+        "DOBBY_LOG_PATH",
+        "DOBBY_LOG_ROOT",
+        "DOBBY_LOG_PRECREATED",
+        "GODEBUG",
+    }),
+    "macos": frozenset({
+        "DOBBYVPN_CONTROL_SOCKET",
+    }),
+}
+
 
 class LocalVMError(RuntimeError):
     """A bounded local candidate operation failed."""
+
+
+def _native_ui_environment(platform: str, runtime: dict[str, Any]) -> dict[str, str]:
+    """Build the bounded environment for a native desktop journey.
+
+    ``runtime["environment"]`` is already platform-owned state, but still
+    filter it here so a malformed or test-supplied state record cannot turn
+    this boundary back into an environment pass-through.  Host values are
+    deliberately selected by name; the user's complete SSH/CI environment is
+    never copied into the interactive desktop session.
+    """
+
+    runtime_names = _NATIVE_UI_RUNTIME_ENVIRONMENT.get(platform)
+    if runtime_names is None:
+        raise LocalVMError(f"native GUI qualification is unsupported on {platform}")
+    environment = {
+        name: value
+        for name in _NATIVE_UI_HOST_ENVIRONMENT
+        if isinstance((value := os.environ.get(name)), str)
+    }
+    runtime_environment = runtime.get("environment")
+    if isinstance(runtime_environment, dict):
+        environment.update({
+            name: runtime_environment[name]
+            for name in runtime_names
+            if isinstance(runtime_environment.get(name), str)
+        })
+    return environment
 
 
 def _positive_timeout(value: str) -> float:
@@ -54,6 +115,26 @@ def _positive_timeout(value: str) -> float:
     if not 0 < result < float("inf"):
         raise argparse.ArgumentTypeError("timeout must be positive and finite")
     return result
+
+
+def _native_ui_driver_timeout(task_timeout: float) -> float:
+    """Return the inner hosted-journey timeout below the task deadline.
+
+    Keep a proportional reserve for short diagnostic invocations while using
+    a fixed 90-second reserve for the normal desktop lane.  The result is
+    always positive and strictly smaller than the task timeout, so the task
+    wrapper can observe the driver's diagnostic result before it terminates
+    an unresponsive full run.
+    """
+
+    if task_timeout <= 0 or task_timeout == float("inf"):
+        raise ValueError("native UI task timeout must be positive and finite")
+    reserve = (
+        _NATIVE_UI_TASK_TIMEOUT_RESERVE_SECONDS
+        if task_timeout > _NATIVE_UI_TASK_TIMEOUT_RESERVE_SECONDS
+        else task_timeout / 3.0
+    )
+    return min(_NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS, task_timeout - reserve)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -150,6 +231,7 @@ def _run_logged(
     label: str,
     timeout: float,
     environment: dict[str, str] | None = None,
+    input_data: bytes | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
     if not command or any(not isinstance(item, str) or not item for item in command):
@@ -163,16 +245,19 @@ def _run_logged(
         # is reconstructed from those same files for callers that need to
         # parse a probe response (PID, route, or launchd record).
         with stdout_path.open("wb") as stdout_stream, stderr_path.open("wb") as stderr_stream:
-            completed = subprocess.run(
-                command,
-                cwd=str(cwd),
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_stream,
-                stderr=stderr_stream,
-                timeout=timeout,
-                check=False,
-            )
+            run_kwargs: dict[str, Any] = {
+                "cwd": str(cwd),
+                "env": environment,
+                "stdout": stdout_stream,
+                "stderr": stderr_stream,
+                "timeout": timeout,
+                "check": False,
+            }
+            if input_data is None:
+                run_kwargs["stdin"] = subprocess.DEVNULL
+            else:
+                run_kwargs["input"] = input_data
+            completed = subprocess.run(command, **run_kwargs)
     except subprocess.TimeoutExpired as error:
         raise LocalVMError(f"{label}: command timed out") from error
     stdout = stdout_path.read_bytes()
@@ -808,6 +893,7 @@ def _native_ui_command(
     for name in ("pid", "binary", "socket"):
         if name not in runtime:
             raise LocalVMError(f"native desktop UI runtime value is missing: {name}")
+    task_timeout = min(timeout, _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS)
     command = [
         sys.executable,
         "-m",
@@ -819,7 +905,7 @@ def _native_ui_command(
         "--smoke-script", str(smoke),
         "--raw-log-dir", str(run_dir / "logs"),
         "--output", str(run_dir / "logs" / "native-ui.json"),
-        "--timeout", str(min(timeout, 900.0)),
+        "--timeout", str(_native_ui_driver_timeout(task_timeout)),
         "--service-pid", str(runtime["pid"]),
         "--service-binary", str(runtime["binary"]),
         "--service-socket", str(runtime["socket"]),
@@ -1058,10 +1144,11 @@ def run(args: argparse.Namespace) -> int:
             state["native_ui_status"] = "passed"
             _write_json(run_dir / "platform.json", state)
         # Desktop full is cumulative: the canonical headless mini lane runs
-        # once first, then the same live service receives the native-window
-        # journey below.  This keeps headless mini independent of desktop
-        # login availability and avoids silently treating the native journey
-        # as a replacement for independent VPN observations.
+        # once first, then the native-window journey runs as a second phase.
+        # Windows' hosted adapter closes its Job-owned process when mini
+        # finalizes, so start a fresh SYSTEM candidate before the native UI;
+        # macOS launchd keeps its replacement alive and can refresh its
+        # sidecar PID instead.
         functional_suite = "mini" if args.suite == "full" else args.suite
         command = _functional_command(
             run_dir, {**descriptor, "runtime": runtime}, args.platform,
@@ -1095,21 +1182,20 @@ def run(args: argparse.Namespace) -> int:
         if result.returncode != 0:
             return result.returncode
         if args.suite == "full" and args.platform in {"windows", "macos"}:
-            runtime = _refresh_desktop_runtime_after_headless(runtime)
+            if args.platform == "windows":
+                runtime = _start_windows(run_dir, descriptor, logs, args.timeout)
+            else:
+                runtime = _refresh_desktop_runtime_after_headless(runtime)
             state["runtime"] = runtime
             _write_json(run_dir / "platform.json", state)
-            native_environment = {**os.environ}
-            runtime_environment = runtime.get("environment")
-            if isinstance(runtime_environment, dict):
-                native_environment.update({
-                    str(key): str(value)
-                    for key, value in runtime_environment.items()
-                    if isinstance(key, str) and isinstance(value, str)
-                })
+            native_environment = _native_ui_environment(args.platform, runtime)
+            native_task_timeout = min(
+                args.timeout, _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS,
+            )
             try:
                 native_result = _run_native_ui(
                     _native_ui_command(
-                        run_dir, descriptor, runtime, args.platform, args.timeout,
+                        run_dir, descriptor, runtime, args.platform, native_task_timeout,
                     ),
                     platform=args.platform,
                     run_dir=run_dir,
@@ -1117,7 +1203,7 @@ def run(args: argparse.Namespace) -> int:
                     # this cwd through the existing interactive user task.
                     cwd=run_dir / "source" / "torturer",
                     logs=logs,
-                    timeout=min(args.timeout, 900.0),
+                    timeout=native_task_timeout,
                     environment=native_environment,
                 )
             except Exception as error:

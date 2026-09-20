@@ -55,14 +55,15 @@ the distribution certificate and provisioning profiles supplied by Release.
 
 - Android owns VPN permission, foreground `VpnService` lifetime, TUN
   allocation, and socket protection. The Go/Fyne process calls a JNI bridge;
-  the service callback only allocates/protects/release descriptors and wakes
-  the Go session, which then reads a fresh snapshot.
+  the service callback only allocates/protects/releases descriptors and
+  publishes lifecycle state. The foreground UI reads a fresh Go snapshot on
+  its bounded polling loop.
 - iOS owns NetworkExtension lifetime, tunnel settings, and the app/provider
   command handoff. The Go/Fyne process calls a C bridge in the containing app.
   The app stores raw configuration in an encrypted one-shot Keychain mailbox;
   configuration bytes do not enter provider messages. Go owns session state in
-  the provider process. Darwin notifications carry only wake hints, followed
-  by a current snapshot read.
+  the provider process. The foreground app reads current Go snapshots on a
+  bounded polling loop; Swift does not maintain a separate state event stream.
 - Desktop owns authenticated local transport, service installation/start, and
   local diagnostics. It does not choose protocol policy or parse
   configuration.

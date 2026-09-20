@@ -83,7 +83,6 @@ class HeadlessUIAdapter:
         except (OSError, UnicodeDecodeError) as error:
             raise ValueError("PROFILE_INVALID") from error
         self._process: subprocess.Popen[str] | None = None
-        self._stderr: Any = None
         self._responses: queue.Queue[str | None] = queue.Queue()
         self._reader_thread: threading.Thread | None = None
         self._request_lock = threading.Lock()
@@ -273,18 +272,9 @@ class HeadlessUIAdapter:
         if callable(emitter):
             emitter(event, **fields)
 
-    def _raw_directory(self) -> Path:
-        raw = getattr(self.runner, "raw_directory", None)
-        if isinstance(raw, Path):
-            raw.mkdir(parents=True, exist_ok=True)
-            return raw
-        return Path.cwd()
-
     def _start_process(self, timeout: float) -> None:
         if self._process is not None:
             return
-        stderr_path = self._raw_directory() / "ui-companion.stderr"
-        self._stderr = stderr_path.open("ab")
         environment = dict(getattr(self.runner, "environment", os.environ))
         deadline = time.monotonic() + min(max(timeout, 0.1), _UI_START_TIMEOUT_SECONDS)
         try:
@@ -293,7 +283,10 @@ class HeadlessUIAdapter:
                 [str(self.ui_test)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=self._stderr,
+                # The companion's JSON protocol is the only UI result.  Its
+                # stderr is deliberately discarded so a successful or failed
+                # lane cannot leave a private diagnostic file behind.
+                stderr=subprocess.DEVNULL,
                 env=environment,
                 text=True,
                 encoding="utf-8",
@@ -304,7 +297,6 @@ class HeadlessUIAdapter:
                 deadline=deadline,
             )
         except Exception as error:
-            self._close_stderr()
             raise ScenarioExecutionError("UI_TEST_LAUNCH_FAILED") from error
 
         def read_responses() -> None:
@@ -358,7 +350,6 @@ class HeadlessUIAdapter:
     def _close_process(self, timeout: float, *, deadline: float | None) -> None:
         process = self._process
         if process is None:
-            self._close_stderr()
             return
         close_deadline = deadline if deadline is not None else time.monotonic() + max(timeout, 0.1)
         try:
@@ -401,23 +392,13 @@ class HeadlessUIAdapter:
             if os.name == "nt":
                 close_windows_job(process, stage="ui-companion-finalize", deadline=close_deadline)
         finally:
-            for stream in (process.stdin, process.stdout):
+            for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     try:
                         stream.close()
                     except OSError:
                         pass
             self._process = None
-            self._close_stderr()
-
-    def _close_stderr(self) -> None:
-        stream = self._stderr
-        self._stderr = None
-        if stream is not None:
-            try:
-                stream.close()
-            except OSError:
-                pass
 
 
 __all__ = ["HeadlessUIAdapter"]

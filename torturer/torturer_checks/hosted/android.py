@@ -1,7 +1,7 @@
 """Hosted Android adapters for binding and rendered Go/Fyne Android lanes.
 
 DobbyVPN owns Android session state and cleanup; Torturer owns the test set,
-assertions, result values, and runner-local evidence. The protocol-matrix lane
+assertions, result values, and disposable runner scratch. The protocol-matrix lane
 uses the native binding to exercise each discovered profile. The gui-auto lane
 uses one visible AUTO action and never claims to cover that matrix. Most
 scenarios use one instrumentation invocation; process loss uses two so the app
@@ -18,7 +18,6 @@ import re
 import shlex
 import threading
 import time
-import traceback
 from typing import Callable, Mapping
 import uuid
 
@@ -203,9 +202,9 @@ def _scenario_deadlines(
     """Return work and cleanup deadlines within one lane.
 
     The canonical engine measures the complete adapter call against the
-    scenario bound, so cleanup is reserved inside that bound. Torturer retains
-    the required VPN logs separately; unrelated device diagnostics are not a
-    qualification requirement.
+    scenario bound, so cleanup is reserved inside that bound. Command output
+    remains in memory for parsing and assertions; no VPN or device logs are
+    retained by the functional lane.
     """
     if scenario_seconds <= 0:
         raise ScenarioExecutionError("SCENARIO_TIMEOUT_INVALID")
@@ -246,6 +245,16 @@ def _observation_error_code(error: AndroidObservationError) -> str:
     if "identity" in detail or "platform" in detail:
         return "ANDROID_OBSERVATION_IDENTITY_INVALID"
     return "ANDROID_OBSERVATION_VALUES_INVALID"
+
+
+def _failure_code(error: BaseException) -> str:
+    """Return a stable code without serializing exception text."""
+
+    for attribute in ("reason_code", "code"):
+        value = getattr(error, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    return type(error).__name__
 
 
 class AndroidHostedAdapter:
@@ -314,6 +323,7 @@ class AndroidHostedAdapter:
         self._observed_tunneled_ips: set[str] = set()
         self._progress_sink: Callable[[str, dict[str, object]], None] | None = None
         self._progress_scenario_id: str | None = None
+        self._scratch_files: set[Path] = set()
 
     @property
     def coverage_lane(self) -> str:
@@ -398,7 +408,7 @@ class AndroidHostedAdapter:
         The exact Release APK is intentionally non-debuggable. Qualification
         uses the root-capable Android ADB owner to stream both payloads into the
         installed app's protected directory. The payloads remain input-only:
-        the command vector and retained diagnostics contain no profile bytes.
+        the command vector and in-memory result metadata contain no profile bytes.
         """
         self._progress_scenario_id = scenario.id
         self._validated_physical_interface = None
@@ -500,15 +510,22 @@ class AndroidHostedAdapter:
             raise
         finally:
             cleanup_error = self._cleanup_device(tuple(device_files), cleanup_deadline)
+            scratch_error = self._cleanup_local_scratch()
             self._active_controls = ()
             if cleanup_error is not None:
                 if execution_error is not None:
                     execution_error.add_note(
-                        "Android cleanup also failed:\n"
-                        + "".join(traceback.format_exception(cleanup_error)).rstrip()
+                        f"android_cleanup_error={_failure_code(cleanup_error)}"
                     )
                 else:
                     raise cleanup_error
+            if scratch_error is not None:
+                if execution_error is not None:
+                    execution_error.add_note(
+                        f"android_scratch_cleanup_error={_failure_code(scratch_error)}"
+                    )
+                elif cleanup_error is None:
+                    raise scratch_error
 
     def _execute_phase(
         self,
@@ -906,7 +923,7 @@ class AndroidHostedAdapter:
             except BaseException as error:
                 # Keep the external operation failure primary. Drain the
                 # worker below so an instrumentation failure can be appended
-                # as secondary evidence.
+                # as secondary in-memory status.
                 primary_error = error
                 break
 
@@ -957,8 +974,7 @@ class AndroidHostedAdapter:
                 primary_error = worker_failure
             elif worker_failure is not primary_error:
                 primary_error.add_note(
-                    "Android instrumentation worker failure:\n"
-                    + "".join(traceback.format_exception(worker_failure)).rstrip()
+                    f"android_instrumentation_worker_error={type(worker_failure).__name__}"
                 )
 
         if primary_error is not None:
@@ -1068,8 +1084,7 @@ class AndroidHostedAdapter:
                 primary = error
             else:
                 primary.add_note(
-                    "Android routing proof secondary failure:\n"
-                    + "".join(traceback.format_exception(error)).rstrip()
+                    f"android_routing_secondary_error={_failure_code(error)}"
                 )
 
         try:
@@ -1181,9 +1196,7 @@ class AndroidHostedAdapter:
             "passed": passed,
         }
         if primary is not None:
-            finish_payload["error"] = "".join(
-                traceback.format_exception(primary)
-            ).rstrip()
+            finish_payload["error"] = _failure_code(primary)
         try:
             self._stage_control_payload(
                 control_file,
@@ -1243,9 +1256,10 @@ class AndroidHostedAdapter:
                 return value
             if time.monotonic() >= deadline:
                 failure = ScenarioExecutionError("ANDROID_ROUTING_PHASE_TIMEOUT")
+                phase = last_value.get("phase") if last_value is not None else None
                 failure.add_note(
-                    "Android routing ready response="
-                    + json.dumps(last_value, sort_keys=True)
+                    "android_routing_phase="
+                    + (phase if isinstance(phase, str) else "invalid")
                 )
                 raise failure
             if abort is not None:
@@ -1360,10 +1374,7 @@ class AndroidHostedAdapter:
                     self._cleanup_routing_chain(deadline)
                 except BaseException as cleanup_error:
                     error.add_note(
-                        "Android routing rule rollback failure:\n"
-                        + "".join(
-                            traceback.format_exception(cleanup_error)
-                        ).rstrip()
+                        f"android_routing_rollback_error={type(cleanup_error).__name__}"
                     )
                 raise
             return
@@ -1450,9 +1461,10 @@ class AndroidHostedAdapter:
         code: str, value: Mapping[str, object]
     ) -> ScenarioExecutionError:
         failure = ScenarioExecutionError(code)
+        phase = value.get("phase")
         failure.add_note(
-            "Android routing probe response="
-            + json.dumps(value, sort_keys=True)
+            "android_routing_phase="
+            + (phase if isinstance(phase, str) else "invalid")
         )
         return failure
 
@@ -1886,7 +1898,7 @@ exit 0
         self._active_controls = ()
         raw_directory = getattr(self.runner, "raw_directory", None)
         if not isinstance(raw_directory, Path):
-            raise ScenarioExecutionError("ANDROID_EVIDENCE_UNAVAILABLE")
+            raise ScenarioExecutionError("ANDROID_SCRATCH_UNAVAILABLE")
         try:
             _ensure_directory(raw_directory)
         except HostedAdapterError as error:
@@ -1934,6 +1946,7 @@ exit 0
         if preserve_active:
             command["preserve_active"] = True
         command_file = raw_directory / command_name
+        self._scratch_files.add(command_file)
         try:
             command_file.write_text(
                 json.dumps(command, sort_keys=True, separators=(",", ":")) + "\n",
@@ -1943,6 +1956,20 @@ exit 0
             raise ScenarioExecutionError("ANDROID_COMMAND_WRITE_FAILED") from error
         self._active_controls = tuple(controls)
         return command_file, profile_name, output_name
+
+    def _cleanup_local_scratch(self) -> ScenarioExecutionError | None:
+        """Remove command staging files after the device cleanup boundary."""
+
+        failure: ScenarioExecutionError | None = None
+        for path in tuple(self._scratch_files):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                if failure is None:
+                    failure = ScenarioExecutionError("ANDROID_SCRATCH_CLEANUP_FAILED")
+                failure.add_note(f"scratch_file_error={type(error).__name__}")
+        self._scratch_files.clear()
+        return failure
 
     @staticmethod
     def _progress_name(command_file: Path) -> str:
@@ -2014,8 +2041,7 @@ exit 0
                     primary = failure
                 else:
                     primary.add_note(
-                        "Android routing cleanup also failed:\n"
-                        + "".join(traceback.format_exception(failure)).rstrip()
+                        f"android_routing_cleanup_error={type(failure).__name__}"
                     )
 
         inventory = self._adb(
@@ -2037,8 +2063,7 @@ exit 0
                 primary = failure
             else:
                 primary.add_note(
-                    "Android routing cleanup absence proof failed:\n"
-                    + "".join(traceback.format_exception(failure)).rstrip()
+                    f"android_routing_cleanup_absence_error={type(failure).__name__}"
                 )
         if primary is not None:
             raise primary
@@ -2072,10 +2097,9 @@ exit 0
             if error is None:
                 error = failure
             else:
-                error.add_note(
-                    "Android app cleanup also failed:\n"
-                    + "".join(traceback.format_exception(failure)).rstrip()
-                )
+                    error.add_note(
+                        f"android_app_cleanup_error={_failure_code(failure)}"
+                    )
 
         verification_parts = [
             *(f"test ! -e {_APP_FILES}/{name}" for name in names),
@@ -2096,10 +2120,9 @@ exit 0
             if error is None:
                 error = failure
             else:
-                error.add_note(
-                    "Android cleanup verification also failed:\n"
-                    + "".join(traceback.format_exception(failure)).rstrip()
-                )
+                    error.add_note(
+                        f"android_cleanup_verification_error={_failure_code(failure)}"
+                    )
         return error
 
 
@@ -2112,17 +2135,20 @@ def _composite_failure(
     Discovery and finalization are aggregate lifecycle operations.  Calling
     only the first lane that fails would make the other lane silently absent
     from the result (or leave it unfinalized), so the composite records a
-    complete traceback for each attempted child before raising.
+    bounded error type/code for each attempted child before raising.
     """
 
     if not failures:
         return
     aggregate = HostedAdapterError(f"ANDROID_COMPOSITE_{operation.upper()}_FAILED")
     for lane, failure in failures:
-        detail = "".join(
-            traceback.format_exception(type(failure), failure, failure.__traceback__)
-        ).rstrip()
-        aggregate.add_note(f"{lane} {operation} failure:\n{detail}")
+        code = getattr(failure, "reason_code", None)
+        if not isinstance(code, str):
+            code = getattr(failure, "code", None)
+        suffix = f" code={code}" if isinstance(code, str) else ""
+        aggregate.add_note(
+            f"{lane} {operation} failure={type(failure).__name__}{suffix}"
+        )
     raise aggregate
 
 

@@ -19,6 +19,7 @@ const (
 	// every record after the most recent clear marker.
 	maxDiagnosticTail = 50
 	logSchema         = "dobby.log/v1"
+	logClearedEvent   = "logs.cleared"
 )
 
 // DiagnosticHistory separates the bounded human-readable UI tail from the
@@ -231,7 +232,7 @@ type storedDiagnosticRecord struct {
 	lines       []string
 }
 
-func readDiagnosticRecords(path string, producer int) ([]storedDiagnosticRecord, error) {
+func readDiagnosticRecords(path string, producer int) (records []storedDiagnosticRecord, err error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -239,14 +240,18 @@ func readDiagnosticRecords(path string, producer int) ([]storedDiagnosticRecord,
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	scanner := bufio.NewScanner(file)
 	// A service diagnostic may contain a large serialized failure. Keep a
 	// bounded but generous line limit; malformed oversized records are reported
 	// by Scanner rather than silently truncated.
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	records := make([]storedDiagnosticRecord, 0)
+	records = make([]storedDiagnosticRecord, 0)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.TrimSpace(line) == "" {
@@ -277,9 +282,9 @@ func recordsAfterClear(records []storedDiagnosticRecord) []storedDiagnosticRecor
 	var marker *storedDiagnosticRecord
 	for index := range records {
 		value := records[index]
-		if value.producer == 0 && value.event == "logs.cleared" {
-			copy := value
-			marker = &copy
+		if value.producer == 0 && value.event == logClearedEvent {
+			markerValue := value
+			marker = &markerValue
 		}
 	}
 	if marker == nil {
@@ -331,7 +336,7 @@ func diagnosticHistoryFromRecords(records []storedDiagnosticRecord) DiagnosticHi
 		// user cleared history, but it is storage metadata rather than a new
 		// diagnostic event. A successful clear with no newer events therefore
 		// leaves the visible history empty.
-		if record.event == "logs.cleared" {
+		if record.event == logClearedEvent {
 			continue
 		}
 		for _, line := range record.lines {

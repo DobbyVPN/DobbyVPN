@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,6 +19,25 @@ func (*panicMobileDevice) Open(int, string) error { panic("test protocol open pa
 func (*panicMobileDevice) GetProxyAddr() string   { return "127.0.0.1:1" }
 func (*panicMobileDevice) GetServerIP() net.IP    { return net.IPv4(192, 0, 2, 1) }
 func (*panicMobileDevice) Close() error           { return nil }
+
+type blockedMobileDevice struct {
+	opened     chan struct{}
+	release    chan struct{}
+	openOnce   sync.Once
+	closeCalls int
+}
+
+func (d *blockedMobileDevice) Open(int, string) error {
+	d.openOnce.Do(func() { close(d.opened) })
+	<-d.release
+	return nil
+}
+func (*blockedMobileDevice) GetProxyAddr() string { return "127.0.0.1:1" }
+func (*blockedMobileDevice) GetServerIP() net.IP  { return net.IPv4(192, 0, 2, 1) }
+func (d *blockedMobileDevice) Close() error {
+	d.closeCalls++
+	return nil
+}
 
 type mobileTestTun struct {
 	*os.File
@@ -131,5 +151,54 @@ func TestMobileConnectPanicRecoveryDoesNotFenceLaterGenerationWhenCleanupFails(t
 	}
 	if secondTun.closeCalls != 1 {
 		t.Fatalf("second TUN close calls = %d, want 1", secondTun.closeCalls)
+	}
+}
+
+func TestMobileConnectCancellationDoesNotMutateBlockedStartupConcurrently(t *testing.T) {
+	device := &blockedMobileDevice{
+		opened:  make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	tun := newMobileTestTun(t, nil)
+	c := newNativeRuntime(device, tun)
+	result := make(chan error, 1)
+	go func() { result <- c.Connect() }()
+	<-device.opened
+
+	// CancelConnect must not wait for the lifecycle mutex held by Connect.
+	cancelReturned := make(chan struct{})
+	go func() {
+		c.CancelConnect()
+		close(cancelReturned)
+	}()
+	select {
+	case <-cancelReturned:
+	case <-time.After(time.Second):
+		t.Fatal("CancelConnect blocked behind native startup")
+	}
+	if device.closeCalls != 0 || tun.closeCalls != 0 {
+		t.Fatalf("resources mutated while device.Open was blocked: device close=%d tun close=%d", device.closeCalls, tun.closeCalls)
+	}
+
+	close(device.release)
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("Connect unexpectedly succeeded after cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Connect did not finish after blocked startup was released")
+	}
+	if device.closeCalls != 1 {
+		t.Fatalf("device close calls=%d, want 1", device.closeCalls)
+	}
+	if tun.closeCalls != 1 {
+		t.Fatalf("TUN close calls=%d, want 1", tun.closeCalls)
+	}
+	if err := c.Disconnect(); err != nil {
+		t.Fatalf("Disconnect after canceled startup failed: %v", err)
+	}
+	if tun.closeCalls != 1 || device.closeCalls != 1 {
+		t.Fatalf("cleanup repeated after canceled startup: device close=%d tun close=%d", device.closeCalls, tun.closeCalls)
 	}
 }

@@ -19,6 +19,7 @@ let package = Package(
             path: "CommonDI",
             exclude: [
                 "CommonDI.h",
+                "GoUIBridge.swift",
                 "ExportLogsInteractorImpl.swift",
                 "DobbyConfigsRepositoryImpl.swift",
                 "IOSSessionShell.swift",

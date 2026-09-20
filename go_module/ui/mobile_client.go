@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -18,31 +19,6 @@ type MobileTransport interface {
 	Stop(string, int64) string
 	Snapshot(string) string
 	Reset(string, int64) string
-}
-
-// mobileAPI adapts exported Go functions without exposing function values to
-// callers. It is kept private so platform code cannot bypass MobileClient's
-// session and JSON handling.
-type mobileAPI struct {
-	configure func(string, int64, []byte) string
-	start     func(string, int64, string, int32) string
-	stop      func(string, int64) string
-	snapshot  func(string) string
-	reset     func(string, int64) string
-}
-
-func (a mobileAPI) Configure(session string, sequence int64, raw []byte) string {
-	return a.configure(session, sequence, raw)
-}
-func (a mobileAPI) Start(session string, sequence int64, mode string, index int32) string {
-	return a.start(session, sequence, mode, index)
-}
-func (a mobileAPI) Stop(session string, generation int64) string {
-	return a.stop(session, generation)
-}
-func (a mobileAPI) Snapshot(session string) string { return a.snapshot(session) }
-func (a mobileAPI) Reset(session string, sequence int64) string {
-	return a.reset(session, sequence)
 }
 
 type MobileClient struct {
@@ -107,8 +83,12 @@ func (c *MobileClient) Configure(ctx context.Context, raw []byte, sequence uint6
 	if err := contextError(ctx); err != nil {
 		return ConfigureResult{}, err
 	}
+	transportSequence, err := mobileInt64(sequence, "sequence")
+	if err != nil {
+		return ConfigureResult{}, err
+	}
 	rawResult, err := invoke(ctx, func() string {
-		return c.api.Configure(c.session(), int64(sequence), append([]byte(nil), raw...))
+		return c.api.Configure(c.session(), transportSequence, append([]byte(nil), raw...))
 	})
 	if err != nil {
 		return ConfigureResult{}, err
@@ -129,11 +109,15 @@ func (c *MobileClient) Start(ctx context.Context, sequence uint64) (StartResult,
 	if err := contextError(ctx); err != nil {
 		return StartResult{}, err
 	}
+	transportSequence, err := mobileInt64(sequence, "sequence")
+	if err != nil {
+		return StartResult{}, err
+	}
 	rawResult, err := invoke(ctx, func() string {
 		// AUTO_SELECT is represented by index zero by the native providers. A
 		// negative sentinel was accepted by the Go manager but rejected by the
 		// Swift bridge, creating a platform-only failure.
-		return c.api.Start(c.session(), int64(sequence), "AUTO_SELECT", 0)
+		return c.api.Start(c.session(), transportSequence, "AUTO_SELECT", 0)
 	})
 	if err != nil {
 		return StartResult{}, err
@@ -147,14 +131,18 @@ func (c *MobileClient) Start(ctx context.Context, sequence uint64) (StartResult,
 	if err := json.Unmarshal(value, &result); err != nil {
 		return StartResult{}, fmt.Errorf("decode mobile start result: %w", err)
 	}
-	return StartResult{Generation: result.Generation, Sequence: result.Sequence}, nil
+	return StartResult(result), nil
 }
 
 func (c *MobileClient) Stop(ctx context.Context, generation uint64) (StopResult, error) {
 	if err := contextError(ctx); err != nil {
 		return StopResult{}, err
 	}
-	rawResult, err := invoke(ctx, func() string { return c.api.Stop(c.session(), int64(generation)) })
+	transportGeneration, err := mobileInt64(generation, "generation")
+	if err != nil {
+		return StopResult{}, err
+	}
+	rawResult, err := invoke(ctx, func() string { return c.api.Stop(c.session(), transportGeneration) })
 	if err != nil {
 		return StopResult{}, err
 	}
@@ -167,7 +155,7 @@ func (c *MobileClient) Stop(ctx context.Context, generation uint64) (StopResult,
 	if err := json.Unmarshal(value, &result); err != nil {
 		return StopResult{}, fmt.Errorf("decode mobile stop result: %w", err)
 	}
-	return StopResult{Generation: result.Generation, Sequence: result.Sequence}, nil
+	return StopResult(result), nil
 }
 
 func (c *MobileClient) Snapshot(ctx context.Context) (Snapshot, error) {
@@ -205,13 +193,15 @@ func (c *MobileClient) Watch(ctx context.Context) (<-chan Snapshot, error) {
 		defer ticker.Stop()
 		for {
 			snapshot, err := c.Snapshot(ctx)
-			if err == nil {
+			switch {
+			case err == nil:
 				select {
 				case updates <- snapshot:
 				default:
 					select {
 					case <-updates:
-					default:
+					case <-ctx.Done():
+						return
 					}
 					select {
 					case updates <- snapshot:
@@ -219,9 +209,9 @@ func (c *MobileClient) Watch(ctx context.Context) (<-chan Snapshot, error) {
 						return
 					}
 				}
-			} else if ctx.Err() != nil {
+			case ctx.Err() != nil:
 				return
-			} else {
+			default:
 				// Closing the stream tells ConnectionView to enter its bounded
 				// reconnect path instead of silently presenting stale state.
 				return
@@ -240,7 +230,11 @@ func (c *MobileClient) Reset(ctx context.Context, sequence uint64) (Snapshot, er
 	if err := contextError(ctx); err != nil {
 		return Snapshot{}, err
 	}
-	rawResult, err := invoke(ctx, func() string { return c.api.Reset(c.session(), int64(sequence)) })
+	transportSequence, err := mobileInt64(sequence, "sequence")
+	if err != nil {
+		return Snapshot{}, err
+	}
+	rawResult, err := invoke(ctx, func() string { return c.api.Reset(c.session(), transportSequence) })
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -262,6 +256,14 @@ func contextError(ctx context.Context) error {
 		return nil
 	}
 	return ctx.Err()
+}
+
+func mobileInt64(value uint64, name string) (int64, error) {
+	converted, err := strconv.ParseInt(strconv.FormatUint(value, 10), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s is outside the mobile transport range: %w", name, err)
+	}
+	return converted, nil
 }
 
 type mobileEnvelope struct {
@@ -367,7 +369,7 @@ func (values profilesDTO) ui() []Profile {
 func (values warningsDTO) ui() []Warning {
 	result := make([]Warning, len(values))
 	for i, value := range values {
-		result[i] = Warning{Code: value.Code, Message: value.Message}
+		result[i] = Warning(value)
 	}
 	return result
 }

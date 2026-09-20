@@ -9,9 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 import time
-import traceback
 from urllib.parse import urlsplit
 
 from torturer_contract.functional.capabilities import Capability
@@ -24,10 +22,9 @@ from .cli import (
     HostedCLIAdapter,
     HostedServiceProcessController,
     RoutingProofMixin,
-    _allocate_evidence_path,
+    _allocate_scratch_path,
     _append_command_result_notes,
     _call_with_deadline,
-    _verify_evidence_file,
     _ensure_directory,
 )
 from torturer_checks.windows_job import (
@@ -263,7 +260,7 @@ def _parse_windows_tree_snapshot(stdout: str) -> tuple[tuple[str, ...], bool]:
                 identities.append(identity)
             continue
         # Unexpected output can be a warning or an error emitted alongside a
-        # partial snapshot.  Retain it in the runner evidence but fail closed.
+        # partial snapshot.  Ignore its contents and fail closed.
         complete = False
     unique = tuple(dict.fromkeys(identities))
     identity_pids = set(identity_by_pid)
@@ -389,11 +386,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             runner=runner,
             raw_directory=raw_directory,
         )
-        self._service_evidence_paths: tuple[Path, Path] | None = None
-        self._service_diagnostics_path: Path | None = None
         self._service_diagnostics: list[str] = []
-        self._service_diagnostics_write_failed = False
-        self._tree_proof_for_evidence = False
         self._external_tree_cleanup_proven = False
         self._initial_identity: str | None = None
         self._replacement_identity: str | None = None
@@ -491,28 +484,12 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         )
 
     def _record_service_diagnostics(self, *diagnostics: str) -> None:
-        """Retain every service-operation diagnostic."""
+        """Keep only fixed, in-memory service status for the current result."""
 
         values = tuple(value for value in diagnostics if value)
         if not values:
             return
         self._service_diagnostics.extend(values)
-        path = self._service_diagnostics_path
-        if path is None or self._service_diagnostics_write_failed:
-            return
-        try:
-            with path.open("ab") as output:
-                for value in values:
-                    output.write(value.encode("utf-8", errors="replace"))
-                    output.write(b"\n")
-        except OSError:
-            self._service_diagnostics_write_failed = True
-
-    @staticmethod
-    def _open_service_stream(path: Path):
-        """Open one service output stream."""
-
-        return path.open("ab", buffering=0)
 
     def _terminate_uncontained_replacement(self, deadline: float) -> None:
         """Best-effort leader cleanup when Job setup itself failed.
@@ -530,7 +507,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             self._record_service_diagnostics("api=ProcessTerminate detail=leader-only")
         except (OSError, ProcessLookupError, AttributeError, ValueError) as error:
             self._record_service_diagnostics(
-                f"api=ProcessTerminate error={type(error).__name__} detail={error!r}"
+                f"api=ProcessTerminate error={type(error).__name__}"
             )
         try:
             process.wait(timeout=self._remaining(deadline, "SERVICE_REAP_FAILED"))  # type: ignore[attr-defined]
@@ -540,8 +517,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             )
         except (OSError, AttributeError, ValueError) as error:
             self._record_service_diagnostics(
-                f"api=ProcessWait error={type(error).__name__} "
-                f"detail=leader-only exception={error!r}"
+                f"api=ProcessWait error={type(error).__name__} detail=leader-only"
             )
 
     def _cleanup_start_failure(self, error: Exception, deadline: float) -> None:
@@ -551,8 +527,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         if not isinstance(reason, str) or not reason:
             reason = type(error).__name__
         self._record_service_diagnostics(
-            f"stage=service-start detail=primary-failure reason={reason} "
-            f"exception={error!r}",
+            f"stage=service-start detail=primary-failure reason={reason}",
         )
         if self._replacement_process is None:
             return
@@ -564,12 +539,10 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 cleanup_reason = type(cleanup_error).__name__
             self._record_service_diagnostics(
                 "stage=service-start-cleanup "
-                f"detail=cleanup-failure reason={cleanup_reason} "
-                f"exception={cleanup_error!r}",
+                f"detail=cleanup-failure reason={cleanup_reason}",
             )
             error.add_note(
-                "replacement cleanup failed:\n"
-                + "".join(traceback.format_exception(cleanup_error)).rstrip()
+                f"replacement_cleanup_error={type(cleanup_error).__name__}"
             )
 
     def _alive(self, timeout: float) -> bool:
@@ -704,7 +677,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             )
         except (OSError, ValueError, TypeError) as error:
             self._record_service_diagnostics(
-                f"api=TerminateJobObject error={type(error).__name__} detail={error!r}",
+                f"api=TerminateJobObject error={type(error).__name__}",
             )
             raise ScenarioExecutionError("SERVICE_JOB_PROOF_FAILED") from error
         self._record_service_diagnostics(*cleanup.diagnostics)
@@ -726,8 +699,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             raise ScenarioExecutionError("SERVICE_REAP_FAILED") from error
         except (OSError, AttributeError, ValueError) as error:
             self._record_service_diagnostics(
-                f"api=ProcessWait error={type(error).__name__} "
-                f"detail=replacement-reap exception={error!r}",
+                f"api=ProcessWait error={type(error).__name__} detail=replacement-reap",
             )
             raise ScenarioExecutionError("SERVICE_REAP_FAILED") from error
         if getattr(process, "poll", lambda: None)() is None:  # type: ignore[attr-defined]
@@ -744,8 +716,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             )
         except (OSError, ValueError, TypeError) as error:
             self._record_service_diagnostics(
-                f"api=CloseHandle error={type(error).__name__} "
-                f"detail=replacement-job exception={error!r}",
+                f"api=CloseHandle error={type(error).__name__} detail=replacement-job",
             )
             raise ScenarioExecutionError("SERVICE_JOB_CLOSE_FAILED") from error
         self._record_service_diagnostics(*close_diagnostics)
@@ -754,12 +725,8 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 "api=CloseHandle winerror=6 detail=replacement-job-still-attached",
             )
             raise ScenarioExecutionError("SERVICE_JOB_CLOSE_FAILED")
-        if self._service_diagnostics_write_failed:
-            raise ScenarioExecutionError("SERVICE_EVIDENCE_INCOMPLETE")
-
         self._replacement_process = None
         self._replacement_cleanup_proven = True
-        self._tree_proof_for_evidence = True
 
     def _terminate(self, timeout: float, *, deadline: float | None = None) -> None:
         if deadline is None:
@@ -789,33 +756,9 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         return result.returncode == 0
 
     def _start(self, timeout: float) -> None:
-        # Establish the restart's total deadline before finalizing evidence
-        # from the predecessor.  Hashing and publishing those files is part
-        # of the same bounded restart operation, never an unbudgeted prefix.
         deadline = time.monotonic() + timeout
-        if self._service_evidence_paths is not None:
-            self._finalize_service_evidence(deadline)
         self._restart_number += 1
-        stdout_path = _allocate_evidence_path(
-            self.raw_directory,
-            f"service-restart-{self._restart_number:03d}",
-            ".stdout.raw.log",
-        )
-        stderr_path = _allocate_evidence_path(
-            self.raw_directory,
-            f"service-restart-{self._restart_number:03d}",
-            ".stderr.raw.log",
-        )
-        diagnostics_path = _allocate_evidence_path(
-            self.raw_directory,
-            f"service-restart-{self._restart_number:03d}",
-            ".diagnostics.raw.log",
-        )
-        self._service_evidence_paths = (stdout_path, stderr_path)
-        self._service_diagnostics_path = diagnostics_path
         self._service_diagnostics = []
-        self._service_diagnostics_write_failed = False
-        self._tree_proof_for_evidence = False
         self._replacement_cleanup_proven = False
         # Invalidate the predecessor sidecar before the launcher runs.  If
         # identity proof or readiness fails, outer cleanup must not trust the
@@ -829,57 +772,27 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         # provide that ownership boundary because its child would be created
         # outside the Job.
         command = self._replacement_command
-        stdout_stream = None
-        stderr_stream = None
         try:
-            stdout_stream = self._open_service_stream(stdout_path)
-            stderr_stream = self._open_service_stream(stderr_path)
             process = popen_with_windows_job(
                 subprocess.Popen,
                 list(command),
                 stdin=subprocess.DEVNULL,
-                stdout=stdout_stream,
-                stderr=stderr_stream,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 stage="hosted-windows-service",
                 deadline=deadline,
             )
         except WindowsJobError as error:
             self._record_service_diagnostics(*error.diagnostics)
-            raise ScenarioExecutionError("SERVICE_RESTART_UNAVAILABLE") from error
+            raise ScenarioExecutionError("SERVICE_RESTART_UNAVAILABLE") from None
         except (OSError, ValueError, TypeError) as error:
             self._record_service_diagnostics(
-                f"api=CreateProcess error={type(error).__name__} detail={error!r}",
+                f"api=CreateProcess error={type(error).__name__}",
             )
-            raise ScenarioExecutionError("SERVICE_RESTART_UNAVAILABLE") from error
-        finally:
-            primary_error = sys.exception()
-            close_errors: list[BaseException] = []
-            for stream in (stdout_stream, stderr_stream):
-                if stream is not None:
-                    try:
-                        stream.close()
-                    except (OSError, ValueError) as error:
-                        close_errors.append(error)
-                        self._record_service_diagnostics(
-                            f"api=ClosePipe error={type(error).__name__} detail={error!r}",
-                        )
-            if close_errors and primary_error is not None:
-                for close_error in close_errors:
-                    primary_error.add_note(
-                        "service evidence pipe finalization also failed:\n"
-                        + "".join(traceback.format_exception(close_error)).rstrip()
-                    )
+            raise ScenarioExecutionError("SERVICE_RESTART_UNAVAILABLE") from None
 
         try:
             self._replacement_process = process
-            if close_errors:
-                error = ScenarioExecutionError("SERVICE_EVIDENCE_INCOMPLETE")
-                for close_error in close_errors:
-                    error.add_note(
-                        "service evidence pipe finalization failed:\n"
-                        + "".join(traceback.format_exception(close_error)).rstrip()
-                    )
-                raise error from close_errors[0]
             if os.name == "nt" and windows_job_for(process) is None:
                 self._record_service_diagnostics(
                     "api=JobObject winerror=6 detail=replacement-not-attached",
@@ -889,10 +802,9 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 process_pid = int(getattr(process, "pid"))
             except (AttributeError, TypeError, ValueError) as process_error:
                 self._record_service_diagnostics(
-                    f"api=ProcessId error={type(process_error).__name__} "
-                    f"detail={process_error!r}",
+                    f"api=ProcessId error={type(process_error).__name__}",
                 )
-                raise ScenarioExecutionError("SERVICE_RESTART_PID_INVALID") from process_error
+                raise ScenarioExecutionError("SERVICE_RESTART_PID_INVALID") from None
             if _service_pid(str(process_pid)) is None:
                 self._record_service_diagnostics("api=ProcessId error=invalid")
                 raise ScenarioExecutionError("SERVICE_RESTART_PID_INVALID")
@@ -926,47 +838,6 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             self._cleanup_start_failure(error, deadline)
             raise
 
-    def _finalize_service_evidence(self, deadline: float | None = None) -> None:
-        """Hash completed service streams without replacing or deleting them."""
-
-        paths = self._service_evidence_paths
-        if paths is None:
-            return
-        if not self._tree_proof_for_evidence:
-            raise ScenarioExecutionError("SERVICE_TREE_UNPROVEN")
-        if self._service_diagnostics_write_failed:
-            raise ScenarioExecutionError("SERVICE_EVIDENCE_INCOMPLETE")
-        for path, kind in zip(paths, ("windows-service-stdout", "windows-service-stderr")):
-            if deadline is not None:
-                self._remaining(deadline, "SERVICE_RESTART_TIMEOUT")
-            try:
-                _verify_evidence_file(path)
-                retain = getattr(self.runner, "retain_external_evidence", None)
-                if callable(retain):
-                    retain(path, evidence_kind=kind)
-            except (OSError, HostedAdapterError) as error:
-                raise ScenarioExecutionError("SERVICE_EVIDENCE_INCOMPLETE") from error
-            if deadline is not None:
-                self._remaining(deadline, "SERVICE_RESTART_TIMEOUT")
-        diagnostics_path = self._service_diagnostics_path
-        if diagnostics_path is not None:
-            if deadline is not None:
-                self._remaining(deadline, "SERVICE_RESTART_TIMEOUT")
-            try:
-                _verify_evidence_file(diagnostics_path)
-                retain = getattr(self.runner, "retain_external_evidence", None)
-                if callable(retain):
-                    retain(
-                        diagnostics_path,
-                        evidence_kind="windows-service-diagnostics",
-                    )
-            except (OSError, HostedAdapterError) as error:
-                raise ScenarioExecutionError("SERVICE_EVIDENCE_INCOMPLETE") from error
-            if deadline is not None:
-                self._remaining(deadline, "SERVICE_RESTART_TIMEOUT")
-        self._service_evidence_paths = None
-        self._service_diagnostics_path = None
-
     def finalize_restarted_service(
         self, timeout_seconds: float, *, deadline: float | None = None
     ) -> None:
@@ -997,25 +868,10 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             return
         if self._replacement_identity is None:
             # No Popen/Job was retained (for example, native setup failed).
-            # Without an explicit proof from the helper, leave evidence
-            # unfinalized and fail closed rather than claiming cleanup.
+            # Without an explicit proof from the helper, fail closed rather
+            # than claiming cleanup.
             raise ScenarioExecutionError("SERVICE_PID_PROBE_FAILED")
         super().finalize_restarted_service(timeout_seconds, deadline=deadline)
-
-    def finalize_evidence(
-        self, timeout_seconds: float = 5.0, *, deadline: float | None = None
-    ) -> None:
-        """Finalize the most recent stream pair after its process is gone."""
-
-        if timeout_seconds <= 0:
-            raise ScenarioExecutionError("INVALID_FINALIZE_TIMEOUT")
-        if deadline is None:
-            deadline = time.monotonic() + timeout_seconds
-        elif deadline <= time.monotonic():
-            raise ScenarioExecutionError("SERVICE_EVIDENCE_TIMEOUT")
-        if self._alive(self._remaining(deadline, "SERVICE_EVIDENCE_TIMEOUT")):
-            raise ScenarioExecutionError("SERVICE_EVIDENCE_PROCESS_LIVE")
-        self._finalize_service_evidence(deadline)
 
 
 def _service_pid(value: str) -> int | None:
@@ -1067,7 +923,7 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 raise HostedAdapterError("SERVICE_CONTROL_INCOMPLETE")
             raw_directory = getattr(runner, "raw_directory", None)
             if not isinstance(raw_directory, Path):
-                raise HostedAdapterError("SERVICE_EVIDENCE_UNAVAILABLE")
+                raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
             control_address = str(
                 service_socket
                 or os.environ.get("DOBBYVPN_CONTROL_ADDRESS", "127.0.0.1:50051")
@@ -1129,11 +985,6 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             deadline = min(deadline, now + timeout_seconds)
         _call_with_deadline(
             self.service.finalize_restarted_service,
-            self._remaining(deadline, "SERVICE_FINALIZE_TIMEOUT"),
-            deadline,
-        )
-        _call_with_deadline(
-            self.service.finalize_evidence,
             self._remaining(deadline, "SERVICE_FINALIZE_TIMEOUT"),
             deadline,
         )
@@ -1338,7 +1189,7 @@ $stats = $adapter | Get-NetAdapterStatistics -ErrorAction Stop
         try:
             _ensure_directory(raw_directory)
             repair_id = os.urandom(8).hex()
-            repair_path = _allocate_evidence_path(
+            repair_path = _allocate_scratch_path(
                 raw_directory,
                 f"windows-uplink-repair-{repair_id}",
                 ".ps1",
@@ -1351,7 +1202,7 @@ $ErrorActionPreference = "Stop"
 & {
   Get-NetAdapter -InterfaceIndex $InterfaceIndex -ErrorAction Stop |
     Enable-NetAdapter -Confirm:$false -ErrorAction Stop
-} 1> ($PSCommandPath + '.stdout.raw.log') 2> ($PSCommandPath + '.stderr.raw.log')
+}
 '''.encode("utf-8")
             descriptor = os.open(
                 repair_path,
@@ -1383,10 +1234,11 @@ if ($null -eq (Get-ScheduledTask -TaskName $taskName -ErrorAction Stop)) { throw
 '''
         remove_repair = r'''$ErrorActionPreference = "Stop"
 $taskName = [string]$args[1]
-$scriptPath = [IO.Path]::GetFullPath([string]$args[2])
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($null -ne $task) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop }
-Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+if ($null -ne (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+  throw "repair task remains registered"
+}
 '''
         disable = r'''$ErrorActionPreference = "Stop"
 $index = [int]$args[0]
@@ -1413,9 +1265,14 @@ while ($true) {
 }
 '''
         disabled = False
+        # Registration can time out after Task Scheduler has accepted the
+        # task. Treat the task as potentially present until removal proves
+        # that it is gone, so the repair script is never unlinked underneath
+        # a registered task.
         repair_scheduled = False
         primary_error: Exception | None = None
         try:
+            repair_scheduled = True
             self._network_command(
                 register_repair,
                 self._remaining(deadline, "NETWORK_REPAIR_SCHEDULE_FAILED"),
@@ -1423,7 +1280,6 @@ while ($true) {
                 repair_task,
                 str(repair_path.resolve(strict=True)),
             )
-            repair_scheduled = True
             self._network_command(
                 disable, self._remaining(deadline, "NETWORK_DOWN_FAILED"),
                 "NETWORK_DOWN_FAILED",
@@ -1438,6 +1294,7 @@ while ($true) {
             primary_error = error
         finally:
             if disabled:
+                restored = False
                 try:
                     self._network_command(
                         enable,
@@ -1449,24 +1306,31 @@ while ($true) {
                         self._remaining(deadline, "NETWORK_UP_UNVERIFIED"),
                         "NETWORK_UP_UNVERIFIED",
                     )
-                    self._network_command(
-                        remove_repair,
-                        self._remaining(deadline, "NETWORK_REPAIR_CLEANUP_FAILED"),
-                        "NETWORK_REPAIR_CLEANUP_FAILED",
-                        repair_task,
-                        str(repair_path),
-                    )
-                    repair_scheduled = False
-                except Exception as repair_error:
+                    restored = True
+                except Exception as restore_error:
                     if primary_error is None:
-                        primary_error = repair_error
+                        primary_error = restore_error
                     else:
                         primary_error.add_note(
-                            "Network repair also failed:\n"
-                            + "".join(
-                                traceback.format_exception(repair_error)
-                            ).rstrip()
+                            f"network_repair_error={type(restore_error).__name__}"
                         )
+                if restored:
+                    try:
+                        self._network_command(
+                            remove_repair,
+                            self._remaining(deadline, "NETWORK_REPAIR_CLEANUP_FAILED"),
+                            "NETWORK_REPAIR_CLEANUP_FAILED",
+                            repair_task,
+                            str(repair_path),
+                        )
+                        repair_scheduled = False
+                    except Exception as repair_error:
+                        if primary_error is None:
+                            primary_error = repair_error
+                        else:
+                            primary_error.add_note(
+                                f"network_repair_cleanup_error={type(repair_error).__name__}"
+                            )
             elif repair_scheduled:
                 # The uplink was never disabled, so removing the unused
                 # scheduled repair is safe and required for idle proof.
@@ -1484,24 +1348,17 @@ while ($true) {
                         primary_error = repair_error
                     else:
                         primary_error.add_note(
-                            "Network repair cleanup also failed:\n"
-                            + "".join(
-                                traceback.format_exception(repair_error)
-                            ).rstrip()
+                            f"network_repair_cleanup_error={type(repair_error).__name__}"
                         )
         if not repair_scheduled:
             try:
                 repair_path.unlink(missing_ok=True)
             except OSError as cleanup_error:
                 if primary_error is None:
-                    primary_error = cleanup_error
-                else:
-                    primary_error.add_note(
-                        "Network repair file cleanup also failed:\n"
-                        + "".join(
-                            traceback.format_exception(cleanup_error)
-                        ).rstrip()
-                    )
+                    primary_error = ScenarioExecutionError("NETWORK_REPAIR_CLEANUP_FAILED")
+                primary_error.add_note(
+                    f"network_repair_file_cleanup_error={type(cleanup_error).__name__}"
+                )
         if primary_error is not None:
             raise primary_error
         while time.monotonic() < deadline:

@@ -194,8 +194,8 @@ func TestOneOwnerRetainsConfigurationAcrossIdleAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, m, id, StateConnected)
-	if _, err := m.Stop(context.Background(), id, first.Generation); err != nil {
-		t.Fatal(err)
+	if _, stopErr := m.Stop(context.Background(), id, first.Generation); stopErr != nil {
+		t.Fatal(stopErr)
 	}
 	idle := waitState(t, m, id, StateIdle)
 	if idle.SessionID != id || !idle.Configured || idle.Digest != configuredSnapshot.Digest || len(idle.Profiles) != len(configuredSnapshot.Profiles) {
@@ -247,10 +247,15 @@ func TestNormalizationAndResults(t *testing.T) {
 
 func TestValidateConfigIsStatelessAndSnapshotCarriesAcceptedMetadata(t *testing.T) {
 	m := NewManager(ManagerOptions{})
-	before, err := m.Snapshot(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := snapshotForTest(t, m, "")
+	assertValidationIsStateless(t, m, before)
+	configured := acceptAndCheckConfiguration(t, m, before)
+	assertInvalidConfigurationDoesNotReplace(t, m, before, configured)
+	assertSnapshotCollectionsAreCopied(t, m, before)
+}
+
+func assertValidationIsStateless(t *testing.T, m *Manager, before SnapshotResult) {
+	t.Helper()
 	validated, err := m.ValidateConfig(context.Background(), fixture(t))
 	if err != nil {
 		t.Fatal(err)
@@ -258,52 +263,52 @@ func TestValidateConfigIsStatelessAndSnapshotCarriesAcceptedMetadata(t *testing.
 	if validated.Digest == "" || validated.SourceKind != ConfigSourceInline || len(validated.Profiles) != 4 {
 		t.Fatalf("validation result = %#v", validated)
 	}
-	if _, err := m.ValidateConfig(context.Background(), []byte("not TOML")); CodeOf(err) != FailureMalformedConfig {
-		t.Fatalf("invalid validation error = %v", err)
+	if _, validationErr := m.ValidateConfig(context.Background(), []byte("not TOML")); CodeOf(validationErr) != FailureMalformedConfig {
+		t.Fatalf("invalid validation error = %v", validationErr)
 	}
-	afterValidation, err := m.Snapshot(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	afterValidation := snapshotForTest(t, m, "")
 	if afterValidation.SessionID != before.SessionID || afterValidation.Sequence != before.Sequence || afterValidation.Generation != before.Generation || afterValidation.State != before.State || afterValidation.Configured != before.Configured {
 		t.Fatalf("validation mutated the owner: before=%#v after=%#v", before, afterValidation)
 	}
+}
 
+func acceptAndCheckConfiguration(t *testing.T, m *Manager, before SnapshotResult) SnapshotResult {
+	t.Helper()
 	accepted, err := configureForTest(t, m, before.SessionID, fixture(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	configured, err := m.Snapshot(context.Background(), before.SessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	configured := snapshotForTest(t, m, before.SessionID)
 	if configured.State != StateConfigured || !configured.Configured || configured.Digest != accepted.Digest || configured.SourceKind != accepted.SourceKind || len(configured.Profiles) != 4 || configured.Sequence <= before.Sequence {
 		t.Fatalf("configured metadata = %#v; configure=%#v before=%#v", configured, accepted, before)
 	}
-	if _, err := m.ValidateConfig(context.Background(), []byte("not TOML")); CodeOf(err) != FailureMalformedConfig {
-		t.Fatalf("invalid validation after configure = %v", err)
+	return configured
+}
+
+func assertInvalidConfigurationDoesNotReplace(t *testing.T, m *Manager, before, configured SnapshotResult) {
+	t.Helper()
+	if _, validationErr := m.ValidateConfig(context.Background(), []byte("not TOML")); CodeOf(validationErr) != FailureMalformedConfig {
+		t.Fatalf("invalid validation after configure = %v", validationErr)
 	}
-	if _, err := configureForTest(t, m, before.SessionID, []byte("not TOML")); CodeOf(err) != FailureMalformedConfig {
-		t.Fatalf("invalid replacement configuration = %v", err)
+	if _, configureErr := configureForTest(t, m, before.SessionID, []byte("not TOML")); CodeOf(configureErr) != FailureMalformedConfig {
+		t.Fatalf("invalid replacement configuration = %v", configureErr)
 	}
-	unchanged, err := m.Snapshot(context.Background(), before.SessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	unchanged := snapshotForTest(t, m, before.SessionID)
 	if unchanged.Sequence != configured.Sequence || unchanged.Digest != configured.Digest || unchanged.State != StateConfigured || !unchanged.Configured || unchanged.SourceKind != ConfigSourceInline || len(unchanged.Profiles) != 4 {
 		t.Fatalf("failed validation/configuration replaced accepted config: %#v", unchanged)
 	}
+}
 
+func assertSnapshotCollectionsAreCopied(t *testing.T, m *Manager, before SnapshotResult) {
+	t.Helper()
+	unchanged := snapshotForTest(t, m, before.SessionID)
 	// Snapshot collections and profile pointers are copies, not mutable views
 	// into the manager's retained configuration.
 	unchanged.Profiles[0].Description = "mutated by caller"
 	if unchanged.ActiveProfile != nil {
 		unchanged.ActiveProfile.Description = "mutated by caller"
 	}
-	verified, err := m.Snapshot(context.Background(), before.SessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	verified := snapshotForTest(t, m, before.SessionID)
 	if verified.Profiles[0].Description == "mutated by caller" {
 		t.Fatalf("snapshot exposed mutable profile storage: %#v", verified.Profiles[0])
 	}
@@ -343,14 +348,14 @@ func TestStaleRevisionCannotConfigureStartOrReset(t *testing.T) {
 	if current.Sequence != accepted.Sequence {
 		t.Fatalf("configure revision = %d, snapshot revision = %d", accepted.Sequence, current.Sequence)
 	}
-	if _, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, fixture(t)); CodeOf(err) != FailureConflict {
-		t.Fatalf("stale configure = %v", err)
+	if _, configureErr := m.Configure(context.Background(), initial.SessionID, initial.Sequence, fixture(t)); CodeOf(configureErr) != FailureConflict {
+		t.Fatalf("stale configure = %v", configureErr)
 	}
-	if _, err := m.Start(context.Background(), initial.SessionID, initial.Sequence, StartTarget{Mode: AutoSelect}); CodeOf(err) != FailureConflict {
-		t.Fatalf("stale start = %v", err)
+	if _, startErr := m.Start(context.Background(), initial.SessionID, initial.Sequence, StartTarget{Mode: AutoSelect}); CodeOf(startErr) != FailureConflict {
+		t.Fatalf("stale start = %v", startErr)
 	}
-	if _, err := m.Reset(context.Background(), initial.SessionID, initial.Sequence); CodeOf(err) != FailureConflict {
-		t.Fatalf("stale reset = %v", err)
+	if _, resetErr := m.Reset(context.Background(), initial.SessionID, initial.Sequence); CodeOf(resetErr) != FailureConflict {
+		t.Fatalf("stale reset = %v", resetErr)
 	}
 	after, err := m.Snapshot(context.Background(), initial.SessionID)
 	if err != nil {
@@ -415,7 +420,18 @@ func TestWatchCoalescesMoreThanSixtyFourChangesAndCancellationUnregisters(t *tes
 	}
 
 	const changes = 96
-	raw := fixture(t)
+	configureRepeatedly(t, m, id, fixture(t), changes)
+	latest := snapshotForTest(t, m, id)
+	if latest.Sequence != initial.Sequence+changes || latest.State != StateConfigured || !latest.Configured {
+		t.Fatalf("latest snapshot after %d changes = %#v", changes, latest)
+	}
+	assertCoalescedWatchUpdate(t, updates, latest)
+	cancel()
+	assertWatchClosed(t, updates)
+}
+
+func configureRepeatedly(t *testing.T, m *Manager, id string, raw []byte, changes int) {
+	t.Helper()
 	done := make(chan error, 1)
 	go func() {
 		for i := 0; i < changes; i++ {
@@ -432,21 +448,17 @@ func TestWatchCoalescesMoreThanSixtyFourChangesAndCancellationUnregisters(t *tes
 		done <- nil
 	}()
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+	case workerErr := <-done:
+		if workerErr != nil {
+			t.Fatal(workerErr)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("slow watcher blocked repeated configuration changes")
 	}
+}
 
-	latest, err := m.Snapshot(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if latest.Sequence != initial.Sequence+changes || latest.State != StateConfigured || !latest.Configured {
-		t.Fatalf("latest snapshot after %d changes = %#v", changes, latest)
-	}
+func assertCoalescedWatchUpdate(t *testing.T, updates <-chan SnapshotResult, latest SnapshotResult) {
+	t.Helper()
 	select {
 	case coalesced := <-updates:
 		if coalesced.Sequence != latest.Sequence || coalesced.Digest != latest.Digest || coalesced.State != latest.State {
@@ -455,8 +467,10 @@ func TestWatchCoalescesMoreThanSixtyFourChangesAndCancellationUnregisters(t *tes
 	default:
 		t.Fatal("watcher did not receive a coalesced update")
 	}
+}
 
-	cancel()
+func assertWatchClosed(t *testing.T, updates <-chan SnapshotResult) {
+	t.Helper()
 	select {
 	case _, open := <-updates:
 		if open {
@@ -958,6 +972,15 @@ func currentSessionForTest(t *testing.T, m *Manager) (string, error) {
 		return "", err
 	}
 	return snapshot.SessionID, nil
+}
+
+func snapshotForTest(t *testing.T, m *Manager, id string) SnapshotResult {
+	t.Helper()
+	snapshot, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func configureForTest(t *testing.T, m *Manager, id string, raw []byte) (ConfigureResult, error) {

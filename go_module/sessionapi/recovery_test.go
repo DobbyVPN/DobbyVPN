@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func newRecoveryTestManager(t *testing.T, runtime Runtime, now func() time.Time) (*Manager, string, *eventPlatform) {
+func newRecoveryTestManager(t *testing.T, runtime Runtime, now func() time.Time) (*Manager, string) {
 	t.Helper()
 	platform := &eventPlatform{events: make(chan StateChange, 128)}
 	manager := NewManager(ManagerOptions{Runtime: runtime, Platform: platform, Now: now})
@@ -18,7 +18,7 @@ func newRecoveryTestManager(t *testing.T, runtime Runtime, now func() time.Time)
 	if _, err := configureForTest(t, manager, id, fixture(t)); err != nil {
 		t.Fatal(err)
 	}
-	return manager, id, platform
+	return manager, id
 }
 
 func waitGenerationState(t *testing.T, manager *Manager, id string, minimumGeneration uint64, state State) SnapshotResult {
@@ -42,7 +42,7 @@ func waitGenerationState(t *testing.T, manager *Manager, id string, minimumGener
 func TestAutoRecoveryStopsAfterThreeUnstableRecoveries(t *testing.T) {
 	failures := make(chan struct{}, 1)
 	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 8)}
-	manager, id, _ := newRecoveryTestManager(t, runtime, time.Now)
+	manager, id := newRecoveryTestManager(t, runtime, time.Now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
 	if err != nil {
 		t.Fatal(err)
@@ -64,8 +64,8 @@ func TestAutoRecoveryStopsAfterThreeUnstableRecoveries(t *testing.T) {
 	if failed.Generation != currentGeneration || failed.LastFailure != FailureRuntime || failed.LastFailureMessage != autoRecoveryMessage || failed.Recovering {
 		t.Fatalf("retry exhaustion snapshot = %#v", failed)
 	}
-	if again, err := manager.Snapshot(context.Background(), id); err != nil || again.Generation != currentGeneration {
-		t.Fatalf("exhausted recovery started another generation: %#v, %v", again, err)
+	if again, snapshotErr := manager.Snapshot(context.Background(), id); snapshotErr != nil || again.Generation != currentGeneration {
+		t.Fatalf("exhausted recovery started another generation: %#v, %v", again, snapshotErr)
 	}
 
 	// A deliberate new Start begins a fresh budget after exhaustion.
@@ -88,7 +88,7 @@ func TestAutoRecoveryBudgetResetsAfterFiveStableMinutes(t *testing.T) {
 	initial := time.Time{}
 	nowValue.Store(&initial)
 	now := func() time.Time { return *nowValue.Load() }
-	manager, id, _ := newRecoveryTestManager(t, runtime, now)
+	manager, id := newRecoveryTestManager(t, runtime, now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +139,7 @@ func (r *blockedRecoveryRuntime) Start(_ context.Context, ref SessionRef, _ Runt
 
 func TestStopFromRecoverySnapshotCancelsReservedGeneration(t *testing.T) {
 	runtime := &blockedRecoveryRuntime{failures: make(chan struct{}, 1), probeEntered: make(chan struct{}, 1)}
-	manager, id, _ := newRecoveryTestManager(t, runtime, time.Now)
+	manager, id := newRecoveryTestManager(t, runtime, time.Now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestStopFromRecoverySnapshotCancelsReservedGeneration(t *testing.T) {
 }
 
 func TestStopFromRecoveryIdleCancelsReservedGeneration(t *testing.T) {
-	manager, id, _ := newRecoveryTestManager(t, &monitoringRuntime{stopped: make(chan uint64, 1)}, time.Now)
+	manager, id := newRecoveryTestManager(t, &monitoringRuntime{stopped: make(chan uint64, 1)}, time.Now)
 	s, err := manager.get(id)
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +242,7 @@ func TestStopFromEarlierRecoveryCycleCannotStopLaterCycle(t *testing.T) {
 		default:
 		}
 	}()
-	manager, id, _ := newRecoveryTestManager(t, runtime, time.Now)
+	manager, id := newRecoveryTestManager(t, runtime, time.Now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +300,7 @@ func TestStopDuringHealthTeardownCancelsQueuedRecovery(t *testing.T) {
 		stopEntered: make(chan uint64, 1),
 		releaseStop: make(chan struct{}),
 	}
-	manager, id, _ := newRecoveryTestManager(t, runtime, time.Now)
+	manager, id := newRecoveryTestManager(t, runtime, time.Now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
 	if err != nil {
 		t.Fatal(err)

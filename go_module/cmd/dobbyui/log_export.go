@@ -46,7 +46,11 @@ func (e *desktopLogExporter) Export(ctx context.Context, lines []string) error {
 		if writer == nil {
 			return
 		}
-		defer writer.Close()
+		defer func() {
+			if closeErr := writer.Close(); closeErr != nil {
+				fyne.LogError("close log export", closeErr)
+			}
+		}()
 		if err := ctx.Err(); err != nil {
 			return
 		}

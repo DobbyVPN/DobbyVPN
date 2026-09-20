@@ -2,6 +2,7 @@ package mobilebinding
 
 import (
 	"context"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -43,8 +44,31 @@ func TestTunnelLeaseReleasePropagatesPlatformCleanupFailure(t *testing.T) {
 		callbacks: callbacks,
 	}
 
-	if err := lease.Release(nil); err == nil || !strings.Contains(err.Error(), "platform tunnel cleanup failed") {
+	if err := lease.Release(context.TODO()); err == nil || !strings.Contains(err.Error(), "platform tunnel cleanup failed") {
 		t.Fatalf("Release error = %v, want platform cleanup failure", err)
+	}
+}
+
+func TestPlatformRejectsCallbackValuesThatDoNotFitNativeTypes(t *testing.T) {
+	callbacks := releaseResultCallbacks{releaseOK: true}
+	adapter := &platformAdapter{
+		callbacks: callbacks,
+		tunnels:   newTunnelFDs(),
+		active:    make(map[string]sessionapi.SessionRef),
+	}
+	if _, _, err := adapter.acquire(sessionapi.SessionRef{SessionID: "session", Generation: math.MaxUint64}); err == nil {
+		t.Fatal("acquire accepted a generation that cannot fit the native callback type")
+	}
+	oversizedDescriptor := int(math.MaxInt32)
+	oversizedDescriptor++
+	if oversizedDescriptor > math.MaxInt32 {
+		if err := adapter.ProtectSocket(context.Background(), sessionapi.SessionRef{Generation: 1}, oversizedDescriptor); err == nil {
+			t.Fatal("socket protection accepted a descriptor that cannot fit the native callback type")
+		}
+	}
+	adapter.active["session"] = sessionapi.SessionRef{SessionID: "session", Generation: math.MaxUint64}
+	if adapter.protectActive(7) {
+		t.Fatal("active socket protection accepted a generation that cannot fit the native callback type")
 	}
 }
 

@@ -1,52 +1,14 @@
 import Foundation
-import CoreFoundation
-
-private func dobbyDarwinEventCallback(
-    _ center: CFNotificationCenter?,
-    _ observer: UnsafeMutableRawPointer?,
-    _ name: CFNotificationName?,
-    _ object: UnsafeRawPointer?,
-    _ userInfo: CFDictionary?
-) {
-    guard let observer else { return }
-    Unmanaged<IOSSessionShell>.fromOpaque(observer).takeUnretainedValue().signalDarwinEvent()
-}
 
 /// Containing-app side of the iOS session bridge. Go in the provider owns state.
 public final class IOSSessionShell: NSObject {
     private let secrets = SharedKeychainSecretStore.shared
     private let manager: VpnManagerImpl
     private let logs = IOSAppCompositionRoot.logsRepository
-    private let eventCondition = NSCondition()
-    private var eventGeneration: UInt64 = 0
-    private var deliveredEventGeneration: UInt64 = 0
-    private let darwinEventName = CFNotificationName(rawValue: IOSDarwinEventSink.notificationName as CFString)
-    private var darwinObserverPointer: UnsafeMutableRawPointer?
 
     init(manager: VpnManagerImpl) {
         self.manager = manager
         super.init()
-        let observerPointer = Unmanaged.passUnretained(self).toOpaque()
-        darwinObserverPointer = observerPointer
-        CFNotificationCenterAddObserver(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            observerPointer,
-            dobbyDarwinEventCallback,
-            darwinEventName.rawValue,
-            nil,
-            .deliverImmediately
-        )
-    }
-
-    deinit {
-        if let darwinObserverPointer {
-            CFNotificationCenterRemoveObserver(
-                CFNotificationCenterGetDarwinNotifyCenter(),
-                darwinObserverPointer,
-                darwinEventName,
-                nil
-            )
-        }
     }
 
     public func configure(sessionID: String, expectedSequence: Int64, rawConfig: Data) -> String {
@@ -106,27 +68,6 @@ public final class IOSSessionShell: NSObject {
             secrets.remove(SharedKeychainSecretStore.sessionConfigurationMailboxKey)
         }
         return result.response
-    }
-
-    public func awaitEvent(timeoutMillis: Int64) -> Bool {
-        eventCondition.lock()
-        let deadline = Date().addingTimeInterval(max(0, Double(timeoutMillis) / 1000.0))
-        while eventGeneration == deliveredEventGeneration {
-            if !eventCondition.wait(until: deadline) && Date() >= deadline {
-                eventCondition.unlock()
-                return false
-            }
-        }
-        deliveredEventGeneration = eventGeneration
-        eventCondition.unlock()
-        return true
-    }
-
-    fileprivate func signalDarwinEvent() {
-        eventCondition.lock()
-        eventGeneration &+= 1
-        eventCondition.broadcast()
-        eventCondition.unlock()
     }
 
     private func storeConfiguration(_ raw: Data) -> String? {

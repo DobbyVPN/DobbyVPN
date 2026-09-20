@@ -41,11 +41,22 @@ type response struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "dobbyui-test: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	connection, err := client.Dial()
 	if err != nil {
-		fatal(err)
+		return err
 	}
-	defer connection.Close()
+	defer func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "dobbyui-test: close service connection: %v\n", closeErr)
+		}
+	}()
 
 	runtime := test.NewApp()
 	defer runtime.Quit()
@@ -55,38 +66,30 @@ func main() {
 	primeContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := application.Connection.Prime(primeContext); err != nil {
 		cancel()
-		fatal(fmt.Errorf("prime service session: %w", err))
+		return fmt.Errorf("prime service session: %w", err)
 	}
 	cancel()
 
-	if err := serve(os.Stdin, os.Stdout, application); err != nil {
-		fmt.Fprintf(os.Stderr, "dobbyui-test: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "dobbyui-test: %v\n", err)
-	os.Exit(1)
+	return serve(os.Stdin, os.Stdout, application)
 }
 
 func serve(input io.Reader, output io.Writer, application *ui.Application) error {
 	decoder := json.NewDecoder(bufio.NewReader(input))
 	encoder := json.NewEncoder(output)
 	for {
-		var request request
-		if err := decoder.Decode(&request); err != nil {
+		var req request
+		if err := decoder.Decode(&req); err != nil {
 			if err == io.EOF {
 				application.Close()
 				return nil
 			}
 			return err
 		}
-		result := handle(request, application)
+		result := handle(req, application)
 		if err := encoder.Encode(result); err != nil {
 			return err
 		}
-		if request.Op == "close" {
+		if req.Op == "close" {
 			return nil
 		}
 	}

@@ -45,6 +45,7 @@ command -v xcodebuild >/dev/null || { echo "xcodebuild is required" >&2; exit 2;
 command -v codesign >/dev/null || { echo "codesign is required" >&2; exit 2; }
 command -v install_name_tool >/dev/null || { echo "install_name_tool is required" >&2; exit 2; }
 command -v otool >/dev/null || { echo "otool is required" >&2; exit 2; }
+command -v python3 >/dev/null || { echo "python3 is required for XCFramework validation" >&2; exit 2; }
 
 if [[ "$device" == 1 ]]; then
   identity=${IOS_SIGNING_IDENTITY:-Apple\ Distribution}
@@ -55,37 +56,74 @@ if [[ "$device" == 1 ]]; then
   [[ "$team_id" =~ ^[A-Za-z0-9]+$ ]] || { echo "IOS_TEAM_ID must contain only letters and digits" >&2; exit 2; }
 fi
 
-if [[ "$device" == 0 && -n "$architecture" ]]; then
+validation_architecture="arm64"
+if [[ "$device" == 0 ]]; then
   go_arch=$(go env GOARCH)
-  if [[ "$go_arch" != "$architecture" ]]; then
+  if [[ -z "$architecture" ]]; then
+    case "$go_arch" in
+      arm64|amd64) validation_architecture="$go_arch" ;;
+      *) echo "unsupported Go Simulator architecture: $go_arch" >&2; exit 2 ;;
+    esac
+  else
+    validation_architecture="$architecture"
+  fi
+  if [[ -n "$architecture" && "$go_arch" != "$architecture" ]]; then
     echo "Fyne's iossimulator packager builds the host Go architecture ($go_arch), requested $architecture" >&2
     echo "run this lane on a matching macOS runner or invoke it through the matching Go toolchain" >&2
     exit 2
   fi
 fi
 
+python3 "$go_root/scripts/ios_runtime_framework.py" \
+  "$target" "$runtime" "$validation_architecture"
+
 derived=$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-go-ui.XXXXXX")
 payload=""
-copied_runtime=0
+runtime_staged=0
+runtime_replaced=0
+runtime_backup=""
+runtime_stage="$derived/runtime-stage/DobbyVPNRuntime.xcframework"
 native_framework_dir="$go_root/native-ios"
 staged_native_framework=0
 cleanup() {
-  rm -rf "$derived"
+  if [[ "$runtime_staged" == 1 ]]; then
+    rm -rf "$swift_root/DobbyVPNRuntime.xcframework"
+  fi
+  if [[ "$runtime_replaced" == 1 ]]; then
+    mv "$runtime_backup" "$swift_root/DobbyVPNRuntime.xcframework"
+  fi
   if [[ "$staged_native_framework" == 1 ]]; then
     rm -rf "$native_framework_dir"
   fi
-  if [[ "$copied_runtime" == 1 ]]; then
-    rm -rf "$swift_root/DobbyVPNRuntime.xcframework"
-  fi
+  rm -rf "$derived"
   if [[ -n "$payload" ]]; then
     rm -rf "$payload"
   fi
 }
 trap cleanup EXIT
 mkdir -p "$swift_root"
-if [[ ! -e "$swift_root/DobbyVPNRuntime.xcframework" ]]; then
-  cp -R "$runtime" "$swift_root/DobbyVPNRuntime.xcframework"
-  copied_runtime=1
+# The Xcode project has one fixed framework reference. When the caller passes
+# another XCFramework, stage that exact source at the reference path and
+# restore any pre-existing path after the package completes; never silently
+# let an older local framework win.
+runtime_real="$(cd -- "$runtime" && pwd -P)"
+fixed_runtime="$swift_root/DobbyVPNRuntime.xcframework"
+fixed_runtime_real=""
+if [[ -e "$fixed_runtime" || -L "$fixed_runtime" ]]; then
+  if [[ -d "$fixed_runtime" ]]; then
+    fixed_runtime_real="$(cd -- "$fixed_runtime" && pwd -P)"
+  fi
+fi
+if [[ "$fixed_runtime_real" != "$runtime_real" ]]; then
+  mkdir -p "$(dirname "$runtime_stage")"
+  cp -R "$runtime" "$runtime_stage"
+  if [[ -e "$fixed_runtime" || -L "$fixed_runtime" ]]; then
+    runtime_backup="$derived/existing-DobbyVPNRuntime.xcframework"
+    mv "$fixed_runtime" "$runtime_backup"
+    runtime_replaced=1
+  fi
+  mv "$runtime_stage" "$fixed_runtime"
+  runtime_staged=1
 fi
 
 xcode_args=(
