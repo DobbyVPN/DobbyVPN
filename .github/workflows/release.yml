@@ -6,11 +6,10 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 concurrency:
-  group: release-${{ github.ref }}
-  # Serialize explicit release builds for a branch.
+  group: dobbyvpn-actions-retention
   cancel-in-progress: false
 
 jobs:
@@ -249,3 +248,34 @@ jobs:
           test "$PLATFORM_RESULT" = success
           test "$RENDER_CLEANUP_RESULT" = success
           echo "Release hosted mini qualification passed"
+
+  retain:
+    name: Retain newest Release run
+    if: always()
+    needs: [prepare_version, verification, desktop_libs_build, android_build, fdroid_check, ios_build, desktop_build, installers_build, installer_migration, render_start, qualification, render_cleanup, qualification_result]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Remove older workflow runs and caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/actions_retention.py \
+            --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" \
+            --delete-caches --delete-intermediate-artifacts \
+            --keep-artifact DobbyVPN.ipa \
+            --keep-artifact dobbyVPN-linux.deb \
+            --keep-artifact dobbyVPN-windows-amd64.msi \
+            --keep-artifact dobbyVPN-macos-aarch64.pkg \
+            --keep-artifact dobbyVPN-macos-amd64.pkg \
+            --keep-artifact dobbyvpn-android-sign.apk \
+            --keep-artifact dobbyvpn-android-unsign.apk \
+            --keep-artifact dobbyvpn-android-provenance \
+            --keep-artifact dobby-vpn-ui-test-windows \
+            --keep-artifact dobby-vpn-ui-test-macos-arm64 \
+            --keep-artifact dobby-vpn-ui-test-macos-amd64

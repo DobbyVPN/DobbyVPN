@@ -25,8 +25,10 @@ these responsibilities or introduce a separate test control service.
 Use `TESTING.md` for check commands and coverage. Keep tests small, disposable,
 and easy to rerun. Preserve meaningful product assertions; remove obsolete
 test infrastructure and duplicate validators. Never hide failures or label an
-unavailable test as passed. Logs are diagnostics, not an approval protocol.
-Run checks relevant to the change and report what could not run.
+unavailable test as passed. The complete diagnostic and cleanup contract is
+authoritative in [torturer/docs/contract.md](torturer/docs/contract.md). Logs
+are diagnostics, not an approval protocol. Run checks relevant to the change
+and report what could not run.
 
 ## Release
 
@@ -40,15 +42,20 @@ processes under test. F-Droid builds the promoted tag and `version.txt`.
 Operational authorization in the private owner workspace is defined by its
 `AGENTS.md`.
 
-## Changes and evidence
+## Changes and diagnostics
 
 Preserve unrelated work and use non-destructive Git operations. Keep source,
 examples, and fixtures synthetic: no credentials, private profiles, private
 endpoints, raw operational logs, or generated packages in commits.
 
-Preserve useful original errors and available command output. Report cleanup
-failures alongside the original failure, and clean up disposable test resources
-on every outcome.
+Preserve complete command stdout and stderr, original exceptions, and cleanup
+errors on every outcome, including timeouts. Never suppress output, replace it
+with byte counts or status codes, or truncate it to a tail, size limit, or a
+selection of supposedly useful lines. Redact credentials and private profile
+values without removing surrounding diagnostic content. Forward output before
+cleaning up disposable files; diagnostic preservation does not require a
+separate log or evidence archive. Report collection failures explicitly and
+cleanup failures alongside the original failure.
 
 ## Simplicity
 
@@ -61,4 +68,4 @@ Solve current problems; do not engineer for hypothetical needs.
 
 Existing architecture is replaceable. Simplify the whole system, not just
 individual files. Temporary breakage during an agreed rewrite is acceptable;
-the completed change must preserve required behavior and useful diagnostics.
+the completed change must preserve required behavior and complete diagnostics.

@@ -647,7 +647,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
         )
 
-    def test_control_failure_preserves_host_progress_and_result(self) -> None:
+    def test_control_failure_preserves_host_progress_and_complete_result(self) -> None:
         self.runner.routing_phases["routing.json.ready"] = "ready"
         self.runner.routing_insert_failure = CommandResult(
             ("synthetic", "iptables", "-I"),
@@ -671,9 +671,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
 
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("command_stdout_bytes=0", notes)
-        self.assertIn("command_stderr_bytes=58", notes)
-        self.assertNotIn("missing kernel module", notes)
+        self.assertIn("command_stdout: <empty>", notes)
+        self.assertIn("command_stderr:\niptables: filter table unavailable; missing kernel module", notes)
         finish = [
             value
             for _name, value in self.runner.staged_control_payloads
@@ -770,12 +769,11 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         notes = "\n".join(raised.exception.__notes__)
         self.assertIn("command_returncode=0", notes)
         self.assertIn(
-            f"command_stdout_bytes={len(self.runner.instrumentation)}",
+            "command_stdout:\nINSTRUMENTATION_STATUS: class=com.dobby.GoUiHostedProfileTest",
             notes,
         )
-        self.assertIn("command_stderr_bytes=0", notes)
-        self.assertNotIn("NoBeanDefFoundException", notes)
-        self.assertNotIn("PermissionEventsChannel", notes)
+        self.assertIn("NoBeanDefFoundException", notes)
+        self.assertIn("PermissionEventsChannel", notes)
         self.assertFalse(any(call[1:2] == ("exec-out",) for call in self.runner.calls))
 
     def test_junit_failure_is_rejected_even_with_instrumentation_code_minus_one(self) -> None:
@@ -796,13 +794,9 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 self.connection,
             )
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn(
-            f"command_stdout_bytes={len(self.runner.instrumentation)}",
-            notes,
-        )
-        self.assertIn("command_stderr_bytes=0", notes)
-        self.assertNotIn("FAILURES!!!", notes)
-        self.assertNotIn("INSTRUMENTATION_CODE: -1", notes)
+        self.assertIn("command_stdout:\nThere was 1 failure:", notes)
+        self.assertIn("FAILURES!!!", notes)
+        self.assertIn("INSTRUMENTATION_CODE: -1", notes)
 
     def test_junit_zero_or_empty_summary_is_not_success(self) -> None:
         for output in (
@@ -1137,8 +1131,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             adapter._routing_proof("routing.json", time.monotonic() + 5.0)
         notes = "\n".join(raised.exception.__notes__)
         self.assertIn("android_routing_secondary_error=ANDROID_ROUTING_RULE_REMOVE_FAILED", notes)
-        self.assertNotIn("remove stdout", notes)
-        self.assertNotIn("remove stderr", notes)
+        self.assertIn("remove stdout", notes)
+        self.assertIn("remove stderr", notes)
         finish = [
             value for _name, value in runner.staged_control_payloads
             if value.get("phase") == "finish"
@@ -1364,7 +1358,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         ]
         self.assertEqual(len(absent_probes), 2)
 
-    def test_process_loss_probe_reports_bounded_status(self) -> None:
+    def test_process_loss_probe_reports_complete_status(self) -> None:
         with self.assertRaisesRegex(
             ScenarioExecutionError, "ANDROID_PROCESS_LOSS_PROBE_FAILED"
         ) as raised:
@@ -1375,11 +1369,10 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
         notes = "\n".join(raised.exception.__notes__)
         self.assertIn("command_returncode=1", notes)
-        self.assertIn("command_stdout_bytes=0", notes)
-        self.assertIn("command_stderr_bytes=31", notes)
-        self.assertNotIn("adb pidof: no matching process", notes)
+        self.assertIn("command_stdout: <empty>", notes)
+        self.assertIn("command_stderr:\nadb pidof: no matching process", notes)
 
-    def test_preserve_active_start_failure_reports_bounded_status(self) -> None:
+    def test_preserve_active_start_failure_reports_complete_status(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "start-failure-raw")
         runner.activity_start_result = CommandResult(
             ("synthetic", "am", "start"),
@@ -1405,10 +1398,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             )
         notes = "\n".join(raised.exception.__notes__)
         self.assertIn("command_returncode=8", notes)
-        self.assertIn("command_stdout_bytes=24", notes)
-        self.assertIn("command_stderr_bytes=24", notes)
-        self.assertNotIn("start stdout diagnostic", notes)
-        self.assertNotIn("start stderr diagnostic", notes)
+        self.assertIn("command_stdout:\nstart stdout diagnostic", notes)
+        self.assertIn("command_stderr:\nstart stderr diagnostic", notes)
         self.assertFalse(any("instrument" in call for call in runner.calls))
 
     def test_android_advertises_transition_without_limitations(self) -> None:
@@ -1517,7 +1508,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         )
         self.assertEqual(ethernet_transition[-2:], ("ethernet", "eth0"))
 
-    def test_android_external_control_reports_bounded_primary_status(self) -> None:
+    def test_android_external_control_reports_complete_primary_status(self) -> None:
         runner = ExternalControlRunner(self.runner.raw_directory.parent / "external-errors")
         runner.transition_failure = CommandResult(
             ("synthetic",),
@@ -1544,10 +1535,8 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 "network_transition", time.monotonic() + 5.0
             )
         notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("command_stdout_bytes=19", notes)
-        self.assertIn("command_stderr_bytes=42", notes)
-        self.assertNotIn("primary diagnostic", notes)
-        self.assertNotIn("secondary restore failure", notes)
+        self.assertIn("command_stdout:\nprimary diagnostic", notes)
+        self.assertIn("command_stderr:\nprimary failure\nsecondary restore failure", notes)
 
     def test_cleanup_failure_does_not_replace_product_failure(self) -> None:
         self.runner.observation = _observation("DRIVER_ERROR")

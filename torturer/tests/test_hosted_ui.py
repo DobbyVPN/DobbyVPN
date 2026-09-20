@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -72,7 +73,7 @@ class HeadlessUIAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             profile = root / "profile.toml"
-            profile.write_text("[[Outline]]\nendpoint = 'example.invalid'\n", encoding="utf-8")
+            profile.write_text("[[Outline]]\nendpoint = 'example.invalid'\npassword = 'secret-value'\n", encoding="utf-8")
             companion = root / "companion.py"
             companion.write_text(
                 "#!/usr/bin/env python3\n"
@@ -80,6 +81,7 @@ class HeadlessUIAdapterTests(unittest.TestCase):
                 "for line in sys.stdin:\n"
                 " request=json.loads(line)\n"
                 " op=request.get('op')\n"
+                " print('companion diagnostic secret-value', file=sys.stderr, flush=True)\n"
                 " if op == 'configure': response={'ok': True, 'status': 'Ready', 'button': 'Connect'}\n"
                 " elif op == 'connect': response={'ok': True, 'status': 'Connected', 'button': 'Disconnect'}\n"
                 " elif op == 'disconnect': response={'ok': True, 'status': 'Disconnected', 'button': 'Connect'}\n"
@@ -112,7 +114,8 @@ class HeadlessUIAdapterTests(unittest.TestCase):
                 assertion_ids=("configure.accepted",),
                 max_duration_seconds=60,
             )
-            observations = adapter.execute_scenario(scenario)
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as diagnostics:
+                observations = adapter.execute_scenario(scenario)
             self.assertTrue(observations["configured"])
             self.assertTrue(observations["tunnel_interface"])
             self.assertEqual(base.native_preparations, 2)
@@ -122,6 +125,9 @@ class HeadlessUIAdapterTests(unittest.TestCase):
             self.assertEqual(base.reset_calls, 1)
             self.assertEqual(base.finalize_calls, 1)
             self.assertIsNone(adapter._process)
+            self.assertIn("companion diagnostic", diagnostics.getvalue())
+            self.assertIn("[REDACTED]", diagnostics.getvalue())
+            self.assertNotIn("secret-value", diagnostics.getvalue())
 
 
 if __name__ == "__main__":

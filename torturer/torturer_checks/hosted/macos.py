@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_checks.diagnostics import add_exception_notes
 
 from .cli import (
     CommandRunner,
@@ -598,8 +599,11 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                     if primary is None:
                         primary = error
                     else:
-                        primary.add_note(
-                            f"network_uplink_restoration_error={type(error).__name__}"
+                        add_exception_notes(
+                            primary,
+                            "network_uplink_restoration",
+                            error,
+                            sensitive_values=getattr(self, "_sensitive_values", None),
                         )
             try:
                 self._discard_network_repair_scratch((state, stdout, stderr))

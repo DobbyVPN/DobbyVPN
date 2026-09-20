@@ -9,12 +9,15 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import threading
 import time
 from urllib.parse import urlsplit
 
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_checks.diagnostics import redact_text
 
 from .cli import (
     CommandRunner,
@@ -391,6 +394,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         self._initial_identity: str | None = None
         self._replacement_identity: str | None = None
         self._replacement_process: object | None = None
+        self._replacement_stream_threads: list[threading.Thread] = []
         self._replacement_cleanup_proven = False
         self.control_host, self.control_port = _parse_control_address(control_address)
         if expected_initial_identity is not None:
@@ -491,6 +495,44 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             return
         self._service_diagnostics.extend(values)
 
+    def _forward_replacement_output(self, process: object) -> None:
+        """Drain the long-lived replacement's streams without retaining logs."""
+
+        sensitive_values = getattr(self.runner, "_sensitive_values", ())
+        threads: list[threading.Thread] = []
+        for name in ("stdout", "stderr"):
+            stream = getattr(process, name, None)
+            if stream is None:
+                continue
+
+            def drain(stream=stream, name=name) -> None:
+                try:
+                    sys.stderr.write(f"[windows-service {name}]\n")
+                    while True:
+                        chunk = stream.readline()
+                        if not chunk:
+                            break
+                        sys.stderr.write(redact_text(chunk, sensitive_values))
+                        sys.stderr.flush()
+                except (OSError, ValueError) as error:
+                    self._record_service_diagnostics(
+                        f"stage=service-output stream={name} error={type(error).__name__}"
+                    )
+
+            thread = threading.Thread(
+                target=drain,
+                name=f"dobbyvpn-windows-service-{name}",
+                daemon=True,
+            )
+            thread.start()
+            threads.append(thread)
+        self._replacement_stream_threads = threads
+
+    def _join_replacement_output(self) -> None:
+        for thread in self._replacement_stream_threads:
+            thread.join(timeout=5.0)
+        self._replacement_stream_threads = []
+
     def _terminate_uncontained_replacement(self, deadline: float) -> None:
         """Best-effort leader cleanup when Job setup itself failed.
 
@@ -519,6 +561,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             self._record_service_diagnostics(
                 f"api=ProcessWait error={type(error).__name__} detail=leader-only"
             )
+        self._join_replacement_output()
 
     def _cleanup_start_failure(self, error: Exception, deadline: float) -> None:
         """Attempt owned Job cleanup before propagating a start failure."""
@@ -708,6 +751,8 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             )
             raise ScenarioExecutionError("SERVICE_REAP_FAILED")
 
+        self._join_replacement_output()
+
         try:
             close_diagnostics = close_windows_job(
                 process,
@@ -777,8 +822,8 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 subprocess.Popen,
                 list(command),
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 stage="hosted-windows-service",
                 deadline=deadline,
             )
@@ -793,6 +838,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
 
         try:
             self._replacement_process = process
+            self._forward_replacement_output(process)
             if os.name == "nt" and windows_job_for(process) is None:
                 self._record_service_diagnostics(
                     "api=JobObject winerror=6 detail=replacement-not-attached",

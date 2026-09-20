@@ -413,8 +413,8 @@ class HostedDesktopAdapterTests(unittest.TestCase):
         assert runner is not None
         process = _FakeWindowsReplacementProcess()
         self.windows_launches.append((popen, tuple(command), kwargs))
-        self.assertIs(kwargs["stdout"], hosted_windows.subprocess.DEVNULL)
-        self.assertIs(kwargs["stderr"], hosted_windows.subprocess.DEVNULL)
+        self.assertIs(kwargs["stdout"], hosted_windows.subprocess.PIPE)
+        self.assertIs(kwargs["stderr"], hosted_windows.subprocess.PIPE)
         runner.service_alive = True
         runner.service_pid = process.pid
         return process
@@ -562,10 +562,8 @@ class HostedDesktopAdapterTests(unittest.TestCase):
         ) as raised:
             error_adapter.service._terminate(5.0)
         notes = "\n".join(getattr(raised.exception, "__notes__", ()))
-        self.assertIn("command_stdout_bytes=12", notes)
-        self.assertIn("command_stderr_bytes=12", notes)
-        self.assertNotIn("kill stdout", notes)
-        self.assertNotIn("kill stderr", notes)
+        self.assertIn("command_stdout:\nkill stdout", notes)
+        self.assertIn("command_stderr:\nkill stderr", notes)
 
     def test_windows_process_probes_preserve_diagnostics(self) -> None:
         self.assertNotIn("Out-Null", _WINDOWS_PROCESS_ALIVE_SCRIPT)
@@ -632,8 +630,8 @@ class HostedDesktopAdapterTests(unittest.TestCase):
         runner.raw_directory = raw
         adapter = self._adapter("windows", runner)
         adapter.service._start(10.0)
-        self.assertIs(self.windows_launches[-1][2]["stdout"], hosted_windows.subprocess.DEVNULL)
-        self.assertIs(self.windows_launches[-1][2]["stderr"], hosted_windows.subprocess.DEVNULL)
+        self.assertIs(self.windows_launches[-1][2]["stdout"], hosted_windows.subprocess.PIPE)
+        self.assertIs(self.windows_launches[-1][2]["stderr"], hosted_windows.subprocess.PIPE)
         self.assertEqual(list(raw.glob("*.raw.log")), [])
         adapter.service._terminate(5.0)
 

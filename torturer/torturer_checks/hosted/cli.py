@@ -29,6 +29,12 @@ from torturer_contract.functional.assertions import (
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.results import ConnectionIdentity
 from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_checks.diagnostics import (
+    add_exception_notes,
+    add_stream_notes,
+    emit_streams,
+    register_sensitive_values,
+)
 from torturer_checks.windows_job import (
     WindowsJobError,
     close_for as close_windows_job,
@@ -63,9 +69,17 @@ def _remaining_until(deadline: float, *, cap: float | None = None) -> float:
 class HostedAdapterError(RuntimeError):
     """An adapter boundary failure with a stable caller-facing code."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        stdout: bytes | str | None = None,
+        stderr: bytes | str | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 @dataclass(frozen=True)
@@ -101,19 +115,40 @@ def _parse_external_ip(raw: str) -> str:
         raise ScenarioExecutionError("EXTERNAL_IDENTITY_INVALID") from error
 
 
-def _append_command_result_notes(error: BaseException, result: CommandResult) -> None:
-    """Attach bounded command metadata without copying private values.
+def _append_command_result_notes(
+    error: BaseException,
+    result: CommandResult,
+    *,
+    sensitive_values: Sequence[bytes | str] | None = None,
+) -> None:
+    """Attach command metadata and forward both complete output streams.
 
     ``CommandResult`` remains available to the caller for the one operation
-    that needs to parse it.  Exceptions are often serialized by a workflow,
-    however, so never put argv (which can contain profile paths/endpoints) or
-    stdout/stderr contents into their notes.
+    that needs to parse it.  Do not include argv (which can contain profile
+    paths/endpoints) in diagnostics.  Streams are forwarded to the invoking
+    process and attached to the exception so a caller that serializes the
+    exception still receives the complete command output.
     """
 
+    _append_command_metadata(error, result)
+    emit_streams(
+        "command",
+        result.stdout,
+        result.stderr,
+        sensitive_values=sensitive_values,
+    )
+    add_stream_notes(
+        error,
+        "command",
+        result.stdout,
+        result.stderr,
+        sensitive_values=sensitive_values,
+    )
+
+
+def _append_command_metadata(error: BaseException, result: CommandResult) -> None:
     error.add_note(f"command_returncode={result.returncode}")
     error.add_note(f"command_timed_out={result.timed_out}")
-    error.add_note(f"command_stdout_bytes={len(result.stdout)}")
-    error.add_note(f"command_stderr_bytes={len(result.stderr)}")
 
 
 class CommandRunner(Protocol):
@@ -162,11 +197,7 @@ def _merge_output(first: bytes, second: bytes) -> bytes:
 
 def _append_error_notes(error: BaseException, errors: Sequence[tuple[str, BaseException]]) -> None:
     for label, secondary in errors:
-        code = getattr(secondary, "reason_code", None)
-        if not isinstance(code, str):
-            code = getattr(secondary, "code", None)
-        suffix = f" code={code}" if isinstance(code, str) else ""
-        error.add_note(f"{label}_error={type(secondary).__name__}{suffix}")
+        add_exception_notes(error, label, secondary)
 
 
 def _terminate_process(
@@ -253,7 +284,7 @@ def _drain_after_termination(
 
 
 class SubprocessRunner:
-    """Run one command with one deadline and ephemeral in-memory output."""
+    """Run one command with one deadline and complete ephemeral output."""
 
     def __init__(
         self,
@@ -266,6 +297,22 @@ class SubprocessRunner:
         self.environment = dict(os.environ)
         if environment is not None:
             self.environment.update(environment)
+        self._sensitive_values: set[bytes | str] = set()
+
+    def register_sensitive_values(self, *values: bytes | str | None) -> None:
+        """Register exact profile/private values for stream redaction."""
+
+        for value in values:
+            if value:
+                self._sensitive_values.add(value)
+
+    def _emit_result(self, stage: str, result: CommandResult) -> None:
+        emit_streams(
+            stage,
+            result.stdout,
+            result.stderr,
+            sensitive_values=self._sensitive_values,
+        )
 
     def run(
         self,
@@ -335,8 +382,18 @@ class SubprocessRunner:
                     errors.append(("close", error))
                 result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
                 primary = HostedAdapterError("COMMAND_TIMEOUT")
+                primary.stdout = stdout
+                primary.stderr = stderr
                 _append_error_notes(primary, errors)
-                _append_command_result_notes(primary, result)
+                _append_command_metadata(primary, result)
+                add_stream_notes(
+                    primary,
+                    "command",
+                    result.stdout,
+                    result.stderr,
+                    sensitive_values=self._sensitive_values,
+                )
+                self._emit_result("hosted-cli-command", result)
                 raise primary from None
             try:
                 _close_process_boundary(
@@ -348,21 +405,50 @@ class SubprocessRunner:
                 result = CommandResult(argv, process.returncode, stdout, stderr)
                 primary = HostedAdapterError("PROCESS_CLEANUP_FAILED")
                 _append_error_notes(primary, (("close", error),))
-                _append_command_result_notes(primary, result)
+                _append_command_metadata(primary, result)
+                add_stream_notes(
+                    primary,
+                    "command",
+                    result.stdout,
+                    result.stderr,
+                    sensitive_values=self._sensitive_values,
+                )
+                self._emit_result("hosted-cli-command", result)
                 raise primary from None
             result = CommandResult(argv, process.returncode, stdout, stderr)
+            self._emit_result("hosted-cli-command", result)
             return result
         except WindowsJobError as error:
             result = CommandResult(argv, -1, error.stdout, error.stderr)
             primary = HostedAdapterError("PROCESS_CONTAINMENT_UNAVAILABLE")
-            _append_command_result_notes(primary, result)
+            primary.stdout = result.stdout
+            primary.stderr = result.stderr
+            _append_command_metadata(primary, result)
+            add_stream_notes(
+                primary,
+                "command",
+                result.stdout,
+                result.stderr,
+                sensitive_values=self._sensitive_values,
+            )
+            self._emit_result("hosted-cli-command", result)
             raise primary from None
         except OSError as error:
             stdout = _output_bytes(getattr(error, "stdout", None))
             stderr = _output_bytes(getattr(error, "stderr", None))
             result = CommandResult(argv, -1, stdout, stderr)
             primary = HostedAdapterError("COMMAND_UNAVAILABLE")
-            _append_command_result_notes(primary, result)
+            primary.stdout = stdout
+            primary.stderr = stderr
+            _append_command_metadata(primary, result)
+            add_stream_notes(
+                primary,
+                "command",
+                stdout,
+                stderr,
+                sensitive_values=self._sensitive_values,
+            )
+            self._emit_result("hosted-cli-command", result)
             raise primary from None
 
     def run_detached(
@@ -411,17 +497,38 @@ class SubprocessRunner:
                 errors.extend(drain_errors)
                 result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
                 primary = HostedAdapterError("COMMAND_TIMEOUT")
+                primary.stdout = stdout
+                primary.stderr = stderr
                 _append_error_notes(primary, errors)
-                _append_command_result_notes(primary, result)
+                _append_command_metadata(primary, result)
+                add_stream_notes(
+                    primary,
+                    "command",
+                    result.stdout,
+                    result.stderr,
+                    sensitive_values=self._sensitive_values,
+                )
+                self._emit_result("hosted-detached-command", result)
                 raise primary from None
             result = CommandResult(argv, process.returncode, stdout, stderr)
+            self._emit_result("hosted-detached-command", result)
             return result
         except OSError as error:
             stdout = _output_bytes(getattr(error, "stdout", None))
             stderr = _output_bytes(getattr(error, "stderr", None))
             result = CommandResult(argv, -1, stdout, stderr)
             primary = HostedAdapterError("COMMAND_UNAVAILABLE")
-            _append_command_result_notes(primary, result)
+            primary.stdout = stdout
+            primary.stderr = stderr
+            _append_command_metadata(primary, result)
+            add_stream_notes(
+                primary,
+                "command",
+                stdout,
+                stderr,
+                sensitive_values=self._sensitive_values,
+            )
+            self._emit_result("hosted-detached-command", result)
             raise primary from None
 
 def _require_scratch_file(path: Path) -> None:
@@ -726,7 +833,11 @@ class RoutingProofMixin:
         result = self._probe_command(timeout)
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError("ROUTING_PROBE_FAILED")
-            _append_command_result_notes(failure, result)
+            _append_command_result_notes(
+                failure,
+                result,
+                sensitive_values=getattr(self, "_sensitive_values", None),
+            )
             raise failure
         return _parse_external_ip(result.stdout_text)
 
@@ -926,6 +1037,16 @@ class HostedCLIAdapter:
         self.cli = cli
         self.profile = profile
         self.runner = runner
+        try:
+            profile_bytes = profile.read_bytes()
+        except OSError as error:
+            raise HostedAdapterError("PROFILE_INVALID") from error
+        self._sensitive_values: tuple[bytes | str, ...] = (profile_bytes,)
+        try:
+            self._sensitive_values += (profile_bytes.decode("utf-8"),)
+        except UnicodeDecodeError:
+            pass
+        register_sensitive_values(runner, *self._sensitive_values)
         self.identity_url = (
             _https_endpoint(identity_url, "identity_url")
             if identity_url is not None
@@ -1154,14 +1275,25 @@ class HostedCLIAdapter:
         try:
             result = self.runner.run(command, timeout_seconds=timeout)
         except HostedAdapterError as error:
-            raise ScenarioExecutionError(error.code) from error
+            failure_error = ScenarioExecutionError(error.code)
+            add_exception_notes(
+                failure_error,
+                "command",
+                error,
+                sensitive_values=self._sensitive_values,
+            )
+            raise failure_error from error
         if result.timed_out:
             failure_error = ScenarioExecutionError("COMMAND_TIMEOUT")
-            _append_command_result_notes(failure_error, result)
+            _append_command_result_notes(
+                failure_error, result, sensitive_values=self._sensitive_values
+            )
             raise failure_error
         if result.returncode != 0:
             failure_error = ScenarioExecutionError(failure)
-            _append_command_result_notes(failure_error, result)
+            _append_command_result_notes(
+                failure_error, result, sensitive_values=self._sensitive_values
+            )
             raise failure_error
         return result
 
@@ -1277,7 +1409,11 @@ class HostedCLIAdapter:
                 raise ScenarioExecutionError(error.code) from error
             if result.timed_out or result.returncode != 0:
                 failure = ScenarioExecutionError("EXTERNAL_IDENTITY_FAILED")
-                _append_command_result_notes(failure, result)
+                _append_command_result_notes(
+                    failure,
+                    result,
+                    sensitive_values=self._sensitive_values,
+                )
                 raise failure
         return _parse_external_ip(result.stdout_text)
 

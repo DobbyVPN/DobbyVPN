@@ -278,12 +278,13 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             IOSSimulatorAppContractError,
-            r"stage 'xctest-ui'.*stdout_bytes=0; stderr_bytes=28",
-        ):
+            r"stage 'xctest-ui'.*exit code 1",
+        ) as raised:
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
                 contract=self.contract,
             )
+        self.assertIn("command_stderr:\nXCTest accessibility failure", raised.exception.__notes__)
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
     def test_ui_test_failure_accepts_already_terminated_app_cleanup(self) -> None:
@@ -299,7 +300,7 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             IOSSimulatorAppContractError,
-            r"stage 'xctest-ui'.*stdout_bytes=0; stderr_bytes=28",
+            r"stage 'xctest-ui'.*exit code 1",
         ) as raised:
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate,
@@ -308,6 +309,7 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
                 contract=self.contract,
             )
         self.assertNotIn("cleanup also failed", str(raised.exception))
+        self.assertIn("command_stderr:\nXCTest accessibility failure", raised.exception.__notes__)
         self.assertTrue(any(
             command[:3] == ["xcrun", "simctl", "shutdown"]
             for command in runner.commands
@@ -380,12 +382,13 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         })
         with self.assertRaisesRegex(
             IOSSimulatorAppContractError,
-            r"stage 'xctest-ui'.*stdout_bytes=0; stderr_bytes=20",
-        ):
+            r"stage 'xctest-ui'.*exit code 1",
+        ) as raised:
             run_ios_simulator_app_contract(
                 candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
                 contract=self.contract,
             )
+        self.assertIn("command_stderr:\napp failed to launch", raised.exception.__notes__)
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 

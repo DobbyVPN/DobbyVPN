@@ -1,11 +1,7 @@
 name: Security
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
 
 jobs:
   trivy:
@@ -27,6 +23,7 @@ jobs:
           ignore-unfixed: true
           exit-code: 1
           trivyignores: .trivyignore
+          cache: 'false'
 
       - name: Run Trivy (Android native shell)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
@@ -37,6 +34,7 @@ jobs:
           ignore-unfixed: true
           exit-code: 1
           trivyignores: .trivyignore
+          cache: 'false'
 
   trufflehog:
     name: TruffleHog — secret detection

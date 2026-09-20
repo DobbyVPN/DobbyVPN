@@ -227,8 +227,8 @@ class HostedWindowsServiceJobTests(unittest.TestCase):
     def _popen(self, popen, command, **kwargs):
         self.assertIs(popen, subprocess.Popen)
         self.assertEqual(command, [str(self.binary), "-port", "50051"])
-        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
-        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stdout"], subprocess.PIPE)
+        self.assertIs(kwargs["stderr"], subprocess.PIPE)
         self.runner.launch_kwargs = kwargs
         process = _FakeProcess()
         self.process = process
@@ -247,13 +247,13 @@ class HostedWindowsServiceJobTests(unittest.TestCase):
             delattr(process, "_torturer_windows_job")
         return diagnostics
 
-    def test_replacement_is_direct_popen_with_discarded_output(self) -> None:
+    def test_replacement_is_direct_popen_with_drained_output(self) -> None:
         self.controller._start(2.0)
         self.assertIsNotNone(self.process)
         assert self.process is not None
         self.assertEqual(self.runner.launch_kwargs["stdin"], subprocess.DEVNULL)
-        self.assertEqual(self.runner.launch_kwargs["stdout"], subprocess.DEVNULL)
-        self.assertEqual(self.runner.launch_kwargs["stderr"], subprocess.DEVNULL)
+        self.assertEqual(self.runner.launch_kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(self.runner.launch_kwargs["stderr"], subprocess.PIPE)
         self.assertFalse(any(call[0] == "powershell.exe" and "Start-Process" in call for call in self.runner.calls))
 
     def test_stop_orders_job_proof_reap_then_close(self) -> None:

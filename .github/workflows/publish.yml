@@ -13,11 +13,11 @@ on:
         type: string
 
 permissions:
-  actions: read
+  actions: write
   contents: read
 
 concurrency:
-  group: publish
+  group: dobbyvpn-actions-retention
   cancel-in-progress: false
 
 jobs:
@@ -50,6 +50,11 @@ jobs:
           test "$(jq -r .event <<<"$run")" = workflow_dispatch
           test "$(jq -r .status <<<"$run")" = completed
           test "$(jq -r .conclusion <<<"$run")" = success
+          completed_runs="$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs?status=completed&per_page=100" \
+            --jq '.workflow_runs[] | .id')"
+          latest_completed_run="${completed_runs%%$'\n'*}"
+          test "$latest_completed_run" = "$RELEASE_RUN_ID"
           if [[ "$(jq -r .run_attempt <<<"$run")" != "1" ]]; then
             echo "Release run $RELEASE_RUN_ID was retried; dispatch and qualify a fresh Release run before publishing." >&2
             exit 1
@@ -413,3 +418,20 @@ jobs:
             --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
             --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
             --asset version.txt
+
+  retain:
+    name: Retain newest Publish run
+    if: always()
+    needs: [resolve_release, submit_testflight, promote]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Remove older workflow runs and caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/actions_retention.py --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" --delete-caches --delete-intermediate-artifacts

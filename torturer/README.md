@@ -49,7 +49,9 @@ already gone, while build artifact names belong to the original run attempt.
 
 The private Harness packages the product and this directory from one selected
 worktree, downloads a fresh owner profile, and invokes the same functional
-engine on local VMs. Local evidence remains private.
+engine on local VMs. Local diagnostic output remains private and is delivered
+before disposable scratch is removed; the functional contract does not create
+an evidence archive.
 
 The iOS Simulator app-contract helper is a local UI/lifecycle check, not VPN
 E2E. The parent Test workflow owns the Go runtime XCFramework, Go/Fyne package,

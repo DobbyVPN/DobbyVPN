@@ -27,7 +27,11 @@ class GoLintWorkflowTests(unittest.TestCase):
 
     def test_reviewdog_cannot_mask_the_authoritative_linter_status(self) -> None:
         self.assertIn("-fail-level=none", self.workflow)
-        self.assertIn("if golangci-lint run", self.workflow)
+        self.assertIn(
+            "if golangci-lint run --output.text.path stdout "
+            "--config .golangci.yml ./...",
+            self.workflow,
+        )
         self.assertIn("lint_status=0", self.workflow)
         self.assertRegex(self.workflow, re.compile(r"lint_status=\$\?"))
         self.assertIn('exit "$lint_status"', self.workflow)

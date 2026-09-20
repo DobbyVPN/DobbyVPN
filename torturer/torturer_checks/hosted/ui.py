@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import queue
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -22,6 +23,7 @@ from typing import Any, Callable, Mapping
 from torturer_contract.functional.engine import ScenarioExecutionError
 from torturer_contract.functional.results import ConnectionIdentity
 from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_checks.diagnostics import add_exception_notes, redact_text, register_sensitive_values
 
 from ..windows_job import (
     close_for as close_windows_job,
@@ -85,9 +87,12 @@ class HeadlessUIAdapter:
         self._process: subprocess.Popen[str] | None = None
         self._responses: queue.Queue[str | None] = queue.Queue()
         self._reader_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        self._stderr_done = threading.Event()
         self._request_lock = threading.Lock()
         self._base_selected: ConnectionIdentity | None = None
         self._ui_connected = False
+        register_sensitive_values(runner, self._profile_text)
 
     @property
     def capabilities(self):
@@ -247,7 +252,7 @@ class HeadlessUIAdapter:
             if error is None:
                 error = failure
             else:
-                error.add_note(f"platform reset also failed: {type(failure).__name__}")
+                add_exception_notes(error, "platform_reset", failure)
         if error is not None:
             raise error
 
@@ -263,7 +268,7 @@ class HeadlessUIAdapter:
             if error is None:
                 error = failure
             else:
-                error.add_note(f"platform finalization also failed: {type(failure).__name__}")
+                add_exception_notes(error, "platform_finalization", failure)
         if error is not None:
             raise error
 
@@ -283,10 +288,9 @@ class HeadlessUIAdapter:
                 [str(self.ui_test)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                # The companion's JSON protocol is the only UI result.  Its
-                # stderr is deliberately discarded so a successful or failed
-                # lane cannot leave a private diagnostic file behind.
-                stderr=subprocess.DEVNULL,
+                # The companion's JSON protocol stays on stdout. Stderr is
+                # drained separately and forwarded to the invoking process.
+                stderr=subprocess.PIPE,
                 env=environment,
                 text=True,
                 encoding="utf-8",
@@ -314,6 +318,25 @@ class HeadlessUIAdapter:
         self._reader_thread = threading.Thread(target=read_responses, name="dobbyvpn-ui-test-reader", daemon=True)
         self._reader_thread.start()
 
+        def read_stderr() -> None:
+            process = self._process
+            stderr = None if process is None else process.stderr
+            try:
+                if stderr is not None:
+                    sys.stderr.write("[headless-ui stderr]\n")
+                    for chunk in stderr:
+                        sys.stderr.write(redact_text(chunk, (self._profile_text,)))
+                        sys.stderr.flush()
+            finally:
+                self._stderr_done.set()
+
+        self._stderr_thread = threading.Thread(
+            target=read_stderr,
+            name="dobbyvpn-ui-test-stderr-reader",
+            daemon=True,
+        )
+        self._stderr_thread.start()
+
     def _request(self, document: Mapping[str, object], timeout: float) -> _UIResponse:
         if timeout <= 0:
             raise ScenarioExecutionError("UI_TIMEOUT")
@@ -336,6 +359,7 @@ class HeadlessUIAdapter:
             except queue.Empty as error:
                 raise ScenarioExecutionError("UI_RESPONSE_TIMEOUT") from error
             if line is None:
+                self._stderr_done.wait(timeout=1.0)
                 raise ScenarioExecutionError("UI_TEST_EXITED")
             try:
                 result = _response(json.loads(line))
@@ -352,19 +376,23 @@ class HeadlessUIAdapter:
         if process is None:
             return
         close_deadline = deadline if deadline is not None else time.monotonic() + max(timeout, 0.1)
+        errors: list[BaseException] = []
         try:
             if process.poll() is None:
                 try:
                     self._request({"op": "close"}, max(0.1, close_deadline - time.monotonic()))
-                except BaseException:
-                    pass
+                except BaseException as error:
+                    errors.append(error)
                 if process.poll() is None:
                     if os.name == "nt":
-                        cleanup = terminate_windows_job(
-                            process, deadline=close_deadline, stage="ui-companion-finalize"
-                        )
-                        if not cleanup.process_tree_proven:
-                            raise ScenarioExecutionError("UI_TEST_CLEANUP_FAILED")
+                        try:
+                            cleanup = terminate_windows_job(
+                                process, deadline=close_deadline, stage="ui-companion-finalize"
+                            )
+                            if not cleanup.process_tree_proven:
+                                errors.append(ScenarioExecutionError("UI_TEST_CLEANUP_FAILED"))
+                        except BaseException as error:
+                            errors.append(error)
                     else:
                         try:
                             # close asks the companion to exit cleanly.  Give
@@ -384,21 +412,36 @@ class HeadlessUIAdapter:
                             except PermissionError:
                                 if process.poll() is None:
                                     process.terminate()
-                    try:
-                        process.wait(timeout=max(0.1, close_deadline - time.monotonic()))
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=1)
+                            try:
+                                process.wait(timeout=max(0.1, close_deadline - time.monotonic()))
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                try:
+                                    process.wait(timeout=1)
+                                except BaseException as error:
+                                    errors.append(error)
+                        except BaseException as error:
+                            errors.append(error)
             if os.name == "nt":
-                close_windows_job(process, stage="ui-companion-finalize", deadline=close_deadline)
+                try:
+                    close_windows_job(process, stage="ui-companion-finalize", deadline=close_deadline)
+                except BaseException as error:
+                    errors.append(error)
         finally:
+            self._stderr_done.wait(timeout=max(1.0, min(timeout, 15.0)))
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     try:
                         stream.close()
-                    except OSError:
-                        pass
+                    except OSError as error:
+                        errors.append(error)
             self._process = None
+            self._stderr_thread = None
+        if errors:
+            failure = ScenarioExecutionError("UI_TEST_CLEANUP_FAILED")
+            for error in errors:
+                add_exception_notes(failure, "ui_cleanup", error)
+            raise failure
 
 
 __all__ = ["HeadlessUIAdapter"]

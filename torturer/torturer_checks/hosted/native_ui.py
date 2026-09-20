@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_checks.diagnostics import redact_text
 
 from .cli import SubprocessRunner, _ensure_directory
 from .factory import adapter_for_platform
@@ -147,9 +148,21 @@ class _NativeUIProcess:
         self.process: subprocess.Popen[str] | None = None
         self._responses: queue.Queue[str | None] = queue.Queue()
         self._reader: threading.Thread | None = None
+        self._stderr_reader: threading.Thread | None = None
+        self._stderr_done = threading.Event()
         self._lock = threading.Lock()
         self._operation = "start"
         self._stage = "launching-driver"
+        try:
+            profile_bytes = profile.read_bytes()
+        except OSError:
+            profile_bytes = b""
+        self._sensitive_values: tuple[bytes | str, ...] = (profile_bytes,)
+        if profile_bytes:
+            try:
+                self._sensitive_values += (profile_bytes.decode("utf-8"),)
+            except UnicodeDecodeError:
+                pass
 
     def _error(self, message: str) -> NativeUIJourneyError:
         operation = self._operation
@@ -177,9 +190,8 @@ class _NativeUIProcess:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             # JSON responses on stdout are the protocol. Native-driver stderr
-            # is intentionally discarded so it cannot become a retained
-            # diagnostic artifact.
-            stderr=subprocess.DEVNULL,
+            # is drained separately and forwarded to the invoking process.
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             bufsize=1,
@@ -200,6 +212,25 @@ class _NativeUIProcess:
 
         self._reader = threading.Thread(target=read, name="dobbyvpn-native-ui-reader", daemon=True)
         self._reader.start()
+
+        def read_stderr() -> None:
+            process = self.process
+            stderr = None if process is None else process.stderr
+            try:
+                if stderr is not None:
+                    sys.stderr.write("[native-ui stderr]\n")
+                    for chunk in stderr:
+                        sys.stderr.write(redact_text(chunk, self._sensitive_values))
+                        sys.stderr.flush()
+            finally:
+                self._stderr_done.set()
+
+        self._stderr_reader = threading.Thread(
+            target=read_stderr,
+            name="dobbyvpn-native-ui-stderr-reader",
+            daemon=True,
+        )
+        self._stderr_reader.start()
         self._operation = "start"
         self._stage = "waiting-for-ready-window"
         response = self._response(self.timeout)
@@ -245,6 +276,7 @@ class _NativeUIProcess:
         if line is None:
             process = self.process
             code = None if process is None else process.poll()
+            self._stderr_done.wait(timeout=1.0)
             raise self._error(
                 f"native UI process exited before responding (code={code})"
             )
@@ -277,14 +309,15 @@ class _NativeUIProcess:
         process = self.process
         if process is None:
             return
+        errors: list[BaseException] = []
         try:
             if process.poll() is None and process.stdin is not None:
                 try:
                     process.stdin.write('{"op":"close"}\n')
                     process.stdin.flush()
                     self._response(min(self.timeout, 15.0))
-                except BaseException:
-                    pass
+                except BaseException as error:
+                    errors.append(error)
             if process.poll() is None:
                 try:
                     process.wait(timeout=min(self.timeout, 5.0))
@@ -300,15 +333,27 @@ class _NativeUIProcess:
                         process.wait(timeout=2)
                     except subprocess.TimeoutExpired:
                         process.kill()
-                        process.wait(timeout=1)
+                        try:
+                            process.wait(timeout=1)
+                        except BaseException as error:
+                            errors.append(error)
+                except BaseException as error:
+                    errors.append(error)
         finally:
+            self._stderr_done.wait(timeout=max(1.0, min(self.timeout, 15.0)))
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     try:
                         stream.close()
-                    except OSError:
-                        pass
+                    except OSError as error:
+                        errors.append(error)
             self.process = None
+            self._stderr_reader = None
+        if errors:
+            failure = self._error("native UI cleanup failed")
+            for error in errors:
+                failure.add_note(f"cleanup_error={type(error).__name__}: {error}")
+            raise failure
 
 
 def _step(identifier: str, operation: str, timeout: float) -> ScenarioStep:

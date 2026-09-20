@@ -1,13 +1,7 @@
 name: Lint
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_call:
 
 env:
   GOTOOLCHAIN: local
@@ -54,7 +48,7 @@ jobs:
         run: |
           set -uo pipefail
           report="$RUNNER_TEMP/golangci-lint.txt"
-          if golangci-lint run --output.text.path stdout --config .golangci.yml ./ >"$report" 2>&1; then
+          if golangci-lint run --output.text.path stdout --config .golangci.yml ./... >"$report" 2>&1; then
             lint_status=0
           else
             lint_status=$?

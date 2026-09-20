@@ -15,6 +15,11 @@ import sys
 import time
 from typing import Protocol, Sequence
 
+from torturer_checks.diagnostics import (
+    add_exception_notes,
+    add_stream_notes,
+    emit_streams,
+)
 from torturer_checks.ios_simulator import (
     IOSSimulatorContractError,
     SimulatorApp,
@@ -113,8 +118,8 @@ class IOSSimulatorStageError(IOSSimulatorAppContractError):
     """A failure tied to one Simulator lifecycle/build stage.
 
     ``stage`` is intentionally machine-readable for local result consumers.
-    Command output stays in memory for assertions and is represented in errors
-    only by bounded status metadata, never by a full stream or command line.
+    Command output remains available in the error notes and is forwarded to the
+    invoking process; command arguments are intentionally not copied.
     """
 
     def __init__(
@@ -252,34 +257,44 @@ class SubprocessCommandRunner:
                 start_new_session=(os.name == "posix"),
             )
         except OSError as error:
-            raise IOSSimulatorAppContractError(
+            failure = IOSSimulatorAppContractError(
                 f"iOS command could not start: {type(error).__name__}"
-            ) from None
+            )
+            add_stream_notes(
+                failure,
+                "command",
+                getattr(error, "stdout", None),
+                getattr(error, "stderr", None),
+            )
+            raise failure from None
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as error:
+            partial_stdout = error.output or b""
+            partial_stderr = error.stderr or b""
+            cleanup_error: BaseException | None = None
             try:
                 stdout, stderr = _stop_process_group(
                     process,
                     min(COMMAND_TERMINATION_GRACE_SECONDS, max(1.0, timeout)),
                 )
-            except IOSSimulatorAppContractError as cleanup_error:
-                stdout = error.output or b""
-                stderr = error.stderr or b""
-                raise IOSSimulatorAppContractError(
-                    f"iOS command timed out after {timeout:g}s; cleanup failed: "
-                    f"{type(cleanup_error).__name__}; stdout_bytes={len(stdout)} "
-                    f"stderr_bytes={len(stderr)}"
-                ) from None
-            raise IOSSimulatorAppContractError(
-                f"iOS command timed out after {timeout:g}s; "
-                f"stdout_bytes={len(stdout)} stderr_bytes={len(stderr)}"
-            ) from None
+            except IOSSimulatorAppContractError as cleanup_failure:
+                stdout, stderr = partial_stdout, partial_stderr
+                cleanup_error = cleanup_failure
+            failure = IOSSimulatorAppContractError(
+                f"iOS command timed out after {timeout:g}s"
+            )
+            add_stream_notes(failure, "command", stdout, stderr)
+            emit_streams("ios-command", stdout, stderr)
+            if cleanup_error is not None:
+                add_exception_notes(failure, "cleanup", cleanup_error)
+            raise failure from None
         result = CommandResult(
             returncode=process.returncode if process.returncode is not None else -1,
             stdout=_decode(stdout or b""),
             stderr=_decode(stderr or b""),
         )
+        emit_streams("ios-command", result.stdout, result.stderr)
         return result
 
 
@@ -426,10 +441,7 @@ def _validate_runtime_framework(
             timeout_seconds=timeout_seconds,
         )
     except IOSRuntimeFrameworkError as error:
-        # This validator reports bounded metadata/path failures, not command
-        # streams. Keep its actionable classification while the command
-        # runner itself remains stream-free.
-        raise IOSSimulatorAppContractError(str(error)[:240]) from error
+        raise IOSSimulatorAppContractError(str(error)) from error
 
 
 def _stage_timeout(
@@ -451,18 +463,18 @@ def _stage_error(
 ) -> IOSSimulatorStageError:
     if isinstance(error, IOSSimulatorStageError) and error.stage == stage:
         return error
-    if isinstance(error, IOSSimulatorAppContractError):
-        text = str(error).strip()
-        lowered = text.lower()
-        if "timed out" in lowered:
-            detail = "command timed out"
-        elif any(marker in lowered for marker in ("stdout", "stderr", "\n", "\r")):
-            detail = type(error).__name__
-        else:
-            detail = text[:240] or type(error).__name__
-    else:
-        detail = type(error).__name__
-    return IOSSimulatorStageError(stage, detail, timeout_seconds=timeout_seconds)
+    detail = str(error).strip() or type(error).__name__
+    wrapped = IOSSimulatorStageError(stage, detail, timeout_seconds=timeout_seconds)
+    for note in getattr(error, "__notes__", ()):
+        wrapped.add_note(note)
+    if hasattr(error, "stdout") or hasattr(error, "stderr"):
+        add_stream_notes(
+            wrapped,
+            "command",
+            getattr(error, "stdout", None),
+            getattr(error, "stderr", None),
+        )
+    return wrapped
 
 
 def _require_success(
@@ -497,18 +509,21 @@ def _require_success(
             raise
         raise _stage_error(stage, error, timeout_seconds=effective_timeout) from error
     if result.returncode:
-        detail = (
-            f"exit code {result.returncode}; stdout_bytes={len(result.stdout)}; "
-            f"stderr_bytes={len(result.stderr)}"
+        failure = IOSSimulatorStageError(
+            stage,
+            f"exit code {result.returncode}",
+            timeout_seconds=effective_timeout,
         )
-        raise IOSSimulatorStageError(stage, detail, timeout_seconds=effective_timeout)
+        emit_streams(f"ios-{stage}", result.stdout, result.stderr)
+        add_stream_notes(failure, "command", result.stdout, result.stderr)
+        raise failure
     return result
 
 
 def _add_note(failure: BaseException | None, label: str, error: BaseException) -> BaseException:
     if failure is None:
         return error
-    failure.add_note(f"{label}: {type(error).__name__}")
+    add_exception_notes(failure, label, error)
     return failure
 
 
@@ -560,12 +575,14 @@ def _terminate_app(
         if "found nothing to terminate" in output.lower():
             return
         del output
-        raise IOSSimulatorStageError(
+        failure = IOSSimulatorStageError(
             "terminate",
-            f"exit code {result.returncode}; stdout_bytes={len(result.stdout)}; "
-            f"stderr_bytes={len(result.stderr)}",
+            f"exit code {result.returncode}",
             timeout_seconds=timeout,
         )
+        emit_streams("ios-terminate", result.stdout, result.stderr)
+        add_stream_notes(failure, "command", result.stdout, result.stderr)
+        raise failure
 
 
 def _disable_simulator_hardware_keyboard(
@@ -592,12 +609,14 @@ def _disable_simulator_hardware_keyboard(
     elif "does not exist" in read.stderr:
         previous = None
     else:
-        raise IOSSimulatorStageError(
+        failure = IOSSimulatorStageError(
             "read-hardware-keyboard",
-            f"exit code {read.returncode}; stdout_bytes={len(read.stdout)}; "
-            f"stderr_bytes={len(read.stderr)}",
+            f"exit code {read.returncode}",
             timeout_seconds=read_timeout,
         )
+        emit_streams("ios-read-hardware-keyboard", read.stdout, read.stderr)
+        add_stream_notes(failure, "command", read.stdout, read.stderr)
+        raise failure
     if previous not in {None, "0", "1"}:
         raise IOSSimulatorStageError(
             "read-hardware-keyboard",
@@ -696,12 +715,14 @@ def run_ios_simulator_app_contract(
                 raise
             raise _stage_error("boot", error, timeout_seconds=boot_timeout) from error
         if boot.returncode and "current state: Booted" not in (boot.stdout + boot.stderr):
-            raise IOSSimulatorStageError(
+            failure = IOSSimulatorStageError(
                 "boot",
-                f"exit code {boot.returncode}; stdout_bytes={len(boot.stdout)}; "
-                f"stderr_bytes={len(boot.stderr)}",
+                f"exit code {boot.returncode}",
                 timeout_seconds=boot_timeout,
             )
+            emit_streams("ios-boot", boot.stdout, boot.stderr)
+            add_stream_notes(failure, "command", boot.stdout, boot.stderr)
+            raise failure
         _require_success(
             runner,
             simctl_bootstatus_command(simulator.udid),

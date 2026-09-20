@@ -196,9 +196,7 @@ def _run_mesa_fixture_command(
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         message = f"Windows Mesa fixture command failed: {command[0]} exited {result.returncode}"
         if detail:
-            # Keep command diagnostics bounded and avoid retaining the whole
-            # archive/tool output as a fixture artifact.
-            message += f": {detail[-512:]}"
+            message += f": {detail}"
         raise _error(message)
     return result
 

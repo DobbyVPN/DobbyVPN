@@ -104,21 +104,39 @@ observed.
 ## Results, diagnostics, and cleanup
 
 The engine decides pass/fail from behavior and required reset/cleanup.
-Command, service, app, and device output is ephemeral. Adapters keep output in
-memory only for parsing and assertions, and use disposable scratch files only
-when an external tool requires a regular file. Scratch is removed after each
-run, including failed runs; the compact structured result is the only retained
-functional output.
+Command, service, app, device, build, and cleanup output is part of the
+diagnostic contract. Every repository-owned process boundary preserves the
+complete stdout and stderr streams, including successful output, non-zero
+exit output, launch exceptions, timeout output after termination, and cleanup
+output. Output is never replaced with byte counts or status codes, selected as
+“useful” lines, tailed, or truncated by a repository-owned size limit. Execution
+deadlines remain bounded, but output has no artificial repository limit.
 
-A failed test remains failed even if cleanup succeeds. A failed cleanup is
-reported separately and blocks successful release completion.
+Adapters may keep output in memory or in owner-only disposable scratch while
+parsing and asserting. The invoking process receives complete redacted streams
+before scratch is removed. Local detached guests expose separate test and
+cleanup streams after completion; the controller attempts to deliver every
+stream before removing the guest run. A collection failure is reported beside
+the original test failure and does not erase it. A failed test remains failed
+even if cleanup succeeds; a failed cleanup remains separately visible and
+blocks successful release completion.
+
+Credentials and private profile values are redacted at the transport boundary
+without deleting surrounding diagnostic text. Public service names and error
+context such as `api.ipify.org` are not removed merely because they occur near a
+redacted value. No separate log or evidence archive is created; the retained
+structured result is compact and local/GitHub retention is governed by the
+owner and workflow policies described by the testing documentation.
+
 Local candidates are disposable and cleaned up after every run. Rerun the
 same command to repeat a test; a failed cleanup is reported separately.
 
 Start a fresh explicit Release to retry hosted qualification. Re-running only
 failed jobs cannot reuse the Render server deleted by final cleanup. A
-successful Release retains its tested packages for the separate manual Publish
-workflow; Publish takes that Release run's ID and does not rebuild or retest.
+successful Release retains only the package artifacts needed by exact-package
+qualification and the separate manual Publish workflow while it remains the
+newest completed workflow run. Publish takes that Release's ID and does not
+rebuild or retest.
 Signing and Render account credentials stay in their protected jobs; the
 test runner receives only the disposable connection profile.
 

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: dobbyvpn-actions-retention
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+    secrets: inherit
+
+  lint:
+    name: Lint
+    uses: ./.github/workflows/lint.yml
+    secrets: inherit
+
+  security:
+    name: Security
+    uses: ./.github/workflows/security.yml
+    secrets: inherit
+
+  actionlint:
+    name: Actionlint
+    uses: ./.github/workflows/actionlint.yml
+    secrets: inherit
+
+  retain:
+    name: Retain newest trusted run
+    if: ${{ always() && github.event_name != 'pull_request' }}
+    needs: [test, lint, security, actionlint]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Remove older workflow runs and caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/actions_retention.py --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" --delete-caches --delete-intermediate-artifacts

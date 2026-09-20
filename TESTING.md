@@ -1,8 +1,11 @@
 # Testing DobbyVPN
 
-Run checks relevant to the change. Tests are disposable: rerun them freely,
-keep only the compact structured result, and clean up resources and scratch
-files on success or failure.
+Run checks relevant to the change. Tests are disposable: emit complete
+redacted output before cleanup, retain only one completed local run total, and
+clean up resources and scratch files on success or failure. Trusted GitHub
+push/manual workflows converge Actions storage to one completed run; public
+fork and Dependabot pull-request runs may temporarily remain until the next
+trusted workflow because their token cannot delete older runs.
 A missing tool or unavailable platform is not a passing test.
 Deferred qualification work is tracked in [docs/TODO.md](docs/TODO.md); those
 items are not accepted skips inside a passing suite.
@@ -143,9 +146,9 @@ console/Finder evidence, while conflicting or malformed values fail closed.
 remain owned by `root` while a user's Aqua session is active. Native controls
 are bound to the launched window/process identity, and disposable macOS runs
 terminate pre-existing `Dobby Vpn` instances before starting a new one.
-The macOS full lane also requires a graphics-capable host with an accelerated
-NSGL/OpenGL context; a non-rendering VM is unavailable for real-window
-qualification and is not converted to a pass.
+The macOS full lane must create and drive the real production window. A failure
+to create its graphics context is reported with complete process output; do not
+infer the cause from VM display inventory alone or convert it to a pass.
 GUI automation must drive visible controls and may not substitute CLI commands.
 
 The Go job emits one repository-wide coverage profile with
@@ -184,8 +187,9 @@ editing and clearing, checks empty and malformed input outcomes, verifies that
 an unaccepted inline value is not restored after reopen, clears diagnostics,
 and opens the app-owned export prompt, follows Save into the native document
 picker, then cancels back to Fyne. The Share action remains the production
-`UIActivityViewController` path for a user-selected export. App-owned startup logs
-are not collected; a log marker cannot satisfy the check. This proves
+`UIActivityViewController` path for a user-selected export. Complete app-owned
+startup output is forwarded for diagnostics, but a log marker cannot satisfy
+the check. This proves
 rendered UI and input/lifecycle/diagnostic wiring, not a physical
 NetworkExtension packet-tunnel or TrustTunnel connection.
 
@@ -238,9 +242,11 @@ Simulator XCTest mini contract; iOS is intentionally absent from the later
 traffic matrix because the Simulator cannot qualify a physical-device
 NetworkExtension tunnel. Release does not publish. When that run succeeds and
 you want to distribute it, use **Actions → Publish → Run workflow** on `main`
-and select its run ID. Publish uses those retained artifacts. Apple submission
-and GitHub/F-Droid publication are independent jobs. Publishing credentials
-stay in those jobs.
+and select its run ID. Publish uses that Release's artifacts while they remain
+the latest run. Any later completed workflow supersedes the Release under the
+single-run retention policy, so publication then requires a new Release.
+Apple submission and GitHub/F-Droid publication are independent jobs.
+Publishing credentials stay in those jobs.
 
 If a Release fails, fix the cause and dispatch a new Release workflow. Do not
 rerun the old Release: only attempt 1 can qualify for Publish. This restriction
@@ -288,11 +294,17 @@ window; exact-Release mode uses the installed package. Linux runs only the
 CLI/service contract. See the private
 Harness README for the launcher command.
 
-Command, service, app, and device output is held in memory only as needed for
-assertions. Disposable scratch is removed after each run, including failed
-runs; cleanup failures are reported separately and prevent a release from
-being treated as successful. The structured result JSON is the only retained
-functional output.
+Complete command, service, app, and device stdout and stderr is emitted before
+disposable scratch is removed, including on failure, timeout, and cleanup
+failure. Repository-owned wrappers do not truncate or suppress output, replace
+it with byte counts or status codes, or select only supposedly useful lines.
+Credentials and private profile values are redacted without removing
+surrounding diagnostic content. Original and cleanup exceptions are both
+reported. No separate log or evidence archive is created; local retention
+keeps one completed run total. Trusted Actions workflows keep one completed run
+total; pull-request backlog is temporary and is removed by the next trusted
+workflow. A Release is publishable only while it remains the newest completed
+workflow run.
 
 Release-only checks retain Android reproducibility and signing-certificate
 verification, and iOS signature, entitlement, provisioning, and version
