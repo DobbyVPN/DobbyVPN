@@ -15,7 +15,12 @@ from torturer_contract.functional.assertions import (
     STABILITY_SAMPLE_COUNT,
     STABILITY_SAMPLE_INTERVAL_SECONDS,
 )
-from torturer_contract.functional.scenarios import get_scenario
+from torturer_contract.functional.scenarios import (
+    get_scenario,
+    select_scenarios,
+    suite_set,
+    validate_suite,
+)
 
 
 class FakeAdapter:
@@ -69,6 +74,36 @@ def connection() -> ConnectionIdentity:
 
 
 class FunctionalContractTests(unittest.TestCase):
+    def test_mini_and_full_are_explicit_cumulative_suites(self):
+        mini_ids = {scenario.id for scenario in suite_set("mini")}
+        full_ids = {scenario.id for scenario in suite_set("full")}
+        self.assertNotIn("functional.network-transition", mini_ids)
+        self.assertTrue(mini_ids <= full_ids)
+        self.assertEqual(mini_ids, full_ids)
+
+    def test_deferred_network_transition_remains_a_focused_diagnostic(self):
+        selected = select_scenarios(
+            suite="mini", scenario_ids=["functional.network-transition"]
+        )
+        self.assertEqual([scenario.id for scenario in selected], ["functional.network-transition"])
+
+    def test_full_policy_rejects_android_before_setup(self):
+        with self.assertRaisesRegex(ValueError, "FULL_SUITE_PHYSICAL_DEVICE_UNIMPLEMENTED"):
+            validate_suite("full", platform="android", entrypoint="local")
+
+    def test_hosted_policy_is_mini_only(self):
+        with self.assertRaisesRegex(ValueError, "FULL_SUITE_UNSUPPORTED_BY_HOSTED_ENTRYPOINT"):
+            validate_suite("full", platform="windows", entrypoint="hosted")
+
+    def test_linux_is_cli_service_mini_only(self):
+        with self.assertRaisesRegex(ValueError, "FULL_SUITE_UNSUPPORTED_PLATFORM"):
+            validate_suite("full", platform="linux", entrypoint="local")
+
+    def test_local_desktops_accept_full(self):
+        for platform in ("windows", "macos"):
+            with self.subTest(platform=platform):
+                validate_suite("full", platform=platform, entrypoint="local")
+
     def test_set_is_unique_and_contains_required_semantics(self):
         scenarios = canonical_test_set()
         self.assertEqual(
@@ -87,6 +122,14 @@ class FunctionalContractTests(unittest.TestCase):
         self.assertIn("traffic.metrics_positive", core.assertion_ids)
         self.assertIn("routing.verified", core.assertion_ids)
         self.assertIn("cleanup.restored", core.assertion_ids)
+
+    def test_every_qualification_configure_step_has_the_mobile_ui_budget(self):
+        for scenario in suite_set("mini"):
+            configure = next(
+                step for step in scenario.steps if step.operation == "configure"
+            )
+            with self.subTest(scenario=scenario.id):
+                self.assertEqual(configure.timeout_seconds, 60)
 
     def test_engine_returns_readable_scenario_result(self):
         result = FunctionalEngine().run(

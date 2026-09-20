@@ -52,7 +52,7 @@ Build and run the local CLI config check:
 python3 .github/scripts/desktop_build.py cli-test --config 'https://example.com/config.toml'
 ```
 
-The config can be an HTTP(S) URL, a local TOML file path, or inline TOML passed
+The config can be an HTTPS URL, a local TOML file path, or inline TOML passed
 through `--config` or `DOBBYVPN_CLI_TEST_CONFIG`.
 
 ## CI Usage
@@ -95,13 +95,24 @@ The private runner calls `local_candidate.py`, which uses
 Local mode accepts the supplied worktree, builds the app once with normal
 incremental caches, and builds its test companion. It does not prove release
 reproducibility or invent a Git identity for uncommitted source.
-For desktop targets, the resulting `candidate.json` is a flat map of the
-built native paths (`service`, `cli`, and `network`); Windows/macOS also carry
-the headless `ui_test` companion. Linux local checks remain CLI/service-only.
-Desktop local VM checks do not build or discover the JVM application. Android
-additionally records the signed `app` and `test_companion` APK paths.
+For desktop targets, the resulting `candidate.json` is a flat map of built
+native paths. Linux carries `service`, `cli`, and `network`. Windows/macOS add
+the native `ui` and headless `ui_test` companion paths. Linux local checks
+remain CLI/service-only.
+Desktop local VM checks use the native Go/Fyne executable. Android additionally
+records the signed `app` and `test_companion` APK paths.
 The runner already owns platform identities and logs, so the descriptor does
 not repeat those values or perform a cross-user permission handoff.
+
+The private Harness selects the `mini` or `full` suite. Hosted desktop runs
+use mini's headless widget/service boundary and semantic VPN checks. A local
+Windows/macOS full run executes mini once and then opens the native window for
+visible input and lifecycle actions; exact-Release full mode uses the binary
+installed from the Release package. Android mini uses the rendered emulator
+and real VPN service; iOS Simulator has one rendered non-Metal mini contract;
+Linux remains CLI/service-only. The exact platform commands and coverage
+contract are in [TESTING.md](../../TESTING.md) and
+[torturer/docs/contract.md](../../torturer/docs/contract.md).
 
 ## Release
 

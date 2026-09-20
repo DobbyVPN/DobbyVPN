@@ -93,3 +93,4 @@ jobs:
           name: DobbyVPNRuntime.xcframework
           path: go_module/DobbyVPNRuntime.xcframework
           if-no-files-found: error
+          retention-days: 3

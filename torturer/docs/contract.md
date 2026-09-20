@@ -6,37 +6,62 @@ Product and tests live in one repository. Local and hosted runs use the same
 [assertions](../torturer_contract/functional/assertions.py), and
 [result fields](../torturer_contract/functional/results.py).
 
-## What is tested
+## Coverage model
 
-The full suite runs these scenarios for each connection reported by the app:
+`mini` is the portable qualification contract. `full` is cumulative: it runs
+mini once and adds environment-specific coverage. Hosted qualification accepts
+mini. Local full is currently defined only for Windows and macOS, where it
+adds the real native-window journey after the shared semantic lane (exact-
+Release mode uses the installed package).
+Android and iOS full remain physical-device work; Linux is intentionally
+CLI/service mini-only.
+
+| Platform | Mini qualification | Full qualification |
+|---|---|---|
+| Windows/macOS | Headless production Go/Fyne widget/service boundary plus the semantic scenarios below and real VPN observations | Mini once plus visible native-window input, Connect/Disconnect/reconnect, settings, and close/reopen actions |
+| Android | Rendered emulator UI plus consent, Connect/Disconnect/reconnect, traffic, and routing for one representative non-TrustTunnel profile; the binding matrix covers every discovered profile | Physical device, including the device-only VPN bridge |
+| iOS | One comprehensive rendered Simulator UI/input/lifecycle/diagnostics contract; no VPN traffic | Physical device and NetworkExtension traffic |
+| Linux | CLI/service and real VPN observations | Not defined |
+
+## Semantic scenarios
+
+The semantic mini lane (desktop, Android, and Linux) runs these scenarios for
+each connection reported by the app. The iOS Simulator mini lane is the
+separate comprehensive rendered UI contract described in the coverage table.
 
 | Scenario | Behavior |
 |---|---|
 | `functional.configure` | Accept and configure the profile. |
 | `functional.core-connection` | Connect, observe the tunnel and routed identity, measure traffic, check stability, disconnect. |
 | `functional.start-stop-start` | Disconnect and reconnect, then independently observe the new tunnel and routing. |
-| `functional.network-transition` | Recover after a reversible network change. |
 | `functional.product-process-loss` | Recover after the product process is stopped and restarted. |
 
 Measurements must be finite and positive. Stability uses five successful
 samples at one-second intervals. Scenario reset and process cleanup must
 succeed; a failure is not converted into a skip or a pass.
 
-A focused local scenario is a diagnostic subset, not a claim that the full
-suite passed. Run it freely while developing. The default local suite has no
-accepted skips.
+`functional.network-transition` remains defined for focused diagnostics but is
+deferred from both qualification suites. Suspend/resume is not yet defined as
+a qualification scenario. A focused or explicitly selected scenario is
+diagnostic evidence only, not a claim that the suite passed. The default
+qualification suites have no accepted unavailable skips.
 
-## Hosted limitations
+## Hosted boundaries
 
-GitHub runners currently cannot safely perform the network-transition
-scenario on Windows or macOS; Linux requires a separately selected
-non-control interface. These known limitations are recorded explicitly in
-[the hosted limitation list](../torturer_checks/public_qualification.py).
-Android has no accepted hosted scenario limitation. Unknown unavailability
-fails the run rather than silently reducing coverage.
+Hosted Windows/macOS runs use the production Go/Fyne widgets and authenticated
+service boundary through the headless Fyne driver; they do not claim that a
+hosted runner displayed a native desktop window. The real native-window journey
+belongs to local full qualification and requires an interactive desktop.
 
-Suspend/resume is not tested on any platform. Simulator checks do not prove
-physical-device iOS VPN behavior.
+Android hosted mini uses a rendered emulator and the real VPN service. Its
+`gui-auto` lane takes the first complete `Outline` or `Xray` protocol block
+from the fresh private bundle without rewriting its bytes; the separate
+`protocol-matrix` lane keeps the original bundle and exercises every product
+profile through the binding. This keeps the real GUI input journey bounded
+while preserving full profile-matrix coverage. iOS
+Simulator mini proves rendered controls, input, lifecycle, and diagnostics but
+cannot prove a physical-device NetworkExtension tunnel or VPN traffic. Unknown
+unavailability fails the run rather than silently reducing coverage.
 
 ## Traffic and infrastructure
 
@@ -64,8 +89,8 @@ Non-success measurement HTTP responses are reported separately from routing
 or transport failures. No fallback silently turns an unavailable check into
 a pass.
 
-Android's instrumentation-only driver makes requests through the VPN network
-and reports observations. The Python engine owns the assertions; see
+Android's observation driver makes requests through the VPN network and
+reports observations. The Python engine owns the assertions; see
 [the observation contract](../torturer_contract/functional/android_observation.py).
 Process disappearance alone is not recovery: a new working session must be
 observed.

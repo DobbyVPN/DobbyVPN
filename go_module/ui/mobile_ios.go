@@ -19,6 +19,7 @@ char* dobby_ui_start(const char*, int64_t, const char*, int32_t);
 char* dobby_ui_stop(const char*, int64_t);
 char* dobby_ui_snapshot(const char*);
 char* dobby_ui_reset(const char*, int64_t);
+char* dobby_ui_diagnostic_paths(void);
 void dobby_ui_export_logs(const unsigned char*, int);
 void dobby_ui_free_string(char*);
 void dobby_ui_startup(const char*);
@@ -28,6 +29,7 @@ import "C"
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"unsafe"
 )
@@ -42,6 +44,23 @@ type iosLogExporter struct{}
 // The Swift bridge hands these lines to the existing gzip/share-sheet
 // interactor; Go does not write a file or retain a second log buffer.
 func newMobileLogExporter() LogExporter { return iosLogExporter{} }
+
+func platformDiagnosticPaths() ([]string, error) {
+	value := C.dobby_ui_diagnostic_paths()
+	if value == nil {
+		return nil, fmt.Errorf("iOS diagnostic bridge returned no paths")
+	}
+	defer C.dobby_ui_free_string(value)
+	encoded := C.GoString(value)
+	if strings.TrimSpace(encoded) == "" {
+		return nil, fmt.Errorf("iOS diagnostic bridge returned no paths")
+	}
+	paths := strings.Split(encoded, "\n")
+	for index := range paths {
+		paths[index] = strings.TrimSpace(paths[index])
+	}
+	return paths, nil
+}
 
 func (iosLogExporter) Export(ctx context.Context, lines []string) error {
 	if ctx == nil {

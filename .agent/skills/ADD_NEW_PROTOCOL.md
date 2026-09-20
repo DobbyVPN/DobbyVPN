@@ -8,7 +8,7 @@ description: Add a protocol engine through the neutral Go runtime while preservi
 This guide is intentionally protocol-neutral. DobbyVPN has one shared Go/Fyne
 UI, one Go product/runtime layer, and thin operating-system shells only where
 the platform VPN API requires them. A new protocol must not create a second
-session manager, protocol-specific RPC, KMP repository, Swift lifecycle owner,
+session manager, protocol-specific RPC, platform UI repository, Swift lifecycle owner,
 or UI toggle.
 
 ## Required implementation sequence

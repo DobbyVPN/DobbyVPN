@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from torturer_checks import local_vm, local_vm_android, local_vm_windows
+from torturer_checks import local_vm, local_vm_android, local_vm_macos, local_vm_windows
 
 
 class LocalVMPlatformTests(unittest.TestCase):
@@ -67,6 +67,18 @@ class LocalVMPlatformTests(unittest.TestCase):
             self.assertIsNone(state["runtime"]["network_interface"])
             self.assertNotIn("pid", state["runtime"])
 
+    def test_windows_release_stops_only_the_msi_owned_service(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(local_vm_windows, "_powershell") as powershell:
+                powershell.return_value = subprocess.CompletedProcess([], 0, b"", b"")
+                local_vm_windows.stop_installed_service(root, root / "logs", 120)
+            powershell.assert_called_once()
+            script = powershell.call_args.args[0]
+            self.assertIn('Get-Service -Name "DobbyVPN Server"', script)
+            self.assertIn("Stop-Service -InputObject $service -Force", script)
+            self.assertEqual(powershell.call_args.kwargs["label"], "release-stop-service")
+
     def test_windows_native_ui_uses_interactive_token_and_cleans_task(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -78,6 +90,8 @@ class LocalVMPlatformTests(unittest.TestCase):
 
             def fake_powershell(script: str, **kwargs):
                 calls.append((kwargs["label"], script, kwargs))
+                if kwargs["label"] == "native-ui-preflight":
+                    return subprocess.CompletedProcess([], 0, b"ready|1|1\n", b"")
                 if kwargs["label"] == "native-ui-task-register":
                     wrapper_text.append((root / "native-ui-task.ps1").read_text(encoding="utf-8"))
                     exit_marker = root / "native-ui.exit"
@@ -118,10 +132,13 @@ class LocalVMPlatformTests(unittest.TestCase):
             self.assertEqual((logs / "native-ui.stderr.log").read_bytes(), b"")
             self.assertEqual(
                 [label for label, _, _ in calls],
-                ["native-ui-task-register", "native-ui-task-cleanup"],
+                ["native-ui-preflight", "native-ui-task-register", "native-ui-task-cleanup"],
             )
-            register_script = calls[0][1]
-            cleanup_script = calls[1][1]
+            preflight_script = calls[0][1]
+            register_script = calls[1][1]
+            cleanup_script = calls[2][1]
+            self.assertIn('Get-Process -Name "explorer"', preflight_script)
+            self.assertIn("SessionId", preflight_script)
             self.assertIn("-LogonType Interactive -RunLevel Limited", register_script)
             self.assertNotIn("InteractiveToken", register_script)
             self.assertIn(r"TEST\dobby", register_script)
@@ -147,6 +164,8 @@ class LocalVMPlatformTests(unittest.TestCase):
 
             def fake_powershell(_script: str, **kwargs):
                 labels.append(kwargs["label"])
+                if kwargs["label"] == "native-ui-preflight":
+                    return subprocess.CompletedProcess([], 0, b"ready|1|1\n", b"")
                 if kwargs["label"] == "native-ui-task-register":
                     (root / "native-ui.pid").write_text("431", encoding="ascii")
                 return subprocess.CompletedProcess([], 0, b"", b"")
@@ -164,9 +183,149 @@ class LocalVMPlatformTests(unittest.TestCase):
 
             self.assertEqual(
                 labels,
-                ["native-ui-task-register", "native-ui-kill", "native-ui-task-cleanup"],
+                ["native-ui-preflight", "native-ui-task-register", "native-ui-kill", "native-ui-task-cleanup"],
             )
             self.assertFalse((root / "native-ui.pid").exists())
+
+    def test_windows_native_ui_without_explorer_is_explicitly_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            logs = root / "logs"
+            cwd = root / "source"
+            cwd.mkdir()
+            labels: list[str] = []
+
+            def fake_powershell(_script: str, **kwargs):
+                labels.append(kwargs["label"])
+                if kwargs["label"] == "native-ui-preflight":
+                    return subprocess.CompletedProcess(
+                        [], 3, b"", b"no Explorer desktop session for TEST\\dobby\n",
+                    )
+                raise AssertionError("the native task must not be registered")
+
+            with mock.patch.object(local_vm_windows, "_powershell", side_effect=fake_powershell):
+                with self.assertRaises(
+                    local_vm_windows.WindowsInteractiveDesktopUnavailable,
+                ) as raised:
+                    local_vm_windows.run_interactive_ui(
+                        [r"C:\Python\python.exe", r"C:\candidate\smoke.py"],
+                        run_dir=root,
+                        cwd=cwd,
+                        logs=logs,
+                        timeout=900,
+                        environment={"DOBBYVPN_CONTROL_TOKEN_USER": r"TEST\dobby"},
+                    )
+
+            self.assertEqual(
+                str(raised.exception),
+                "WINDOWS_INTERACTIVE_DESKTOP_UNAVAILABLE: "
+                "no usable Explorer desktop session for configured interactive user",
+            )
+            self.assertNotIn("TEST\\dobby", str(raised.exception))
+            self.assertEqual(labels, ["native-ui-preflight"])
+            self.assertFalse((root / "native-ui-task.ps1").exists())
+
+    def test_macos_native_ui_without_aqua_is_unavailable_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            logs = root / "logs"
+            calls: list[list[str]] = []
+
+            def fake_probe(command, **_kwargs):
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0, b"root\n", b"")
+
+            with (
+                mock.patch.object(local_vm_macos.host_platform, "system", return_value="Darwin"),
+                mock.patch.object(local_vm_macos, "_run_logged", side_effect=fake_probe),
+                mock.patch.object(local_vm_macos.getpass, "getuser", return_value="root"),
+            ):
+                with self.assertRaises(local_vm_macos.MacOSInteractiveDesktopUnavailable) as raised:
+                    local_vm_macos.run_interactive_ui(
+                        ["python", "native_ui.py"],
+                        run_dir=root,
+                        cwd=root,
+                        logs=logs,
+                        timeout=900,
+                        environment={},
+                    )
+
+            self.assertEqual(
+                str(raised.exception),
+                "MACOS_AQUA_SESSION_UNAVAILABLE: no logged-in Aqua console user",
+            )
+            self.assertEqual(calls, [["stat", "-f", "%Su", "/dev/console"]])
+
+    def test_macos_native_ui_aqua_preflight_passes_through_after_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            logs = root / "logs"
+            calls: list[list[str]] = []
+            expected = subprocess.CompletedProcess(["native-ui"], 0, b"passed", b"")
+
+            def fake_probe(command, **_kwargs):
+                calls.append(command)
+                if command[0] == "stat":
+                    return subprocess.CompletedProcess(command, 0, b"alice\n", b"")
+                if command[0] == "launchctl":
+                    return subprocess.CompletedProcess(command, 0, b"gui session\n", b"")
+                return expected
+
+            with (
+                mock.patch.object(local_vm_macos.host_platform, "system", return_value="Darwin"),
+                mock.patch.object(local_vm_macos, "_run_logged", side_effect=fake_probe),
+                mock.patch.object(local_vm_macos.getpass, "getuser", return_value="alice"),
+                mock.patch.object(local_vm_macos.os, "getuid", return_value=501),
+            ):
+                result = local_vm_macos.run_interactive_ui(
+                    ["native-ui"],
+                    run_dir=root,
+                    cwd=root,
+                    logs=logs,
+                    timeout=900,
+                    environment={"TEST": "value"},
+                )
+
+            self.assertIs(result, expected)
+            self.assertEqual(
+                calls,
+                [
+                    ["stat", "-f", "%Su", "/dev/console"],
+                    ["launchctl", "print", "gui/501"],
+                    ["native-ui"],
+                ],
+            )
+
+    def test_windows_native_ui_preflight_failure_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cwd = root / "source"
+            cwd.mkdir()
+            logs = root / "logs"
+
+            def fake_powershell(_script: str, **kwargs):
+                self.assertEqual(kwargs["label"], "native-ui-preflight")
+                return subprocess.CompletedProcess([], 17, b"", b"raw script and username")
+
+            with mock.patch.object(local_vm_windows, "_powershell", side_effect=fake_powershell):
+                with self.assertRaises(
+                    local_vm_windows.WindowsInteractiveDesktopUnavailable,
+                ) as raised:
+                    local_vm_windows.run_interactive_ui(
+                        [r"C:\Python\python.exe", r"C:\candidate\smoke.py"],
+                        run_dir=root,
+                        cwd=cwd,
+                        logs=logs,
+                        timeout=900,
+                        environment={"DOBBYVPN_CONTROL_TOKEN_USER": "dobby"},
+                    )
+
+            self.assertEqual(
+                str(raised.exception),
+                "WINDOWS_INTERACTIVE_DESKTOP_UNAVAILABLE: "
+                "Explorer desktop preflight exited with status 17",
+            )
+            self.assertNotIn("raw script", str(raised.exception))
 
 
     def test_windows_cleanup_uses_exact_identity_and_firewall_rule(self) -> None:
@@ -392,7 +551,17 @@ class LocalVMPlatformTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0)
             commands = [command for command, _ in calls]
+            labels = [kwargs["label"] for _, kwargs in calls]
             instrument = next(command for command in commands if "instrument" in command)
+            cold_start = next(
+                command for command, kwargs in calls
+                if kwargs["label"] == "android-native-ui-cold-start"
+            )
+            self.assertEqual(cold_start[-3:], ["am", "force-stop", "com.dobby.vpn"])
+            self.assertLess(
+                labels.index("android-native-ui-cold-start"),
+                labels.index("android-native-ui"),
+            )
             self.assertIn("com.dobby.GoUiInstrumentedTest", instrument)
             self.assertNotIn("dobby.ui_profile", instrument)
             self.assertFalse(any("push" in command or "chmod" in command for command in commands))

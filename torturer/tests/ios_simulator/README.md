@@ -1,22 +1,35 @@
-# iOS Simulator checks
+# iOS Simulator mini check
 
 The public GitHub Test workflow builds the Go packet-tunnel runtime
 XCFramework, packages the Go/Fyne application with the native Swift
-NetworkExtension shell, and launches that same app on an iPhone Simulator.
-`run_app_contract.py` then runs the app's XCTest UI target. The test locates
-the real Fyne controls through the Simulator accessibility tree, taps Settings
-and Back, types an intentionally invalid profile, taps Connect, checks the
-visible failure outcome, and terminates/reopens the app. The app-owned log is
-retained for diagnostics only; a startup marker is not a pass condition.
+NetworkExtension shell, and installs that app on an iPhone Simulator.
+`run_app_contract.py` then lets the XCTest target own the app launch and runs
+one comprehensive UI mini contract. The
+tests locate the real Fyne controls through the Simulator accessibility tree,
+verify Settings/Back and release metadata, exercise real keyboard input and
+editing/clearing by focusing the freshly rendered Fyne input once per edit and
+tapping the published software-keyboard key frames, check empty and malformed
+configuration outcomes, exercise reopen/persistence behavior, and exercise
+the production Clear logs and native log export/share cancellation paths. The
+exporter first presents an app-owned UIKit `Export logs` prompt with explicit
+Share, Save, and Close actions. Share continues to `UIActivityViewController`;
+Save uses `UIDocumentPickerViewController` to export the real compressed
+archive. Both use the existing active app window's topmost presenter, including
+the normal iPad popover anchor, and no transparent helper window is created.
+Each keyboard/key lookup has a bounded wait; a disappeared keyboard or a
+stale key subtree after three short retries causes the rendered input to be
+refocused. The app-owned log is retained for diagnostics
+only, and a startup marker is not a pass condition.
 
-The private Harness accepts `--platform ios-simulator --simulator-mode mini`
-on a host without usable Metal and `--simulator-mode metal` on a Metal-capable
-host for compatibility with existing commands. Both modes now exercise the
-same OpenGLES-backed Fyne package; neither requires an Apple Development
-certificate, and neither performs a Metal capability probe. The distinction is
-only the caller's host/timeout policy. A missing Simulator, build, launch,
-XCTest UI target, accessibility action, or expected visible outcome is a failed
-or unavailable check, never a pass.
+There is one Simulator mini contract. It uses the OpenGLES-backed Fyne package
+and does not require an Apple Development certificate or a Metal capability
+probe. A missing Simulator, build, XCTest UI target, app launch, accessibility
+action, or expected visible outcome is a failed or unavailable check, never a
+pass. Stage-specific timeouts identify whether inventory, boot, install, XCTest
+(including its app launch), or cleanup failed; no stage is retried blindly.
+An erased iOS 26 Simulator may spend several minutes in its normal Data
+Migration, so the bootstatus stage has a six-minute bounded allowance within
+the existing lane deadline and cleanup reserve.
 
 The Simulator build writes its native log to the app-owned temporary directory
 because a provisioning-free bundle cannot receive an App Group container. The
@@ -29,4 +42,5 @@ Physical iOS builds keep using the real App Group boundary.
 The Simulator does not run a packet tunnel or the physical-device-only
 TrustTunnel bridge. A signed physical-device build still requires the normal
 Apple distribution certificate and provisioning profiles; that requirement is
-separate from unsigned/ad-hoc Simulator packaging.
+separate from unsigned/ad-hoc Simulator packaging. A passing mini result is
+therefore UI/lifecycle qualification only, not physical iOS VPN qualification.

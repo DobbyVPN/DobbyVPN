@@ -72,6 +72,9 @@ jobs:
             "$GOPATH"
           sudo chown -R "$USER:$USER" /home/vagrant
 
+      # Go 1.24.6 is only the minimum bootstrap compiler used by make.bash to
+      # build the pinned Go 1.26.8 toolchain from source. It never compiles the
+      # application; the version and binary used for that are verified below.
       - name: Set up bootstrap Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:

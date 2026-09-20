@@ -51,7 +51,6 @@ from torturer_checks.hosted.run import (
     _select_scenarios,
     build_parser,
 )
-from torturer_checks.public_qualification import PUBLIC_EXPECTED_UNAVAILABLE
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.results import ConnectionIdentity
 from torturer_contract.functional.engine import (
@@ -62,6 +61,7 @@ from torturer_contract.functional.engine import (
 from torturer_contract.functional.scenarios import (
     ScenarioStep,
     get_scenario,
+    suite_set,
     test_set as canonical_test_set,
 )
 
@@ -500,7 +500,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertIn("--show-error", runner.calls[0])
         self.assertNotIn("--silent", runner.calls[0])
 
-    def test_stability_uses_repeated_connection_status_checks(self) -> None:
+    def test_stability_uses_repeated_tunneled_https_samples(self) -> None:
         runner = FakeRunner()
         runner.connected = True
         adapter = HostedCLIAdapter(
@@ -508,14 +508,44 @@ class HostedCLIAdapterTests(unittest.TestCase):
             profile=self.profile,
             runner=runner,
             identity_url="https://identity.example.test/ip",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
         )
         with mock.patch("torturer_checks.hosted.cli.time.sleep"):
             result = adapter._stability(15)
         self.assertTrue(result["stability_verified"])
         self.assertEqual(
-            [call[1] for call in runner.calls if len(call) > 1],
+            [call[1] for call in runner.calls if len(call) > 1 and call[0] != "curl"],
             ["status"] * 5,
         )
+        curl_calls = [call for call in runner.calls if call[0] == "curl"]
+        self.assertEqual(len(curl_calls), 5)
+        self.assertTrue(all(call[-1] == "https://download.example.test/blob" for call in curl_calls))
+
+    def test_stability_reports_http_measurement_failure(self) -> None:
+        class ServiceUnavailableRunner(FakeRunner):
+            def run(self, command, *, timeout_seconds):
+                argv = tuple(command)
+                if argv[0] == "curl":
+                    self.calls.append(argv)
+                    self.timeouts.append(float(timeout_seconds))
+                    return CommandResult(argv, 0, b"0.01\t0\t503\n", b"service unavailable\n")
+                return super().run(command, timeout_seconds=timeout_seconds)
+
+        runner = ServiceUnavailableRunner()
+        runner.connected = True
+        adapter = HostedCLIAdapter(
+            cli=self.cli,
+            profile=self.profile,
+            runner=runner,
+            download_url=PUBLIC_DOWNLOAD_URL,
+            upload_url=PUBLIC_UPLOAD_URL,
+        )
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "MEASUREMENT_SERVICE_UNAVAILABLE"
+        ) as raised:
+            adapter._stability(5)
+        self.assertIn("stability_sample=1/5", raised.exception.__notes__)
 
     def test_routing_identity_waits_for_convergence_without_classifying_baseline_as_tunnel(self) -> None:
         baseline = b"198.51.100.10\n"
@@ -1138,7 +1168,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(disconnected, {"disconnect_clean": True})
         self.assertFalse(runner.firewall_active)
 
-    def test_linux_explicit_interface_keeps_the_canonical_test_set_and_applies_network_transition(self) -> None:
+    def test_linux_explicit_interface_uses_mini_and_keeps_network_transition_diagnostic(self) -> None:
         adapter = LinuxHostedAdapter(
             cli=self.cli,
             profile=self.profile,
@@ -1146,10 +1176,10 @@ class HostedCLIAdapterTests(unittest.TestCase):
             network_interface="eth0",
         )
         selected = _select_scenarios(None, platform="linux")
-        self.assertEqual(len(selected), 5)
+        self.assertEqual(len(selected), 4)
         self.assertEqual(
             {scenario.id for scenario in selected},
-            {scenario.id for scenario in canonical_test_set()},
+            {scenario.id for scenario in suite_set("mini")},
         )
         network_result = FunctionalEngine().run(
             get_scenario("functional.network-transition"),
@@ -1311,6 +1341,37 @@ class HostedCLIAdapterTests(unittest.TestCase):
         ):
             self.assertTrue(adapter._wait_for_routing_verified(5.0))
         self.assertEqual(probe.call_count, 2)
+
+    def test_windows_native_connect_prepares_routing_probe_only_in_local_mode(self) -> None:
+        enabled = WindowsHostedAdapter(
+            cli=self.cli,
+            profile=self.profile,
+            runner=self.runner,
+            identity_url="https://probe.example/api/v0/ip",
+            local_mode=True,
+            network_interface="7",
+        )
+        with (
+            mock.patch.object(enabled, "_prepare_routing_probe") as prepare,
+            mock.patch.object(enabled, "_capture_baseline") as baseline,
+        ):
+            enabled.prepare_native_connect(5.0)
+        prepare.assert_called_once_with(5.0)
+        baseline.assert_not_called()
+
+        disabled = WindowsHostedAdapter(
+            cli=self.cli,
+            profile=self.profile,
+            runner=self.runner,
+            identity_url="https://probe.example/api/v0/ip",
+        )
+        with (
+            mock.patch.object(disabled, "_prepare_routing_probe") as prepare,
+            mock.patch.object(disabled, "_capture_baseline") as baseline,
+        ):
+            disabled.prepare_native_connect(5.0)
+        prepare.assert_not_called()
+        baseline.assert_called_once_with(5.0)
 
     def test_windows_network_interface_is_local_only_and_numeric(self) -> None:
         with self.assertRaisesRegex(HostedAdapterError, "NETWORK_INTERFACE_INVALID"):
@@ -1581,9 +1642,8 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
 
     def _linux_coverage_fixture(self):
-        selected = canonical_test_set()
+        selected = suite_set("mini")
         connections = (ConnectionIdentity(0, "OUTLINE"),)
-        expected = PUBLIC_EXPECTED_UNAVAILABLE["linux"]
         results = [
             {
                 "connection": connections[0].to_dict(),
@@ -1592,9 +1652,6 @@ class HostedCLIAdapterTests(unittest.TestCase):
             }
             for scenario in selected
         ]
-        for scenario_id, reason_code in expected:
-            result = next(item for item in results if item["scenario"]["id"] == scenario_id)
-            result.update({"outcome": "unavailable", "failure": {"code": reason_code}})
         coverage = _coverage_contract(
             "linux",
             connections,
@@ -1603,10 +1660,10 @@ class HostedCLIAdapterTests(unittest.TestCase):
         )
         return selected, results, coverage
 
-    def test_expected_unavailable_scenario_is_an_explicit_supported_subset(self) -> None:
+    def test_all_mini_scenarios_are_required_hosted_coverage(self) -> None:
         _, _, coverage = self._linux_coverage_fixture()
         self.assertEqual(_qualification_exit_code(coverage), 0)
-        self.assertEqual(coverage["status"], "supported-subset-with-expected-limitations")
+        self.assertEqual(coverage["status"], "complete")
 
     def test_unexpected_missing_capability_cannot_become_a_coverage_pass(self) -> None:
         selected, results, _ = self._linux_coverage_fixture()
@@ -1627,28 +1684,26 @@ class HostedCLIAdapterTests(unittest.TestCase):
             2,
         )
 
-    def test_coverage_summary_lists_only_observed_unavailable_scenarios(self) -> None:
+    def test_coverage_summary_has_no_expected_unavailable_scenarios(self) -> None:
         _, _, coverage = self._linux_coverage_fixture()
-        self.assertEqual(coverage["status"], "supported-subset-with-expected-limitations")
-        self.assertFalse(coverage["complete"])
-        self.assertEqual(coverage["actual_unavailable"], [
-            {"scenario_id": "functional.network-transition", "reason_code": "HOSTED_LINUX_INTERFACE_REQUIRED"},
-        ])
+        self.assertEqual(coverage["status"], "complete")
+        self.assertTrue(coverage["complete"])
+        self.assertEqual(coverage["actual_unavailable"], [])
 
-    def test_possible_limitation_can_be_supported_without_failing_coverage(self) -> None:
+    def test_unavailable_result_cannot_be_supported_by_hosted_allowlist(self) -> None:
         selected, results, _ = self._linux_coverage_fixture()
         results = [dict(item) for item in results]
         supported = next(
             item for item in results
-            if item["scenario"]["id"] == "functional.network-transition"
+            if item["scenario"]["id"] == "functional.core-connection"
         )
-        supported["outcome"] = "passed"
-        supported.pop("failure", None)
+        supported["outcome"] = "unavailable"
+        supported["failure"] = {"code": "UNEXPECTED_GAP"}
         coverage = _coverage_contract(
             "linux", (self.connection,), selected, results,
         )
-        self.assertEqual(coverage["status"], "complete")
-        self.assertEqual(coverage["actual_unavailable"], [])
+        self.assertEqual(coverage["status"], "coverage-contract-failed")
+        self.assertEqual(_qualification_exit_code(coverage), 2)
 
     def test_hosted_subset_or_missing_result_cannot_qualify(self) -> None:
         selected, results, _ = self._linux_coverage_fixture()
@@ -1658,7 +1713,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
         self.assertEqual(missing["status"], "coverage-contract-failed")
 
     def test_all_passed_test_set_is_complete_even_when_platform_has_possible_gaps(self) -> None:
-        selected = canonical_test_set()
+        selected = suite_set("mini")
         results = [
             {
                 "connection": self.connection.to_dict(),
@@ -1902,7 +1957,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             mock.patch.object(
                 hosted_run,
                 "_coverage_contract",
-                return_value={"status": "supported-subset-with-expected-limitations"},
+                return_value={"status": "complete"},
             ),
             mock.patch.object(hosted_run, "_qualification_exit_code", return_value=0),
         ):
@@ -1941,7 +1996,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             mock.patch.object(hosted_run, "_run_connection_matrix", return_value=[]),
             mock.patch.object(
                 hosted_run, "_coverage_contract",
-                return_value={"status": "supported-subset-with-expected-limitations"},
+                return_value={"status": "complete"},
             ),
             mock.patch.object(hosted_run, "_qualification_exit_code", return_value=0),
             self.assertRaisesRegex(ValueError, "PRIVATE_SECRET=must-not-escape"),
@@ -2001,7 +2056,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
             mock.patch.object(
                 hosted_run,
                 "_coverage_contract",
-                return_value={"status": "supported-subset-with-expected-limitations"},
+                return_value={"status": "complete"},
             ),
             mock.patch.object(hosted_run, "_qualification_exit_code", return_value=0),
         ):

@@ -12,9 +12,12 @@ from unittest.mock import patch
 
 from torturer_checks.android_instrumentation import ROUTING_RULE_CHAIN
 from torturer_checks.hosted.android import (
+    AndroidCompositeHostedAdapter,
     AndroidHostedAdapter,
     _observation_error_code,
+    _GUI_PROFILE_MAX_BYTES,
     _scenario_deadlines,
+    _select_gui_profile,
 )
 from torturer_checks.hosted.cli import CommandResult, HostedAdapterError
 from torturer_checks.hosted.factory import (
@@ -32,6 +35,22 @@ from torturer_contract.functional.scenarios import get_scenario
 
 
 _SOURCE_SHA = "a" * 40
+_PROFILE_BUNDLE = (
+    b"[[TrustTunnel]]\n"
+    b"name = 'emulator-excluded'\n\n"
+    b"[[Outline]] # rendered representative\n"
+    b"Server = 'vpn.invalid'\n"
+    b"Port = 443\n"
+    b"Password = 'synthetic-outline'\n\n"
+    b"[[Xray]]\n"
+    b"outbounds = []\n"
+)
+_GUI_PROFILE = (
+    b"[[Outline]] # rendered representative\n"
+    b"Server = 'vpn.invalid'\n"
+    b"Port = 443\n"
+    b"Password = 'synthetic-outline'\n\n"
+)
 
 
 def _observation(error_code: str | None = None, **overrides: object) -> bytes:
@@ -93,6 +112,7 @@ class FakeAndroidRunner:
         self.routing_cleanup_inventory_failure = False
         self.activity_start_result: CommandResult | None = None
         self.staged_control_payloads: list[tuple[str, dict[str, object]]] = []
+        self.staged_profile_payloads: list[tuple[str, bytes]] = []
 
     def _record_staged_payload(self, argv: tuple[str, ...], payload: bytes) -> None:
         try:
@@ -134,6 +154,11 @@ class FakeAndroidRunner:
                             f"{control_file}.routing.ready"
                         ] = "ready"
         if input_bytes is not None and argv[1:4] == ("shell", "-T", "sh"):
+            destinations = re.findall(r"/files/([A-Za-z0-9._-]+)", argv[-1])
+            if destinations and destinations[-1].endswith(".profile"):
+                self.staged_profile_payloads.append(
+                    (destinations[-1], bytes(input_bytes))
+                )
             self._record_staged_payload(argv, input_bytes)
         tail = argv[1:]
         shell_script = None
@@ -238,9 +263,7 @@ class FakeAndroidRunner:
                     value = {
                         "phase": "blocked",
                         "direct": {
-                            "error_type": "java.net.ConnectException",
-                            "error": "blocked",
-                            "stack": "synthetic stack",
+                            "error_code": "ANDROID_NETWORK_REQUEST_FAILED",
                         },
                         "vpn": {"status": 200, "body": "198.51.100.7"},
                     }
@@ -349,7 +372,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.adb.write_bytes(b"synthetic adb executable\n")
         self.adb.chmod(0o700)
         self.profile = root / "profile.conf"
-        self.profile.write_bytes(b"synthetic profile bytes\n")
+        self.profile.write_bytes(_PROFILE_BUNDLE)
         os.chmod(self.profile, 0o600)
         self.runner = FakeAndroidRunner(root / "raw")
         self.adapter = AndroidHostedAdapter(
@@ -367,7 +390,28 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.runner.timeouts.clear()
         self.runner.command_payload = None
         self.runner.command_payloads.clear()
+        self.runner.staged_profile_payloads.clear()
         self.addCleanup(self.directory.cleanup)
+
+    def test_gui_profile_selector_preserves_one_complete_non_trusttunnel_block(self) -> None:
+        self.assertEqual(_select_gui_profile(_PROFILE_BUNDLE), _GUI_PROFILE)
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_GUI_PROFILE_UNAVAILABLE"
+        ):
+            _select_gui_profile(b"[[TrustTunnel]]\nname = 'only'\n")
+
+    def test_gui_profile_selector_skips_oversized_block_for_later_bounded_block(self) -> None:
+        oversized = (
+            b"[[Outline]]\nDescription = \""
+            + (b"x" * _GUI_PROFILE_MAX_BYTES)
+            + b"\"\n"
+        )
+        later = b"[[Xray]]\noutbounds = []\n"
+        self.assertEqual(_select_gui_profile(oversized + later), later)
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_GUI_PROFILE_UNAVAILABLE"
+        ):
+            _select_gui_profile(oversized)
 
     def test_bulk_adapter_uses_one_product_session_and_canonical_engine(self) -> None:
         scenario = get_scenario("functional.core-connection")
@@ -379,6 +423,12 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             [item["operation"] for item in self.runner.command_payload["operations"]],
             [step.operation for step in scenario.steps],
         )
+        self.assertEqual(
+            [payload for _name, payload in self.runner.staged_profile_payloads],
+            [_PROFILE_BUNDLE],
+        )
+        self.assertEqual(self.runner.command_payload["coverage_lane"], "protocol-matrix")
+        self.assertEqual(self.runner.command_payload["ui_mode"], "protocol-matrix")
         instrumentation = [
             call for call in self.runner.calls if "instrument" in call
         ]
@@ -400,6 +450,76 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         )
         self.assertTrue(all(timeout <= 15.0 for timeout in self.runner.timeouts[-2:]))
         self.assertEqual(self.runner.timeouts[-1], 15.0)
+
+    def test_gui_auto_lane_is_explicit_and_does_not_claim_protocol_matrix(self) -> None:
+        runner = FakeAndroidRunner(self.runner.raw_directory.parent / "gui-auto-raw")
+        runner.observation = _observation(
+            connections=[{"index": 0, "protocol": "AUTO"}],
+            connection={"index": 0, "protocol": "AUTO"},
+            coverage_lane="gui-auto",
+            gui_auto_verified=True,
+            ui_reopen_verified=True,
+            vpn_consent_handled=True,
+        )
+        adapter = AndroidHostedAdapter(
+            runner=runner,
+            profile=self.profile,
+            adb=self.adb,
+            ui_mode="gui-auto",
+            source_sha=_SOURCE_SHA,
+            identity_url="https://identity.example.test/ip",
+            latency_url="https://latency.example.test/blob",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
+        )
+        connections = adapter.discover_connections()
+        self.assertEqual(connections, (ConnectionIdentity(0, "AUTO"),))
+        adapter.select_connection(connections[0])
+
+        result = FunctionalEngine().run(
+            get_scenario("functional.core-connection"),
+            adapter,
+            _provenance(adapter),
+            connections[0],
+        )
+
+        self.assertEqual(result.outcome, "passed")
+        self.assertEqual(
+            [payload for _name, payload in runner.staged_profile_payloads],
+            [_GUI_PROFILE],
+        )
+        command = runner.command_payload
+        assert command is not None
+        self.assertEqual(command["coverage_lane"], "gui-auto")
+        self.assertEqual(command["ui_mode"], "gui-auto")
+        self.assertNotIn("profile_index", command)
+
+    def test_gui_auto_observation_requires_rendered_reopen_for_cleanup_scenarios(self) -> None:
+        runner = FakeAndroidRunner(self.runner.raw_directory.parent / "gui-auto-reopen-raw")
+        runner.observation = _observation(
+            connections=[{"index": 0, "protocol": "AUTO"}],
+            connection={"index": 0, "protocol": "AUTO"},
+            coverage_lane="gui-auto",
+            gui_auto_verified=True,
+            ui_reopen_verified=False,
+        )
+        adapter = AndroidHostedAdapter(
+            runner=runner,
+            profile=self.profile,
+            adb=self.adb,
+            ui_mode="gui-auto",
+            source_sha=_SOURCE_SHA,
+            identity_url="https://identity.example.test/ip",
+            latency_url="https://latency.example.test/blob",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
+        )
+        connection = adapter.discover_connections()[0]
+        adapter.select_connection(connection)
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_UI_REOPEN_NOT_VERIFIED"
+        ):
+            adapter.execute_scenario(get_scenario("functional.core-connection"))
 
     def test_instrumentation_progress_does_not_require_product_logs(self) -> None:
         progress: list[tuple[str, dict[str, object]]] = []
@@ -425,6 +545,83 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 for call in self.runner.calls
             )
         )
+
+    def test_regular_instrumentation_cold_stops_target_before_runner(self) -> None:
+        result = self.adapter._run_instrumentation(
+            "command.json", time.monotonic() + 10.0
+        )
+
+        self.assertEqual(result.returncode, 0)
+        cold_start_indices = [
+            index
+            for index, call in enumerate(self.runner.calls)
+            if call[1:] == ("shell", "am", "force-stop", "com.dobby.vpn")
+        ]
+        instrumentation_indices = [
+            index for index, call in enumerate(self.runner.calls)
+            if "instrument" in call
+        ]
+        self.assertEqual(len(cold_start_indices), 1)
+        self.assertEqual(len(instrumentation_indices), 1)
+        self.assertLess(cold_start_indices[0], instrumentation_indices[0])
+
+    def test_preserve_active_instrumentation_does_not_cold_stop_target(self) -> None:
+        result = self.adapter._run_instrumentation(
+            "command.json", time.monotonic() + 10.0, preserve_active=True
+        )
+
+        self.assertEqual(result.returncode, 0)
+        instrumentation_index = next(
+            index for index, call in enumerate(self.runner.calls)
+            if "instrument" in call
+        )
+        self.assertFalse(
+            any(
+                call[1:] == ("shell", "am", "force-stop", "com.dobby.vpn")
+                for call in self.runner.calls[:instrumentation_index]
+            )
+        )
+        self.assertTrue(
+            any(
+                call[1:5] == ("shell", "am", "start", "-W")
+                for call in self.runner.calls[:instrumentation_index]
+            )
+        )
+
+    def test_gui_preserve_active_instrumentation_resets_prior_renderer_state(self) -> None:
+        runner = FakeAndroidRunner(self.runner.raw_directory.parent / "gui-preserve-raw")
+        adapter = AndroidHostedAdapter(
+            runner=runner,
+            profile=self.profile,
+            adb=self.adb,
+            ui_mode="gui-auto",
+            source_sha=_SOURCE_SHA,
+            identity_url="https://identity.example.test/ip",
+            latency_url="https://latency.example.test/blob",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
+        )
+
+        result = adapter._run_instrumentation(
+            "command.json", time.monotonic() + 10.0, preserve_active=True
+        )
+
+        self.assertEqual(result.returncode, 0)
+        stop_index = next(
+            index
+            for index, call in enumerate(runner.calls)
+            if call[1:] == ("shell", "am", "force-stop", "com.dobby.vpn")
+        )
+        start_index = next(
+            index
+            for index, call in enumerate(runner.calls)
+            if call[1:5] == ("shell", "am", "start", "-W")
+        )
+        instrumentation_index = next(
+            index for index, call in enumerate(runner.calls) if "instrument" in call
+        )
+        self.assertLess(stop_index, start_index)
+        self.assertLess(start_index, instrumentation_index)
 
     def test_worker_observation_error_precedes_external_control_timeout(self) -> None:
         self.runner.observation = _observation("ANDROID_PROFILE_OPERATION_FAILED")
@@ -627,9 +824,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                 runner.routing_blocked_override = {
                     "phase": "blocked",
                     "direct": {
-                        "error_type": "java.net.ConnectException",
-                        "error": "blocked",
-                        "stack": "synthetic stack",
+                        "error_code": "ANDROID_NETWORK_REQUEST_FAILED",
                     },
                     "vpn": {"status": 200, "body": body},
                 }
@@ -829,9 +1024,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
                     runner.routing_blocked_override = {
                         "phase": "blocked",
                         "direct": direct or {
-                            "error_type": "java.net.ConnectException",
-                            "error": "blocked",
-                            "stack": "synthetic stack",
+                            "error_code": "ANDROID_NETWORK_REQUEST_FAILED",
                         },
                         "vpn": vpn or {
                             "status": 200,
@@ -1416,6 +1609,15 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             30 * 60,
         )
 
+    def test_android_ui_mode_is_restricted_to_named_coverage_lanes(self) -> None:
+        with self.assertRaisesRegex(HostedAdapterError, "ANDROID_UI_MODE_INVALID"):
+            AndroidHostedAdapter(
+                runner=self.runner,
+                profile=self.profile,
+                adb=self.adb,
+                ui_mode="headless",
+            )
+
     def test_factory_wires_android_without_a_desktop_cli(self) -> None:
         adapter = adapter_for_platform(
             "android",
@@ -1425,8 +1627,409 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             adb=self.adb,
             source_sha=_SOURCE_SHA,
         )
-        self.assertIsInstance(adapter, AndroidHostedAdapter)
+        self.assertIsInstance(adapter, AndroidCompositeHostedAdapter)
+        self.assertIsInstance(adapter.gui_auto, AndroidHostedAdapter)
+        self.assertIsInstance(adapter.protocol_matrix, AndroidHostedAdapter)
+        self.assertEqual(adapter.gui_auto.ui_mode, "gui-auto")
+        self.assertEqual(adapter.protocol_matrix.ui_mode, "protocol-matrix")
         self.assertEqual(adapter.capabilities, self.adapter.capabilities)
+
+    def test_factory_composite_routes_contiguous_gui_and_matrix_inventory(self) -> None:
+        runner = FakeAndroidRunner(Path(self.directory.name) / "composite-raw")
+        runner.observation = _observation(
+            connections=[
+                {"index": 0, "protocol": "OUTLINE"},
+                {"index": 1, "protocol": "WIREGUARD"},
+            ],
+            connection={"index": 0, "protocol": "OUTLINE"},
+        )
+        adapter = adapter_for_platform(
+            "android",
+            profile=self.profile,
+            runner=runner,
+            adb=self.adb,
+            source_sha=_SOURCE_SHA,
+        )
+        self.assertIsInstance(adapter, AndroidCompositeHostedAdapter)
+        sink_events: list[tuple[str, dict[str, object]]] = []
+        adapter.set_progress_sink(lambda event, fields: sink_events.append((event, fields)))
+        connections = adapter.discover_connections()
+        self.assertEqual(
+            connections,
+            (
+                ConnectionIdentity(0, "AUTO"),
+                ConnectionIdentity(1, "OUTLINE"),
+                ConnectionIdentity(2, "WIREGUARD"),
+            ),
+        )
+        self.assertIs(
+            adapter._external_to_internal[connections[0]][0], adapter.gui_auto
+        )
+        self.assertEqual(
+            adapter._external_to_internal[connections[0]][1],
+            ConnectionIdentity(0, "AUTO"),
+        )
+        self.assertIs(
+            adapter._external_to_internal[connections[2]][0], adapter.protocol_matrix
+        )
+        self.assertEqual(
+            adapter._external_to_internal[connections[2]][1],
+            ConnectionIdentity(1, "WIREGUARD"),
+        )
+
+        runner.observation = _observation(
+            connections=[{"index": 0, "protocol": "AUTO"}],
+            connection={"index": 0, "protocol": "AUTO"},
+            coverage_lane="gui-auto",
+            gui_auto_verified=True,
+            vpn_consent_handled=True,
+        )
+        adapter.select_connection(connections[0])
+        gui_result = FunctionalEngine().run(
+            get_scenario("functional.configure"),
+            adapter,
+            _provenance(adapter),
+            connections[0],
+        )
+        self.assertEqual(gui_result.outcome, "passed")
+        self.assertEqual(runner.staged_profile_payloads[-1][1], _GUI_PROFILE)
+        gui_command = runner.command_payloads[-1]
+        self.assertEqual(gui_command["coverage_lane"], "gui-auto")
+        self.assertNotIn("profile_index", gui_command)
+
+        runner.observation = _observation(
+            connections=[
+                {"index": 0, "protocol": "OUTLINE"},
+                {"index": 1, "protocol": "WIREGUARD"},
+            ],
+            connection={"index": 1, "protocol": "WIREGUARD"},
+        )
+        adapter.select_connection(connections[2])
+        matrix_result = FunctionalEngine().run(
+            get_scenario("functional.configure"),
+            adapter,
+            _provenance(adapter),
+            connections[2],
+        )
+        self.assertEqual(matrix_result.outcome, "passed")
+        self.assertEqual(runner.staged_profile_payloads[-1][1], _PROFILE_BUNDLE)
+        matrix_command = runner.command_payloads[-1]
+        self.assertEqual(matrix_command["coverage_lane"], "protocol-matrix")
+        self.assertEqual(matrix_command["profile_index"], 1)
+        self.assertTrue(
+            any(fields.get("coverage_lane") == "gui-auto" for _, fields in sink_events)
+        )
+        self.assertTrue(
+            any(fields.get("coverage_lane") == "protocol-matrix" for _, fields in sink_events)
+        )
+
+        runner.calls.clear()
+        adapter.reset(timeout_seconds=2.0)
+        reset_calls = [
+            call for call in runner.calls
+            if call[1:] == ("shell", "am", "force-stop", "com.dobby.vpn")
+        ]
+        self.assertEqual(len(reset_calls), 2)
+        adapter.finalize(timeout_seconds=2.0)
+
+    def test_composite_discovery_and_finalization_retain_both_lane_failures(self) -> None:
+        adapter = adapter_for_platform(
+            "android",
+            profile=self.profile,
+            runner=self.runner,
+            adb=self.adb,
+            source_sha=_SOURCE_SHA,
+        )
+        with (
+            patch.object(
+                adapter.gui_auto,
+                "discover_connections",
+                side_effect=RuntimeError("gui discovery boom"),
+            ) as gui_discover,
+            patch.object(
+                adapter.protocol_matrix,
+                "discover_connections",
+                side_effect=RuntimeError("matrix discovery boom"),
+            ) as matrix_discover,
+            self.assertRaisesRegex(
+                HostedAdapterError, "ANDROID_COMPOSITE_DISCOVERY_FAILED"
+            ) as raised,
+        ):
+            adapter.discover_connections()
+        gui_discover.assert_called_once()
+        matrix_discover.assert_called_once()
+        discovery_notes = "\n".join(raised.exception.__notes__)
+        self.assertIn("gui discovery boom", discovery_notes)
+        self.assertIn("matrix discovery boom", discovery_notes)
+
+        with (
+            patch.object(
+                adapter.gui_auto,
+                "finalize",
+                side_effect=RuntimeError("gui finalize boom"),
+            ) as gui_finalize,
+            patch.object(
+                adapter.protocol_matrix,
+                "finalize",
+                side_effect=RuntimeError("matrix finalize boom"),
+            ) as matrix_finalize,
+            self.assertRaisesRegex(
+                HostedAdapterError, "ANDROID_COMPOSITE_FINALIZE_FAILED"
+            ) as raised,
+        ):
+            adapter.finalize()
+        gui_finalize.assert_called_once()
+        matrix_finalize.assert_called_once()
+        finalize_notes = "\n".join(raised.exception.__notes__)
+        self.assertIn("gui finalize boom", finalize_notes)
+        self.assertIn("matrix finalize boom", finalize_notes)
+
+    def test_gui_auto_configure_contract_requires_visible_acceptance(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        configure = source.index('case "configure":')
+        connect = source.index('case "connect":', configure)
+        body = source[configure:connect]
+        self.assertIn("configureThroughRenderedUI", body)
+        self.assertIn("hasFollowingConnectionStart", body)
+        self.assertIn("connectThroughRenderedUI", body)
+        self.assertIn("disconnectThroughRenderedUI", body)
+        self.assertIn("remainingTimeout", body)
+        self.assertLess(body.index("configureThroughRenderedUI"), body.index("connectThroughRenderedUI"))
+        self.assertLess(body.index("connectThroughRenderedUI"), body.index("disconnectThroughRenderedUI"))
+
+    def test_hosted_real_ui_commits_profile_through_focused_ime(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        configure = source.index("private void configureThroughRenderedUI(")
+        helper = source.index("private void injectProfileThroughNativeInput(", configure)
+        helper_end = source.index("private JSONObject snapshotResult", helper)
+        body = source[helper:helper_end]
+        self.assertNotIn("ClipboardManager", source)
+        self.assertNotIn("ClipData", source)
+        self.assertIn("instrumentation.runOnMainSync", body)
+        self.assertIn("activity.getCurrentFocus()", body)
+        self.assertIn("focused instanceof EditText", body)
+        self.assertIn("focused.onCreateInputConnection(editorInfo)", body)
+        self.assertIn("String text = new String(profile, StandardCharsets.UTF_8);", source)
+        self.assertNotIn("String text = new String(profile, StandardCharsets.UTF_8).trim();", source)
+        self.assertIn("commitAndVerifyNativeInput(instrumentation, text, deadline)", body)
+        self.assertNotIn("input.isFocused()", body)
+        self.assertIn("foregroundActivity = ensureForegroundActivity();", body)
+        self.assertIn("PROFILE_INPUT_CHUNK_CODE_UNITS = 4_096", source)
+        self.assertIn("while (start < text.length())", body)
+        self.assertIn("editor.setSelection(editor.length());", body)
+        self.assertIn("String chunk = text.substring(start, end);", body)
+        self.assertIn("connection.commitText(chunk, 1)", body)
+        self.assertIn("if (!connection.finishComposingText())", body)
+        self.assertIn("Character.isHighSurrogate(text.charAt(end - 1))", body)
+        self.assertIn("Character.isLowSurrogate(text.charAt(end))", body)
+        self.assertGreaterEqual(body.count("System.currentTimeMillis() >= deadline"), 2)
+        self.assertIn('"ANDROID_UI_INPUT_COMMIT_FAILED"', body)
+        self.assertIn('"ANDROID_UI_INPUT_FOCUS_LOST"', body)
+        self.assertIn("waitForIdleBounded(uiDevice(), deadline)", body)
+        self.assertNotIn('String[] lines = text.split("\\n", -1);', body)
+        self.assertNotIn("instrumentation.sendKeySync", body)
+        self.assertNotIn("KeyEvent", source)
+        self.assertNotIn("AccessibilityNodeInfo.ACTION_PASTE", body)
+        self.assertNotIn("KeyEvent.KEYCODE_V", body)
+        self.assertNotIn("pressKeyCode(", body)
+        self.assertNotIn("ANDROID_UI_PASTE_INCOMPLETE", body)
+        self.assertNotIn("input.setText(text);", body)
+        self.assertNotIn("input.setText(text);", source)
+        self.assertNotIn("nativeEditorBufferMatches", body)
+        self.assertNotIn("getText()", body)
+        for diagnostic in (
+            "ANDROID_UI_INPUT_REJECTED",
+            "ANDROID_UI_INPUT_FIRST_CHUNK_ONLY",
+            "ANDROID_UI_INPUT_TRUNCATED",
+            "ANDROID_UI_INPUT_TRANSFORMED",
+            "ANDROID_UI_INPUT_INCOMPLETE",
+        ):
+            self.assertNotIn(diagnostic, body)
+
+    def test_hosted_real_ui_refreshes_activity_before_native_input(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        helper = source.index("private void injectProfileThroughNativeInput(")
+        refresh = source.index("foregroundActivity = ensureForegroundActivity();", helper)
+        self.assertGreater(refresh, helper)
+        helper_end = source.index("private void commitAndVerifyNativeInput", helper)
+        self.assertNotIn("input.isFocused()", source[helper:helper_end])
+        self.assertIn("currently resumed Activity", source[helper:refresh])
+
+    def test_hosted_real_ui_reacquires_native_editor_after_focus_handoff(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        self.assertIn("INPUT_REACQUIRE_TIMEOUT_MILLIS = 5_000L", source)
+        resolver = source.index("private EditText resolveFocusedNativeInput(")
+        resolver_end = source.index("private JSONObject snapshotResult", resolver)
+        resolver_body = source[resolver:resolver_end]
+        self.assertIn("findNativeInputView(activity.getWindow().getDecorView())", resolver_body)
+        self.assertIn("editor.requestFocus()", resolver_body)
+        self.assertIn("focused != editor", resolver_body)
+        self.assertIn("editor.isFocused()", resolver_body)
+        commit = source.index("private void commitAndVerifyNativeInput(")
+        self.assertIn("focused.onCreateInputConnection(editorInfo)", source[commit:resolver])
+        self.assertIn("reacquireDeadline", source[commit:resolver])
+        self.assertIn('"ANDROID_UI_INPUT_FOCUS_LOST".equals(failure[0])', source[commit:resolver])
+        self.assertIn("Thread.sleep(POLL_MILLIS)", source[commit:resolver])
+        self.assertNotIn("input.setText(text);", source[commit:resolver])
+        self.assertNotIn("ClipboardManager", source)
+        self.assertNotIn("ClipData", source)
+
+    def test_hosted_real_ui_skips_stale_editors_when_resolving_native_input(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        eligibility = source.index("private boolean isEligibleNativeInput(")
+        eligibility_end = source.index("/** Commit the opaque profile", eligibility)
+        eligibility_body = source[eligibility:eligibility_end]
+        self.assertIn("editor.getVisibility() == View.VISIBLE", eligibility_body)
+        self.assertIn("editor.isShown()", eligibility_body)
+        self.assertIn("editor.isEnabled()", eligibility_body)
+        self.assertIn("editor.isFocusable()", eligibility_body)
+        self.assertIn("editor.getContext().getPackageName()", eligibility_body)
+
+        resolver = source.index("private EditText resolveFocusedNativeInput(")
+        resolver_end = source.index("private JSONObject snapshotResult", resolver)
+        resolver_body = source[resolver:resolver_end]
+        self.assertIn("findCurrentNativeInput(activity)", resolver_body)
+        self.assertIn("findNativeInputView(activity.getWindow().getDecorView())", resolver_body)
+        self.assertIn("editor.requestFocus()", resolver_body)
+        self.assertIn("focused != editor", resolver_body)
+        self.assertIn("editor.isFocused()", resolver_body)
+
+        finder = source.index("private EditText findNativeInputView(View root)")
+        finder_end = source.index("/** Commit the opaque profile", finder)
+        finder_body = source[finder:finder_end]
+        self.assertIn("isEligibleNativeInput(editor) ? editor : null", finder_body)
+        self.assertIn("root instanceof ViewGroup", finder_body)
+        self.assertIn("findNativeInputView(group.getChildAt(index))", finder_body)
+
+        dismiss = source.index("private void forceHideNativeInput()")
+        dismiss_end = source.index("private boolean isEligibleNativeInput", dismiss)
+        dismiss_body = source[dismiss:dismiss_end]
+        self.assertIn("findCurrentNativeInput(activity)", dismiss_body)
+        self.assertIn("findNativeInputView(activity.getWindow().getDecorView())", dismiss_body)
+
+    def test_hosted_real_ui_dismisses_native_editor_on_target_ui_thread(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        dismiss = source.index("private void hideNativeInput(")
+        commit = source.index("/** Commit the opaque profile", dismiss)
+        body = source[dismiss:commit]
+        self.assertIn("INPUT_DISMISS_INITIAL_WAIT_MILLIS", body)
+        self.assertIn("device.pressBack()", body)
+        self.assertIn("waitForNativeInputGone(device", body)
+        self.assertIn("forceHideNativeInput()", body)
+        self.assertIn('"ANDROID_UI_INPUT_DISMISS_FAILED"', body)
+        self.assertIn("InputMethodManager", body)
+        self.assertIn("instrumentation.runOnMainSync", body)
+        self.assertIn("activity.getWindow().getDecorView()", body)
+        self.assertIn("manager.hideSoftInputFromWindow", body)
+        self.assertIn("editor.clearFocus()", body)
+        self.assertIn("editor.setVisibility(View.GONE)", body)
+        self.assertIn("private EditText findNativeInputView(View root)", body)
+        self.assertIn("root instanceof ViewGroup", body)
+        self.assertNotIn("input.setText(text);", body)
+
+    def test_android_activity_launch_does_not_wait_for_fyne_render_idle(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        start = source.index("private Activity ensureForegroundActivity()")
+        end = source.index("private void acceptVpnConsent", start)
+        body = source[start:end]
+        self.assertIn("ActivityLifecycleMonitorRegistry", source)
+        self.assertIn("Stage.RESUMED", body)
+        self.assertIn("ACTIVITY_RESUME_TIMEOUT_MILLIS", body)
+        self.assertIn("runOnMainSync", body)
+        self.assertIn("context.startActivity(launch)", body)
+        self.assertIn("Intent.FLAG_ACTIVITY_NEW_TASK", body)
+        self.assertIn("findLiveFyneActivity()", body)
+        self.assertIn("context.getClassLoader().loadClass", body)
+        self.assertIn("activity.hasWindowFocus()", body)
+        self.assertNotIn("Intent.FLAG_ACTIVITY_CLEAR_TASK", body)
+        self.assertNotIn("Intent.FLAG_ACTIVITY_CLEAR_TOP", body)
+        self.assertNotIn("startActivitySync(", body)
+        self.assertNotIn("waitForIdleSync(", body)
+        monitor_start = source.index("private Activity findResumedTargetActivity()")
+        monitor_end = source.index("private void acceptVpnConsent", monitor_start)
+        monitor_body = source[monitor_start:monitor_end]
+        self.assertIn("AtomicReference<Activity>", monitor_body)
+        self.assertIn("runOnMainSync", monitor_body)
+        self.assertIn("getActivitiesInStage(Stage.RESUMED)", monitor_body)
+
+    def test_android_rendered_drivers_disable_global_selector_wait(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        kotlin_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/kotlin/com/dobby/GoUiInstrumentedTest.kt"
+        )
+        for source in (
+            java_path.read_text(encoding="utf-8"),
+            kotlin_path.read_text(encoding="utf-8"),
+        ):
+            self.assertIn("Configurator.getInstance().setWaitForSelectorTimeout(0)", source)
+            self.assertIn("@Before", source)
+
+    def test_android_vpn_consent_retries_enabled_system_action_until_granted(self) -> None:
+        java_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+        )
+        source = java_path.read_text(encoding="utf-8")
+        start = source.index("private void acceptVpnConsent(long timeout)")
+        end = source.index("private Network awaitVpnNetwork", start)
+        body = source[start:end]
+        self.assertIn("findVpnConsentButton", body)
+        self.assertIn('"android:id/button1"', body)
+        self.assertIn('"com.android.vpndialogs:id/button1"', body)
+        self.assertIn("button.isEnabled()", body)
+        # UiAutomator's accessibility clickable bit is not a reliable
+        # readiness signal for Android-owned VPN dialogs. The helper keeps
+        # the stable selector and enabled-state assertion, then invokes the
+        # supported UiObject2.click() action.
+        self.assertNotIn("button.isClickable()", body)
+        self.assertGreaterEqual(body.count("VpnService.prepare(context) == null"), 2)
+        self.assertIn("grantDeadline", body)
+        self.assertNotIn('By.text("Connect")', body)
+
+    def test_android_renderer_accepts_ready_as_an_idle_state(self) -> None:
+        kotlin_path = (
+            Path(__file__).resolve().parents[3]
+            / "android_module/app/src/androidTest/kotlin/com/dobby/GoUiInstrumentedTest.kt"
+        )
+        source = kotlin_path.read_text(encoding="utf-8")
+        self.assertIn('waitForOneOf(arrayOf("Disconnected", "Ready"), 30_000)', source)
+        self.assertIn('waitForOneOf(arrayOf("Disconnected", "Ready", "Error", "Failed"), 30_000)', source)
+        self.assertNotIn('requireObject("Disconnected")', source)
+        self.assertNotIn("dumpWindowHierarchy", source)
+        self.assertNotIn("takeScreenshot", source)
+        self.assertNotIn("lastTapDiagnostic", source)
 
     def test_android_source_sha_is_optional_and_omitted_when_absent(self) -> None:
         adapter = adapter_for_platform(
@@ -1439,11 +2042,16 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIsNone(adapter.source_sha)
         self.assertFalse(hasattr(adapter, "local_mode"))
         self.assertTrue(adapter.capabilities)
-        command_file, _profile, _output = adapter._write_command(
+        command_file, _profile, _output = adapter.protocol_matrix._write_command(
             get_scenario("functional.configure")
         )
         command = json.loads(command_file.read_text(encoding="utf-8"))
         self.assertNotIn("source_sha", command)
+        self.assertRegex(
+            command["progress_file"],
+            r"^android-hosted-[0-9a-f]+\.progress\.json$",
+        )
+        self.assertNotIn("profile", command["progress_file"])
 
     def test_finalizer_completes_the_shared_adapter_contract(self) -> None:
         self.adapter.finalize(12.5)

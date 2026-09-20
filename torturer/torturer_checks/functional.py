@@ -21,7 +21,8 @@ from torturer_contract.functional.results import (
     RunProvenance,
 )
 from torturer_contract.functional.scenarios import (
-    test_set,
+    suite_set,
+    validate_suite,
 )
 
 from .hosted.cli import (
@@ -43,11 +44,6 @@ _ARCHITECTURES = {
     "macos": "arm64",
     "android": "x86_64",
 }
-# Local runs have no skip allowlist. Hosted desktop network-transition skips
-# live in the public qualification contract, where GitHub runners cannot
-# interrupt the control uplink.
-
-
 def _parse_timeout(value: str) -> float:
     try:
         timeout = float(value)
@@ -86,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional candidate source SHA; dirty local trees do not require one",
     )
     parser.add_argument("--lane-timeout-seconds", type=_parse_timeout, default=1800.0)
+    parser.add_argument(
+        "--suite",
+        choices=("mini", "full"),
+        default="mini",
+        help="Functional suite; full is orchestrated by local_vm only",
+    )
     parser.add_argument("--scenario", action="append", dest="scenario_ids")
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-binary", type=Path)
@@ -138,6 +140,18 @@ def _local_exit_code(results: list[dict[str, object]]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # The direct functional runner owns only the shared semantic lane.  A
+    # desktop full run is a local_vm orchestration: it runs this lane as mini
+    # and then adds the real native-window journey.  Rejecting full here keeps
+    # a direct invocation from claiming complete coverage while still letting
+    # local_vm pass --suite full to its own orchestration entrypoint.
+    if args.suite == "full":
+        raise ValueError(
+            "FULL_SUITE_REQUIRES_LOCAL_VM_ORCHESTRATOR: "
+            "run local_vm --suite full for the Windows/macOS native-window lane"
+        )
+    # Validate before touching logs, candidate setup, or the adapter.
+    validate_suite(args.suite, platform=args.platform, entrypoint="local")
     lane_deadline = time.monotonic() + args.lane_timeout_seconds
     local_architecture = args.architecture or (
         "x86_64" if args.platform == "macos" and host_platform.machine().lower() in {"x86_64", "amd64"}
@@ -147,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     selected = _select_scenarios(
         args.scenario_ids,
         platform=args.platform,
+        suite=args.suite,
     )
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", local_architecture) is None:
         raise ValueError("architecture has an invalid format")
@@ -216,12 +231,31 @@ def main(argv: list[str] | None = None) -> int:
             "platform": args.platform,
             "platform_version": args.platform_version,
             "architecture": local_architecture,
+            "suite": args.suite,
         },
         "connections": [connection.to_dict() for connection in connections],
         "scenarios": results,
-        "complete_test_set": {scenario.id for scenario in selected}
-        == {scenario.id for scenario in test_set()},
     }
+    suite_ids = {scenario.id for scenario in suite_set(args.suite)}
+    selected_ids = {scenario.id for scenario in selected}
+    complete_selection = not args.scenario_ids and selected_ids == suite_ids
+    passed_results = bool(results) and all(
+        result.get("outcome") == "passed" for result in results
+    )
+    document["coverage"] = {
+        "suite": args.suite,
+        "complete": complete_selection and passed_results,
+        "selection_complete": complete_selection,
+        "passed": passed_results,
+        "selected_scenario_ids": sorted(selected_ids),
+        "required_scenario_ids": sorted(suite_ids),
+        "selected_scenario_count": len(selected_ids),
+        "expected_scenario_count": len(suite_ids),
+        "explicit_scenario_selection": bool(args.scenario_ids),
+    }
+    # Preserve the existing field for consumers while making its semantics
+    # explicit: focused diagnostics can pass but never claim qualification.
+    document["complete_test_set"] = complete_selection
     _write_json(args.output, document)
     return _local_exit_code(results)
 

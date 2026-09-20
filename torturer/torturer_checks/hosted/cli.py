@@ -754,6 +754,20 @@ class RoutingProofMixin:
         self._routing_probe_interface: str | None = None
         self.network_interface = network_interface
 
+    def prepare_native_connect(self, timeout: float) -> None:
+        """Prepare observations before a native UI Connect action.
+
+        The UI adapter cannot use ``execute(connect)`` because that would
+        issue a second, CLI-driven connection.  Routing-enabled hosted
+        adapters therefore prepare the same firewall/baseline proof used by
+        their CLI connect path, while ordinary adapters retain the simple
+        external-IP baseline behavior from ``HostedCLIAdapter``.
+        """
+        if self._routing_proof_enabled:
+            self._prepare_routing_probe(timeout)
+            return
+        super().prepare_native_connect(timeout)
+
     def _probe_command(self, timeout: float):
         if (
             self.identity_url is None
@@ -1244,6 +1258,10 @@ class HostedCLIAdapter:
         self._tunneled_ips.clear()
         self._baseline_ip = self._external_ip(timeout)
 
+    def prepare_native_connect(self, timeout: float) -> None:
+        """Capture the observation baseline before a native UI Connect."""
+        self._capture_baseline(timeout)
+
     def _routing_identity_changed(self, timeout: float) -> bool:
         current = self._external_ip(timeout)
         changed = self._baseline_ip is not None and current != self._baseline_ip
@@ -1326,17 +1344,37 @@ class HostedCLIAdapter:
     def _stability(self, timeout: float) -> dict[str, object]:
         deadline = time.monotonic() + timeout
         completed_samples = 0
+        if self.download_url is None:
+            raise ScenarioExecutionError("STABILITY_ENDPOINT_UNAVAILABLE")
         for index in range(STABILITY_SAMPLE_COUNT):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            connected = self._connected(max(0.1, deadline - time.monotonic()))
+            connected = self._connected(
+                self._remaining(deadline, "STABILITY_TIMEOUT")
+            )
             if not connected:
                 return {
                     "stability_verified": False,
                     "stability_sample_count": completed_samples,
                     "stability_sample_interval_seconds": STABILITY_SAMPLE_INTERVAL_SECONDS,
                 }
+            try:
+                # The status probe remains a useful service-state observation,
+                # but stability is only established by a successful HTTPS
+                # request through the candidate's current route.  Reuse the
+                # throughput request helper so status, transfer bytes, and
+                # bounded request failures have one implementation.
+                self._curl_metric(
+                    self.download_url,
+                    self._remaining(deadline, "STABILITY_TIMEOUT"),
+                    upload=False,
+                )
+            except ScenarioExecutionError as error:
+                error.add_note(
+                    f"stability_sample={index + 1}/{STABILITY_SAMPLE_COUNT}"
+                )
+                raise
             completed_samples += 1
             if index + 1 < STABILITY_SAMPLE_COUNT:
                 time.sleep(

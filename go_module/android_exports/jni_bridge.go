@@ -13,6 +13,7 @@ package dobbyvpn
 static JavaVM *dobby_vm;
 static jobject dobby_context;
 static jclass dobby_bridge;
+static char *dobby_jstring_utf8(JNIEnv *, jstring);
 // The Fyne runtime can refresh the native context while its snapshot watcher
 // is making a JNI call. Keep global-reference replacement and use under one
 // lock; a deleted global reference must never be passed to Java.
@@ -294,6 +295,39 @@ static bool dobby_call_export_logs(const unsigned char *logs, int length) {
 	return result == JNI_TRUE;
 }
 
+// Return only paths selected by the Android shell. The Go UI treats this as a
+// fixed native contract and validates the returned directory before opening
+// any file; it never accepts a path from a profile or test command.
+static char *dobby_call_diagnostic_paths(void) {
+	bool attached = false; JNIEnv *env = dobby_env(&attached);
+	if (env == NULL) { dobby_detach(attached); return NULL; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL || dobby_context == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return NULL;
+	}
+	jmethodID method = (*env)->GetStaticMethodID(
+		env, dobby_bridge, "diagnosticPaths", "(Landroid/content/Context;)Ljava/lang/String;"
+	);
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return NULL;
+	}
+	jobject value = (*env)->CallStaticObjectMethod(env, dobby_bridge, method, dobby_context);
+	if ((*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionClear(env);
+		value = NULL;
+	}
+	char *copy = dobby_jstring_utf8(env, (jstring)value);
+	if (value != NULL) (*env)->DeleteLocalRef(env, value);
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return copy;
+}
+
 static void dobby_set_android_context(uintptr_t vm, uintptr_t envPointer, uintptr_t context) {
 	JNIEnv *env = (JNIEnv *)envPointer;
 	if (vm == 0 || env == NULL || context == 0) return;
@@ -406,6 +440,15 @@ func exportAndroidLogs(raw []byte) bool {
 	return bool(C.dobby_call_export_logs(
 		(*C.uchar)(unsafe.Pointer(&raw[0])), C.int(len(raw)),
 	))
+}
+
+func androidDiagnosticPaths() string {
+	value := C.dobby_call_diagnostic_paths()
+	if value == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(value))
+	return C.GoString(value)
 }
 
 // installJNIPlatform is called once from the package initializer. The Java

@@ -19,6 +19,8 @@ import time
 from typing import Any
 import uuid
 
+from .local_vm import LocalVMError
+
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
 _INTERFACE = re.compile(r"^[1-9][0-9]*$")
@@ -62,6 +64,15 @@ def _error(message: str) -> Exception:
     from .local_vm import LocalVMError
 
     return LocalVMError(message)
+
+
+class WindowsInteractiveDesktopUnavailable(LocalVMError):
+    """The configured user has no usable Explorer desktop session."""
+
+    reason_code = "WINDOWS_INTERACTIVE_DESKTOP_UNAVAILABLE"
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"{self.reason_code}: {detail}")
 
 
 def _run_logged(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
@@ -113,6 +124,93 @@ def _powershell_literal(value: str) -> str:
     if "\x00" in value or "\r" in value or "\n" in value:
         raise _error("Windows UI task value contains a control character")
     return "'" + value.replace("'", "''") + "'"
+
+
+_NATIVE_UI_PREFLIGHT_SCRIPT = r'''$ErrorActionPreference = "Stop"
+$target = [string]$env:DOBBYVPN_CONTROL_TOKEN_USER
+if ([string]::IsNullOrWhiteSpace($target)) {
+  Write-Error "interactive user is not configured"
+  exit 3
+}
+$shortName = ($target -split "\\")[-1]
+$explorers = @(Get-Process -Name "explorer" -IncludeUserName -ErrorAction SilentlyContinue |
+  Where-Object {
+    $session = [int]$_.SessionId
+    $owner = [string]$_.UserName
+    $session -gt 0 -and (
+      $owner -ieq $target -or
+      $owner -ieq ("{0}\{1}" -f $env:COMPUTERNAME, $shortName) -or
+      $owner -imatch ("\\{0}$" -f [regex]::Escape($shortName))
+    )
+  })
+if ($explorers.Count -eq 0) {
+  Write-Error ("no Explorer desktop session for {0}" -f $target)
+  exit 3
+}
+$session = [int]$explorers[0].SessionId
+Write-Output ("ready|{0}|{1}" -f $session, $explorers.Count)
+'''
+
+
+def _preflight_interactive_desktop(
+    *, run_dir: Path, logs: Path, timeout: float, user: str,
+) -> None:
+    """Prove the scheduled task has a visible Explorer session before launch."""
+
+    environment = os.environ.copy()
+    environment["DOBBYVPN_CONTROL_TOKEN_USER"] = user
+    try:
+        result = _powershell(
+            _NATIVE_UI_PREFLIGHT_SCRIPT,
+            cwd=run_dir,
+            logs=logs,
+            label="native-ui-preflight",
+            timeout=min(timeout, 15.0),
+            environment=environment,
+            check=False,
+        )
+    except Exception as error:
+        # The command log retains the detailed PowerShell failure.  Keep the
+        # result boundary free of scripts, paths, usernames, and raw stderr.
+        raise WindowsInteractiveDesktopUnavailable(
+            "Explorer desktop preflight failed before readiness check"
+        ) from error
+    if result.returncode != 0:
+        if result.returncode == 3:
+            raise WindowsInteractiveDesktopUnavailable(
+                "no usable Explorer desktop session for configured interactive user"
+            )
+        status = result.returncode if isinstance(result.returncode, int) else "unknown"
+        raise WindowsInteractiveDesktopUnavailable(
+            f"Explorer desktop preflight exited with status {status}"
+        )
+    value = result.stdout.decode("ascii", errors="replace").strip()
+    if not re.fullmatch(r"ready\|[1-9][0-9]*\|[1-9][0-9]*", value):
+        raise WindowsInteractiveDesktopUnavailable(
+            "Explorer desktop probe returned an invalid readiness record"
+        )
+
+
+_STOP_INSTALLED_SERVICE_SCRIPT = r'''$ErrorActionPreference = "Stop"
+$service = Get-Service -Name "DobbyVPN Server" -ErrorAction Stop
+if ($service.Status -ne "Stopped") {
+  Stop-Service -InputObject $service -Force -ErrorAction Stop
+  $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
+}
+$service = Get-Service -Name "DobbyVPN Server" -ErrorAction Stop
+if ($service.Status -ne "Stopped") { throw "DobbyVPN Server did not stop" }
+'''
+
+
+def stop_installed_service(run_dir: Path, logs: Path, timeout: float) -> None:
+    """Stop only the exact MSI-owned DobbyVPN service before direct launch."""
+    _powershell(
+        _STOP_INSTALLED_SERVICE_SCRIPT,
+        cwd=run_dir,
+        logs=logs,
+        label="release-stop-service",
+        timeout=min(timeout, 45.0),
+    )
 
 
 def _native_ui_wrapper(
@@ -297,6 +395,13 @@ def run_interactive_ui(
     }
     if filtered_environment.get("DOBBYVPN_CONTROL_TOKEN_USER") != user:
         raise LocalVMError("Windows interactive UI control-token user is invalid")
+    # A SYSTEM worker can register an interactive task even when the target
+    # account has no visible shell.  Prove the user's Explorer session first;
+    # otherwise the wait for the task's exit marker can consume the full lane
+    # timeout without ever starting the production window.
+    _preflight_interactive_desktop(
+        run_dir=run_dir, logs=logs, timeout=timeout, user=user,
+    )
     for path in (pid, exit_code, stdout, stderr):
         try:
             path.unlink()

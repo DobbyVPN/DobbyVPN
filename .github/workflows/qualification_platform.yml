@@ -1,4 +1,4 @@
-name: Release qualification platform
+name: Release hosted mini platform
 
 on:
   workflow_call:
@@ -14,7 +14,7 @@ on:
 
 jobs:
   qualification:
-    name: Public Release qualification / ${{ inputs.platform }}
+    name: Release hosted mini / ${{ inputs.platform }}
     runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
@@ -377,15 +377,6 @@ jobs:
           printf 'SERVICE_BINARY=%s\nSERVICE_PID=%s\n' "$SERVICE" "$service_pid" >> "$GITHUB_ENV"
           sleep 2
 
-      - name: Exercise real native desktop UI input
-        if: inputs.platform == 'windows' || inputs.platform == 'macos'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/native_ui_smoke.py \
-            --platform "$PLATFORM" --ui "$UI_BINARY" \
-            --profile "$GITHUB_WORKSPACE/render/profile.toml" --timeout 180
-
       - name: Run canonical test set against exact Release package
         id: functional
         working-directory: torturer
@@ -399,7 +390,7 @@ jobs:
           fi
           if [ "$PLATFORM" = android ]; then
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run \
-              --platform android --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
+              --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
               --raw-log-dir "$EVIDENCE_DIR"
           else
@@ -418,7 +409,7 @@ jobs:
               export DOBBY_LOG_ROOT="$EVIDENCE_DIR"
             fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run \
-              --platform "$PLATFORM" --cli "$CLI" "${ui_args[@]}" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
+              --platform "$PLATFORM" --suite mini --cli "$CLI" "${ui_args[@]}" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
               --raw-log-dir "$EVIDENCE_DIR" "${extra[@]}" \
               --service-pid "$SERVICE_PID" --service-binary "$SERVICE_BINARY" --service-socket "$SERVICE_SOCKET"
@@ -428,16 +419,15 @@ jobs:
         if: always() && inputs.platform == 'android'
         shell: bash
         run: |
-          adb pull /data/user/0/com.dobby.vpn/files/app_logs.txt \
-            "$EVIDENCE_DIR/app.log" || echo "warning: Android app log unavailable"
-          adb pull /data/user/0/com.dobby.vpn/files/go_android_logs.jsonl \
-            "$EVIDENCE_DIR/service.log" || echo "warning: Android service log unavailable"
-          adb pull /data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.png \
-            "$EVIDENCE_DIR/android-native-ui-failure.png" \
-            || echo "warning: Android UI failure screenshot unavailable"
-          adb pull /data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.xml \
-            "$EVIDENCE_DIR/android-native-ui-failure.xml" \
-            || echo "warning: Android UI failure tree unavailable"
+          adb pull /data/user/0/com.dobby.vpn/files/diagnostics/ui_diagnostics.jsonl \
+            "$EVIDENCE_DIR/ui_diagnostics.jsonl" \
+            || echo "warning: Android UI diagnostics unavailable"
+          adb pull /data/user/0/com.dobby.vpn/files/diagnostics/native_logs.jsonl \
+            "$EVIDENCE_DIR/native_logs.jsonl" \
+            || echo "warning: Android native diagnostics unavailable"
+          adb pull /data/user/0/com.dobby.vpn/files/diagnostics/go_app_logs.jsonl \
+            "$EVIDENCE_DIR/go_app_logs.jsonl" \
+            || echo "warning: Android Go diagnostics unavailable"
 
       - name: Remove Android standalone probe staging
         if: always() && inputs.platform == 'android'
@@ -478,7 +468,7 @@ jobs:
         shell: bash
         run: rm -f "$GITHUB_WORKSPACE/render/profile.toml"
 
-      - name: Upload complete app, service, and command logs
+      - name: Upload functional diagnostics and command logs
         if: failure() || cancelled()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
@@ -486,13 +476,14 @@ jobs:
           path: |
             ${{ runner.temp }}/dobbyvpn-release-evidence/app.log
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log
+            ${{ runner.temp }}/dobbyvpn-release-evidence/ui_diagnostics.jsonl
+            ${{ runner.temp }}/dobbyvpn-release-evidence/native_logs.jsonl
+            ${{ runner.temp }}/dobbyvpn-release-evidence/go_app_logs.jsonl
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stdout
             ${{ runner.temp }}/dobbyvpn-release-evidence/service.log.stderr
             ${{ runner.temp }}/dobbyvpn-release-evidence/ui-companion.stderr
             ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui.stdout.log
             ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui.stderr.log
-            ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui-failure.png
-            ${{ runner.temp }}/dobbyvpn-release-evidence/android-native-ui-failure.xml
             ${{ runner.temp }}/dobbyvpn-release-evidence/windows-install.log
             ${{ runner.temp }}/dobbyvpn-release-service/windows-service-start.log
             ${{ runner.temp }}/dobbyvpn-release-service/windows-service.pid
@@ -500,13 +491,13 @@ jobs:
             ${{ runner.temp }}/dobbyvpn-release-service/emulator.stdout.log
             ${{ runner.temp }}/dobbyvpn-release-service/emulator.stderr.log
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
 
       - name: Upload functional result
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: public-functional-evidence-${{ inputs.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: hosted-mini-result-${{ inputs.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/dobbyvpn-release-evidence/functional-result.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7

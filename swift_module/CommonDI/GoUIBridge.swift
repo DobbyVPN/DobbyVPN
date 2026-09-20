@@ -25,6 +25,12 @@ public func dobbyUIAttached() {
     IOSAppCompositionRoot.logsRepository.writeLog(log: "startup.ui_attached mode=normal")
 }
 
+@_cdecl("dobby_ui_diagnostic_paths")
+public func dobbyUIDiagnosticPaths() -> UnsafeMutablePointer<CChar> {
+    let paths = IOSAppCompositionRoot.diagnosticPaths().map(\.path)
+    return allocatedCString(paths.joined(separator: "\n"))
+}
+
 @_cdecl("dobby_ui_configure")
 public func dobbyUIConfigure(
     _ sessionID: UnsafePointer<CChar>?,
@@ -92,8 +98,12 @@ public func dobbyUIExportLogs(_ rawLogs: UnsafePointer<UInt8>?, _ rawLength: Int
     let data = rawLogs.map { Data(bytes: $0, count: Int(rawLength)) } ?? Data()
     let text = String(decoding: data, as: UTF8.self)
     let logs = data.isEmpty ? [] : text.components(separatedBy: "\n")
+    // This marker is intentionally content-free. It distinguishes a Fyne
+    // tap/Go-to-Swift bridge failure from a UIKit presentation failure while
+    // keeping exported configuration and diagnostic payloads private.
+    IOSAppCompositionRoot.logsRepository.writeLog(log: "Log export requested")
     DispatchQueue.main.async {
-        ExportLogsInteractorImpl().export(logs: logs)
+        IOSAppCompositionRoot.exportLogsInteractor.export(logs: logs)
     }
 }
 

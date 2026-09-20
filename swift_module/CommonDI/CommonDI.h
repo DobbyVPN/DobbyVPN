@@ -22,3 +22,4 @@ FOUNDATION_EXPORT void dobby_ui_free_string(char *);
 FOUNDATION_EXPORT bool dobby_ui_await_event(long long);
 FOUNDATION_EXPORT void dobby_ui_startup(const char *);
 FOUNDATION_EXPORT void dobby_ui_attached(void);
+FOUNDATION_EXPORT char *dobby_ui_diagnostic_paths(void);

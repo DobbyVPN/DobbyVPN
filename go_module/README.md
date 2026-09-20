@@ -207,15 +207,15 @@ for the authenticated session and local Diagnostics transport.
 
 After editing that proto, regenerate stubs:
 
-**Go** (local `protoc` only — see workspace `AGENTS.md`; do not rely on system install):
+**Go** (`protoc` must be available on `PATH`):
 
 ```bash
 cd go_module
-export PATH="$PWD/../../tools/protoc/bin:$(go env GOPATH)/bin:$PATH"
+export PATH="$(go env GOPATH)/bin:$PATH"
 ./scripts/regenerate-grpcproto.sh
 ```
 
 The script verifies the canonical proto in `grpcproto/` and runs
-the workspace-local `tools/protoc/bin/protoc`. It requires `protoc-gen-go` and
+the `protoc` executable from `PATH`. It requires `protoc-gen-go` and
 `protoc-gen-go-grpc` in `$(go env GOPATH)/bin`; install those user-local plugins
 only when they are absent.

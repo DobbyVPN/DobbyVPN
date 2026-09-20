@@ -1,9 +1,11 @@
-"""Hosted Android adapter for the canonical profile-session seam.
+"""Hosted Android adapters for binding and rendered Go/Fyne Android lanes.
 
-DobbyVPN owns Android session state and cleanup; Torturer owns the
-test set, assertions, result values, and runner-local evidence. Most scenarios
-use one instrumentation invocation; process loss uses two so the app process is
-actually absent between the initial connection and the recovery session.
+DobbyVPN owns Android session state and cleanup; Torturer owns the test set,
+assertions, result values, and runner-local evidence. The protocol-matrix lane
+uses the native binding to exercise each discovered profile. The gui-auto lane
+uses one visible AUTO action and never claims to cover that matrix. Most
+scenarios use one instrumentation invocation; process loss uses two so the app
+process is actually absent between the initial connection and recovery.
 """
 
 from __future__ import annotations
@@ -93,6 +95,43 @@ _MAX_CLEANUP_RESERVE_SECONDS = 30.0
 _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
+_ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
+# Keep this boundary in step with sessionapi's product parser.  The rendered
+# lane needs one input small enough for the real Fyne/Android editor, but it
+# must still receive an untouched, complete TOML protocol block.  In
+# particular, do not re-encode or otherwise normalize private profile bytes in
+# the controller.
+_GUI_PROFILE_HEADER = re.compile(
+    rb"(?m)^[ \t]*\[\[\s*(Outline|Xray|TrustTunnel)\s*\]\]"
+    rb"[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
+)
+_GUI_PROFILE_PROTOCOLS = frozenset({b"Outline", b"Xray"})
+# Fyne's Android editor forwards each insertion through a native text bridge.
+# Keep the rendered representative comfortably below the product's 1 MiB
+# configuration limit; the full bundle remains the binding lane's concern.
+_GUI_PROFILE_MAX_BYTES = 64 * 1024
+_ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
+    "foreground": frozenset({"VPN_DIALOG", "PRODUCT", "OTHER", "NONE"}),
+    "button1": frozenset({"ENABLED", "DISABLED", "ABSENT", "UNAVAILABLE"}),
+    "vpn_permission": frozenset({"PENDING", "GRANTED", "UNAVAILABLE"}),
+    "launch_state": frozenset(
+        {"NOT_REQUESTED", "QUEUED", "STARTED", "RETURNED", "FAILED"}
+    ),
+    "post_tap_state": frozenset(
+        {
+            "Connecting",
+            "Connected",
+            "Error",
+            "Failed",
+            "Ready",
+            "Disconnected",
+            "UNKNOWN",
+        }
+    ),
+}
+
+
 def _instrumentation_succeeded(result: CommandResult) -> bool:
     """Require both Android instrumentation completion and JUnit success."""
 
@@ -127,6 +166,35 @@ def _remaining(deadline: float, code: str) -> float:
     if value <= 0:
         raise ScenarioExecutionError(code)
     return value
+
+
+def _select_gui_profile(raw: bytes) -> bytes:
+    """Return the first complete emulator-supported protocol block.
+
+    Android's rendered lane intentionally proves one real GUI journey while
+    the binding lane retains full profile-matrix coverage.  A large
+    multi-profile bundle can overwhelm the native editor before Fyne has
+    delivered every inserted span, so the rendered lane stages one
+    source-preserving ``Outline`` or ``Xray`` block within the conservative
+    native-editor bound. TrustTunnel is excluded because it is not an
+    emulator-supported representative for this lane. Oversized candidates
+    are skipped so a later bounded protocol block can still represent the
+    rendered journey; if none exists, selection fails closed.
+
+    The product's Go parser remains authoritative for syntax and protocol
+    validation once the bytes reach the app.  This helper only finds strict
+    protocol-header boundaries; it never parses, logs, or reconstructs
+    profile content.
+    """
+    headers = tuple(_GUI_PROFILE_HEADER.finditer(raw))
+    for index, header in enumerate(headers):
+        if header.group(1) not in _GUI_PROFILE_PROTOCOLS:
+            continue
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(raw)
+        candidate = raw[header.start():end]
+        if candidate.strip() and len(candidate) <= _GUI_PROFILE_MAX_BYTES:
+            return candidate
+    raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
 
 
 def _scenario_deadlines(
@@ -169,6 +237,8 @@ def _observation_error_code(error: AndroidObservationError) -> str:
     detail = str(error)
     if "source_sha" in detail:
         return "ANDROID_OBSERVATION_SOURCE_INVALID"
+    if "coverage lane" in detail:
+        return "ANDROID_OBSERVATION_LANE_INVALID"
     if "connection" in detail:
         return "ANDROID_OBSERVATION_CONNECTIONS_INVALID"
     if "unexpected shape" in detail:
@@ -182,7 +252,7 @@ class AndroidHostedAdapter:
     """Run canonical scenarios through DobbyVPN Android instrumentation."""
 
     adapter_id = "hosted-android-app"
-    adapter_version = "v6"
+    adapter_version = "v7"
 
     def __init__(
         self,
@@ -195,6 +265,7 @@ class AndroidHostedAdapter:
         latency_url: str | None = None,
         download_url: str | None = None,
         upload_url: str | None = None,
+        ui_mode: str = "protocol-matrix",
         **kwargs: object,
     ) -> None:
         if kwargs:
@@ -205,6 +276,10 @@ class AndroidHostedAdapter:
         _executable_file(adb, "ANDROID_ADB_UNAVAILABLE")
         if source_sha is not None and _SOURCE_SHA.fullmatch(source_sha) is None:
             raise HostedAdapterError("SOURCE_SHA_INVALID")
+        if ui_mode not in _ANDROID_UI_MODES:
+            raise HostedAdapterError(
+                "ANDROID_UI_MODE_INVALID: expected protocol-matrix or gui-auto"
+            )
         endpoint_values = (identity_url, latency_url, download_url, upload_url)
         if not all(value is not None for value in endpoint_values):
             raise HostedAdapterError("ENDPOINTS_REQUIRED")
@@ -212,6 +287,7 @@ class AndroidHostedAdapter:
         self.profile = profile
         self.adb = adb
         self.source_sha = source_sha
+        self.ui_mode = ui_mode
         self.identity_url = (
             _https_endpoint(identity_url, "identity_url") if identity_url is not None else None
         )
@@ -239,6 +315,12 @@ class AndroidHostedAdapter:
         self._progress_sink: Callable[[str, dict[str, object]], None] | None = None
         self._progress_scenario_id: str | None = None
 
+    @property
+    def coverage_lane(self) -> str:
+        """Human-readable lane identity retained in progress and commands."""
+
+        return self.ui_mode
+
     def set_progress_sink(
         self, sink: Callable[[str, dict[str, object]], None]
     ) -> None:
@@ -250,6 +332,7 @@ class AndroidHostedAdapter:
             contextual = dict(fields)
             if self._progress_scenario_id is not None:
                 contextual.setdefault("scenario", self._progress_scenario_id)
+            contextual.setdefault("coverage_lane", self.coverage_lane)
             if selected is not None:
                 contextual.setdefault("connection_index", selected.index)
                 contextual.setdefault("protocol", selected.protocol)
@@ -261,6 +344,13 @@ class AndroidHostedAdapter:
         if timeout_seconds <= 0:
             raise HostedAdapterError("CONNECTION_DISCOVERY_TIMEOUT")
         self._selected_connection = None
+        if self.ui_mode == "gui-auto":
+            # The rendered lane deliberately does not probe the binding to
+            # discover per-profile entries.  Its contract is one visible
+            # AUTO action; the protocol matrix remains a separate adapter
+            # lane using the binding mode below.
+            self._connections = (ConnectionIdentity(index=0, protocol="AUTO"),)
+            return self._connections
         self.execute_scenario(get_scenario("functional.configure"))
         observation = self._last_observation
         if observation is None:
@@ -271,6 +361,10 @@ class AndroidHostedAdapter:
     def select_connection(self, connection: ConnectionIdentity) -> None:
         if connection not in self._connections:
             raise HostedAdapterError("CONNECTION_NOT_DISCOVERED")
+        if self.ui_mode == "gui-auto" and connection != ConnectionIdentity(
+            index=0, protocol="AUTO"
+        ):
+            raise HostedAdapterError("ANDROID_GUI_CONNECTION_INVALID")
         self._selected_connection = connection
 
     def _validate_observation_identity(
@@ -278,6 +372,8 @@ class AndroidHostedAdapter:
     ) -> None:
         if self._connections and observation.connections != self._connections:
             raise ScenarioExecutionError("CONNECTION_INVENTORY_CHANGED")
+        if observation.coverage_lane != self.coverage_lane:
+            raise ScenarioExecutionError("ANDROID_COVERAGE_LANE_MISMATCH")
         if self._selected_connection is not None and (
             observation.connection != self._selected_connection
         ):
@@ -325,6 +421,7 @@ class AndroidHostedAdapter:
                     device_files,
                 )
                 self._validate_observation_identity(observation)
+                self._validate_gui_observation(scenario, observation)
                 self._last_observation = observation
                 return self._observations(observation)
             if len(loss_steps) != 1:
@@ -344,6 +441,7 @@ class AndroidHostedAdapter:
                 preserve_active=True,
             )
             self._validate_observation_identity(initial)
+            self._validate_gui_observation(scenario, initial, steps=before_loss)
             initial_facts = self._observations(initial)
             if not all(
                 initial_facts.get(name) is True
@@ -374,6 +472,7 @@ class AndroidHostedAdapter:
                 device_files,
             )
             self._validate_observation_identity(recovered)
+            self._validate_gui_observation(scenario, recovered)
             self._last_observation = recovered
             recovered_facts = self._observations(recovered)
             recovery_verified = all(
@@ -425,6 +524,7 @@ class AndroidHostedAdapter:
             steps=steps,
             preserve_active=preserve_active,
         )
+        progress_name = self._progress_name(command_file)
         device_files.extend(
             (
                 profile_name,
@@ -432,6 +532,8 @@ class AndroidHostedAdapter:
                 command_file.name,
                 f"{command_file.name}.tmp",
                 output_name,
+                progress_name,
+                f"{progress_name}.tmp",
             )
         )
         for control_file, _operation, _timeout in self._active_controls:
@@ -447,6 +549,8 @@ class AndroidHostedAdapter:
             profile_bytes = self.profile.read_bytes()
         except OSError as error:
             raise ScenarioExecutionError("ANDROID_PROFILE_STAGE_FAILED") from error
+        if self.ui_mode == "gui-auto":
+            profile_bytes = _select_gui_profile(profile_bytes)
         self._stage_private_file(
             profile_name,
             profile_bytes,
@@ -468,6 +572,7 @@ class AndroidHostedAdapter:
             deadline,
             preserve_active=preserve_active,
             output_name=output_name,
+            progress_name=progress_name,
         )
         if (
             not _instrumentation_succeeded(instrument)
@@ -501,6 +606,21 @@ class AndroidHostedAdapter:
             return observation.to_observations()
         except AndroidObservationError as error:
             raise ScenarioExecutionError("ANDROID_OBSERVATION_ERROR") from error
+
+    def _validate_gui_observation(
+        self,
+        scenario: ScenarioDefinition,
+        observation: AndroidProfileObservation,
+        *,
+        steps: tuple[ScenarioStep, ...] | None = None,
+    ) -> None:
+        if self.ui_mode != "gui-auto":
+            return
+        if not observation.gui_auto_verified:
+            raise ScenarioExecutionError("ANDROID_GUI_AUTO_NOT_VERIFIED")
+        executed_steps = scenario.steps if steps is None else steps
+        if any(step.operation == "inspect_cleanup" for step in executed_steps) and not observation.ui_reopen_verified:
+            raise ScenarioExecutionError("ANDROID_UI_REOPEN_NOT_VERIFIED")
 
     def _stage_private_file(
         self, name: str, payload: bytes, timeout: float, failure_code: str
@@ -549,10 +669,38 @@ class AndroidHostedAdapter:
         *,
         preserve_active: bool = False,
         output_name: str | None = None,
+        progress_name: str | None = None,
     ) -> CommandResult:
         controls = self._active_controls
         observe_live = bool(controls or self._progress_sink)
+        if not preserve_active:
+            # A preceding real-renderer invocation can leave Fyne's
+            # NativeActivity process alive after Android has torn down the
+            # instrumentation session.  Starting the next runner against
+            # that process can produce a blank surface and leave
+            # GoUiHostedProfileTest waiting until its outer deadline.  The
+            # runner has not started yet, so this controller-side stop cannot
+            # kill an active instrumentation process.  Preserve the live
+            # process deliberately for the first half of process-loss
+            # coverage, where --no-restart depends on it.
+            self._adb(
+                ("shell", "am", "force-stop", _PACKAGE_NAME),
+                _remaining(deadline, "ANDROID_COLD_START_TIMEOUT"),
+                "ANDROID_COLD_START_FAILED",
+            )
         if preserve_active:
+            # The rendered process-loss phase must not inherit the previous
+            # scenario's Fyne editor/activity state.  A preserved Activity
+            # can still contain the prior profile, and appending the next
+            # source through its real InputConnection would make the failure
+            # look like a profile-entry or Go parse problem.  Reset only the
+            # rendered lane; protocol-matrix does not own that UI state.
+            if self.ui_mode == "gui-auto":
+                self._adb(
+                    ("shell", "am", "force-stop", _PACKAGE_NAME),
+                    _remaining(deadline, "ANDROID_COLD_START_TIMEOUT"),
+                    "ANDROID_COLD_START_FAILED",
+                )
             # Android normally force-stops the target when instrumentation
             # finishes; launch production first so --no-restart leaves the
             # intentional process kill to Torturer.
@@ -604,9 +752,113 @@ class AndroidHostedAdapter:
             state="started",
         )
         observation_checked = False
+        last_ui_progress: tuple[object, ...] | None = None
+
+        def poll_ui_progress() -> None:
+            """Forward only the driver's redacted phase marker.
+
+            The hosted Java driver never writes profile text, endpoint values,
+            or exception details to this file.  Validate the small value
+            vocabulary here as a second boundary so a malformed candidate
+            record cannot leak arbitrary data into the runner's live output.
+            """
+
+            nonlocal last_ui_progress
+            if progress_name is None:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            try:
+                result = self._adb(
+                    ("shell", "-T", "cat", f"{_APP_FILES}/{progress_name}"),
+                    min(1.0, remaining),
+                    "ANDROID_UI_PROGRESS_UNAVAILABLE",
+                    allow_nonzero=True,
+                )
+            except ScenarioExecutionError:
+                # The marker is intentionally best-effort diagnostics.  A
+                # missing file must never replace the instrumentation result.
+                return
+            if result.returncode != 0:
+                return
+            try:
+                value = json.loads(result.stdout.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return
+            if not isinstance(value, Mapping):
+                return
+            operation = value.get("operation")
+            stage = value.get("stage")
+            state = value.get("state")
+            sequence = value.get("sequence")
+            if (
+                not all(
+                    isinstance(item, str)
+                    and _ANDROID_UI_PROGRESS_VALUE.fullmatch(item) is not None
+                    for item in (operation, stage, state)
+                )
+                or not isinstance(sequence, int)
+                or isinstance(sequence, bool)
+                or sequence < 0
+            ):
+                return
+            consent_diagnostic = value.get("consent_diagnostic")
+            diagnostic_values: dict[str, str] | None = None
+            if consent_diagnostic is not None:
+                if not isinstance(consent_diagnostic, Mapping):
+                    return
+                if set(consent_diagnostic) != set(
+                    _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES
+                ):
+                    return
+                candidate: dict[str, str] = {}
+                for key, allowed in _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES.items():
+                    item = consent_diagnostic.get(key)
+                    if not isinstance(item, str) or item not in allowed:
+                        return
+                    candidate[key] = item
+                diagnostic_values = candidate
+            marker = (
+                operation,
+                stage,
+                state,
+                sequence,
+                tuple(
+                    diagnostic_values.get(key)
+                    for key in _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES
+                )
+                if diagnostic_values is not None
+                else None,
+            )
+            if marker == last_ui_progress:
+                return
+            last_ui_progress = marker
+            if diagnostic_values is None:
+                self._emit_progress(
+                    "native-state",
+                    kind="ui-phase",
+                    platform="android",
+                    operation=operation,
+                    phase=stage,
+                    state=state,
+                    progress_sequence=sequence,
+                )
+            else:
+                self._emit_progress(
+                    "native-state",
+                    kind="ui-phase",
+                    platform="android",
+                    operation=operation,
+                    phase=stage,
+                    state=state,
+                    progress_sequence=sequence,
+                    consent_diagnostic=diagnostic_values,
+                )
 
         def check_worker() -> None:
             nonlocal observation_checked
+            poll_ui_progress()
             if worker.is_alive():
                 return
             worker_error = holder.get("error")
@@ -657,6 +909,22 @@ class AndroidHostedAdapter:
                 # as secondary evidence.
                 primary_error = error
                 break
+
+        if not controls:
+            # Without an external routing handshake there is no polling loop
+            # to call check_worker while the Java UI driver is running.  Keep
+            # the worker bounded by the scenario deadline and poll the
+            # privacy-safe marker so a hang reports its exact last phase.
+            while worker.is_alive():
+                try:
+                    check_worker()
+                except BaseException as error:
+                    primary_error = error
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                worker.join(timeout=min(0.25, remaining))
 
         # A control failure may have sent the app's finish message while the
         # instrumentation worker is still returning its command result. Wait
@@ -1195,10 +1463,7 @@ class AndroidHostedAdapter:
         if (
             not isinstance(direct, Mapping)
             or "status" in direct
-            or not all(
-                isinstance(direct.get(key), str)
-                for key in ("error_type", "error", "stack")
-            )
+            or direct.get("error_code") != "ANDROID_NETWORK_REQUEST_FAILED"
         ):
             raise AndroidHostedAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_DIRECT_NOT_BLOCKED", value
@@ -1630,6 +1895,7 @@ exit 0
         profile_name = f"android-hosted-{token}.profile"
         command_name = f"android-hosted-{token}.command.json"
         output_name = f"android-hosted-{token}.observation.json"
+        progress_name = f"android-hosted-{token}.progress.json"
         operations = []
         controls: list[tuple[str, str, float]] = []
         for step in (scenario.steps if steps is None else steps):
@@ -1650,6 +1916,9 @@ exit 0
         command = {
             "profile_file": profile_name,
             "output_file": output_name,
+            "progress_file": progress_name,
+            "coverage_lane": self.coverage_lane,
+            "ui_mode": self.ui_mode,
             "endpoints": {
                 "identity_url": self.identity_url,
                 "latency_url": self.latency_url,
@@ -1658,7 +1927,7 @@ exit 0
             },
             "operations": operations,
         }
-        if self._selected_connection is not None:
+        if self.ui_mode == "protocol-matrix" and self._selected_connection is not None:
             command["profile_index"] = self._selected_connection.index
         if self.source_sha is not None:
             command["source_sha"] = self.source_sha
@@ -1674,6 +1943,12 @@ exit 0
             raise ScenarioExecutionError("ANDROID_COMMAND_WRITE_FAILED") from error
         self._active_controls = tuple(controls)
         return command_file, profile_name, output_name
+
+    @staticmethod
+    def _progress_name(command_file: Path) -> str:
+        """Return the private progress filename paired with one command."""
+
+        return command_file.name.replace(".command.json", ".progress.json")
 
     def _adb(
         self,
@@ -1826,3 +2101,223 @@ exit 0
                     + "".join(traceback.format_exception(failure)).rstrip()
                 )
         return error
+
+
+def _composite_failure(
+    operation: str,
+    failures: list[tuple[str, BaseException]],
+) -> None:
+    """Raise one error while retaining every Android lane failure.
+
+    Discovery and finalization are aggregate lifecycle operations.  Calling
+    only the first lane that fails would make the other lane silently absent
+    from the result (or leave it unfinalized), so the composite records a
+    complete traceback for each attempted child before raising.
+    """
+
+    if not failures:
+        return
+    aggregate = HostedAdapterError(f"ANDROID_COMPOSITE_{operation.upper()}_FAILED")
+    for lane, failure in failures:
+        detail = "".join(
+            traceback.format_exception(type(failure), failure, failure.__traceback__)
+        ).rstrip()
+        aggregate.add_note(f"{lane} {operation} failure:\n{detail}")
+    raise aggregate
+
+
+class AndroidCompositeHostedAdapter:
+    """Expose rendered AUTO and protocol-matrix Android as one lane.
+
+    The public connection inventory is deliberately contiguous: AUTO is
+    external index zero and each discovered binding profile follows it.  The
+    profile indexes used by the protocol-matrix child remain private, so the
+    canonical runner can use the same connection/scenario loop without
+    pretending that the rendered action covers every binding profile.
+    """
+
+    adapter_id = "hosted-android-composite"
+    adapter_version = "v1"
+
+    def __init__(
+        self,
+        *,
+        gui_auto: AndroidHostedAdapter,
+        protocol_matrix: AndroidHostedAdapter,
+    ) -> None:
+        if gui_auto.ui_mode != "gui-auto" or protocol_matrix.ui_mode != "protocol-matrix":
+            raise HostedAdapterError("ANDROID_COMPOSITE_LANES_INVALID")
+        self.gui_auto = gui_auto
+        self.protocol_matrix = protocol_matrix
+        self.runner = gui_auto.runner
+        self.profile = gui_auto.profile
+        self.adb = gui_auto.adb
+        self.source_sha = gui_auto.source_sha
+        self.identity_url = gui_auto.identity_url
+        self.latency_url = gui_auto.latency_url
+        self.download_url = gui_auto.download_url
+        self.upload_url = gui_auto.upload_url
+        self._connections: tuple[ConnectionIdentity, ...] = ()
+        self._external_to_internal: dict[
+            ConnectionIdentity, tuple[AndroidHostedAdapter, ConnectionIdentity]
+        ] = {}
+        self._selected_connection: ConnectionIdentity | None = None
+        self._selected_lane: AndroidHostedAdapter | None = None
+
+    @property
+    def coverage_lane(self) -> str:
+        """Identify the adapter as a composite; child events name each lane."""
+
+        return "android-composite"
+
+    @property
+    def _lanes(self) -> tuple[tuple[str, AndroidHostedAdapter], ...]:
+        return (("gui-auto", self.gui_auto), ("protocol-matrix", self.protocol_matrix))
+
+    def set_progress_sink(
+        self, sink: Callable[[str, dict[str, object]], None]
+    ) -> None:
+        failures: list[tuple[str, BaseException]] = []
+        for lane, adapter in self._lanes:
+            try:
+                adapter.set_progress_sink(sink)
+            except Exception as error:
+                failures.append((lane, error))
+        _composite_failure("progress", failures)
+
+    def discover_connections(
+        self, timeout_seconds: float = 30.0
+    ) -> tuple[ConnectionIdentity, ...]:
+        if timeout_seconds <= 0:
+            raise HostedAdapterError("CONNECTION_DISCOVERY_TIMEOUT")
+        self._connections = ()
+        self._external_to_internal = {}
+        self._selected_connection = None
+        self._selected_lane = None
+
+        discovered: dict[str, tuple[ConnectionIdentity, ...]] = {}
+        failures: list[tuple[str, BaseException]] = []
+        for lane, adapter in self._lanes:
+            try:
+                discovered[lane] = tuple(
+                    adapter.discover_connections(timeout_seconds=timeout_seconds)
+                )
+            except Exception as error:
+                failures.append((lane, error))
+
+        gui_connections = discovered.get("gui-auto")
+        if gui_connections is not None and gui_connections != (
+            ConnectionIdentity(index=0, protocol="AUTO"),
+        ):
+            failures.append(
+                (
+                    "gui-auto",
+                    HostedAdapterError("ANDROID_GUI_AUTO_INVENTORY_INVALID"),
+                )
+            )
+        matrix_connections = discovered.get("protocol-matrix")
+        if matrix_connections is not None:
+            try:
+                if not matrix_connections:
+                    raise HostedAdapterError("ANDROID_PROTOCOL_MATRIX_EMPTY")
+                if [item.index for item in matrix_connections] != list(
+                    range(len(matrix_connections))
+                ):
+                    raise HostedAdapterError("ANDROID_PROTOCOL_MATRIX_INDEX_INVALID")
+                if any(item.protocol == "AUTO" for item in matrix_connections):
+                    raise HostedAdapterError("ANDROID_PROTOCOL_MATRIX_AUTO_INVALID")
+            except Exception as error:
+                failures.append(("protocol-matrix", error))
+
+        _composite_failure("discovery", failures)
+        assert gui_connections is not None
+        assert matrix_connections is not None
+
+        external: list[ConnectionIdentity] = [ConnectionIdentity(0, "AUTO")]
+        mapping: dict[
+            ConnectionIdentity, tuple[AndroidHostedAdapter, ConnectionIdentity]
+        ] = {
+            external[0]: (self.gui_auto, gui_connections[0]),
+        }
+        for internal in matrix_connections:
+            identity = ConnectionIdentity(len(external), internal.protocol)
+            external.append(identity)
+            mapping[identity] = (self.protocol_matrix, internal)
+        self._connections = tuple(external)
+        self._external_to_internal = mapping
+        return self._connections
+
+    def select_connection(self, connection: ConnectionIdentity) -> None:
+        try:
+            adapter, internal = self._external_to_internal[connection]
+        except KeyError as error:
+            raise HostedAdapterError("CONNECTION_NOT_DISCOVERED") from error
+        lane = "gui-auto" if adapter is self.gui_auto else "protocol-matrix"
+        try:
+            adapter.select_connection(internal)
+        except Exception as error:
+            error.add_note(
+                f"Android composite selection failed for lane={lane} "
+                f"external_connection={connection!r} internal_connection={internal!r}"
+            )
+            raise
+        self._selected_connection = connection
+        self._selected_lane = adapter
+
+    @property
+    def capabilities(self) -> frozenset[Capability]:
+        if self._selected_lane is not None:
+            return self._selected_lane.capabilities
+        # Before selection, advertise only capabilities shared by both child
+        # lanes.  The canonical runner selects before evaluating a scenario.
+        return frozenset(self.gui_auto.capabilities & self.protocol_matrix.capabilities)
+
+    @property
+    def capability_unavailable_reasons(self) -> dict[Capability, str]:
+        if self._selected_lane is not None:
+            return dict(self._selected_lane.capability_unavailable_reasons)
+        reasons: dict[Capability, str] = {}
+        for _lane, adapter in self._lanes:
+            for capability, reason in adapter.capability_unavailable_reasons.items():
+                if capability in reasons and reasons[capability] != reason:
+                    reasons[capability] = f"{reasons[capability]}; {reason}"
+                else:
+                    reasons[capability] = reason
+        return reasons
+
+    def execute_scenario(self, scenario: ScenarioDefinition) -> Mapping[str, object]:
+        if self._selected_lane is None or self._selected_connection is None:
+            raise HostedAdapterError("CONNECTION_NOT_SELECTED")
+        try:
+            return self._selected_lane.execute_scenario(scenario)
+        except Exception as error:
+            lane = "gui-auto" if self._selected_lane is self.gui_auto else "protocol-matrix"
+            error.add_note(
+                f"Android composite execution lane={lane} "
+                f"external_connection={self._selected_connection!r}"
+            )
+            raise
+
+    def reset(self, timeout_seconds: float = 5.0) -> None:
+        if timeout_seconds <= 0:
+            raise HostedAdapterError("INVALID_RESET_TIMEOUT")
+        failures: list[tuple[str, BaseException]] = []
+        for lane, adapter in self._lanes:
+            try:
+                adapter.reset(timeout_seconds=timeout_seconds)
+            except Exception as error:
+                failures.append((lane, error))
+        _composite_failure("reset", failures)
+
+    def finalize(
+        self, timeout_seconds: float = 30.0, *, deadline: float | None = None
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise HostedAdapterError("INVALID_FINALIZE_TIMEOUT")
+        failures: list[tuple[str, BaseException]] = []
+        for lane, adapter in self._lanes:
+            try:
+                adapter.finalize(timeout_seconds=timeout_seconds, deadline=deadline)
+            except Exception as error:
+                failures.append((lane, error))
+        _composite_failure("finalize", failures)

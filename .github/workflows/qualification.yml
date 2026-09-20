@@ -1,4 +1,4 @@
-name: Release platform qualification
+name: Release hosted mini qualification
 
 # Runs the Release packages through the shared functional contract. Render
 # service ownership stays in the calling Release workflow.
@@ -49,10 +49,10 @@ jobs:
       render_artifact_name: ${{ inputs.render_artifact_name }}
     permissions:
       contents: read
-      actions: write
+      actions: read
 
   aggregate:
-    name: Require all functional results
+    name: Require all hosted mini results
     if: always()
     needs: [linux, windows, macos, android]
     runs-on: ubuntu-24.04
@@ -70,4 +70,4 @@ jobs:
           test "$WINDOWS_RESULT" = success
           test "$MACOS_RESULT" = success
           test "$ANDROID_RESULT" = success
-          echo "public qualification passed"
+          echo "hosted mini qualification passed"

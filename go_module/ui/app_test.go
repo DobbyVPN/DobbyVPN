@@ -15,6 +15,7 @@ type fakeClient struct {
 	mu        sync.Mutex
 	snapshot  Snapshot
 	configure ConfigureResult
+	startGate <-chan struct{}
 	started   bool
 	stopped   bool
 	startedCh chan struct{}
@@ -31,6 +32,41 @@ type fakeLogExporter struct {
 	lines []string
 }
 
+// startupLifecycleApp lets the startup contract test model the one important
+// property of a native Fyne driver: its started callback is delivered only
+// after Run has entered the driver loop. The underlying test app still supplies
+// the in-memory window and software driver.
+type startupLifecycleApp struct {
+	fyne.App
+	lifecycle   *startupLifecycle
+	runEntered  chan struct{}
+	beforeStart func()
+}
+
+type startupLifecycle struct {
+	onStarted    func()
+	onStopped    func()
+	onForeground func()
+	onBackground func()
+}
+
+func (l *startupLifecycle) SetOnEnteredForeground(fn func()) { l.onForeground = fn }
+func (l *startupLifecycle) SetOnExitedForeground(fn func())  { l.onBackground = fn }
+func (l *startupLifecycle) SetOnStarted(fn func())           { l.onStarted = fn }
+func (l *startupLifecycle) SetOnStopped(fn func())           { l.onStopped = fn }
+
+func (a *startupLifecycleApp) Lifecycle() fyne.Lifecycle { return a.lifecycle }
+
+func (a *startupLifecycleApp) Run() {
+	close(a.runEntered)
+	if a.beforeStart != nil {
+		a.beforeStart()
+	}
+	if a.lifecycle.onStarted != nil {
+		a.lifecycle.onStarted()
+	}
+}
+
 func (f *fakeLogExporter) Export(_ context.Context, lines []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -42,6 +78,47 @@ func (f *fakeLogExporter) captured() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.lines...)
+}
+
+func TestApplicationDefersNativeDiagnosticResolutionUntilDriverStarted(t *testing.T) {
+	base := test.NewApp()
+	runtime := &startupLifecycleApp{
+		App:        base,
+		lifecycle:  &startupLifecycle{},
+		runEntered: make(chan struct{}),
+	}
+	application := NewApplication(runtime, &fakeClient{})
+	t.Cleanup(application.Close)
+	startedBeforeLifecycle := make(chan bool, 1)
+	runtime.beforeStart = func() {
+		application.Connection.mu.Lock()
+		started := application.Connection.started
+		application.Connection.mu.Unlock()
+		startedBeforeLifecycle <- started
+	}
+
+	resolved := make(chan bool, 1)
+	application.RunWithDiagnosticStore(func() DiagnosticStore {
+		select {
+		case <-runtime.runEntered:
+			resolved <- true
+		default:
+			resolved <- false
+		}
+		return nil
+	})
+	if started := <-startedBeforeLifecycle; started {
+		t.Fatal("mobile session watcher started before the Fyne driver lifecycle")
+	}
+
+	select {
+	case started := <-resolved:
+		if !started {
+			t.Fatal("native diagnostic store resolved before the Fyne driver started")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native diagnostic store was not resolved")
+	}
 }
 
 func (r *reconnectClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
@@ -78,6 +155,12 @@ func (f *fakeClient) Configure(context.Context, []byte, uint64) (ConfigureResult
 	return f.configure, nil
 }
 func (f *fakeClient) Start(context.Context, uint64) (StartResult, error) {
+	f.mu.Lock()
+	gate := f.startGate
+	f.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = true
@@ -183,8 +266,8 @@ func TestConnectionViewRejectsEmptyConfiguration(t *testing.T) {
 	if view.Status.Text != "Error" {
 		t.Fatalf("status = %q", view.Status.Text)
 	}
-	if view.Details.Text == "" {
-		t.Fatal("validation details are empty")
+	if view.Details.Text != "INVALID_ARGUMENT: connection configuration is required" {
+		t.Fatalf("validation details = %q", view.Details.Text)
 	}
 }
 
@@ -234,13 +317,40 @@ func TestConnectionViewButtonDrivesSessionClient(t *testing.T) {
 	}
 }
 
+func TestConnectionViewPublishesConnectingBeforeStartingSession(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	gate := make(chan struct{})
+	client := &fakeClient{startGate: gate}
+	view := NewConnectionView(client)
+	view.ctx = context.Background()
+	view.render(Snapshot{State: StateIdle})
+	view.showError(context.DeadlineExceeded)
+	view.Input.SetText("https://example.test/profile")
+
+	view.toggle()
+	status, details, button := view.Presentation()
+	if status != "Connecting" || details != "" || button != "Disconnect" {
+		t.Fatalf("presentation during connect = (%q, %q, %q), want Connecting/empty/Disconnect", status, details, button)
+	}
+
+	close(gate)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !client.startedValue() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !client.startedValue() {
+		t.Fatal("session start did not complete")
+	}
+}
+
 func TestConnectionViewPersistsOnlyAcceptedSourceAndCanRestartConfiguredSession(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
 	store := &MemorySourceStore{}
 	client := &fakeClient{
 		snapshot:  Snapshot{State: StateIdle, Configured: true, Sequence: 2},
-		configure: ConfigureResult{Sequence: 3},
+		configure: ConfigureResult{Sequence: 3, SourceKind: "URL"},
 	}
 	view := NewConnectionView(client, store)
 	view.ctx = context.Background()
@@ -270,6 +380,30 @@ func TestConnectionViewPersistsOnlyAcceptedSourceAndCanRestartConfiguredSession(
 	}
 	if !client.startedValue() {
 		t.Fatal("configured session was not started without re-entering source")
+	}
+}
+
+func TestConnectionViewDoesNotPersistInlineConfiguration(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	store := &MemorySourceStore{}
+	client := &fakeClient{
+		configure: ConfigureResult{Sequence: 3, SourceKind: "INLINE"},
+	}
+	view := NewConnectionView(client, store)
+	view.ctx = context.Background()
+	test.Type(view.Input, "inline-secret-config")
+	view.toggle()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !client.startedValue() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	got, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("inline configuration was persisted: %q", got)
 	}
 }
 

@@ -46,7 +46,6 @@ def main(argv: list[str] | None = None) -> int:
             candidate_root=args.candidate_root,
             work_dir=args.work_dir,
             runner=runner,
-            mode="metal",
             contract=contract,
             budget=budget,
             diagnostic_dir=args.work_dir / "diagnostics",
@@ -55,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
-        "iOS-Simulator-Go/Fyne XCTest UI interaction check passed: "
+        "iOS-Simulator-Go/Fyne comprehensive XCTest UI mini contract passed: "
         f"{evidence.simulator.name} ({evidence.simulator.runtime}); "
         "VPN/NetworkExtension success is not asserted"
     )

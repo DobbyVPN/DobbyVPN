@@ -160,7 +160,7 @@ class HeadlessUIAdapter:
             self._configure_ui(max(timeout, _UI_CONFIGURE_TIMEOUT_SECONDS))
             return {"configured": True}
         if step.operation == "connect":
-            self._capture_baseline(timeout)
+            self._prepare_native_connect(timeout)
             self._connect_ui(timeout)
             return {}
         if step.operation == "disconnect":
@@ -169,6 +169,7 @@ class HeadlessUIAdapter:
             key = "final_disconnect_clean" if step.id == "final-disconnect" else "disconnect_clean"
             return {key: clean}
         if step.operation == "reconnect":
+            self._prepare_native_connect(timeout)
             self._connect_ui(timeout)
             if not self.base._connected(timeout):
                 raise ScenarioExecutionError("RECONNECT_NOT_ESTABLISHED")
@@ -190,11 +191,11 @@ class HeadlessUIAdapter:
             return result
         return self.base.execute(step)
 
-    def _capture_baseline(self, timeout: float) -> None:
-        capture = getattr(self.base, "_capture_baseline", None)
-        if not callable(capture):
-            raise ScenarioExecutionError("ROUTING_BASELINE_UNAVAILABLE")
-        capture(timeout)
+    def _prepare_native_connect(self, timeout: float) -> None:
+        prepare = getattr(self.base, "prepare_native_connect", None)
+        if not callable(prepare):
+            raise ScenarioExecutionError("NATIVE_CONNECT_PREPARATION_UNAVAILABLE")
+        prepare(timeout)
 
     def _connect_ui(self, timeout: float) -> None:
         if self._ui_connected:

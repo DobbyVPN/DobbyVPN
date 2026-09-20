@@ -103,7 +103,22 @@ class HostedRunPreflightTests(unittest.TestCase):
             {"--identity-url", "--latency-url", "--download-url", "--upload-url"}.isdisjoint(options)
         )
         self.assertIn("--scenario", options)
+        self.assertIn("--suite", options)
+        arguments = parser.parse_args([
+            "--platform", "linux", "--profile", "profile.toml",
+            "--platform-version", "24.04", "--lane-timeout-seconds", "60",
+            "--output", "result.json",
+        ])
+        self.assertEqual(arguments.suite, "mini")
         self.assertNotIn("--scenario-id", options)
+
+    def test_hosted_full_suite_is_rejected_before_adapter_setup(self):
+        with self.assertRaisesRegex(ValueError, "FULL_SUITE_UNSUPPORTED_BY_HOSTED_ENTRYPOINT"):
+            hosted_run.main([
+                "--platform", "linux", "--suite", "full",
+                "--profile", "profile.toml", "--platform-version", "24.04",
+                "--lane-timeout-seconds", "60", "--output", "result.json",
+            ])
 
 
 if __name__ == "__main__":

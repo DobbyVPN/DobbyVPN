@@ -42,6 +42,31 @@ class LocalRunTests(unittest.TestCase):
         self.assertTrue(
             {"--result", "--logs", "--scenario-id", "--adapter", "--dobby-source"}.isdisjoint(options)
         )
+        self.assertIn("--suite", options)
+        self.assertEqual(build_parser().parse_args(
+            ["--platform", "linux", "--profile", "profile", "--output", "result",
+             "--raw-log-dir", "logs"]
+        ).suite, "mini")
+
+    def test_full_direct_functional_entrypoint_rejected_before_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            profile = root / "profile.toml"
+            profile.write_text("profile", encoding="utf-8")
+            for platform in ("linux", "windows", "macos", "android"):
+                with self.subTest(platform=platform), mock.patch(
+                    "torturer_checks.functional.adapter_for_platform"
+                ) as setup:
+                    with self.assertRaisesRegex(
+                        ValueError, "FULL_SUITE_REQUIRES_LOCAL_VM_ORCHESTRATOR"
+                    ):
+                        main([
+                            "--platform", platform, "--suite", "full",
+                            "--profile", str(profile), "--output", str(root / f"{platform}.json"),
+                            "--raw-log-dir", str(root / f"{platform}-logs"),
+                        ])
+                    setup.assert_not_called()
+                    self.assertFalse((root / f"{platform}-logs").exists())
 
     @staticmethod
     def _result(scenario):

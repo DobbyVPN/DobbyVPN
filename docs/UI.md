@@ -20,9 +20,10 @@ the profile through the real UI client, then Connect, Disconnect, and
 reconnect actions exercise the production widget callbacks against the
 authenticated gRPC service. The shared functional adapter delegates tunnel,
 routing, traffic, process-loss, and cleanup assertions to the normal platform
-adapter. A Windows/macOS native-window qualification also starts the packaged
-binary, discovers controls through the platform accessibility tree, enters a
-fresh profile through native clipboard/keyboard input, clicks Connect and
+adapter. A Windows/macOS native-window qualification starts the native binary
+(exact-Release mode uses the installed Release package), discovers controls
+through the platform accessibility tree, enters a fresh profile through native
+clipboard/keyboard input, clicks Connect and
 Disconnect, observes visible status, opens Settings, and verifies close/reopen
 reattaches to the service-owned session. A missing interactive desktop or
 denied automation permission is an incomplete/failed GUI lane, not a pass.
@@ -103,9 +104,9 @@ no state; the app follows each wake with a current Go snapshot.
 - Platform shells own only VPN permission, foreground/extension lifetime,
   tunnel creation, socket protection, and wake delivery.
 - The shared Go/Fyne UI maps snapshots to presentation state. It does not maintain an
-  event ledger or synthesize connection state. It does not run its own polling
-  loop on desktop; the mobile adapter uses a bounded foreground-only refresh
-  while the native service/extension remains the lifecycle owner.
+  event ledger or synthesize connection state. While the view is attached, it
+  refreshes retained diagnostics on a bounded 500 ms loop; the native
+  service/extension remains the lifecycle owner.
 - Diagnostics stay local unless the user exports them. Android and iOS create a
   compressed file and open the platform share sheet; desktop opens a save
   dialog. DobbyVPN does not receive the exported logs automatically.

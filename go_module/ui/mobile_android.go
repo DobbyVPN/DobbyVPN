@@ -26,6 +26,30 @@ type androidLogExporter struct{}
 
 func newMobileLogExporter() LogExporter { return androidLogExporter{} }
 
+func platformDiagnosticPaths() ([]string, error) {
+	var encoded string
+	err := driver.RunNative(func(value any) error {
+		context, ok := value.(*driver.AndroidContext)
+		if !ok {
+			return fmt.Errorf("Fyne did not provide an Android native context")
+		}
+		dobbyvpn.SetAndroidContext(context.VM, context.Env, context.Ctx)
+		encoded = dobbyvpn.DiagnosticPaths()
+		if strings.TrimSpace(encoded) == "" {
+			return fmt.Errorf("Android diagnostic bridge returned no paths")
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	paths := strings.Split(encoded, "\n")
+	for index := range paths {
+		paths[index] = strings.TrimSpace(paths[index])
+	}
+	return paths, nil
+}
+
 func (androidLogExporter) Export(ctx context.Context, lines []string) error {
 	if ctx == nil {
 		ctx = context.Background()

@@ -110,6 +110,7 @@ jobs:
           name: go-coverage
           path: ${{ runner.temp }}/dobbyvpn-go-coverage
           if-no-files-found: warn
+          retention-days: 7
 
   android:
     name: Android native shell and Go/Fyne tests
@@ -247,9 +248,10 @@ jobs:
             ${{ runner.temp }}/swift-lifecycle-core.lcov
             ${{ runner.temp }}/swift-lifecycle-core-coverage.md
           if-no-files-found: error
+          retention-days: 7
 
-  ios_simulator_metal:
-    name: iOS Simulator Go/Fyne app startup check
+  ios_simulator_mini:
+    name: iOS Simulator Go/Fyne mini suite
     needs: ios_libraries
     runs-on: macos-15
     timeout-minutes: 30
@@ -274,19 +276,6 @@ jobs:
           go-version-file: .go-version
           cache-dependency-path: go_module/go.sum
 
-      - name: Install pinned Go mobile runtime tools
-        run: |
-          set -euo pipefail
-          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
-          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
-          gopath="$(go env GOPATH)"
-          echo "$gopath/bin" >> "$GITHUB_PATH"
-          for tool in gomobile gobind; do
-            test -x "$gopath/bin/$tool"
-            go version -m "$gopath/bin/$tool" | grep -F "$mobile_version" >/dev/null
-          done
-
       - name: Download Go modules
         working-directory: go_module
         run: go mod download
@@ -298,12 +287,13 @@ jobs:
           set -euo pipefail
           python3 torturer/tests/ios_simulator/run_app_contract.py \
             --candidate-root "$GITHUB_WORKSPACE" \
-            --work-dir "$RUNNER_TEMP/ios-simulator-metal-contract"
+            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract"
 
       - name: Upload Simulator launch diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-simulator-go-ui-diagnostics
-          path: ${{ runner.temp }}/ios-simulator-metal-contract/diagnostics
+          path: ${{ runner.temp }}/ios-simulator-mini-contract/diagnostics
           if-no-files-found: ignore
+          retention-days: 7

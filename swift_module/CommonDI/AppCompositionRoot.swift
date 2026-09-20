@@ -24,8 +24,20 @@ public final class DobbyLogStore {
     public func writeLog(log: String) {
         lock.lock()
         defer { lock.unlock() }
-        let line = log.hasSuffix("\n") ? log : log + "\n"
-        guard let data = line.data(using: .utf8) else { return }
+        // Keep the native producer in the same structured JSONL format as Go.
+        // This gives the shared FileDiagnosticStore a reliable timestamp at
+        // the clear boundary while retaining a readable message for users.
+        let record: [String: Any] = [
+            "schema": "dobby.log/v1",
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "level": "INFO",
+            "source": "ios-native",
+            "event": "log.message",
+            "message": log,
+        ]
+        guard let encoded = try? JSONSerialization.data(withJSONObject: record),
+              var data = String(data: encoded, encoding: .utf8)?.data(using: .utf8) else { return }
+        data.append(contentsOf: [0x0A])
         guard let handle = try? FileHandle(forWritingTo: path) else { return }
         defer { try? handle.close() }
         try? handle.seekToEnd()
@@ -80,6 +92,18 @@ public enum IOSAppCompositionRoot {
         return sharedLogPath(isTunnel ? "go_tunnel_logs.jsonl" : "go_app_logs.jsonl")
     }
 
+    /// Fixed files are resolved by the native app-group/container boundary.
+    /// The Go UI receives these URLs through the C bridge and validates that
+    /// they stay in this one directory before opening them.
+    public static func diagnosticPaths() -> [URL] {
+        [
+            sharedLogPath("ui_diagnostics.jsonl"),
+            appLogPath(),
+            sharedLogPath("go_app_logs.jsonl"),
+            sharedLogPath("go_tunnel_logs.jsonl"),
+        ]
+    }
+
     public static let logsRepository: DobbyLogStore = {
         let current = appLogPath()
         let all = [
@@ -91,6 +115,7 @@ public enum IOSAppCompositionRoot {
         return DobbyLogStore(path: current, additionalPaths: all)
     }()
 
+    public static let exportLogsInteractor = ExportLogsInteractorImpl()
     public static let vpnManager = VpnManagerImpl()
     public static let sessionShell = IOSSessionShell(manager: vpnManager)
 }

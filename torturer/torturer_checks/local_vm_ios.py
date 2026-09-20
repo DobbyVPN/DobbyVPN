@@ -13,12 +13,8 @@ def run(
     logs: Path,
     timeout: float,
     architecture: str | None,
-    simulator_mode: str,
 ) -> dict:
     from .local_vm import _read_state, _write_json
-
-    if simulator_mode not in ios.SIMULATOR_MODES:
-        raise ValueError("ios-simulator requires mode mini or metal")
 
     contract = ios.public_ios_simulator_app_contract(
         architecture or ("amd64" if platform.machine().lower() in {"x86_64", "amd64"} else "arm64")
@@ -56,11 +52,10 @@ def run(
     evidence = ios.run_ios_simulator_app_contract(
         candidate_root=run_dir / "source", work_dir=work, runner=runner,
         contract=contract, budget=budget,
-        mode=simulator_mode,
         diagnostic_dir=logs / "ios",
     )
     _write_json(logs / "simulator.json", {
-        "scope": f"ios-simulator-{simulator_mode}", "mode": simulator_mode, "passed": True,
+        "scope": "ios-simulator-mini", "suite": "mini", "passed": True,
         "udid": evidence.simulator.udid, "architecture": contract.architecture,
     })
     return _read_state(run_dir)["runtime"]

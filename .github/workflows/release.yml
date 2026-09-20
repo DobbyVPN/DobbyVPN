@@ -200,7 +200,7 @@ jobs:
     uses: ./.github/workflows/qualification.yml
     permissions:
       contents: read
-      actions: write
+      actions: read
     with:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -228,7 +228,7 @@ jobs:
             --owner-id "$RENDER_OWNER_ID"
 
   qualification_result:
-    name: Require qualification and Render cleanup
+    name: Require hosted mini and Render cleanup
     if: always()
     needs: [render_start, qualification, render_cleanup]
     runs-on: ubuntu-24.04
@@ -248,4 +248,4 @@ jobs:
           test "$RENDER_START_RESULT" = success
           test "$PLATFORM_RESULT" = success
           test "$RENDER_CLEANUP_RESULT" = success
-          echo "Release qualification passed"
+          echo "Release hosted mini qualification passed"

@@ -39,29 +39,18 @@ class LocalSimulatorTests(unittest.TestCase):
                 patch.object(local_vm_ios.ios.SubprocessCommandRunner, "run", autospec=True, side_effect=execute), \
                 patch.object(local_vm_ios.ios, "prepare_ios_simulator_candidate", autospec=True) as prepare, \
                 patch.object(local_vm_ios.ios, "run_ios_simulator_app_contract", autospec=True, side_effect=lifecycle) as run_contract:
-            runtime = local_vm_ios.run(self.root, self.logs, 300, None, "mini")
+            runtime = local_vm_ios.run(self.root, self.logs, 300, None)
         self.assertEqual(prepare.call_args.kwargs["contract"].architecture, "amd64")
         self.assertNotIn("mode", prepare.call_args.kwargs)
         self.assertEqual(run_contract.call_args.kwargs["diagnostic_dir"], self.logs / "ios")
-        self.assertEqual(run_contract.call_args.kwargs["mode"], "mini")
+        self.assertNotIn("mode", run_contract.call_args.kwargs)
         self.assertNotIn("existing_app", run_contract.call_args.kwargs)
         self.assertFalse(runtime["installed"])
         self.assertIn(["xcrun", "simctl", "uninstall", "device-1", "vpn.dobby.app"], commands)
         self.assertTrue((self.logs / "simulator.json").exists())
 
-    def test_metal_mode_is_owned_by_the_app_contract(self):
-        def lifecycle(**kwargs):
-            self.assertEqual(kwargs["mode"], "metal")
-            return SimpleNamespace(simulator=SimpleNamespace(udid="device-1"))
-
-        with patch.object(local_vm_ios.ios, "prepare_ios_simulator_candidate") as prepare, \
-                patch.object(local_vm_ios.ios, "run_ios_simulator_app_contract", side_effect=lifecycle) as run_contract:
-            local_vm_ios.run(self.root, self.logs, 300, "arm64", "metal")
-        self.assertNotIn("mode", prepare.call_args.kwargs)
-        self.assertEqual(run_contract.call_args.kwargs["mode"], "metal")
-
     def test_simulator_never_uses_vpn_candidate_builder_or_profile(self):
-        args = local_vm.build_parser().parse_args(["run", "--platform", "ios-simulator", "--run-dir", str(self.root), "--timeout", "300", "--simulator-mode", "mini"])
+        args = local_vm.build_parser().parse_args(["run", "--platform", "ios-simulator", "--run-dir", str(self.root), "--timeout", "300", "--suite", "mini"])
         with patch.object(local_vm, "_prepare_candidate") as build, patch.object(local_vm, "_start_ios", return_value={"udid": "fixture"}):
             self.assertEqual(local_vm.run(args), 0)
         build.assert_not_called()

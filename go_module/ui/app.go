@@ -22,7 +22,7 @@ type Application struct {
 }
 
 func NewApplication(runtime fyne.App, client SessionClient, stores ...SourceStore) *Application {
-	return newApplication(runtime, client, nil, stores...)
+	return newApplication(runtime, client, nil, newDefaultDiagnosticStore(), stores...)
 }
 
 // NewApplicationWithLogExporter is the constructor used when a platform has
@@ -30,15 +30,30 @@ func NewApplication(runtime fyne.App, client SessionClient, stores ...SourceStor
 // this one injected interface leaves session ownership and snapshot mapping
 // in the shared UI.
 func NewApplicationWithLogExporter(runtime fyne.App, client SessionClient, exporter LogExporter, stores ...SourceStore) *Application {
-	return newApplication(runtime, client, exporter, stores...)
+	return newApplication(runtime, client, exporter, newDefaultDiagnosticStore(), stores...)
 }
 
-func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter, stores ...SourceStore) *Application {
+// NewApplicationWithDiagnostics is used by mobile/native shells that own a
+// platform-specific diagnostic location. Passing nil keeps the history and
+// clear controls disabled until a native adapter is available.
+func NewApplicationWithDiagnostics(runtime fyne.App, client SessionClient, diagnostics DiagnosticStore, stores ...SourceStore) *Application {
+	return newApplication(runtime, client, nil, diagnostics, stores...)
+}
+
+// NewApplicationWithLogExporterAndDiagnostics combines the explicit share
+// adapter with an injected retained-history adapter. The two boundaries stay
+// separate because some platforms can read logs but cannot present a file
+// picker from the shared Go process.
+func NewApplicationWithLogExporterAndDiagnostics(runtime fyne.App, client SessionClient, exporter LogExporter, diagnostics DiagnosticStore, stores ...SourceStore) *Application {
+	return newApplication(runtime, client, exporter, diagnostics, stores...)
+}
+
+func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter, diagnostics DiagnosticStore, stores ...SourceStore) *Application {
 	var store SourceStore
 	if len(stores) > 0 {
 		store = stores[0]
 	}
-	view := newConnectionView(client, exporter, store)
+	view := newConnectionView(client, exporter, diagnostics, store)
 	settings := NewSettingsView()
 	window := runtime.NewWindow("Dobby VPN")
 	window.Resize(fyne.NewSize(460, 520))
@@ -53,12 +68,49 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 }
 
 func (a *Application) Run() {
-	a.Start()
+	a.run(nil)
+}
+
+// RunWithDiagnosticStore starts the native window before starting the mobile
+// client or resolving a store whose implementation needs a platform context
+// (for example Android's Fyne/JNI activity). Calling either path while the
+// c-shared entrypoint is still constructing the window can race the first
+// native surface callback; the store is optional, so its setup must not be on
+// the first-render path.
+func (a *Application) RunWithDiagnosticStore(resolve func() DiagnosticStore) {
+	a.run(resolve)
+}
+
+func (a *Application) run(resolve func() DiagnosticStore) {
+	// Mobile clients call through Fyne's JNI bridge from their first
+	// Snapshot. Keep that work out of the c-shared entrypoint's pre-driver
+	// phase; desktop callers (and the headless companion) retain the existing
+	// eager start behavior because they do not pass a deferred native store.
+	if resolve == nil {
+		a.Start()
+	}
 	// Show before emitting the diagnostic marker so logs distinguish a window
 	// handed to the platform renderer from a widget tree that was only built.
 	// Real UI qualification still drives the platform accessibility tree.
 	a.Window.Show()
 	markUIAttached()
+	if resolve != nil {
+		// The resolver may call a platform bridge (Android JNI or an iOS
+		// native context). Do not run it between Window.Show and App.Run:
+		// mobile Fyne executes DoFromGoroutine directly until its driver loop
+		// has initialized, so an early resolver can mutate the first canvas
+		// concurrently with native-surface setup and leave a blank window.
+		// OnStarted is the first lifecycle callback delivered by that loop;
+		// resolve off the UI goroutine, then marshal only the widget mutation
+		// back through Fyne.
+		a.App.Lifecycle().SetOnStarted(func() {
+			a.Start()
+			go func() {
+				store := resolve()
+				fyne.Do(func() { a.Connection.SetDiagnosticStore(store) })
+			}()
+		})
+	}
 	a.App.Run()
 }
 
@@ -77,18 +129,21 @@ func (a *Application) Close() {
 // UI tests.  Tests locate controls by their stable accessibility labels/text,
 // not by screen coordinates.
 type ConnectionView struct {
-	client   SessionClient
-	store    SourceStore
-	exporter LogExporter
+	client      SessionClient
+	store       SourceStore
+	exporter    LogExporter
+	diagnostics DiagnosticStore
 
-	Input    *AccessibleEntry
-	Connect  *widget.Button
-	Status   *widget.Label
-	Details  *widget.Label
-	Logs     *AccessibleEntry
-	Export   *widget.Button
-	Settings *widget.Button
-	root     fyne.CanvasObject
+	Input     *AccessibleEntry
+	Connect   *widget.Button
+	Status    *widget.Label
+	Details   *widget.Label
+	Logs      *AccessibleEntry
+	Export    *widget.Button
+	ClearLogs *widget.Button
+	LogStatus *widget.Label
+	Settings  *widget.Button
+	root      fyne.CanvasObject
 
 	mu           sync.Mutex
 	ctx          context.Context
@@ -104,26 +159,44 @@ type ConnectionView struct {
 	// widgets are updated through fyne.Do and must not be read from a worker
 	// goroutine; the mirrors keep lifecycle tests race-free without making the
 	// widget tree a second state store.
-	renderedStatus  string
-	renderedButton  string
-	renderedDetails string
-	renderedLogs    string
-	localError      string
-	localErrorAt    uint64
+	renderedStatus    string
+	renderedButton    string
+	renderedDetails   string
+	renderedLogs      string
+	renderedLogStatus string
+	exportLines       []string
+	diagnosticsLoaded bool
+	diagnosticError   string
+	localError        string
+	localErrorAt      uint64
+	presentationMu    sync.Mutex
+	diagnosticIO      sync.Mutex
 }
 
 func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionView {
-	return newConnectionView(client, nil, stores...)
+	return newConnectionView(client, nil, nil, stores...)
 }
 
 // NewConnectionViewWithLogExporter is useful to platform entry points and
 // headless tests that want to exercise the export action without changing the
 // SessionClient boundary.
 func NewConnectionViewWithLogExporter(client SessionClient, exporter LogExporter, stores ...SourceStore) *ConnectionView {
-	return newConnectionView(client, exporter, stores...)
+	return newConnectionView(client, exporter, nil, stores...)
 }
 
-func newConnectionView(client SessionClient, exporter LogExporter, stores ...SourceStore) *ConnectionView {
+// NewConnectionViewWithDiagnostics injects a retained-history adapter without
+// changing the SessionClient boundary.
+func NewConnectionViewWithDiagnostics(client SessionClient, diagnostics DiagnosticStore, stores ...SourceStore) *ConnectionView {
+	return newConnectionView(client, nil, diagnostics, stores...)
+}
+
+// NewConnectionViewWithLogExporterAndDiagnostics is the test and platform
+// entrypoint for the complete history/export action pair.
+func NewConnectionViewWithLogExporterAndDiagnostics(client SessionClient, exporter LogExporter, diagnostics DiagnosticStore, stores ...SourceStore) *ConnectionView {
+	return newConnectionView(client, exporter, diagnostics, stores...)
+}
+
+func newConnectionView(client SessionClient, exporter LogExporter, diagnostics DiagnosticStore, stores ...SourceStore) *ConnectionView {
 	var store SourceStore
 	if len(stores) > 0 {
 		store = stores[0]
@@ -132,6 +205,7 @@ func newConnectionView(client SessionClient, exporter LogExporter, stores ...Sou
 		client:         client,
 		store:          store,
 		exporter:       exporter,
+		diagnostics:    diagnostics,
 		renderedStatus: "Disconnected",
 		renderedButton: "Connect",
 	}
@@ -150,10 +224,20 @@ func newConnectionView(client SessionClient, exporter LogExporter, stores ...Sou
 	if exporter == nil {
 		view.Export.Disable()
 	}
+	view.ClearLogs = widget.NewButton("Clear logs", nil)
+	if diagnostics == nil {
+		// Mobile shells do not guess an app-group/private-filesystem path. Keep
+		// the optional control out of the accessibility tree until a native
+		// DiagnosticStore is injected, rather than exposing a dead button.
+		view.ClearLogs.Hide()
+	}
+	view.LogStatus = widget.NewLabel("")
+	view.LogStatus.Wrapping = fyne.TextWrapWord
 	view.Settings = widget.NewButton("Settings", nil)
 
 	view.Connect.OnTapped = func() { view.toggle() }
 	view.Export.OnTapped = func() { view.exportLogs() }
+	view.ClearLogs.OnTapped = func() { view.clearLogs() }
 	view.root = container.NewBorder(
 		container.NewVBox(
 			view.Status,
@@ -161,6 +245,8 @@ func newConnectionView(client SessionClient, exporter LogExporter, stores ...Sou
 			view.Input,
 			view.Connect,
 			view.Export,
+			view.ClearLogs,
+			view.LogStatus,
 			view.Settings,
 		),
 		nil, nil, nil, view.Logs,
@@ -182,6 +268,27 @@ func (v *ConnectionView) SetLogExporter(exporter LogExporter) {
 			v.Export.Enable()
 		}
 	})
+}
+
+// SetDiagnosticStore injects or replaces the retained-history adapter after a
+// native window has been created. A failed or absent adapter never erases the
+// last visible history; it only disables the clear action and reports status.
+func (v *ConnectionView) SetDiagnosticStore(store DiagnosticStore) {
+	v.mu.Lock()
+	v.diagnostics = store
+	v.diagnosticsLoaded = false
+	v.mu.Unlock()
+	onUI(func() {
+		if store == nil {
+			v.ClearLogs.Hide()
+		} else {
+			v.ClearLogs.Show()
+			v.ClearLogs.Enable()
+		}
+	})
+	if store != nil {
+		v.refreshDiagnostics(context.Background())
+	}
 }
 
 // AccessibleEntry supplies the label/role that Fyne's native accessibility
@@ -277,8 +384,40 @@ func (v *ConnectionView) Start() {
 
 	go func() {
 		defer close(done)
-		v.watch(ctx)
+		var group sync.WaitGroup
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			v.watch(ctx)
+		}()
+		go func() {
+			defer group.Done()
+			v.watchDiagnostics(ctx)
+		}()
+		group.Wait()
 	}()
+}
+
+func (v *ConnectionView) watchDiagnostics(ctx context.Context) {
+	// The mobile entrypoint may inject its native store after Start, once the
+	// Fyne window has a live platform context. Keep the watcher alive while
+	// that optional store is still nil; refreshDiagnostics deliberately treats
+	// nil as a no-op and the next tick observes the injected store.
+	v.refreshDiagnostics(ctx)
+	// Diagnostic producers do not necessarily emit a session snapshot when a
+	// new line is written. Keep the rollback UI's 500 ms refresh cadence, but
+	// serialize every store operation through diagnosticIO so a slow read never
+	// overlaps a later poll or a user-triggered clear.
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			v.refreshDiagnostics(ctx)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // Prime synchronously obtains the initial service snapshot.  The normal app
@@ -413,10 +552,22 @@ func (v *ConnectionView) toggle() {
 	sequence := v.sequence
 	text := strings.TrimSpace(v.Input.Text)
 	ctx := v.ctx
+	// Publish the attempt synchronously before the transport work starts.  A
+	// previous permission or transport error is otherwise still rendered while
+	// the retry is being configured, so a real UI observer can mistake that
+	// stale frame for the result of the new attempt.
+	v.renderedStatus = "Connecting"
+	v.renderedButton = "Disconnect"
+	v.renderedDetails = ""
 	v.mu.Unlock()
+	v.applyPresentation()
 
 	if text == "" && !snapshot.Configured {
-		v.showError(fmt.Errorf("connection configuration is required"))
+		// Keep the local validation failure in the same fixed vocabulary as
+		// session Configure errors.  The rendered Android lane can then
+		// distinguish an empty/corrupted editor value from a native transport
+		// failure without reading or exporting the entered configuration.
+		v.showError(fmt.Errorf("INVALID_ARGUMENT: connection configuration is required"))
 		v.setBusy(false)
 		return
 	}
@@ -431,6 +582,8 @@ func (v *ConnectionView) exportLogs() {
 	v.mu.Lock()
 	exporter := v.exporter
 	snapshot := v.snapshot
+	lines := append([]string(nil), v.exportLines...)
+	loaded := v.diagnosticsLoaded
 	ctx := v.ctx
 	v.mu.Unlock()
 	if exporter == nil {
@@ -439,9 +592,73 @@ func (v *ConnectionView) exportLogs() {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := exporter.Export(ctx, snapshotLogLines(snapshot)); err != nil {
-		v.showError(err)
+	if !loaded {
+		lines = snapshotLogLines(snapshot)
 	}
+	if err := exporter.Export(ctx, lines); err != nil {
+		v.setDiagnosticError(err)
+	}
+}
+
+func (v *ConnectionView) clearLogs() {
+	v.mu.Lock()
+	store := v.diagnostics
+	ctx := v.ctx
+	v.mu.Unlock()
+	if store == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	v.diagnosticIO.Lock()
+	err := store.Clear(ctx)
+	v.diagnosticIO.Unlock()
+	if err != nil {
+		v.setDiagnosticError(err)
+		return
+	}
+	// Refresh from storage after the clear marker is durably written. This is
+	// deliberately not an optimistic blanking operation: if the read fails,
+	// the previous retained history remains visible.
+	v.refreshDiagnostics(ctx)
+}
+
+func (v *ConnectionView) refreshDiagnostics(ctx context.Context) {
+	v.mu.Lock()
+	store := v.diagnostics
+	v.mu.Unlock()
+	if store == nil {
+		return
+	}
+	v.diagnosticIO.Lock()
+	history, err := store.Read(ctx)
+	v.diagnosticIO.Unlock()
+	v.mu.Lock()
+	if len(history.UILines) > 0 || err == nil {
+		v.diagnosticsLoaded = true
+		v.renderedLogs = strings.Join(history.UILines, "\n")
+		v.exportLines = append([]string(nil), history.ExportLines...)
+	}
+	if err != nil {
+		v.diagnosticError = err.Error()
+	} else {
+		v.diagnosticError = ""
+	}
+	v.renderedLogStatus = diagnosticStatusText(v.diagnosticError)
+	v.mu.Unlock()
+	v.applyPresentation()
+}
+
+func (v *ConnectionView) setDiagnosticError(err error) {
+	if err == nil {
+		return
+	}
+	v.mu.Lock()
+	v.diagnosticError = err.Error()
+	v.renderedLogStatus = diagnosticStatusText(v.diagnosticError)
+	v.mu.Unlock()
+	v.applyPresentation()
 }
 
 func (v *ConnectionView) connect(ctx context.Context, raw []byte, sequence uint64) {
@@ -450,7 +667,10 @@ func (v *ConnectionView) connect(ctx context.Context, raw []byte, sequence uint6
 		v.mu.Lock()
 		v.sequence = configured.Sequence
 		v.mu.Unlock()
-		if v.store != nil {
+		// Only URL sources are safe to restore on the next launch. Inline
+		// configuration may contain credentials and is intentionally kept in the
+		// service-owned session only.
+		if v.store != nil && strings.EqualFold(strings.TrimSpace(configured.SourceKind), "URL") {
 			if saveErr := v.store.Save(ctx, raw); saveErr != nil {
 				err = fmt.Errorf("save accepted connection source: %w", saveErr)
 			}
@@ -542,7 +762,11 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 	v.renderedStatus = status
 	v.renderedButton = button
 	v.renderedDetails = details
-	v.renderedLogs = snapshotLogText(snapshot)
+	if !v.diagnosticsLoaded {
+		v.renderedLogs = snapshotLogText(snapshot)
+		v.exportLines = snapshotLogLines(snapshot)
+	}
+	v.renderedLogStatus = diagnosticStatusText(v.diagnosticError)
 	v.mu.Unlock()
 
 	v.applyPresentation()
@@ -565,16 +789,20 @@ func (v *ConnectionView) showError(err error) {
 // error with a stale snapshot.
 func (v *ConnectionView) applyPresentation() {
 	onUI(func() {
+		v.presentationMu.Lock()
+		defer v.presentationMu.Unlock()
 		v.mu.Lock()
 		status := v.renderedStatus
 		button := v.renderedButton
 		details := v.renderedDetails
 		logs := v.renderedLogs
+		logStatus := v.renderedLogStatus
 		v.mu.Unlock()
 		v.Status.SetText(status)
 		v.Connect.SetText(button)
 		v.Details.SetText(details)
 		v.Logs.SetText(logs)
+		v.LogStatus.SetText(logStatus)
 	})
 }
 
@@ -645,6 +873,13 @@ func snapshotLogLines(snapshot Snapshot) []string {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func diagnosticStatusText(err string) string {
+	if strings.TrimSpace(err) == "" {
+		return ""
+	}
+	return "Local diagnostics unavailable (LOCAL_LOG_STORAGE_UNAVAILABLE): " + err
 }
 
 func onUI(fn func()) {

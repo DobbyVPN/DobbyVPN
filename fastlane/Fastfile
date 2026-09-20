@@ -18,7 +18,6 @@ REPO            = ENV["APP_SOURCE_REPOSITORY"] || ENV["GITHUB_REPOSITORY"]
 COMMIT_LINK     = "https://github.com/#{REPO}/tree/#{COMMIT}"
 platform :ios do
   PROJECT    = File.expand_path("../swift_module/iosApp.xcodeproj", __dir__)
-  SCHEME     = "iosApp"
   EXPORT_DIR = File.expand_path("../swift_module/build/ipa", __dir__)
   ARCHIVE    = File.expand_path("../swift_module/build/archive.xcarchive", __dir__)
 

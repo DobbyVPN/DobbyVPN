@@ -21,7 +21,6 @@ from torturer_checks.ios_simulator import (
     simctl_boot_command,
     simctl_bootstatus_command,
     simctl_install_command,
-    simctl_launch_command,
     simctl_terminate_command,
     xcodebuild_ui_test_command,
 )
@@ -39,18 +38,76 @@ _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
 _XCODE_ARCHITECTURES = {"arm64": "arm64", "amd64": "x86_64"}
 _DIAGNOSTIC_TAIL_BYTES = 1024 * 1024
 _SIMULATOR_LOG_TAIL_BYTES = 256 * 1024
+_FAILURE_DIAGNOSTIC_TAIL_BYTES = 128 * 1024
 _SIMULATOR_DIAGNOSTIC_TIMEOUT_SECONDS = 30
 _SIMULATOR_PREFERENCE_DOMAIN = "com.apple.iphonesimulator"
 _HARDWARE_KEYBOARD_PREFERENCE = "ConnectHardwareKeyboard"
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
+IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS = 15 * 60
 IOS_GO_UI_BUILD_TIMEOUT_SECONDS = 15 * 60
+IOS_UI_TEST_TIMEOUT_SECONDS = 10 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
+
+# These are deliberately stage-specific.  The old contract gave every
+# command the same five-minute limit, which made an XCTest hang
+# indistinguishable from a Simulator boot or install problem.  The values are
+# upper bounds, not retry budgets: a timed-out stage fails once and cleanup
+# keeps the original stage/error visible.
+STAGE_TIMEOUT_SECONDS = {
+    "list-devices": 30,
+    "read-hardware-keyboard": 10,
+    "write-hardware-keyboard": 10,
+    "restore-hardware-keyboard": 15,
+    "boot": 120,
+    # An erased iOS 26 Simulator can spend several minutes in its normal
+    # one-time Data Migration before bootstatus reports ready. Keep this a
+    # single bounded wait; the lane budget still reserves cleanup time.
+    "bootstatus": 360,
+    "install": 180,
+    "locate-app-logs": 30,
+    "clear-app-logs": 30,
+    "xctest-ui": IOS_UI_TEST_TIMEOUT_SECONDS,
+    "terminate": 60,
+    "collect-core-simulator-diagnostics": 30,
+    "shutdown": 120,
+    "build-ios-framework": IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
+    "package-ios-app": IOS_GO_UI_BUILD_TIMEOUT_SECONDS,
+}
 
 
 class IOSSimulatorAppContractError(RuntimeError):
     """The fixed public Simulator check failed."""
+
+
+class IOSSimulatorStageError(IOSSimulatorAppContractError):
+    """A failure tied to one Simulator lifecycle/build stage.
+
+    ``stage`` is intentionally machine-readable for local result consumers,
+    while the string includes the original command diagnostic so a timeout or
+    non-zero exit is never replaced by a generic "Simulator failed" message.
+    """
+
+    def __init__(
+        self,
+        stage: str,
+        detail: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self.stage = stage
+        self.timeout_seconds = timeout_seconds
+        normalized = detail.strip() or "no command diagnostic"
+        timed_out = "timed out" in normalized.lower()
+        if timed_out and timeout_seconds is not None:
+            message = (
+                f"iOS Simulator stage '{stage}' timed out after "
+                f"{timeout_seconds:g}s: {normalized}"
+            )
+        else:
+            message = f"iOS Simulator stage '{stage}' failed: {normalized}"
+        super().__init__(message)
 
 
 class RunBudget:
@@ -233,26 +290,6 @@ class IOSSimulatorAppContract:
 
 
 PUBLIC_IOS_SIMULATOR_APP_CONTRACT = IOSSimulatorAppContract()
-SIMULATOR_MODES = ("mini", "metal")
-
-
-def _validate_mode(mode: str) -> str:
-    if mode not in SIMULATOR_MODES:
-        raise IOSSimulatorAppContractError(f"iOS Simulator mode must be one of: {', '.join(SIMULATOR_MODES)}")
-    return mode
-
-
-def metal_probe_command() -> list[str]:
-    return ["swift", "-e", "import Metal; print(MTLCreateSystemDefaultDevice() != nil)"]
-
-
-def require_metal(runner: CommandRunner, *, budget: RunBudget) -> None:
-    result = runner.run(metal_probe_command(), timeout_seconds=budget.operation_timeout(30))
-    if result.returncode or result.stdout.strip().lower() != "true":
-        detail = (result.stdout + result.stderr).strip() or "no Metal device"
-        raise IOSSimulatorAppContractError(
-            f"iOS-Simulator-Metal requires a usable Metal device; capability probe returned {detail!r}"
-        )
 
 
 def public_ios_simulator_app_contract(architecture: str) -> IOSSimulatorAppContract:
@@ -263,7 +300,6 @@ def public_ios_simulator_app_contract(architecture: str) -> IOSSimulatorAppContr
 class IOSSimulatorAppEvidence:
     simulator: AvailableSimulator
     app: SimulatorApp
-    mode: str
 
 
 def select_available_iphone(simctl_devices_json: str) -> AvailableSimulator:
@@ -302,14 +338,12 @@ def xcodebuild_app_command(
     *, candidate_root: Path,
     device_udid: str,
     work_dir: Path,
-    mode: str = "metal",
 ) -> list[str]:
-    mode = _validate_mode(mode)
     try:
         udid = simctl_boot_command(device_udid)[-1]
     except IOSSimulatorContractError as error:
         raise IOSSimulatorAppContractError(str(error)) from error
-    del udid, mode
+    del udid
     go_framework = candidate_root / "go_module" / "DobbyVPNRuntime.xcframework"
     return [
         "/bin/bash", "scripts/package_ios_app.sh", "iossimulator",
@@ -329,6 +363,32 @@ def simctl_get_app_container_command(device_udid: str) -> list[str]:
     return ["xcrun", "simctl", "get_app_container", udid, _BUNDLE_IDENTIFIER, "data"]
 
 
+def _stage_timeout(
+    budget: RunBudget | None,
+    stage: str,
+    requested: float | None = None,
+) -> float:
+    value = requested if requested is not None else STAGE_TIMEOUT_SECONDS.get(
+        stage, DEFAULT_COMMAND_TIMEOUT_SECONDS
+    )
+    return budget.operation_timeout(value) if budget is not None else value
+
+
+def _stage_error(
+    stage: str,
+    error: BaseException | str,
+    *,
+    timeout_seconds: float | None = None,
+) -> IOSSimulatorStageError:
+    if isinstance(error, IOSSimulatorStageError) and error.stage == stage:
+        return error
+    return IOSSimulatorStageError(
+        stage,
+        str(error) or error.__class__.__name__,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def _require_success(
     runner: CommandRunner,
     command: Sequence[str],
@@ -337,15 +397,33 @@ def _require_success(
     cwd: Path | None = None,
     budget: RunBudget | None = None,
     timeout_seconds: float | None = None,
+    bounded_timeout: bool = False,
 ) -> CommandResult:
-    if timeout_seconds is None:
-        timeout_seconds = budget.operation_timeout(DEFAULT_COMMAND_TIMEOUT_SECONDS) if budget else DEFAULT_COMMAND_TIMEOUT_SECONDS
-    result = runner.run(command, cwd=cwd, timeout_seconds=timeout_seconds)
+    effective_timeout: float | None = timeout_seconds
+    try:
+        # Cleanup callers pass a timeout already bounded by the cleanup
+        # reserve. Reapplying ``operation_timeout`` there would subtract the
+        # reserve twice and could skip a still-available shutdown window.
+        effective_timeout = (
+            timeout_seconds
+            if bounded_timeout and timeout_seconds is not None
+            else _stage_timeout(budget, stage, timeout_seconds)
+        )
+        if effective_timeout <= 0:
+            raise IOSSimulatorAppContractError(
+                f"iOS Simulator stage '{stage}' has no time remaining"
+            )
+        result = runner.run(command, cwd=cwd, timeout_seconds=effective_timeout)
+    except BaseException as error:
+        # Preserve the command runner's stdout/stderr and timeout wording, but
+        # make the failed lifecycle/build stage unambiguous to callers.
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise
+        raise _stage_error(stage, error, timeout_seconds=effective_timeout) from error
     if result.returncode:
         output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
-        raise IOSSimulatorAppContractError(
-            f"{stage} failed with exit code {result.returncode}" + (f":\n{output}" if output else "")
-        )
+        detail = f"exit code {result.returncode}" + (f":\n{output}" if output else "")
+        raise IOSSimulatorStageError(stage, detail, timeout_seconds=effective_timeout)
     return result
 
 
@@ -360,7 +438,7 @@ def _app_container(
         result = _require_success(
             runner,
             simctl_get_app_container_command(device_udid),
-            "locate iOS app logs",
+            "locate-app-logs",
             budget=budget,
         )
         # `simctl get_app_container ... data` returns one absolute data
@@ -377,15 +455,18 @@ def _app_container(
             if path.is_absolute():
                 paths.append(path)
         if len(paths) != 1:
-            raise IOSSimulatorAppContractError(
+            raise IOSSimulatorStageError(
+                "locate-app-logs",
                 "simctl data output did not contain exactly one absolute "
-                "app data container path"
+                "app data container path",
             )
         return paths[0] / "tmp"
-    except (IOSSimulatorAppContractError, OSError):
+    except (IOSSimulatorAppContractError, OSError) as error:
         if best_effort:
             return None
-        raise
+        if isinstance(error, IOSSimulatorStageError):
+            raise
+        raise _stage_error("locate-app-logs", error) from error
 
 
 def _log_bytes(path: Path) -> bytes:
@@ -420,12 +501,12 @@ def _collect_simulator_diagnostics(
 ) -> str | None:
     """Capture bounded CoreSimulator logs when launch or UI interaction fails.
 
-    A successful ``simctl launch`` only proves that SpringBoard accepted the
-    bundle.  The process can still exit during native initialization or fail
-    its XCTest accessibility actions, and the app-owned log is then
-    legitimately empty. CoreSimulator's unified log is the useful diagnostic
-    in that case. Collection is best effort and never replaces the original
-    failure.
+    XCTest owns the app launch for this lane. A successful test-runner launch
+    still only proves that SpringBoard accepted the bundle: the process can
+    exit during native initialization or fail its accessibility actions, and
+    the app-owned log is then legitimately empty. CoreSimulator's unified log
+    is the useful diagnostic in that case. Collection is best effort and never
+    replaces the original failure.
     """
     command = [
         "xcrun", "simctl", "spawn", simulator.udid, "log", "show",
@@ -444,10 +525,10 @@ def _collect_simulator_diagnostics(
             ),
         )
     except BaseException as error:
-        return f"CoreSimulator diagnostics collection failed: {error}"
+        return f"stage=collect-core-simulator-diagnostics failed: {error}"
     payload = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
     if not payload:
-        return "CoreSimulator diagnostics were empty"
+        return "stage=collect-core-simulator-diagnostics detail=empty"
     encoded = payload.encode("utf-8", errors="replace")
     bounded = encoded[-_SIMULATOR_LOG_TAIL_BYTES:]
     text = bounded.decode("utf-8", errors="replace")
@@ -457,7 +538,7 @@ def _collect_simulator_diagnostics(
             (diagnostic_dir / "simulator.log.txt").write_bytes(bounded)
         except OSError:
             pass
-    return text
+    return "stage=collect-core-simulator-diagnostics\n" + text
 
 
 def _add_note(failure: BaseException | None, label: str, error: BaseException) -> BaseException:
@@ -467,21 +548,42 @@ def _add_note(failure: BaseException | None, label: str, error: BaseException) -
     return failure
 
 
+def _retain_failure_diagnostic(
+    diagnostic_dir: Path | None,
+    failure: BaseException | None,
+) -> None:
+    """Retain the stage and cleanup notes without replacing the raised error."""
+    if diagnostic_dir is None or failure is None:
+        return
+    try:
+        payload = "".join(traceback.format_exception(failure))
+        encoded = payload.encode("utf-8", errors="replace")[-_FAILURE_DIAGNOSTIC_TAIL_BYTES:]
+        diagnostic_dir.mkdir(parents=True, exist_ok=True)
+        stage = getattr(failure, "stage", "unknown")
+        (diagnostic_dir / "failure-stage.txt").write_text(
+            str(stage) + "\n",
+            encoding="utf-8",
+        )
+        (diagnostic_dir / "failure.txt").write_bytes(encoded)
+    except OSError:
+        # Diagnostics are useful but never become a second test result.
+        pass
+
+
 def _shutdown_simulator(
     runner: CommandRunner,
     simulator: AvailableSimulator,
     *,
     budget: RunBudget,
 ) -> None:
-    result = runner.run(
+    _require_success(
+        runner,
         ["xcrun", "simctl", "shutdown", simulator.udid],
+        "shutdown",
+        budget=budget,
         timeout_seconds=budget.cleanup_timeout(),
+        bounded_timeout=True,
     )
-    if result.returncode:
-        output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
-        raise IOSSimulatorAppContractError(
-            f"Simulator shutdown failed with exit code {result.returncode}" + (f":\n{output}" if output else "")
-        )
 
 
 def _terminate_app(
@@ -491,26 +593,53 @@ def _terminate_app(
     *,
     budget: RunBudget,
 ) -> None:
-    _require_success(
-        runner,
-        simctl_terminate_command(simulator.udid, contract.bundle_identifier),
-        "terminate Simulator app",
-        budget=budget,
-        timeout_seconds=budget.cleanup_timeout(),
-    )
+    # Keep app termination inside its own stage budget. Using the entire
+    # cleanup reserve here allowed a stuck CoreSimulator app operation to
+    # starve diagnostics and shutdown, which are the reliable final cleanup
+    # actions. Pass this bounded value directly; applying the functional
+    # operation budget again would subtract the cleanup reserve twice.
+    timeout = min(STAGE_TIMEOUT_SECONDS["terminate"], budget.cleanup_timeout())
+    if timeout <= 0:
+        raise IOSSimulatorStageError("terminate", "cleanup deadline expired")
+    try:
+        result = runner.run(
+            simctl_terminate_command(simulator.udid, contract.bundle_identifier),
+            timeout_seconds=timeout,
+        )
+    except BaseException as error:
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise
+        raise _stage_error("terminate", error, timeout_seconds=timeout) from error
+    if result.returncode:
+        output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+        # XCTest can terminate the application itself after a UI-test
+        # failure. In that state cleanup is already complete and simctl uses
+        # exit 3 with this stable message; do not turn it into a second error.
+        if "found nothing to terminate" in output.lower():
+            return
+        detail = f"exit code {result.returncode}" + (f":\n{output}" if output else "")
+        raise IOSSimulatorStageError("terminate", detail, timeout_seconds=timeout)
 
 
 def _disable_simulator_hardware_keyboard(
     runner: CommandRunner, *, budget: RunBudget
 ) -> str | None:
     """Expose the software keyboard that XCTest taps for real Fyne input."""
-    read = runner.run(
-        [
-            "/usr/bin/defaults", "read", _SIMULATOR_PREFERENCE_DOMAIN,
-            _HARDWARE_KEYBOARD_PREFERENCE,
-        ],
-        timeout_seconds=budget.operation_timeout(10),
-    )
+    read_timeout = _stage_timeout(budget, "read-hardware-keyboard")
+    try:
+        read = runner.run(
+            [
+                "/usr/bin/defaults", "read", _SIMULATOR_PREFERENCE_DOMAIN,
+                _HARDWARE_KEYBOARD_PREFERENCE,
+            ],
+            timeout_seconds=read_timeout,
+        )
+    except BaseException as error:
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise
+        raise _stage_error(
+            "read-hardware-keyboard", error, timeout_seconds=read_timeout
+        ) from error
     if read.returncode == 0:
         previous = read.stdout.strip()
     elif "does not exist" in read.stderr:
@@ -519,13 +648,16 @@ def _disable_simulator_hardware_keyboard(
         output = "\n".join(
             part for part in (read.stdout, read.stderr) if part
         ).strip()
-        raise IOSSimulatorAppContractError(
-            "read Simulator hardware-keyboard preference failed"
-            + (f":\n{output}" if output else "")
+        raise IOSSimulatorStageError(
+            "read-hardware-keyboard",
+            "exit code 1" + (f":\n{output}" if output else ""),
+            timeout_seconds=read_timeout,
         )
     if previous not in {None, "0", "1"}:
-        raise IOSSimulatorAppContractError(
-            "Simulator hardware-keyboard preference has an unsupported value"
+        raise IOSSimulatorStageError(
+            "read-hardware-keyboard",
+            "preference has an unsupported value",
+            timeout_seconds=read_timeout,
         )
     _require_success(
         runner,
@@ -533,9 +665,9 @@ def _disable_simulator_hardware_keyboard(
             "/usr/bin/defaults", "write", _SIMULATOR_PREFERENCE_DOMAIN,
             _HARDWARE_KEYBOARD_PREFERENCE, "-bool", "false",
         ],
-        "disable Simulator hardware keyboard",
+        "write-hardware-keyboard",
         budget=budget,
-        timeout_seconds=budget.operation_timeout(10),
+        timeout_seconds=STAGE_TIMEOUT_SECONDS["write-hardware-keyboard"],
     )
     return previous
 
@@ -554,15 +686,14 @@ def _restore_simulator_hardware_keyboard(
             _HARDWARE_KEYBOARD_PREFERENCE, "-bool",
             "true" if previous == "1" else "false",
         ]
-    result = runner.run(command, timeout_seconds=budget.cleanup_timeout())
-    if result.returncode:
-        output = "\n".join(
-            part for part in (result.stdout, result.stderr) if part
-        ).strip()
-        raise IOSSimulatorAppContractError(
-            "restore Simulator hardware keyboard failed"
-            + (f":\n{output}" if output else "")
-        )
+    _require_success(
+        runner,
+        command,
+        "restore-hardware-keyboard",
+        budget=budget,
+        timeout_seconds=budget.cleanup_timeout(),
+        bounded_timeout=True,
+    )
 
 
 def run_ios_simulator_app_contract(
@@ -570,21 +701,21 @@ def run_ios_simulator_app_contract(
     candidate_root: Path,
     work_dir: Path,
     runner: CommandRunner,
-    mode: str = "metal",
     contract: IOSSimulatorAppContract = PUBLIC_IOS_SIMULATOR_APP_CONTRACT,
     budget: RunBudget | None = None,
     diagnostic_dir: Path | None = None,
 ) -> IOSSimulatorAppEvidence:
-    """Launch the packaged app and run its real XCTest accessibility contract."""
-    mode = _validate_mode(mode)
+    """Run the one comprehensive, rendered Go/Fyne Simulator mini contract.
+
+    Simulator UI proves accessibility, native input, lifecycle and visible
+    error/presentation behavior only.  It never claims NetworkExtension or
+    packet-tunnel success.
+    """
     budget = budget or RunBudget()
-    # Fyne's iOS renderer uses the pinned OpenGLES/GLKit path. A host Metal
-    # probe is not a prerequisite for this UI and would incorrectly reject a
-    # usable Simulator on the no-Metal development VM.
     work_dir.mkdir(parents=True, exist_ok=True)
     simulator: AvailableSimulator | None = None
     container: Path | None = None
-    app_launched = False
+    app_installed = False
     boot_started = False
     keyboard_preference_configured = False
     previous_keyboard_preference: str | None = None
@@ -596,37 +727,56 @@ def run_ios_simulator_app_contract(
         inventory = _require_success(
             runner,
             ["xcrun", "simctl", "list", "devices", "available", "-j"],
-            "list Simulators",
+            "list-devices",
             budget=budget,
         )
-        simulator = select_available_iphone(inventory.stdout)
+        try:
+            simulator = select_available_iphone(inventory.stdout)
+        except BaseException as error:
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise _stage_error("select-device", error) from error
         previous_keyboard_preference = _disable_simulator_hardware_keyboard(
             runner, budget=budget
         )
         keyboard_preference_configured = True
         boot_started = True
-        boot = runner.run(
-            simctl_boot_command(simulator.udid),
-            timeout_seconds=budget.operation_timeout(60),
-        )
+        boot_timeout = _stage_timeout(budget, "boot")
+        try:
+            boot = runner.run(
+                simctl_boot_command(simulator.udid),
+                timeout_seconds=boot_timeout,
+            )
+        except BaseException as error:
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise _stage_error("boot", error, timeout_seconds=boot_timeout) from error
         if boot.returncode and "current state: Booted" not in (boot.stdout + boot.stderr):
             output = "\n".join(part for part in (boot.stdout, boot.stderr) if part).strip()
-            raise IOSSimulatorAppContractError(f"boot Simulator failed" + (f":\n{output}" if output else ""))
+            raise IOSSimulatorStageError(
+                "boot",
+                f"exit code {boot.returncode}" + (f":\n{output}" if output else ""),
+                timeout_seconds=boot_timeout,
+            )
         _require_success(
             runner,
             simctl_bootstatus_command(simulator.udid),
-            "wait for Simulator boot",
+            "bootstatus",
             budget=budget,
         )
 
         if not app_path.is_dir():
-            raise IOSSimulatorAppContractError(f"Go/Fyne Simulator build produced no app bundle: {app_path}")
+            raise IOSSimulatorStageError(
+                "verify-app-bundle",
+                f"Go/Fyne Simulator build produced no app bundle: {app_path}",
+            )
         _require_success(
             runner,
             simctl_install_command(simulator.udid, app_path),
-            "install Simulator app",
+            "install",
             budget=budget,
         )
+        app_installed = True
         # App-owned logs are diagnostic only. The UI test below is the pass
         # condition, so a missing sandbox path must not turn a real accessible
         # UI into a marker-based claim or block cleanup.
@@ -638,16 +788,15 @@ def run_ios_simulator_app_contract(
                 log_path.write_bytes(b"")
             except OSError:
                 container = None
-        _require_success(
-            runner,
-            simctl_launch_command(simulator.udid, contract.bundle_identifier),
-            "launch Simulator app",
-            budget=budget,
-        )
-        app_launched = True
         project = candidate_root / _PROJECT_PATH
         if not project.is_dir():
-            raise IOSSimulatorAppContractError(f"iOS XCTest project is unavailable: {project}")
+            raise IOSSimulatorStageError(
+                "verify-ui-test-project",
+                f"iOS XCTest project is unavailable: {project}",
+            )
+        # Do not pre-launch with simctl. The XCTest target owns the first app
+        # launch and its in-test terminate/reopen lifecycle; handing it an
+        # already-running simctl process can block setUp before test output.
         _require_success(
             runner,
             xcodebuild_ui_test_command(
@@ -655,9 +804,10 @@ def run_ios_simulator_app_contract(
                 project,
                 work_dir / "ui-tests",
             ),
-            "run iOS XCTest UI interaction contract",
+            "xctest-ui",
             cwd=candidate_root,
             budget=budget,
+            timeout_seconds=STAGE_TIMEOUT_SECONDS["xctest-ui"],
         )
 
         evidence = IOSSimulatorAppEvidence(
@@ -665,13 +815,12 @@ def run_ios_simulator_app_contract(
             app=SimulatorApp(app_path=app_path,
                              bundle_identifier=contract.bundle_identifier,
                              architecture=contract.architecture),
-            mode=mode,
         )
     except BaseException as error:
         failure = error
     finally:
         if simulator is not None:
-            if app_launched:
+            if app_installed:
                 try:
                     _terminate_app(runner, simulator, contract, budget=budget)
                 except BaseException as error:
@@ -705,6 +854,10 @@ def run_ios_simulator_app_contract(
                 failure = _add_note(
                     failure, "Simulator keyboard preference cleanup also failed", error
                 )
+        _retain_failure_diagnostic(
+            Path(diagnostic_dir) if diagnostic_dir is not None else None,
+            failure,
+        )
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
     if evidence is None:
@@ -731,18 +884,25 @@ def prepare_ios_simulator_candidate(
     _require_success(
         runner,
         ["/bin/bash", "scripts/build_ios_xcframework.sh", "--simulator-architecture", contract.architecture],
-        "build iOS Go framework",
+        "build-ios-framework",
         cwd=go_root,
         budget=budget,
+        timeout_seconds=IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
     )
     if not go_framework.is_dir():
-        raise IOSSimulatorAppContractError(f"iOS Go build produced no XCFramework: {go_framework}")
+        raise IOSSimulatorStageError(
+            "build-ios-framework",
+            f"iOS Go build produced no XCFramework: {go_framework}",
+        )
     _require_success(
         runner,
         ["/bin/bash", "scripts/package_ios_app.sh", "iossimulator", str(app_path), str(go_framework), contract.architecture],
-        "build Go/Fyne iOS Simulator app",
+        "package-ios-app",
         cwd=go_root,
-        timeout_seconds=budget.operation_timeout(IOS_GO_UI_BUILD_TIMEOUT_SECONDS),
+        timeout_seconds=IOS_GO_UI_BUILD_TIMEOUT_SECONDS,
     )
     if not app_path.is_dir():
-        raise IOSSimulatorAppContractError(f"Go/Fyne build produced no Simulator app: {app_path}")
+        raise IOSSimulatorStageError(
+            "package-ios-app",
+            f"Go/Fyne build produced no Simulator app: {app_path}",
+        )

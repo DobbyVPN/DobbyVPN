@@ -180,6 +180,21 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     environment = os.environ.copy()
     if not environment.get("ADB_SERVER_SOCKET"):
         raise _error("Android ADB server socket is not configured")
+    # Android instrumentation normally executes the runner in the target
+    # application's process.  Do this cold-start cleanup from the controller,
+    # before the runner exists; issuing am force-stop from GoUiInstrumentedTest
+    # could terminate the test process together with the stale Fyne
+    # NativeActivity surface.
+    _adb_call(
+        adb_value,
+        serial,
+        ["shell", "am", "force-stop", APP_PACKAGE],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-native-ui-cold-start",
+        timeout=min(timeout, 30),
+        environment=environment,
+    )
     result = _adb_call(
         adb_value,
         serial,
@@ -202,46 +217,10 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     )
     if parsed.succeeded:
         return result
-    # Preserve the rendered frame and Android accessibility tree while the
-    # failed activity is still visible. These are diagnostics only: collection
-    # must not replace the original instrumentation result or delay cleanup.
-    _adb_call(
-        adb_value,
-        serial,
-        ["exec-out", "cat", "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.png"],
-        run_dir=run_dir,
-        logs=logs,
-        label="android-native-ui-screen",
-        timeout=min(timeout, 15),
-        environment=environment,
-        check=False,
-    )
-    _adb_call(
-        adb_value,
-        serial,
-        ["exec-out", "cat", "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.xml"],
-        run_dir=run_dir,
-        logs=logs,
-        label="android-native-ui-tree",
-        timeout=min(timeout, 15),
-        environment=environment,
-        check=False,
-    )
-    _adb_call(
-        adb_value,
-        serial,
-        [
-            "shell", "rm", "-f",
-            "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.png",
-            "/data/user/0/com.dobby.vpn/files/dobbyvpn-ui-failure.xml",
-        ],
-        run_dir=run_dir,
-        logs=logs,
-        label="android-native-ui-diagnostic-cleanup",
-        timeout=min(timeout, 15),
-        environment=environment,
-        check=False,
-    )
+    # Preserve the original instrumentation result. Screenshots and
+    # accessibility hierarchies can contain profile text, user-entered
+    # values, and private system details, so Android qualification keeps no
+    # failure artifacts from the rendered surface.
     return subprocess.CompletedProcess(
         result.args, result.returncode or 1, result.stdout, result.stderr
     )

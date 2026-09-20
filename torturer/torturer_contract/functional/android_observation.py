@@ -41,6 +41,10 @@ class AndroidProfileObservation:
     final_disconnect_clean: bool
     cleanup_verified: bool
     error_code: str | None = None
+    coverage_lane: str = "protocol-matrix"
+    gui_auto_verified: bool = False
+    ui_reopen_verified: bool = False
+    vpn_consent_handled: bool = False
 
     def __post_init__(self) -> None:
         if self.source_sha is not None and (
@@ -48,6 +52,10 @@ class AndroidProfileObservation:
             or re.fullmatch(r"[0-9a-f]{40}", self.source_sha) is None
         ):
             raise AndroidObservationError("source_sha is invalid")
+        if not isinstance(self.coverage_lane, str) or self.coverage_lane not in {
+            "protocol-matrix", "gui-auto"
+        }:
+            raise AndroidObservationError("coverage lane is invalid")
         if (
             (not self.connections and self.error_code is None)
             or len(self.connections) != len(set(self.connections))
@@ -63,6 +71,7 @@ class AndroidProfileObservation:
             "restart_verified", "reconnect_completed", "second_tunnel_interface",
             "second_routing_verified", "final_disconnect_clean",
             "cleanup_verified",
+            "gui_auto_verified", "ui_reopen_verified", "vpn_consent_handled",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise AndroidObservationError(f"{name} must be boolean")
@@ -145,6 +154,10 @@ class AndroidProfileObservation:
             final_disconnect_clean=value["final_disconnect_clean"],
             cleanup_verified=value["cleanup_verified"],
             error_code=error_code,
+            coverage_lane=value.get("coverage_lane", "protocol-matrix"),
+            gui_auto_verified=value.get("gui_auto_verified", False),
+            ui_reopen_verified=value.get("ui_reopen_verified", False),
+            vpn_consent_handled=value.get("vpn_consent_handled", False),
         )
         if expected_source_sha is not None:
             if (
@@ -180,4 +193,8 @@ class AndroidProfileObservation:
             "second_routing_verified": self.second_routing_verified,
             "final_disconnect_clean": self.final_disconnect_clean,
             "cleanup_verified": self.cleanup_verified,
+            "coverage_lane": self.coverage_lane,
+            "gui_auto_verified": self.gui_auto_verified,
+            "ui_reopen_verified": self.ui_reopen_verified,
+            "vpn_consent_handled": self.vpn_consent_handled,
         }

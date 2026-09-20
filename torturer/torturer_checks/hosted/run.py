@@ -18,10 +18,10 @@ from torturer_contract.functional.results import (
     RunProvenance,
 )
 from torturer_contract.functional.scenarios import (
-    get_scenario,
-    test_set,
+    select_scenarios,
+    suite_set,
+    validate_suite,
 )
-from torturer_checks.public_qualification import PUBLIC_EXPECTED_UNAVAILABLE
 
 from .cli import (
     HostedAdapterError,
@@ -64,14 +64,12 @@ def _select_scenarios(
     scenario_ids: list[str] | None,
     *,
     platform: str | None = None,
+    suite: str = "mini",
 ) -> tuple:
-    defined = test_set()
-    if not scenario_ids:
-        scenarios = defined
-    else:
-        scenarios = tuple(get_scenario(value) for value in scenario_ids)
-        if platform is not None and any(scenario not in defined for scenario in scenarios):
-            raise ValueError("scenario is not applicable to the selected platform")
+    # ``platform`` remains a caller-side preflight check.  Resolution itself
+    # is shared with the local entrypoint so a diagnostic selection can still
+    # name a deferred scenario; only a complete suite can qualify.
+    scenarios = select_scenarios(suite=suite, scenario_ids=scenario_ids)
     if len({scenario.id for scenario in scenarios}) != len(scenarios):
         raise ValueError("scenario-id values must be unique")
     if platform is not None and platform not in _HOSTED_ARCHITECTURE_BY_PLATFORM:
@@ -84,12 +82,20 @@ def _coverage_contract(
     connections: tuple[ConnectionIdentity, ...],
     selected_scenarios,
     results: list[dict[str, object]],
+    *,
+    suite: str = "mini",
+    explicit_scenario_selection: bool = False,
 ) -> dict[str, object]:
-    """Summarize results; the engine runs every selected scenario directly."""
+    """Summarize results; only a complete suite can qualify.
 
-    test_ids = {scenario.id for scenario in test_set()}
+    Unavailable results are never accepted as hosted qualification evidence.
+    A focused ``--scenario`` invocation remains useful for diagnostics, but
+    is explicitly incomplete even if it names every scenario by hand.
+    """
+
+    suite_scenarios = suite_set(suite)
+    test_ids = {scenario.id for scenario in suite_scenarios}
     selected_ids = {scenario.id for scenario in selected_scenarios}
-    expected_unavailable = PUBLIC_EXPECTED_UNAVAILABLE.get(platform)
     actual_unavailable = {
         (item["scenario"]["id"], item["failure"]["code"])
         for item in results
@@ -97,28 +103,28 @@ def _coverage_contract(
     }
     matrix_complete = (
         selected_ids == test_ids
+        and not explicit_scenario_selection
         and len(results) == len(connections) * len(selected_scenarios)
     )
     accepted = (
-        expected_unavailable is not None
-        and actual_unavailable.issubset(expected_unavailable)
-        and all(item["outcome"] in {"passed", "unavailable"} for item in results)
+        not actual_unavailable
+        and all(item["outcome"] == "passed" for item in results)
         and bool(connections)
     )
     valid = matrix_complete and accepted
-    complete = valid and not actual_unavailable
-    status = (
-        "complete" if complete
-        else "supported-subset-with-expected-limitations" if valid
-        else "coverage-contract-failed"
-    )
+    complete = valid
+    status = "complete" if complete else "coverage-contract-failed"
     return {
+        "suite": suite,
         "status": status,
         "complete": complete,
         "test_set_scenario_count": len(test_ids),
+        "required_scenario_ids": sorted(test_ids),
         "connection_count": len(connections),
         "expected_result_count": len(connections) * len(selected_scenarios),
         "selected_scenario_count": len(selected_ids),
+        "selected_scenario_ids": sorted(selected_ids),
+        "explicit_scenario_selection": explicit_scenario_selection,
         "result_count": len(results),
         "actual_unavailable": [
             {"scenario_id": scenario_id, "reason_code": reason}
@@ -390,9 +396,7 @@ def _execute_lane(
 
 def _qualification_exit_code(coverage: dict[str, object]) -> int:
     """Fail qualification unless the reviewed platform coverage contract matches."""
-    return 0 if coverage.get("status") in {
-        "complete", "supported-subset-with-expected-limitations"
-    } else 2
+    return 0 if coverage.get("status") == "complete" else 2
 
 
 def _write_json(
@@ -426,6 +430,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Workflow-provided remaining canonical lane budget",
     )
+    parser.add_argument(
+        "--suite",
+        choices=("mini", "full"),
+        default="mini",
+        help="Qualification suite; hosted runs currently support mini only",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--raw-log-dir", type=Path)
     parser.add_argument("--app-log", type=Path, help="Complete application log")
@@ -444,6 +454,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # Reject unsupported suite requests before creating logs, constructing an
+    # adapter, or doing any candidate setup.  In particular, Android full is
+    # a physical-device extension and must not silently become mini.
+    validate_suite(args.suite, platform=args.platform, entrypoint="hosted")
+    selected_scenarios = _select_scenarios(
+        args.scenario_ids,
+        platform=args.platform,
+        suite=args.suite,
+    )
     adapter = None
     # The workflow's remaining budget is also the outer deadline's budget.
     # Start one clock before preflight so adapter reset and finalization stay
@@ -500,10 +519,6 @@ def main(argv: list[str] | None = None) -> int:
             architecture=architecture,
         )
         engine = FunctionalEngine()
-        selected_scenarios = _select_scenarios(
-            args.scenario_ids,
-            platform=args.platform,
-        )
         # Keep every selected scenario in the engine run. Unsupported behavior
         # becomes an ordinary unavailable result, not an omitted test.
         finalization_attempted = True
@@ -519,12 +534,15 @@ def main(argv: list[str] | None = None) -> int:
             connections,
             selected_scenarios,
             results,
+            suite=args.suite,
+            explicit_scenario_selection=bool(args.scenario_ids),
         )
         document = {
             "environment": {
                 "platform": args.platform,
                 "platform_version": args.platform_version,
                 "architecture": architecture,
+                "suite": args.suite,
             },
             "connections": [connection.to_dict() for connection in connections],
             "scenarios": results,

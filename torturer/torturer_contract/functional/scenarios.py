@@ -63,11 +63,40 @@ def _step(id: str, operation: str, timeout: int = 8) -> ScenarioStep:
 
 
 _COMMON_CONNECT = (
-    _step("configure", "configure"),
+    # Android mini enters the real profile through Fyne's transient native
+    # editor and then proves a rendered Settings/Back transition.  That cold
+    # UI path already uses the same 60-second bound in functional.configure;
+    # keep the configure operation consistent in every semantic scenario
+    # instead of giving the identical work the generic eight-second default.
+    _step("configure", "configure", 60),
     _step("connect", "connect", 40),
     _step("tunnel", "observe_tunnel"),
     _step("routing", "observe_routing_identity", 15),
 )
+
+
+# ``functional.network-transition`` remains a useful, directly selectable
+# diagnostic scenario.  It is deliberately not part of either qualification
+# suite while network-transition is deferred.  Keeping the definition here
+# (rather than deleting it) preserves focused diagnostics without allowing a
+# hosted limitation to masquerade as qualification coverage.
+_QUALIFICATION_SCENARIO_IDS = (
+    "functional.configure",
+    "functional.core-connection",
+    "functional.start-stop-start",
+    "functional.product-process-loss",
+)
+
+SUITE_NAMES = ("mini", "full")
+
+# The full lane is cumulative at the caller level: desktop callers add their
+# native-window journeys to this shared functional lane.  The semantic
+# scenario membership is intentionally the same as mini until deferred
+# network-transition coverage is re-admitted by policy.
+_SUITE_SCENARIO_IDS: dict[str, tuple[str, ...]] = {
+    "mini": _QUALIFICATION_SCENARIO_IDS,
+    "full": _QUALIFICATION_SCENARIO_IDS,
+}
 
 
 TEST_SET: tuple[ScenarioDefinition, ...] = (
@@ -110,7 +139,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             "disconnect.clean",
             "cleanup.restored",
         ),
-        max_duration_seconds=141,
+        max_duration_seconds=193,
     ),
     ScenarioDefinition(
         id="functional.start-stop-start",
@@ -146,7 +175,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             "disconnect.final_clean",
             "cleanup.restored",
         ),
-        max_duration_seconds=159,
+        max_duration_seconds=211,
     ),
     ScenarioDefinition(
         id="functional.network-transition",
@@ -175,7 +204,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             "disconnect.clean",
             "cleanup.restored",
         ),
-        max_duration_seconds=126,
+        max_duration_seconds=178,
     ),
     ScenarioDefinition(
         id="functional.product-process-loss",
@@ -213,9 +242,90 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
 
 
 def test_set() -> tuple[ScenarioDefinition, ...]:
-    """Return the immutable functional test set."""
+    """Return every defined scenario, including diagnostic-only scenarios.
+
+    Callers running qualification must use :func:`suite_set`; this complete
+    definition list is retained so focused diagnostics can still resolve
+    scenarios that are not currently in a qualification suite.
+    """
 
     return TEST_SET
+
+
+def suite_set(suite: str = "mini") -> tuple[ScenarioDefinition, ...]:
+    """Return the canonical scenario membership for ``suite``.
+
+    ``full`` is cumulative with respect to the caller's additional journeys
+    (for example, native desktop-window actions); the shared semantic lane
+    remains the mini membership while deferred scenarios are out of scope.
+    """
+
+    try:
+        scenario_ids = _SUITE_SCENARIO_IDS[suite]
+    except KeyError as error:
+        raise ValueError(
+            f"unknown suite {suite!r}; expected one of {', '.join(SUITE_NAMES)}"
+        ) from error
+    by_id = {scenario.id: scenario for scenario in TEST_SET}
+    return tuple(by_id[scenario_id] for scenario_id in scenario_ids)
+
+
+def select_scenarios(
+    *,
+    suite: str = "mini",
+    scenario_ids: list[str] | tuple[str, ...] | None = None,
+) -> tuple[ScenarioDefinition, ...]:
+    """Resolve a suite or an explicit diagnostic scenario selection.
+
+    Explicit selections intentionally resolve against all definitions, so a
+    deferred scenario remains available for diagnostics.  Qualification
+    callers must separately mark an explicit selection as incomplete.
+    """
+
+    suite_set(suite)  # validate the suite even when diagnostics are selected
+    if not scenario_ids:
+        return suite_set(suite)
+    scenarios = tuple(get_scenario(value) for value in scenario_ids)
+    if len({scenario.id for scenario in scenarios}) != len(scenarios):
+        raise ValueError("scenario-id values must be unique")
+    return scenarios
+
+
+def validate_suite(
+    suite: str,
+    *,
+    platform: str,
+    entrypoint: str,
+) -> None:
+    """Validate caller/platform policy before any candidate setup.
+
+    Hosted qualification is intentionally mini-only.  Local full is the
+    additional real-window journey on Windows and macOS. Android and iOS full
+    suites are future physical-device extensions, while Linux deliberately
+    remains CLI/service mini-only. Raising before adapter construction
+    prevents an unsupported request from being silently downgraded to mini or
+    from doing installation/build work.
+    """
+
+    suite_set(suite)
+    if suite == "mini":
+        return
+    if platform in {"android", "ios", "ios-simulator"}:
+        raise ValueError(
+            "FULL_SUITE_PHYSICAL_DEVICE_UNIMPLEMENTED: "
+            f"{platform} does not implement the full physical-device suite"
+        )
+    if entrypoint == "hosted":
+        raise ValueError(
+            "FULL_SUITE_UNSUPPORTED_BY_HOSTED_ENTRYPOINT: hosted qualification "
+            "accepts --suite mini"
+        )
+    if platform == "linux":
+        raise ValueError(
+            "FULL_SUITE_UNSUPPORTED_PLATFORM: Linux is CLI/service mini-only"
+        )
+    if platform not in {"windows", "macos"}:
+        raise ValueError(f"FULL_SUITE_UNSUPPORTED_PLATFORM: {platform}")
 
 
 def get_scenario(scenario_id: str) -> ScenarioDefinition:

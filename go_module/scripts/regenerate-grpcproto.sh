@@ -4,22 +4,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GO_MODULE="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO_ROOT="$(cd "$GO_MODULE/.." && pwd)"
-CANONICAL="$REPO_ROOT/go_module/grpcproto/vpnserver.proto"
-PROTO_DEST="$GO_MODULE/grpcproto/vpnserver.proto"
+CANONICAL="$GO_MODULE/grpcproto/vpnserver.proto"
 
 if [[ ! -f "$CANONICAL" ]]; then
   echo "error: canonical proto not found: $CANONICAL" >&2
   exit 1
 fi
 
-cp "$CANONICAL" "$PROTO_DEST"
-
-WORKSPACE_PROTOC="$REPO_ROOT/../tools/protoc/bin/protoc"
-if [[ -x "$WORKSPACE_PROTOC" ]]; then
-  export PATH="$(dirname "$WORKSPACE_PROTOC"):$(go env GOPATH)/bin:$PATH"
-elif ! command -v protoc >/dev/null; then
-  echo "error: protoc not found. Use workspace tools/protoc/ (see AGENTS.md)." >&2
+if ! command -v protoc >/dev/null; then
+  echo "error: protoc not found on PATH; install protoc and retry." >&2
   exit 1
 fi
 

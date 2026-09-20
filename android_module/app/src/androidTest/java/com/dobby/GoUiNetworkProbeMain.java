@@ -18,7 +18,6 @@ import java.util.Base64;
 /** HTTPS probe launched by UiAutomation as Android's ordinary shell UID. */
 public final class GoUiNetworkProbeMain {
     private static final int MAX_BODY_TEXT_BYTES = 64 * 1024;
-    private static final int MAX_ERROR_DETAIL = 512;
 
     private GoUiNetworkProbeMain() { }
 
@@ -172,15 +171,10 @@ public final class GoUiNetworkProbeMain {
 
     private static JSONObject failureResult(Throwable failure) {
         try {
-            String detail = failure.toString().replace('\r', ' ').replace('\n', ' ');
-            if (detail.length() > MAX_ERROR_DETAIL) {
-                detail = detail.substring(0, MAX_ERROR_DETAIL);
-            }
             return new JSONObject()
                     .put("network_binding", "default")
                     .put("probe_uid", Process.myUid())
-                    .put("error_type", failure.getClass().getName())
-                    .put("error", detail);
+                    .put("error_code", "ANDROID_NETWORK_REQUEST_FAILED");
         } catch (JSONException impossible) {
             throw new AssertionError(impossible);
         }

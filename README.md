@@ -19,11 +19,11 @@ Those references are rollback points, not compatibility code in the release
 tree.
 
 The product Go toolchain is pinned to Go 1.26.8 in `.go-version`. Desktop
-packages are native Go/Fyne executables with no JVM launcher. Android still
-runs its thin Kotlin/Java OS boundary on ART for permission and `VpnService`
-lifecycle, but has no KMP or Compose UI; iOS likewise retains only its thin
-Swift NetworkExtension boundary. No RAM benchmark or memory-usage acceptance
-criterion is part of this migration.
+packages are native Go/Fyne executables with no desktop JVM launcher or
+Conveyor packaging. Android still runs its thin Kotlin/Java OS boundary on ART
+for permission and `VpnService` lifecycle, but has no KMP or Compose UI; iOS
+likewise retains only its thin Swift native/VPN boundary. No RAM
+benchmark or memory-usage acceptance criterion is part of this migration.
 
 See the complete [architecture contract](docs/ARCHITECTURE.md) for the
 responsibility boundaries and supported configuration behavior.
@@ -38,9 +38,15 @@ DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 Desktop build commands, a local CLI configuration check, and CI build
 commands are documented in [.github/scripts/README.md](.github/scripts/README.md).
 For Windows/macOS iteration, the native `dobby-vpn-ui` executable can be
-injected into a disposable VM directly; Release still qualifies the packaged
-installer/archive and the real native-window interaction path. No JVM is
-installed by the desktop client.
+injected into a disposable VM directly. Release qualifies the packaged
+installer/archive through hosted mini; local full qualification adds the real
+native-window interaction path (and uses the exact Release package when run in
+Release mode). No JVM is installed by the desktop client.
+
+The qualification model is documented in [TESTING.md](TESTING.md): mini is the
+portable contract, full is cumulative where a platform supports it, and the
+same Go coverage source is used across platforms. Linux remains CLI/service
+only; physical-device Android and iOS full qualification is tracked separately.
 
 Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
 URLs are rejected, redirects must remain HTTPS, and downloaded or inline

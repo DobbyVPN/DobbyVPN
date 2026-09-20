@@ -94,8 +94,8 @@ xcode_args=(
   -sdk "$sdk"
   # xcodebuild's -derivedDataPath mode requires a scheme.  These are direct
   # target builds so use the equivalent build-directory settings instead;
-  # this keeps CommonDI/tunnel isolated without forcing the diagnostic
-  # iosApp target into the generated Fyne bundle.
+  # this keeps CommonDI/tunnel isolated without involving the removed
+  # legacy application target in the generated Fyne bundle.
   "SYMROOT=$derived/products"
   "OBJROOT=$derived/intermediates"
   CODE_SIGNING_ALLOWED=NO
@@ -106,7 +106,6 @@ if [[ "$device" == 0 && -n "${xcode_arch:-}" ]]; then
   xcode_args+=(ARCHS="$xcode_arch" ONLY_ACTIVE_ARCH=YES)
 fi
 # Build by target rather than relying on an Xcode shared-scheme file. The
-# repository intentionally keeps only the user-facing iosApp scheme; the
 # generated Fyne bundle consumes these two native targets directly.
 xcodebuild "${xcode_args[@]}" -target CommonDI build
 tunnel_xcode_args=("${xcode_args[@]}")

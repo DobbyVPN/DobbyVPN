@@ -43,6 +43,23 @@ class AndroidObservationContractTests(unittest.TestCase):
         self.assertNotIn("source_sha", observation.to_observations())
         self.assertNotIn("observed_ipv4", observation.to_observations())
 
+    def test_optional_lane_metadata_distinguishes_gui_auto_from_protocol_matrix(self) -> None:
+        value = _valid()
+        value.update(
+            {
+                "coverage_lane": "gui-auto",
+                "gui_auto_verified": True,
+                "ui_reopen_verified": True,
+                "vpn_consent_handled": True,
+            }
+        )
+        observation = AndroidProfileObservation.from_mapping(value)
+        facts = observation.to_observations()
+        self.assertEqual(facts["coverage_lane"], "gui-auto")
+        self.assertTrue(facts["gui_auto_verified"])
+        self.assertTrue(facts["ui_reopen_verified"])
+        self.assertTrue(facts["vpn_consent_handled"])
+
     def test_requires_matching_source_sha_and_rejects_reported_errors(self) -> None:
         value = _valid()
         with self.assertRaisesRegex(AndroidObservationError, "source_sha"):
@@ -85,6 +102,12 @@ class AndroidObservationContractTests(unittest.TestCase):
         value = _valid()
         value["latency_ms"] = math.nan
         with self.assertRaisesRegex(AndroidObservationError, "finite"):
+            AndroidProfileObservation.from_mapping(value)
+
+    def test_rejects_unknown_coverage_lane(self) -> None:
+        value = _valid()
+        value["coverage_lane"] = "headless"
+        with self.assertRaisesRegex(AndroidObservationError, "coverage lane"):
             AndroidProfileObservation.from_mapping(value)
 
 

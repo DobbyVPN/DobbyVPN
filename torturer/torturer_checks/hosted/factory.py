@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .android import AndroidHostedAdapter
+from .android import AndroidCompositeHostedAdapter, AndroidHostedAdapter
 from .cli import CommandRunner
 from .linux import LinuxHostedAdapter
 from .macos import MacOSHostedAdapter
@@ -41,6 +41,7 @@ def adapter_for_platform(
     | WindowsHostedAdapter
     | MacOSHostedAdapter
     | AndroidHostedAdapter
+    | AndroidCompositeHostedAdapter
 ):
     if platform == "android":
         if service_log is not None:
@@ -60,7 +61,7 @@ def adapter_for_platform(
         ):
             if value is not None:
                 raise ValueError(f"android adapter received unexpected {name}")
-        return AndroidHostedAdapter(
+        common = dict(
             runner=runner,
             profile=profile,
             adb=adb,
@@ -69,6 +70,10 @@ def adapter_for_platform(
             latency_url=PUBLIC_LATENCY_URL,
             download_url=PUBLIC_DOWNLOAD_URL,
             upload_url=PUBLIC_UPLOAD_URL,
+        )
+        return AndroidCompositeHostedAdapter(
+            gui_auto=AndroidHostedAdapter(**common, ui_mode="gui-auto"),
+            protocol_matrix=AndroidHostedAdapter(**common, ui_mode="protocol-matrix"),
         )
 
     if platform not in {"linux", "windows", "macos"}:

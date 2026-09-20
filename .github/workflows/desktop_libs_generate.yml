@@ -185,6 +185,7 @@ jobs:
             go_module/dobby_bridge.dll
             go_module/wintun.dll
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload built libraries
         if: matrix.platform == 'linux'
@@ -197,6 +198,7 @@ jobs:
             go_module/libc++.so.1
             go_module/libc++abi.so.1
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload macOS arm64 service
         if: matrix.platform == 'macos' && matrix.arch == 'arm64'
@@ -206,6 +208,7 @@ jobs:
           path: |
             go_module/macos_grpcvpnserver
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload macOS amd64 service and TrustTunnel helper
         if: matrix.platform == 'macos' && matrix.arch == 'amd64'
@@ -216,6 +219,7 @@ jobs:
             go_module/macos_grpcvpnserver
             go_module/trusttunnel_client
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload Windows desktop CLI
         if: matrix.platform == 'windows'
@@ -224,6 +228,7 @@ jobs:
           name: dobby-cli-windows
           path: go_module/dobby-cli.exe
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload Windows Go/Fyne UI
         if: matrix.platform == 'windows'
@@ -232,6 +237,7 @@ jobs:
           name: dobby-vpn-ui-windows
           path: go_module/dobby-vpn-ui.exe
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload Windows headless Go/Fyne UI companion
         if: matrix.platform == 'windows'
@@ -240,6 +246,7 @@ jobs:
           name: dobby-vpn-ui-test-windows
           path: go_module/dobby-vpn-ui-test.exe
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload Linux desktop CLI
         if: matrix.platform == 'linux'
@@ -248,6 +255,7 @@ jobs:
           name: dobby-cli-linux
           path: go_module/dobby-cli
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload Linux Go/Fyne UI
         if: matrix.platform == 'linux'
@@ -256,6 +264,7 @@ jobs:
           name: dobby-vpn-ui-linux
           path: go_module/dobby-vpn-ui
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload Linux headless Go/Fyne UI companion
         if: matrix.platform == 'linux'
@@ -264,6 +273,7 @@ jobs:
           name: dobby-vpn-ui-test-linux
           path: go_module/dobby-vpn-ui-test
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload macOS desktop CLI
         if: matrix.platform == 'macos'
@@ -272,6 +282,7 @@ jobs:
           name: dobby-cli-macos-${{ matrix.arch }}
           path: go_module/dobby-cli
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload macOS Go/Fyne UI
         if: matrix.platform == 'macos'
@@ -280,6 +291,7 @@ jobs:
           name: dobby-vpn-ui-macos-${{ matrix.arch }}
           path: go_module/dobby-vpn-ui
           if-no-files-found: error
+          retention-days: 3
 
       - name: Upload macOS headless Go/Fyne UI companion
         if: matrix.platform == 'macos'
@@ -288,3 +300,4 @@ jobs:
           name: dobby-vpn-ui-test-macos-${{ matrix.arch }}
           path: go_module/dobby-vpn-ui-test
           if-no-files-found: error
+          retention-days: 3

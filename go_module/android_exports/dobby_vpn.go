@@ -22,6 +22,11 @@ func PrepareAndroidService() int { return prepareAndroidService() }
 // ExportLogs passes input-safe diagnostics to Android's native share sheet.
 func ExportLogs(raw []byte) bool { return exportAndroidLogs(raw) }
 
+// DiagnosticPaths returns the fixed app-owned files selected by the native
+// Android context. The newline-delimited value is consumed only by the shared
+// Go UI path validator; callers cannot supply or override it.
+func DiagnosticPaths() string { return androidDiagnosticPaths() }
+
 // PlatformCallbacks is declared in the bound package so gobind emits the Java
 // interface instead of skipping an interface imported from another package.
 type PlatformCallbacks interface {

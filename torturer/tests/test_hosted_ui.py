@@ -19,6 +19,7 @@ class FakeBase:
     def __init__(self) -> None:
         self.selected = None
         self.baselines = 0
+        self.native_preparations = 0
         self.reset_calls = 0
         self.finalize_calls = 0
 
@@ -41,6 +42,10 @@ class FakeBase:
 
     def _capture_baseline(self, _timeout: float) -> None:
         self.baselines += 1
+
+    def prepare_native_connect(self, timeout: float) -> None:
+        self.native_preparations += 1
+        self._capture_baseline(timeout)
 
     def _connected(self, _timeout: float) -> bool:
         return True
@@ -100,15 +105,18 @@ class HeadlessUIAdapterTests(unittest.TestCase):
                     ScenarioStep(id="connect", operation="connect", timeout_seconds=8),
                     ScenarioStep(id="tunnel", operation="observe_tunnel", timeout_seconds=8),
                     ScenarioStep(id="disconnect", operation="disconnect", timeout_seconds=8),
+                    ScenarioStep(id="reconnect", operation="reconnect", timeout_seconds=8),
+                    ScenarioStep(id="final-disconnect", operation="disconnect", timeout_seconds=8),
                 ),
                 required_capabilities=frozenset(),
                 assertion_ids=("configure.accepted",),
-                max_duration_seconds=40,
+                max_duration_seconds=60,
             )
             observations = adapter.execute_scenario(scenario)
             self.assertTrue(observations["configured"])
             self.assertTrue(observations["tunnel_interface"])
-            self.assertEqual(base.baselines, 1)
+            self.assertEqual(base.native_preparations, 2)
+            self.assertEqual(base.baselines, 2)
             adapter.reset()
             adapter.finalize()
             self.assertEqual(base.reset_calls, 1)
