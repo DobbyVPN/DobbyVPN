@@ -251,10 +251,11 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         core = FakeCore()
         with (
             patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 200, 200)),
-            patch.object(smoke, "_macos_focus_window"),
+            patch.object(smoke, "_macos_focus_window") as focus_window,
             patch.object(smoke, "_macos_core_graphics", return_value=(graphics, core)),
         ):
             smoke._macos_click((40, 60, 80, 100), 4321)
+        focus_window.assert_called_once_with(4321)
         self.assertEqual([event[1] for event in graphics.created], [5, 5, 1, 2])
         self.assertEqual(graphics.created[2][2].x, 60.0)
         self.assertEqual(graphics.created[2][2].y, 80.0)
@@ -303,12 +304,13 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
 
     def test_macos_keystroke_is_bound_to_pid(self) -> None:
         result = subprocess.CompletedProcess(["osascript"], 0, stdout="", stderr="")
-        with patch.object(smoke, "_macos_focus_window"), \
+        with patch.object(smoke, "_macos_focus_window") as focus_window, \
                 patch.object(smoke.subprocess, "run", return_value=result) as run:
             smoke._macos_keystroke(4321, "v")
         script = run.call_args.args[0][2]
         self.assertIn("unix id is 4321", script)
         self.assertIn('keystroke "v" using command down', script)
+        focus_window.assert_not_called()
 
     def test_macos_focus_next_sends_one_native_tab_to_pid(self) -> None:
         result = subprocess.CompletedProcess(["osascript"], 0, stdout="", stderr="")
@@ -816,14 +818,24 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
             patch.object(smoke, "_macos_accessibility_rect", return_value=(1, 2, 100, 200)),
             patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 200, 300)) as window_rect,
             patch.object(controller, "_macos_pid_or_error", return_value=4321),
-            patch.object(smoke, "_macos_focus_next"),
+            patch.object(smoke, "_macos_focus_next") as focus_next,
             patch.object(smoke, "_macos_clipboard_set_verified"),
-            patch.object(smoke, "_macos_keystroke"),
-            patch.object(smoke, "_macos_copy_selection_verified"),
+            patch.object(smoke, "_macos_keystroke") as keystroke,
+            patch.object(smoke, "_macos_copy_selection_verified") as copy_selection,
             patch.object(controller, "snapshot", side_effect=AssertionError("status snapshot is not part of configure")),
         ):
             self.assertEqual(controller.configure(), {"input_verified": True})
         window_rect.assert_not_called()
+        focus_next.assert_called_once_with(4321)
+        self.assertEqual(
+            keystroke.call_args_list,
+            [
+                call(4321, "a"),
+                call(4321, "v"),
+                call(4321, "a"),
+                call(4321, "v"),
+            ],
+        )
 
     def test_process_loss_recovery_reconfigures_and_connects_through_native_ui(self) -> None:
         controller = smoke.NativeUIController(

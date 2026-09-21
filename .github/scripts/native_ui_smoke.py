@@ -891,9 +891,9 @@ def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
 
 
 def _macos_keystroke(process_pid: int, key: str) -> None:
+    """Send one exact-PID shortcut after the caller establishes native focus."""
     if process_pid <= 0 or len(key) != 1 or key not in {"a", "v", "c"}:
         raise NativeUISmokeError("macOS native UI process identity is unavailable")
-    _macos_focus_window(process_pid)
     script = f'''tell application "System Events"
     tell (first process whose unix id is {process_pid})
         set frontmost to true
@@ -1065,7 +1065,7 @@ def _macos_copy_selection_verified(
     timeout: float,
     control_bounds: tuple[int, int, int, int] | None = None,
 ) -> None:
-    """Exercise Cmd+A/C and compare only after pasteboard generation changes."""
+    """Exercise Cmd+A/C and compare after pasteboard generation changes."""
 
     _macos_keystroke(process_pid, "a")
     # Make a copy a detectable state transition even when the field already
