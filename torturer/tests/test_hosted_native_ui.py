@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
+import queue
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -211,6 +214,55 @@ class NativeUIJourneyTests(unittest.TestCase):
     def test_required_process_loss_evidence_is_enforced(self) -> None:
         with self.assertRaisesRegex(native_ui.NativeUIJourneyError, "process_loss_verified"):
             self._run_with_fakes(_FakeBase(process_loss_verified=False), _FakeUI())
+
+    def test_native_ui_process_does_not_discard_terminal_cleanup_error(self) -> None:
+        class FakeProcess:
+            pid = 123
+            returncode = None
+
+            def __init__(self):
+                self.stdin = io.StringIO()
+                self.stdout = None
+                self.stderr = None
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                self.returncode = 1
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 1
+
+            def kill(self):
+                self.returncode = -9
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.write_text("synthetic", encoding="utf-8")
+            process = FakeProcess()
+            ui = native_ui._NativeUIProcess(
+                script=root / "smoke.py",
+                platform="macos",
+                binary=root / "ui.app",
+                profile=profile,
+                timeout=1,
+                raw_directory=root / "logs",
+            )
+            ui.process = process
+            ui._responses.put(json.dumps({
+                "ok": False,
+                "error": "verified product process did not exit",
+            }))
+            ui._stderr_done.set()
+            with self.assertRaises(native_ui.NativeUIJourneyError) as raised:
+                ui.close()
+            self.assertTrue(any(
+                "verified product process did not exit" in note
+                for note in raised.exception.__notes__
+            ))
 
 
 if __name__ == "__main__":

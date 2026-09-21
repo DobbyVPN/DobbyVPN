@@ -1555,6 +1555,7 @@ def serve_native_ui(
         output_stream.flush()
 
     start_failed = False
+    cleanup_done = False
     try:
         progress("start", "window-discovery")
         try:
@@ -1613,10 +1614,37 @@ def serve_native_ui(
                 elif operation == "reopen":
                     result = controller.reopen()
                 elif operation == "close":
-                    result = controller.close()
-                    output_stream.write(encoder.encode({"ok": True, **result}) + "\n")
+                    # ``close`` is the terminal cleanup handshake, not the
+                    # visible close-window assertion.  On macOS the normal
+                    # close path sends Cmd-W through AppleScript and then
+                    # waits for a product process that may be stuck in a
+                    # native/network call for the full smoke timeout.  If we
+                    # did that here, the parent could kill this child before
+                    # its finally block reaches exact-identity cleanup.  The
+                    # journey's separate ``close-window`` operation owns the
+                    # graceful visible-close assertion; terminal teardown
+                    # must clean the verified product identity first.
+                    try:
+                        controller.close_for_cleanup()
+                        cleanup_error = None
+                    except BaseException as error:
+                        cleanup_error = error
+                    cleanup_done = True
+                    try:
+                        result = controller.snapshot()
+                    except BaseException:
+                        result = {}
+                    if cleanup_error is None:
+                        response = {"ok": True, **result}
+                    else:
+                        response = {
+                            "ok": False,
+                            "error": str(cleanup_error),
+                            **result,
+                        }
+                    output_stream.write(encoder.encode(response) + "\n")
                     output_stream.flush()
-                    return 0
+                    return 0 if cleanup_error is None else 1
                 else:
                     raise NativeUISmokeError(f"unsupported native UI operation {operation!r}")
                 response = {"ok": True, **result}
@@ -1629,7 +1657,7 @@ def serve_native_ui(
         output_stream.flush()
         return 1
     finally:
-        if not start_failed:
+        if not start_failed and not cleanup_done:
             controller.close_for_cleanup()
     return 0
 

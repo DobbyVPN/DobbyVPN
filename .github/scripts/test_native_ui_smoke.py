@@ -767,6 +767,72 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         self.assertFalse(failure["ok"])
         self.assertIn("window discovery failed", failure["error"])
 
+    def test_serve_terminal_close_cleans_before_ack_without_graceful_close(self) -> None:
+        events: list[str] = []
+
+        class TerminalController:
+            def __init__(self):
+                self.close_calls = 0
+                self.cleanup_calls = 0
+
+            def start(self):
+                events.append("start")
+
+            def snapshot(self):
+                events.append("snapshot")
+                return {"status": "Disconnected"}
+
+            def close(self):
+                self.close_calls += 1
+                events.append("graceful-close")
+                raise AssertionError("terminal cleanup must not use graceful close")
+
+            def close_for_cleanup(self):
+                self.cleanup_calls += 1
+                events.append("cleanup")
+
+        controller = TerminalController()
+        output = io.StringIO()
+        with patch.object(smoke, "_controller_for", return_value=controller):
+            result = smoke.serve_native_ui(
+                "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1,
+                io.StringIO('{"op":"close"}\n'), output,
+            )
+        self.assertEqual(result, 0)
+        self.assertEqual(controller.close_calls, 0)
+        self.assertEqual(controller.cleanup_calls, 1)
+        self.assertEqual(events, ["start", "snapshot", "cleanup", "snapshot"])
+        response = json.loads(output.getvalue().splitlines()[-1])
+        self.assertTrue(response["ok"])
+
+    def test_serve_terminal_close_serializes_cleanup_failure_and_exits(self) -> None:
+        class FailingCleanupController:
+            def __init__(self):
+                self.cleanup_calls = 0
+
+            def start(self):
+                pass
+
+            def snapshot(self):
+                return {"status": "Disconnected"}
+
+            def close_for_cleanup(self):
+                self.cleanup_calls += 1
+                raise smoke.NativeUISmokeError("verified product process did not exit")
+
+        controller = FailingCleanupController()
+        output = io.StringIO()
+        with patch.object(smoke, "_controller_for", return_value=controller):
+            result = smoke.serve_native_ui(
+                "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1,
+                io.StringIO('{"op":"close"}\n'), output,
+            )
+        self.assertEqual(result, 1)
+        self.assertEqual(controller.cleanup_calls, 1)
+        response = json.loads(output.getvalue().splitlines()[-1])
+        self.assertFalse(response["ok"])
+        self.assertIn("did not exit", response["error"])
+
 
 class NativeUIClipboardCleanupTests(unittest.TestCase):
     def test_windows_paste_restores_previous_text_without_exposing_profile(self) -> None:

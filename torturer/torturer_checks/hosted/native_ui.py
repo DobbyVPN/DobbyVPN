@@ -336,7 +336,13 @@ class _NativeUIProcess:
                 try:
                     process.stdin.write('{"op":"close"}\n')
                     process.stdin.flush()
-                    self._response(min(self.timeout, 15.0))
+                    response = self._response(min(self.timeout, 15.0))
+                    if response.get("ok") is not True:
+                        errors.append(
+                            self._error(
+                                str(response.get("error", "native UI cleanup failed"))
+                            )
+                        )
                 except BaseException as error:
                     errors.append(error)
             if process.poll() is None:
