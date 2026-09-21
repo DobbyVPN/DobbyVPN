@@ -8,6 +8,7 @@ import XCTest
 /// used only for accessibility lookup, native taps, and lifecycle.
 final class GoFyneUIInteractionTests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "vpn.dobby.app")
+    private let connectionActionLabel = "VPN connection action"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -47,9 +48,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
             inputAfterSettings.waitForExistence(timeout: 30),
             "Go/Fyne UI did not return from Settings"
         )
-        let connect = element(named: "Connect")
-        XCTAssertTrue(connect.waitForExistence(timeout: 10), "Fyne Connect control is not accessible")
-        XCTAssertTrue(waitForEnabled(connect), "Fyne Connect control is not enabled after startup")
+        let connect = element(named: connectionActionLabel)
+        XCTAssertTrue(connect.waitForExistence(timeout: 10), "Fyne connection action is not accessible")
+        XCTAssertTrue(waitForEnabled(connect), "Fyne connection action is not enabled after startup")
 
         // Exercise real keyboard taps, editing, clearing, and a malformed
         // connect without depending on a renderer-specific accessibility value.
@@ -101,9 +102,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
         // relaunch: the button is rendered, but its production action is not
         // ready to dispatch. Require the freshly rendered action to be enabled
         // before submitting the empty-input request.
-        let reopenedConnect = element(named: "Connect")
-        XCTAssertTrue(reopenedConnect.waitForExistence(timeout: 30), "Go/Fyne Connect control did not reopen")
-        XCTAssertTrue(waitForEnabled(reopenedConnect), "Go/Fyne Connect control was not ready after relaunch")
+        let reopenedConnect = element(named: connectionActionLabel)
+        XCTAssertTrue(reopenedConnect.waitForExistence(timeout: 30), "Go/Fyne connection action did not reopen")
+        XCTAssertTrue(waitForEnabled(reopenedConnect), "Go/Fyne connection action was not ready after relaunch")
         XCTAssertTrue(
             element(named: "Connection logs").waitForExistence(timeout: 10),
             "Go/Fyne diagnostics view did not reopen"

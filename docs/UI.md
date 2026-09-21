@@ -23,9 +23,9 @@ routing, traffic, process-loss, and cleanup assertions to the normal platform
 adapter. A Windows/macOS native-window qualification starts the native binary
 (exact-Release mode uses the installed Release package), discovers controls
 through the platform accessibility tree, enters a fresh profile through native
-clipboard/keyboard input, clicks Connect and
-Disconnect, observes visible status, opens Settings, and verifies close/reopen
-reattaches to the service-owned session. A missing interactive desktop or
+clipboard/keyboard input, clicks the stable connection action, observes visible
+status, opens Settings, and verifies close/reopen reattaches to the service-owned
+session. A missing interactive desktop or
 denied automation permission is an incomplete/failed GUI lane, not a pass.
 Linux deliberately stays CLI/service-only.
 
@@ -42,15 +42,15 @@ summary while retaining the exact source privately until Connect submits it.
 One-line HTTPS URLs and ordinary edits retain normal Entry behavior; the Logs
 editor is not staged.
 
-On Windows and macOS, changing the rendered status, action label, or connection
-details also re-attaches the current connection content through the public Fyne
-window API. Fyne 2.8.1's dirty-frame accessibility refresh did not republish
-these labels within the observed macOS activation contract, while desktop
-`Window.SetContent` forces an immediate native accessibility rebuild. This
-keeps real-window assertions aligned with the visible UI without forking or
-changing Fyne. The refresh is skipped while Settings is displayed; mobile
-drivers keep their normal dirty-frame accessibility path so Entry/IME focus is
-not rebuilt unnecessarily.
+On Windows and macOS, the native window title mirrors the rendered connection
+status (`Dobby VPN — <status>`). The connection action keeps one stable
+accessibility label while its visible text changes between Connect and
+Disconnect. Fyne 2.8.1's Darwin child-label snapshots do not reliably republish
+dynamic text, so native drivers use the exact-PID window title for live status
+and the stable action label for physical input. Settings owns a genuinely new
+content tree and temporarily owns the title; Back restores the synchronized
+connection status. This stays within the public Fyne API and requires no fork
+or upstream change.
 
 ## Connect and reattach
 

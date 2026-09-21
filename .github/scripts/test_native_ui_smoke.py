@@ -90,12 +90,12 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         )
         with patch.object(smoke.subprocess, "run", return_value=result) as run:
             self.assertEqual(
-                smoke._macos_accessibility_rect(4321, "Connect", 2),
+                smoke._macos_accessibility_rect(4321, smoke._NATIVE_ACTION_LABEL, 2),
                 (10, 20, 110, 220),
             )
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--pid") + 1], "4321")
-        self.assertEqual(command[command.index("--name") + 1], "Connect")
+        self.assertEqual(command[command.index("--name") + 1], smoke._NATIVE_ACTION_LABEL)
         self.assertNotIn("osascript", command)
 
     def test_macos_window_probe_uses_the_same_exact_pid_helper(self) -> None:
@@ -109,6 +109,23 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--window", command)
+
+    def test_macos_window_title_probe_uses_the_same_exact_pid_helper(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"window-title","title":"Dobby VPN — Connected"}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+            self.assertEqual(smoke._macos_window_title(4321, 2), "Dobby VPN — Connected")
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--pid") + 1], "4321")
+        self.assertIn("--window-title", command)
+
+    def test_macos_title_state_requires_exact_product_title(self) -> None:
+        self.assertTrue(smoke._macos_title_has_state("Dobby VPN — Connected", "Connected"))
+        self.assertFalse(smoke._macos_title_has_state("Other window — Connected", "Connected"))
+        self.assertFalse(smoke._macos_title_has_state("Dobby VPN — Connected (debug)", "Connected"))
 
     def test_macos_ax_helper_keeps_child_deadline_inside_parent_timeout(self) -> None:
         result = subprocess.CompletedProcess(
@@ -141,7 +158,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
-            self.assertEqual(smoke._macos_accessibility_rect(4321, "Connect", 2), (10, 20, 110, 220))
+            self.assertEqual(smoke._macos_accessibility_rect(4321, smoke._NATIVE_ACTION_LABEL, 2), (10, 20, 110, 220))
         self.assertEqual(run.call_count, 2)
 
     def test_macos_window_rect_retries_transient_window_server_state(self) -> None:
@@ -209,7 +226,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             side_effect=smoke.NativeUIElementNotFound("ambiguous control"),
         ) as request:
             with self.assertRaisesRegex(smoke.NativeUIElementNotFound, "ambiguous control"):
-                smoke._macos_accessibility_rect(4321, "Connect", 2)
+                smoke._macos_accessibility_rect(4321, smoke._NATIVE_ACTION_LABEL, 2)
         self.assertEqual(request.call_count, 1)
 
     def test_macos_frontmost_query_rejects_non_pid_output(self) -> None:
@@ -279,24 +296,24 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             "_macos_accessibility_rect",
             side_effect=smoke.NativeUIElementNotFound("not found"),
         ):
-            self.assertFalse(smoke._macos_has_element(4321, "Connect"))
+            self.assertFalse(smoke._macos_has_element(4321, smoke._NATIVE_ACTION_LABEL))
         with patch.object(
             smoke,
             "_macos_accessibility_rect",
             side_effect=smoke.NativeUISmokeError("AX timeout"),
         ):
             with self.assertRaisesRegex(smoke.NativeUISmokeError, "AX timeout"):
-                smoke._macos_has_element(4321, "Connect")
+                smoke._macos_has_element(4321, smoke._NATIVE_ACTION_LABEL)
 
     def test_macos_activation_diagnostic_reports_only_allowlisted_state_labels(self) -> None:
         def has_element(_pid, name, *, timeout):
             self.assertEqual(timeout, 1.5)
-            return name in {"Ready", "Connect"}
+            return name in {"Ready", smoke._NATIVE_ACTION_LABEL}
 
         with patch.object(smoke, "_macos_has_element", side_effect=has_element):
             self.assertEqual(
                 smoke._macos_allowlisted_state_labels(4321),
-                ("Ready", "Connect"),
+                ("Ready", smoke._NATIVE_ACTION_LABEL),
             )
 
     def test_macos_activation_diagnostic_does_not_replace_lookup_errors(self) -> None:
@@ -349,7 +366,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             patch.object(smoke.subprocess, "run", return_value=result) as run,
         ):
             self.assertEqual(
-                smoke._windows_accessibility_rect(328514, "Connect"),
+                smoke._windows_accessibility_rect(328514, smoke._NATIVE_ACTION_LABEL),
                 (10, 20, 110, 220),
             )
         command = run.call_args.args[0]
@@ -697,7 +714,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         controller.hwnd = 123
         with patch.object(smoke, "_windows_click") as click:
             with self.assertRaisesRegex(smoke.NativeUISmokeError, "process has exited"):
-                controller._windows_click_name("Connect")
+                controller._windows_click_name(smoke._NATIVE_ACTION_LABEL)
         click.assert_not_called()
 
     def test_windows_click_rejects_reused_stale_hwnd_before_using_it(self) -> None:
@@ -715,7 +732,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             patch.object(smoke, "_windows_click") as click,
         ):
             with self.assertRaisesRegex(smoke.NativeUISmokeError, "stale"):
-                controller._windows_click_name("Connect")
+                controller._windows_click_name(smoke._NATIVE_ACTION_LABEL)
         click.assert_not_called()
 
     def test_macos_disposable_setup_terminates_preexisting_exact_product_pids(self) -> None:
@@ -865,6 +882,17 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
             clipboard_set.call_args_list,
             [call(smoke._MACOS_INPUT_SENTINEL), call(b"profile")],
         )
+
+    def test_macos_activation_uses_exact_window_title_not_dynamic_child_label(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 10
+        )
+        with (
+            patch.object(smoke, "_macos_window_title", return_value="Dobby VPN — Connecting"),
+            patch.object(smoke, "_macos_has_element") as has_element,
+        ):
+            self.assertEqual(controller._macos_action_state(4321), "Connecting")
+        has_element.assert_not_called()
 
     def test_process_loss_recovery_reconfigures_and_connects_through_native_ui(self) -> None:
         controller = smoke.NativeUIController(

@@ -81,6 +81,7 @@ public final class GoUiHostedProfileTest {
     private static final String GUI_AUTO_MODE = "gui-auto";
     private static final String BINDING_MODE = "protocol-matrix";
     private static final String GUI_AUTO_PROTOCOL = "AUTO";
+    private static final String CONNECTION_ACTION_LABEL = "VPN connection action";
     private static final String START_MODE_PROFILE_INDEX = "PROFILE_INDEX";
     private static final Class<GoUiNetworkProbeMain> NETWORK_PROBE_CLASS =
             GoUiNetworkProbeMain.class;
@@ -676,7 +677,7 @@ public final class GoUiHostedProfileTest {
         boolean consentNeeded = VpnService.prepare(context) != null;
         markProgress(operation, "connect-control", "started");
         tapUiControl(
-                "Connect",
+                CONNECTION_ACTION_LABEL,
                 remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
         markProgress(operation, "connect-control", "completed");
         // Record only the small, non-sensitive status vocabulary after the
@@ -734,10 +735,10 @@ public final class GoUiHostedProfileTest {
             // next visible Connect click is the real Go/Fyne start action.
             markProgress(operation, "connect-retry", "started");
             waitForUiControl(
-                    "Connect",
+                    CONNECTION_ACTION_LABEL,
                     remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
             tapUiControl(
-                    "Connect",
+                CONNECTION_ACTION_LABEL,
                     remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
             markProgress(operation, "connect-retry", "completed");
         }
@@ -756,7 +757,7 @@ public final class GoUiHostedProfileTest {
         markProgress("disconnect", "surface", "completed");
         markProgress("disconnect", "disconnect-control", "started");
         tapUiControl(
-                "Disconnect",
+                CONNECTION_ACTION_LABEL,
                 remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
         markProgress("disconnect", "disconnect-control", "completed");
         markProgress("disconnect", "disconnected-state", "started");
@@ -783,7 +784,7 @@ public final class GoUiHostedProfileTest {
         foregroundActivity = null;
         ensureForegroundActivity();
         ensureUiSurface(timeout);
-        boolean hasConnect = findUiObject("Connect") != null;
+        boolean hasConnect = findUiObject(CONNECTION_ACTION_LABEL) != null;
         boolean hasStatus = findUiObject("Disconnected") != null
                 || findUiObject("Ready") != null
                 || findUiObject("Error") != null
@@ -850,12 +851,12 @@ public final class GoUiHostedProfileTest {
 
     private void ensureUiSurface(long timeout) throws Exception {
         UiDevice device = uiDevice();
-        if (findUiObject("Connect") == null && findUiObject("Disconnect") == null) {
+        if (findUiObject(CONNECTION_ACTION_LABEL) == null) {
             ensureForegroundActivity();
         }
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
-            boolean button = findUiObject("Connect") != null || findUiObject("Disconnect") != null;
+            boolean button = findUiObject(CONNECTION_ACTION_LABEL) != null;
             boolean status = findUiObject("Disconnected") != null
                     || findUiObject("Ready") != null
                     || findUiObject("Connecting") != null

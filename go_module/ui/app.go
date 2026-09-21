@@ -15,6 +15,7 @@ import (
 
 const (
 	statusDisconnected = "Disconnected"
+	nativeActionLabel  = "VPN connection action"
 	// Fyne's multiline RichText renderer is intentionally not given a large
 	// inline source.  The exact source remains private to AccessibleEntry and
 	// is supplied to the session client only when Connect is pressed.
@@ -68,36 +69,35 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 	window.Resize(fyne.NewSize(460, 520))
 	connectionContent := view.Content()
 	window.SetContent(connectionContent)
-	view.refreshNativeSemantics = newNativeSemanticsRefresh(goruntime.GOOS, window, connectionContent)
+	if nativeDesktopStatusTitleEnabled(goruntime.GOOS) {
+		view.setNativeStatusTitle = func(status string) {
+			if window.Content() == connectionContent {
+				window.SetTitle(nativeWindowTitle(status))
+			}
+		}
+		view.setNativeStatusTitle(statusDisconnected)
+	}
 	window.SetCloseIntercept(func() {
 		view.Stop()
 		window.Close()
 	})
-	view.Settings.OnTapped = func() { window.SetContent(settings.Content()) }
-	settings.Back.OnTapped = func() { window.SetContent(view.Content()) }
+	view.Settings.OnTapped = func() {
+		window.SetTitle(nativeWindowTitle("Settings"))
+		window.SetContent(settings.Content())
+	}
+	settings.Back.OnTapped = func() {
+		window.SetTitle(nativeWindowTitle(view.displayedStatus()))
+		window.SetContent(view.Content())
+	}
 	return &Application{App: runtime, Window: window, Connection: view, Settings: settings}
 }
 
-func nativeSemanticsRefreshEnabled(goos string) bool {
+func nativeDesktopStatusTitleEnabled(goos string) bool {
 	return goos == "darwin" || goos == "windows"
 }
 
-func newNativeSemanticsRefresh(
-	goos string,
-	window fyne.Window,
-	connectionContent fyne.CanvasObject,
-) func() {
-	if !nativeSemanticsRefreshEnabled(goos) {
-		return nil
-	}
-	return func() {
-		// Settings replaces the window content. Never pull the user back to the
-		// connection screen merely because a service snapshot arrives while
-		// Settings is open.
-		if window.Content() == connectionContent {
-			window.SetContent(connectionContent)
-		}
-	}
+func nativeWindowTitle(status string) string {
+	return "Dobby VPN — " + status
 }
 
 func (a *Application) Run() {
@@ -161,7 +161,7 @@ type ConnectionView struct {
 	diagnostics DiagnosticStore
 
 	Input     *AccessibleEntry
-	Connect   *widget.Button
+	Connect   *AccessibleButton
 	Status    *widget.Label
 	Details   *widget.Label
 	Logs      *AccessibleEntry
@@ -201,16 +201,12 @@ type ConnectionView struct {
 	localError        string
 	localErrorAt      uint64
 	presentationMu    sync.Mutex
-	// Fyne 2.8.1 republishes native accessibility labels when a window's
-	// content is attached, but ordinary widget SetText calls only refresh the
-	// renderer. The desktop application supplies this callback so dynamic
-	// status/button labels remain visible to the real-window AX driver without
-	// changing Fyne or switching away from the shared view.
-	refreshNativeSemantics func()
-	lastSemanticStatus     string
-	lastSemanticButton     string
-	lastSemanticDetails    string
-	diagnosticIO           sync.Mutex
+	// AppKit/Win32 update the native window title directly. Desktop tests use
+	// this visible status channel because Fyne's Darwin child labels are a
+	// snapshot and do not reliably republish dynamic text.
+	setNativeStatusTitle func(status string)
+	lastSemanticStatus   string
+	diagnosticIO         sync.Mutex
 }
 
 func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionView {
@@ -253,7 +249,7 @@ func newConnectionView(client SessionClient, exporter LogExporter, diagnostics D
 	view.Input.SetPlaceHolder("HTTPS connection URL or inline configuration")
 	view.Input.SetMinRowsVisible(4)
 
-	view.Connect = widget.NewButton("Connect", nil)
+	view.Connect = NewAccessibleButton(nativeActionLabel, "Connect")
 	view.Status = widget.NewLabel(statusDisconnected)
 	view.Details = widget.NewLabel("")
 	view.Details.Wrapping = fyne.TextWrapWord
@@ -381,6 +377,24 @@ func newAccessibleEntry(multiline bool, label string, stageMultilinePaste bool) 
 	}
 	return view
 }
+
+// AccessibleButton keeps one stable native action identity while the visible
+// button text changes between Connect and Disconnect. The macOS Fyne bridge
+// snapshots child labels, so native drivers must discover the same physical
+// control across both states; the window title carries the live status.
+type AccessibleButton struct {
+	*widget.Button
+	label string
+}
+
+func NewAccessibleButton(label, text string) *AccessibleButton {
+	button := &widget.Button{Text: text}
+	view := &AccessibleButton{Button: button, label: label}
+	button.ExtendBaseWidget(view)
+	return view
+}
+
+func (b *AccessibleButton) AccessibilityLabel() string { return b.label }
 
 func (e *AccessibleEntry) AccessibilityLabel() string { return e.label }
 func (e *AccessibleEntry) AccessibilityRole() fyne.AccessibleRole {
@@ -988,8 +1002,7 @@ func (v *ConnectionView) applyPresentationOnUI() {
 	logStatus := v.renderedLogStatus
 	busy := v.busy || v.startPending
 	v.mu.Unlock()
-	semanticChanged := status != v.lastSemanticStatus ||
-		button != v.lastSemanticButton || details != v.lastSemanticDetails
+	statusChanged := status != v.lastSemanticStatus
 	v.Status.SetText(status)
 	v.Connect.SetText(button)
 	if busy {
@@ -1001,12 +1014,10 @@ func (v *ConnectionView) applyPresentationOnUI() {
 	v.Logs.SetText(logs)
 	v.LogStatus.SetText(logStatus)
 	v.lastSemanticStatus = status
-	v.lastSemanticButton = button
-	v.lastSemanticDetails = details
-	refresh := v.refreshNativeSemantics
+	setNativeStatusTitle := v.setNativeStatusTitle
 	v.presentationMu.Unlock()
-	if semanticChanged && refresh != nil {
-		refresh()
+	if statusChanged && setNativeStatusTitle != nil {
+		setNativeStatusTitle(status)
 	}
 }
 

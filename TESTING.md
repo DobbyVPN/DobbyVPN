@@ -112,8 +112,9 @@ observations and cleanup. Local Windows/macOS full runs the mini contract once,
 then launch the native binary in an interactive desktop session. Exact-Release
 full mode launches the binary installed from that Release package. The journey
 discovers Fyne controls through the platform accessibility tree, enters a fresh
-profile with native keyboard input, clicks Connect and Disconnect, observes
-rendered status, opens Settings, and closes/reopens the UI while the
+profile with native keyboard input, clicks the stable connection action for
+Connect and Disconnect, observes the rendered status (and the desktop native
+window title), opens Settings, and closes/reopens the UI while the
 service-owned session remains available. It then proves the explicit native
 reconnect with a fresh tunnel/routing/stability/throughput observation set.
 For process-loss qualification the desktop service controller only kills and

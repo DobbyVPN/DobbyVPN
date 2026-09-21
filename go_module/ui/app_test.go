@@ -421,35 +421,45 @@ func TestConnectionViewRendersAuthoritativeSnapshot(t *testing.T) {
 	}
 }
 
-func TestConnectionViewRefreshesNativeSemanticsAfterDynamicPresentation(t *testing.T) {
+func TestConnectionViewPublishesNativeStatusTitleAfterDynamicPresentation(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
 	view := NewConnectionView(nil)
-	refreshes := 0
-	var observedStatus, observedButton string
-	view.refreshNativeSemantics = func() {
-		refreshes++
-		observedStatus = view.Status.Text
-		observedButton = view.Connect.Text
+	var titles []string
+	view.setNativeStatusTitle = func(status string) {
+		titles = append(titles, nativeWindowTitle(status))
 	}
 
 	view.render(Snapshot{State: StateIdle})
-	if refreshes != 1 {
-		t.Fatalf("initial semantic presentation refreshes = %d, want 1", refreshes)
-	}
-	if observedStatus != "Disconnected" || observedButton != "Connect" {
-		t.Fatalf("initial semantic labels = (%q, %q)", observedStatus, observedButton)
+	if len(titles) != 1 || titles[0] != "Dobby VPN — Disconnected" {
+		t.Fatalf("initial native titles = %q, want Disconnected", titles)
 	}
 	view.render(Snapshot{State: StateIdle})
-	if refreshes != 1 {
-		t.Fatalf("unchanged semantic presentation refreshes = %d, want 1", refreshes)
+	if len(titles) != 1 {
+		t.Fatalf("unchanged presentation republished title: %q", titles)
 	}
-	view.render(Snapshot{State: StateConnected, Generation: 1})
-	if refreshes != 2 {
-		t.Fatalf("changed semantic presentation refreshes = %d, want 2", refreshes)
+	for _, testCase := range []struct {
+		name string
+		snap Snapshot
+		want string
+	}{
+		{name: "configured", snap: Snapshot{State: StateConfigured}, want: "Ready"},
+		{name: "probing", snap: Snapshot{State: StateProbing}, want: "Connecting"},
+		{name: "connected", snap: Snapshot{State: StateConnected, Generation: 1}, want: "Connected"},
+		{name: "stopping", snap: Snapshot{State: StateStopping}, want: "Disconnecting"},
+		{name: "recovering", snap: Snapshot{State: StateIdle, Recovering: true}, want: "Reconnecting"},
+		{name: "failed", snap: Snapshot{State: StateFailed}, want: "Failed"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			view.render(testCase.snap)
+			want := nativeWindowTitle(testCase.want)
+			if got := titles[len(titles)-1]; got != want {
+				t.Fatalf("last native title = %q, want %q", got, want)
+			}
+		})
 	}
-	if observedStatus != "Connected" || observedButton != "Disconnect" {
-		t.Fatalf("changed semantic labels = (%q, %q)", observedStatus, observedButton)
+	if len(titles) != 7 {
+		t.Fatalf("native title count = %d, want 7", len(titles))
 	}
 }
 
@@ -462,11 +472,15 @@ func TestConnectionViewCommitsNativeConnectPresentationInUICallback(t *testing.T
 	view := NewConnectionView(client)
 	view.ctx = context.Background()
 	view.Input.SetText("https://example.test/profile")
-	refreshes := 0
-	view.refreshNativeSemantics = func() { refreshes++ }
+	titles := 0
+	var observedTitle string
+	view.setNativeStatusTitle = func(status string) {
+		titles++
+		observedTitle = nativeWindowTitle(status)
+	}
 
 	// Calling the production callback directly models Fyne's UI goroutine. The
-	// optimistic labels and native refresh must be committed before Configure
+	// optimistic labels and native title must be committed before Configure
 	// and Start can race the real-window observer.
 	view.Connect.OnTapped()
 	status, _, button := view.Presentation()
@@ -476,8 +490,8 @@ func TestConnectionViewCommitsNativeConnectPresentationInUICallback(t *testing.T
 	if view.Status.Text != "Connecting" || view.Connect.Text != "Disconnect" {
 		t.Fatalf("UI callback did not synchronously update widgets: (%q, %q)", view.Status.Text, view.Connect.Text)
 	}
-	if refreshes != 1 {
-		t.Fatalf("UI callback semantic refreshes = %d, want 1", refreshes)
+	if titles != 1 || observedTitle != "Dobby VPN — Connecting" {
+		t.Fatalf("UI callback native title = (%d, %q), want Connecting", titles, observedTitle)
 	}
 	if !view.Connect.Disabled() {
 		t.Fatal("Connect control remained enabled during the pending UI callback")
@@ -491,14 +505,11 @@ func TestConnectionViewCommitsNativeConnectPresentationInUICallback(t *testing.T
 	}
 }
 
-func TestApplicationDoesNotReattachConnectionContentOverSettings(t *testing.T) {
+func TestApplicationPresentationDoesNotReplaceSettingsContent(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
 	application := NewApplication(runtime, &fakeClient{})
 	t.Cleanup(application.Close)
-	application.Connection.refreshNativeSemantics = newNativeSemanticsRefresh(
-		"darwin", application.Window, application.Connection.Content(),
-	)
 	settingsContent := application.Settings.Content()
 	application.Window.SetContent(settingsContent)
 
@@ -508,7 +519,7 @@ func TestApplicationDoesNotReattachConnectionContentOverSettings(t *testing.T) {
 	}
 }
 
-func TestNativeSemanticsRefreshIsDesktopOnly(t *testing.T) {
+func TestNativeDesktopStatusTitleIsDesktopOnly(t *testing.T) {
 	for _, testCase := range []struct {
 		goos    string
 		enabled bool
@@ -520,8 +531,8 @@ func TestNativeSemanticsRefreshIsDesktopOnly(t *testing.T) {
 		{goos: "ios", enabled: false},
 	} {
 		t.Run(testCase.goos, func(t *testing.T) {
-			if got := nativeSemanticsRefreshEnabled(testCase.goos); got != testCase.enabled {
-				t.Fatalf("native semantics refresh for %s = %t, want %t", testCase.goos, got, testCase.enabled)
+			if got := nativeDesktopStatusTitleEnabled(testCase.goos); got != testCase.enabled {
+				t.Fatalf("native desktop status title for %s = %t, want %t", testCase.goos, got, testCase.enabled)
 			}
 		})
 	}
@@ -971,8 +982,11 @@ func TestApplicationControlsHaveStableLabelsAndSettingsRoundTrip(t *testing.T) {
 	if application.Connection.Input.AccessibilityLabel() != "Connection configuration" {
 		t.Fatalf("configuration label = %q", application.Connection.Input.AccessibilityLabel())
 	}
-	if application.Connection.Connect.AccessibilityLabel() != "Disconnect" {
+	if application.Connection.Connect.AccessibilityLabel() != nativeActionLabel {
 		t.Fatalf("connect label = %q", application.Connection.Connect.AccessibilityLabel())
+	}
+	if application.Connection.Connect.Text != "Disconnect" {
+		t.Fatalf("connect text = %q", application.Connection.Connect.Text)
 	}
 	if application.Connection.Status.AccessibilityLabel() != "Connected" {
 		t.Fatalf("status label = %q", application.Connection.Status.AccessibilityLabel())

@@ -360,6 +360,33 @@ def _window_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
             frameworks.release(window)
 
 
+def _window_title_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
+    """Read the exact product window title through the public AX API."""
+
+    windows = _windows(frameworks, pid)
+    try:
+        for window in windows:
+            _check_deadline()
+            value = _attribute(frameworks, window, "AXTitle")
+            if value is None:
+                continue
+            try:
+                title = frameworks.text(value)
+            finally:
+                frameworks.release(value)
+            if title:
+                return {
+                    "ok": True,
+                    "stage": "window-title",
+                    "title": title,
+                    "ax_window_count": len(windows),
+                }
+        raise AXLookupError("ax-window-title", "AXWindows had no readable title")
+    finally:
+        for window in windows:
+            frameworks.release(window)
+
+
 def _raise_window(frameworks: Frameworks, pid: int) -> dict[str, object]:
     """Raise the exact process window through the public AX window action.
 
@@ -521,6 +548,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--name")
     parser.add_argument("--prefix", action="store_true")
     parser.add_argument("--window", action="store_true")
+    parser.add_argument("--window-title", action="store_true")
     parser.add_argument("--raise-window", action="store_true")
     parser.add_argument("--deadline", type=float, default=4.0)
     return parser
@@ -531,9 +559,9 @@ def main() -> int:
     args = _parser().parse_args()
     if args.pid <= 0:
         raise SystemExit("pid must be positive")
-    selected = int(args.window) + int(args.raise_window) + int(args.name is not None)
+    selected = int(args.window) + int(args.window_title) + int(args.raise_window) + int(args.name is not None)
     if selected != 1:
-        raise SystemExit("choose exactly one of --window, --raise-window, or --name")
+        raise SystemExit("choose exactly one of --window, --window-title, --raise-window, or --name")
     if args.deadline <= 0 or not math.isfinite(args.deadline):
         raise SystemExit("deadline must be positive and finite")
     _DEADLINE = time.monotonic() + args.deadline
@@ -542,6 +570,8 @@ def main() -> int:
         frameworks = Frameworks()
         if args.window:
             payload = _window_probe(frameworks, args.pid)
+        elif args.window_title:
+            payload = _window_title_probe(frameworks, args.pid)
         elif args.raise_window:
             payload = _raise_window(frameworks, args.pid)
         else:

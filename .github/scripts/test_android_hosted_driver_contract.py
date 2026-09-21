@@ -280,7 +280,7 @@ def test_hosted_real_ui_settles_editor_before_connect() -> None:
         back,
     )
     connect = source.index(
-        'tapUiControl(\n                "Connect"',
+        'tapUiControl(\n                CONNECTION_ACTION_LABEL',
         source.index("private boolean connectThroughRenderedUI("),
     )
     assert input_dismissed < navigation < settings < back < returned < connect

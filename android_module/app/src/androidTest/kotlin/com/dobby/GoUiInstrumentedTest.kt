@@ -15,6 +15,7 @@ import org.junit.runner.RunWith
 /** Real-renderer smoke against the signed release APK and Android's native input path. */
 @RunWith(AndroidJUnit4::class)
 class GoUiInstrumentedTest {
+    private val connectionActionLabel = "VPN connection action"
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private val packageName = instrumentation.targetContext.packageName
@@ -37,7 +38,7 @@ class GoUiInstrumentedTest {
         device.wait(androidx.test.uiautomator.Until.hasObject(By.pkg(packageName)), 10_000)
 
         waitForOneOf(arrayOf("Disconnected", "Ready"), 30_000)
-        requireObject("Connect")
+        requireObject(connectionActionLabel)
 
         tapStable("Connection configuration")
         val nativeInput = waitForFocusedNativeInput(10_000)
@@ -74,7 +75,7 @@ class GoUiInstrumentedTest {
         backgroundActivity()
         launch()
         waitForOneOf(arrayOf("Disconnected", "Ready", "Error", "Failed"), 30_000)
-        requireObject("Connect")
+        requireObject(connectionActionLabel)
     }
 
     private fun launch() {
@@ -169,7 +170,7 @@ class GoUiInstrumentedTest {
 
     private fun tapAndWaitForFailureOutcome() {
         val outcomes = arrayOf("Error", "Failed")
-        tapStable("Connect")
+        tapStable(connectionActionLabel)
         waitForOneOf(outcomes, 10_000)
     }
 

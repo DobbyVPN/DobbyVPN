@@ -122,6 +122,45 @@ class MacOSAXMatchTests(unittest.TestCase):
             with self.assertRaisesRegex(macos_ax.AXLookupError, "AXRaise failed"):
                 macos_ax._raise_window(Framework(), 42)
 
+    def test_window_title_probe_reads_public_ax_title(self):
+        class Framework:
+            core = _Core()
+
+            @staticmethod
+            def text(value):
+                return value if isinstance(value, str) else None
+
+            @staticmethod
+            def release(_value):
+                return None
+
+        with (
+            patch.object(macos_ax, "_windows", return_value=(1,)),
+            patch.object(macos_ax, "_attribute", return_value="Dobby VPN — Connected"),
+        ):
+            result = macos_ax._window_title_probe(Framework(), 42)
+        self.assertEqual(result["stage"], "window-title")
+        self.assertEqual(result["title"], "Dobby VPN — Connected")
+
+    def test_window_title_probe_rejects_missing_or_non_text_title(self):
+        class Framework:
+            core = _Core()
+
+            @staticmethod
+            def text(_value):
+                return None
+
+            @staticmethod
+            def release(_value):
+                return None
+
+        with (
+            patch.object(macos_ax, "_windows", return_value=(1,)),
+            patch.object(macos_ax, "_attribute", return_value=object()),
+        ):
+            with self.assertRaisesRegex(macos_ax.AXLookupError, "no readable title"):
+                macos_ax._window_title_probe(Framework(), 42)
+
 
 if __name__ == "__main__":
     unittest.main()

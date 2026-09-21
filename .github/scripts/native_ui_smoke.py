@@ -60,6 +60,7 @@ _MACOS_INPUT_SENTINEL = b"DobbyVPN-native-input-sentinel-v1"
 _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS = 0.25
 _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS = 0.1
 _MACOS_AX_MESSAGE_TIMEOUT_SECONDS = 1.0
+_NATIVE_ACTION_LABEL = "VPN connection action"
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
     if (visible of process "Finder") is false then error "Finder is not visible"
@@ -286,6 +287,10 @@ def _windows_user32() -> object:
     # preserving the pointer-sized HWND argument.
     user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
     user32.GetWindowRect.restype = wintypes.BOOL
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.POINTER(ctypes.c_wchar), ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
     user32.SetForegroundWindow.restype = wintypes.BOOL
     return user32
@@ -625,6 +630,49 @@ def _macos_ax_raise_window_once(process_pid: int, timeout: float) -> None:
         raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
 
 
+def _macos_ax_window_title_once(process_pid: int, timeout: float) -> str:
+    """Read the exact product window title through public AX APIs."""
+
+    if process_pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    if not _MACOS_AX_HELPER.is_file():
+        raise NativeUISmokeError("macOS native AX helper is missing")
+    command = [
+        sys.executable,
+        str(_MACOS_AX_HELPER),
+        "--pid", str(process_pid),
+        "--window-title",
+        "--deadline", str(max(
+            _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS,
+            min(timeout - _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS, 4.0),
+        )),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=max(0.1, min(timeout, 6.0)),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS native AX title lookup failed: {error}") from error
+    try:
+        payload = json.loads(completed.stdout.strip() or "{}")
+    except (TypeError, ValueError) as error:
+        raise NativeUISmokeError("macOS native AX helper returned invalid window title JSON") from error
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
+        detail = payload.get("error", "window title lookup failed") if isinstance(payload, dict) else "window title lookup failed"
+        if isinstance(payload, dict) and stage == "ax-windows" and payload.get("transient") is True:
+            raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
+        raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
+    title = payload.get("title")
+    if not isinstance(title, str) or not title:
+        raise NativeUISmokeError("macOS AX returned an invalid window title")
+    return title
+
+
 def _macos_retry_ax_request(
     timeout: float,
     request: Callable[[float], _T],
@@ -734,6 +782,20 @@ def _macos_accessibility_rect(
         ),
         f"lookup for {name!r}",
     )
+
+
+def _macos_window_title(process_pid: int, timeout: float = 2.0) -> str:
+    """Read one exact-PID title under the same bounded AX retry contract."""
+
+    return _macos_retry_ax_request(
+        timeout,
+        lambda request_timeout: _macos_ax_window_title_once(process_pid, request_timeout),
+        "window title lookup",
+    )
+
+
+def _macos_title_has_state(title: str, state: str) -> bool:
+    return title == f"Dobby VPN — {state}"
 
 
 def _macos_frontmost_pid() -> int:
@@ -958,13 +1020,13 @@ def _macos_allowlisted_state_labels(process_pid: int) -> tuple[str, ...]:
 
     This diagnostic deliberately asks for a short allowlist rather than
     dumping the accessibility tree.  It distinguishes a presentation
-    publication problem (old Ready/Disconnected/Connect labels are still
+    publication problem (old Ready/Disconnected/action labels are still
     present) from a missing/incorrect AX root without exposing profile text.
     A diagnostic lookup must never replace the original activation timeout.
     """
 
     observed: list[str] = []
-    for name in ("Ready", "Disconnected", "Connect"):
+    for name in ("Ready", "Disconnected", _NATIVE_ACTION_LABEL):
         try:
             if _macos_has_element(process_pid, name, timeout=1.5):
                 observed.append(name)
@@ -1498,6 +1560,23 @@ class NativeUIController:
         self._windows_validate_window()
         return bool(_windows_has_element(self.hwnd, name, prefix=prefix))
 
+    def _windows_window_title(self) -> str:
+        """Read the exact product window title from the owned HWND."""
+
+        self._windows_validate_window()
+        user32 = _windows_user32()
+        length = int(user32.GetWindowTextLengthW(self.hwnd))
+        if length <= 0:
+            raise NativeUISmokeError("Windows native UI window has no readable title")
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        copied = int(user32.GetWindowTextW(self.hwnd, buffer, len(buffer)))
+        if copied <= 0:
+            raise NativeUISmokeError("Windows native UI window title lookup failed")
+        return buffer.value
+
+    def _windows_title_has_state(self, state: str) -> bool:
+        return self._windows_window_title() == f"Dobby VPN — {state}"
+
     def _launch_windows(self) -> None:
         user32 = _windows_user32()
         self.process = subprocess.Popen([str(self.binary)])
@@ -1655,6 +1734,14 @@ class NativeUIController:
         if self.platform == "windows":
             names = ("Connected", "Connecting", "Reconnecting", "Disconnected", "Failed", "Error")
             status = next((name for name in names if self._windows_has_name(name)), "Unknown")
+            if status == "Unknown":
+                for name in names:
+                    try:
+                        if self._windows_title_has_state(name):
+                            status = name
+                            break
+                    except NativeUISmokeError:
+                        break
         else:
             names = ("Connected", "Connecting", "Reconnecting", "Disconnected", "Failed", "Error")
             status = "Unknown"
@@ -1665,8 +1752,11 @@ class NativeUIController:
                     process_pid = self._macos_pid_or_error()
                 except NativeUISmokeError:
                     break
-                if _macos_has_element(process_pid, name):
-                    status = name
+                try:
+                    if _macos_title_has_state(_macos_window_title(process_pid), name):
+                        status = name
+                        break
+                except NativeUISmokeError:
                     break
         return {
             "status": status,
@@ -1676,22 +1766,22 @@ class NativeUIController:
     def _macos_action_state(self, process_pid: int) -> str | None:
         """Return the first current post-activation state, without secrets."""
 
-        # Probe the positive transition first.  Each AX query is a fresh,
-        # bounded helper process; a sub-second deadline can expire during
-        # Python/ctypes startup before the tree walk begins.
-        for name in ("Connecting", "Disconnect"):
-            if _macos_has_element(process_pid, name, timeout=1.5):
-                return name
-        # Error/Failed are checked only when no accepted transition is
-        # visible, so a slow negative lookup cannot hide a real Connect.
-        for name in ("Error", "Failed"):
-            if _macos_has_element(process_pid, name, timeout=1.5):
+        try:
+            title = _macos_window_title(process_pid, timeout=1.5)
+        except NativeUISmokeError:
+            title = ""
+        for name in ("Connecting", "Connected", "Error", "Failed"):
+            if _macos_title_has_state(title, name):
                 return name
         return None
 
     def _macos_failure_state(self, process_pid: int) -> str | None:
+        try:
+            title = _macos_window_title(process_pid, timeout=1.5)
+        except NativeUISmokeError:
+            title = ""
         for name in ("Error", "Failed"):
-            if _macos_has_element(process_pid, name, timeout=1.5):
+            if _macos_title_has_state(title, name):
                 return name
         return None
 
@@ -1711,7 +1801,7 @@ class NativeUIController:
                 raise NativeUISmokeError(
                     f"macOS UI reported {state} immediately after activation"
                 )
-            return state in {"Connecting", "Disconnect"}
+            return state in {"Connecting", "Connected"}
 
         try:
             self._wait(
@@ -1787,7 +1877,11 @@ class NativeUIController:
         if not status:
             raise NativeUISmokeError("native UI wait state is empty")
         if self.platform == "windows":
-            self._wait(lambda: self._windows_has_name(status), f"Windows UI did not display {status}", timeout)
+            self._wait(
+                lambda: self._windows_has_name(status) or self._windows_title_has_state(status),
+                f"Windows UI did not display {status}",
+                timeout,
+            )
         else:
             def visible() -> bool:
                 process_pid = self._macos_pid_or_error()
@@ -1797,11 +1891,13 @@ class NativeUIController:
                         raise NativeUISmokeError(
                             f"macOS UI reported {failure} while waiting for {status}"
                         )
-                return _macos_has_element(
-                    process_pid,
-                    status,
-                    timeout=min(1.0, self.timeout),
-                )
+                try:
+                    return _macos_title_has_state(
+                        _macos_window_title(process_pid, timeout=min(1.0, self.timeout)),
+                        status,
+                    )
+                except NativeUISmokeError:
+                    return False
 
             self._wait(
                 visible,
@@ -1814,11 +1910,11 @@ class NativeUIController:
 
     def _connect_control_visible(self) -> bool:
         if self.platform == "windows":
-            return self._windows_has_name("Connect")
+            return self._windows_has_name(_NATIVE_ACTION_LABEL)
         if self.macos_pid is None:
             return False
         try:
-            return _macos_has_element(self._macos_pid_or_error(), "Connect")
+            return _macos_has_element(self._macos_pid_or_error(), _NATIVE_ACTION_LABEL)
         except NativeUISmokeError:
             return False
 
@@ -1855,10 +1951,10 @@ class NativeUIController:
 
     def connect(self) -> dict[str, object]:
         if self.platform == "windows":
-            self._windows_click_name("Connect")
+            self._windows_click_name(_NATIVE_ACTION_LABEL)
         else:
             process_pid = self._macos_pid_or_error()
-            bounds = _macos_accessibility_rect(process_pid, "Connect", 10)
+            bounds = _macos_accessibility_rect(process_pid, _NATIVE_ACTION_LABEL, 10)
             process_pid = self._macos_pid_or_error()
             _macos_click(bounds, process_pid)
             process_pid = self._macos_pid_or_error()
@@ -1867,10 +1963,10 @@ class NativeUIController:
 
     def disconnect(self) -> dict[str, object]:
         if self.platform == "windows":
-            self._windows_click_name("Disconnect")
+            self._windows_click_name(_NATIVE_ACTION_LABEL)
         else:
             process_pid = self._macos_pid_or_error()
-            bounds = _macos_accessibility_rect(process_pid, "Disconnect", 10)
+            bounds = _macos_accessibility_rect(process_pid, _NATIVE_ACTION_LABEL, 10)
             process_pid = self._macos_pid_or_error()
             _macos_click(bounds, process_pid)
         return self.wait_status("Disconnected")
