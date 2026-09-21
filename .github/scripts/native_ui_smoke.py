@@ -829,6 +829,28 @@ def _terminate_macos_process(identity: _MacOSProcessIdentity, sig: int) -> None:
         raise NativeUISmokeError("macOS native UI process cleanup failed") from error
 
 
+def _terminate_macos_process_tree(identity: _MacOSProcessIdentity, timeout: float) -> None:
+    """Stop the exact app process even when its ``open`` launcher exited."""
+
+    if not _macos_identity_is_alive(identity):
+        return
+    _terminate_macos_process(identity, signal.SIGTERM)
+    try:
+        _wait_until(
+            lambda: not _macos_identity_is_alive(identity),
+            min(max(timeout, 0.1), 5.0),
+            "macOS native UI process did not exit after verified cleanup",
+        )
+        return
+    except NativeUIWaitTimeout:
+        _terminate_macos_process(identity, signal.SIGKILL)
+        _wait_until(
+            lambda: not _macos_identity_is_alive(identity),
+            2.0,
+            "macOS native UI process survived verified termination",
+        )
+
+
 def _terminate_existing_macos_instances(timeout: float, expected_executable: str) -> None:
     """Clear exact product UI instances before starting a disposable run."""
 
@@ -1314,10 +1336,15 @@ class NativeUIController:
     def close(self) -> dict[str, object]:
         process = self.process
         if process is None:
+            if self.platform == "macos" and self.macos_process_identity is not None:
+                _terminate_macos_process_tree(self.macos_process_identity, self.timeout)
+                self.macos_pid = None
+                self.macos_process_identity = None
+                self.macos_expected_executable = None
             return self.snapshot()
         if self.platform == "windows":
             self._windows_key(0x12, 0x73)  # Alt+F4
-        else:
+        elif process.poll() is None:
             process_pid = self._macos_pid_or_error()
             completed = subprocess.run(
                 [
@@ -1339,6 +1366,8 @@ end tell''',
         self._wait(lambda: process.poll() is not None, f"{self.platform} UI did not close")
         if process.returncode not in (0, 1):
             raise NativeUISmokeError(f"{self.platform} UI exited with code {process.returncode}")
+        if self.platform == "macos" and self.macos_process_identity is not None:
+            _terminate_macos_process_tree(self.macos_process_identity, self.timeout)
         self.process = None
         self.hwnd = 0
         self.macos_pid = None
@@ -1352,19 +1381,26 @@ end tell''',
         return result | self.snapshot()
 
     def close_for_cleanup(self) -> None:
-        if self.process is None:
+        if self.process is None and not (
+            self.platform == "macos" and self.macos_process_identity is not None
+        ):
             return
         try:
             self.close()
         except Exception:
             process = self.process
+            cleanup_error: BaseException | None = None
+            if self.platform == "macos":
+                if self.macos_process_identity is None:
+                    raise NativeUISmokeError(
+                        "macOS native UI process identity is unavailable during cleanup"
+                    )
+                try:
+                    _terminate_macos_process_tree(self.macos_process_identity, self.timeout)
+                except BaseException as error:
+                    cleanup_error = error
             if process is not None and process.poll() is None:
                 if self.platform == "macos":
-                    if self.macos_process_identity is None:
-                        raise NativeUISmokeError(
-                            "macOS native UI process identity is unavailable during cleanup"
-                        )
-                    _terminate_macos_process(self.macos_process_identity, signal.SIGTERM)
                     try:
                         process.wait(timeout=2)
                     except subprocess.TimeoutExpired as error:
@@ -1385,6 +1421,8 @@ end tell''',
             self.macos_pid = None
             self.macos_process_identity = None
             self.macos_expected_executable = None
+            if cleanup_error is not None:
+                raise cleanup_error
 
     def _macos_pid_or_error(self) -> int:
         identity = self.macos_process_identity

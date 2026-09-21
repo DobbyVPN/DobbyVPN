@@ -343,11 +343,28 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         controller.macos_process_identity = identity
         with (
             patch.object(controller, "close", side_effect=smoke.NativeUISmokeError("close failed")),
-            patch.object(smoke, "_terminate_macos_process") as terminate,
+            patch.object(smoke, "_terminate_macos_process_tree") as terminate,
         ):
             controller.close_for_cleanup()
-        terminate.assert_called_once_with(identity, signal.SIGTERM)
+        terminate.assert_called_once_with(identity, 1)
         process.wait.assert_called_once_with(timeout=2)
+        self.assertIsNone(controller.process)
+        self.assertIsNone(controller.macos_process_identity)
+
+    def test_macos_close_stops_app_when_open_launcher_already_exited(self) -> None:
+        identity = smoke._MacOSProcessIdentity(
+            4321, 501, self._MACOS_EXECUTABLE, "Mon Sep 20 12:34:56 2026"
+        )
+        process = Mock(pid=9001, poll=Mock(return_value=0), returncode=0)
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 3
+        )
+        controller.process = process
+        controller.macos_pid = identity.pid
+        controller.macos_process_identity = identity
+        with patch.object(smoke, "_terminate_macos_process_tree") as terminate:
+            controller.close()
+        terminate.assert_called_once_with(identity, 3)
         self.assertIsNone(controller.process)
         self.assertIsNone(controller.macos_process_identity)
 
