@@ -20,16 +20,25 @@ the mini contract once and adds only the platform-specific qualification that
 the environment can actually provide. A missing environment is an unavailable
 check, not an accepted skip or a pass.
 
+GUI connection journeys temporarily exercise AUTO only and do not iterate
+individual profiles. The Android non-GUI binding matrix still exercises every
+discovered profile; other non-GUI profile matrices remain unchanged. Desktop
+full is mini once plus the AUTO native-window journey; all other required UI
+actions are unchanged.
+
 | Platform | `mini` | `full` |
 |---|---|---|
-| Windows/macOS | Headless production Go/Fyne widget and service boundary, plus the real VPN semantic scenarios | Mini once, plus the native-window journey through visible controls and native input; exact-Release mode uses the installed package |
-| Android | Rendered emulator UI, consent, connect/disconnect/reconnect, and real VPN traffic/routing for one representative non-TrustTunnel profile; the binding matrix covers every discovered profile | Physical-device extension; not part of 1.5.1 |
+| Windows/macOS | Headless production Go/Fyne AUTO widget and service boundary, plus the real VPN semantic scenarios | Mini once, plus the AUTO native-window journey through visible controls and native input; exact-Release mode uses the installed package |
+| Android | Rendered emulator AUTO journey, consent, connect/disconnect/reconnect, and real VPN traffic/routing; the binding matrix covers every discovered profile | Physical-device extension; not part of 1.5.1 |
 | iOS | One comprehensive rendered Simulator UI/input/lifecycle/diagnostics contract; no VPN traffic | Physical-device NetworkExtension and traffic extension; not part of 1.5.1 |
 | Linux | CLI/service and real VPN semantic scenarios | Not defined; Linux is intentionally CLI/service-only |
 
 The canonical semantic scenario membership and assertions are in the
 [functional contract](torturer/docs/contract.md). The native desktop window
-journey is cumulative full coverage, not a second semantic scenario set.
+journey is cumulative full coverage, not a second semantic scenario set; it is
+the AUTO native-window journey added after mini. GUI journeys do not iterate
+individual profiles. The Android binding matrix retains separate per-profile
+coverage.
 Deferred work is listed in [docs/TODO.md](docs/TODO.md); an explicitly chosen
 diagnostic scenario is never a qualification result.
 
@@ -109,8 +118,9 @@ Go/Fyne component tests cover UI state without opening a window. The native
 driver and the authenticated desktop service; hosted Windows/macOS mini runs
 use it for the UI/service boundary while the shared semantic engine owns VPN
 observations and cleanup. Local Windows/macOS full runs the mini contract once,
-then launch the native binary in an interactive desktop session. Exact-Release
-full mode launches the binary installed from that Release package. The journey
+then launches the native binary for the AUTO native-window journey in an
+interactive desktop session. Exact-Release full mode launches the binary
+installed from that Release package. The journey
 discovers Fyne controls through the platform accessibility tree, enters a fresh
 profile with native keyboard input, clicks the stable connection action for
 Connect and Disconnect, observes the rendered status (and the desktop native

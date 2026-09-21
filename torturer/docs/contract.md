@@ -11,23 +11,32 @@ Product and tests live in one repository. Local and hosted runs use the same
 `mini` is the portable qualification contract. `full` is cumulative: it runs
 mini once and adds environment-specific coverage. Hosted qualification accepts
 mini. Local full is currently defined only for Windows and macOS, where it
-adds the real native-window journey after the shared semantic lane (exact-
+adds the AUTO native-window journey after the shared semantic lane (exact-
 Release mode uses the installed package).
 Android and iOS full remain physical-device work; Linux is intentionally
 CLI/service mini-only.
 
+GUI connection journeys temporarily exercise AUTO only and do not iterate
+individual profiles. The Android non-GUI binding matrix still exercises every
+discovered profile; other non-GUI profile matrices remain unchanged. Desktop
+full is mini once plus the AUTO native-window journey; all other required UI
+actions are unchanged.
+
 | Platform | Mini qualification | Full qualification |
 |---|---|---|
-| Windows/macOS | Headless production Go/Fyne widget/service boundary plus the semantic scenarios below and real VPN observations | Mini once plus visible native-window input, Connect/Disconnect/reconnect, settings, and close/reopen actions |
-| Android | Rendered emulator UI plus consent, Connect/Disconnect/reconnect, traffic, and routing for one representative non-TrustTunnel profile; the binding matrix covers every discovered profile | Physical device, including the device-only VPN bridge |
+| Windows/macOS | Headless production Go/Fyne AUTO widget/service boundary plus the semantic scenarios below and real VPN observations | Mini once plus the AUTO native-window journey: visible native-window input, Connect/Disconnect/reconnect, settings, and close/reopen actions |
+| Android | Rendered emulator AUTO journey plus consent, Connect/Disconnect/reconnect, traffic, and routing; the binding matrix covers every discovered profile | Physical device, including the device-only VPN bridge |
 | iOS | One comprehensive rendered Simulator UI/input/lifecycle/diagnostics contract; no VPN traffic | Physical device and NetworkExtension traffic |
 | Linux | CLI/service and real VPN observations | Not defined |
 
 ## Semantic scenarios
 
 The semantic mini lane (desktop, Android, and Linux) runs these scenarios for
-each connection reported by the app. The iOS Simulator mini lane is the
-separate comprehensive rendered UI contract described in the coverage table.
+the connections its platform adapter exposes. GUI adapters expose the single
+AUTO selection and do not iterate individual profiles. Android additionally
+runs the same scenarios through its non-GUI binding matrix for every discovered
+profile. The iOS Simulator mini lane is the separate comprehensive rendered UI
+contract described in the coverage table.
 
 | Scenario | Behavior |
 |---|---|
@@ -63,7 +72,7 @@ Android hosted mini uses a rendered emulator and the real VPN service. Its
 `gui-auto` lane takes the first complete `Outline` or `Xray` protocol block
 from the fresh private bundle without rewriting its bytes; the separate
 `protocol-matrix` lane keeps the original bundle and exercises every product
-profile through the binding. This keeps the real GUI input journey bounded
+profile through the binding. This keeps the real GUI AUTO journey bounded
 while preserving full profile-matrix coverage. iOS
 Simulator mini proves rendered controls, input, lifecycle, and diagnostics but
 cannot prove a physical-device NetworkExtension tunnel or VPN traffic. Unknown
