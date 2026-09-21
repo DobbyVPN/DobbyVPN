@@ -1716,7 +1716,6 @@ class NativeUIController:
                     process_pid,
                     timeout=min(5.0, self.timeout),
                     control_bounds=bounds,
-                    window_bounds=_macos_window_rect(process_pid, 5.0),
                 )
                 _macos_clipboard_set_verified(profile_bytes)
                 process_pid = self._macos_pid_or_error()
@@ -1729,7 +1728,6 @@ class NativeUIController:
                     process_pid,
                     timeout=min(30.0, self.timeout),
                     control_bounds=bounds,
-                    window_bounds=_macos_window_rect(process_pid, 5.0),
                 )
             finally:
                 _macos_restore_clipboard(previous_clipboard)
