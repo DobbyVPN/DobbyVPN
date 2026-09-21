@@ -1814,10 +1814,15 @@ class NativeUIController:
                 frontmost = _macos_frontmost_pid()
             except NativeUISmokeError as frontmost_error:
                 frontmost = f"unavailable:{frontmost_error}"
+            try:
+                window_title = repr(_macos_window_title(process_pid, timeout=1.5))
+            except NativeUISmokeError as title_error:
+                window_title = f"unavailable:{title_error}"
             stale_labels = _macos_allowlisted_state_labels(process_pid)
             raise NativeUISmokeError(
                 f"{error}; click_center=({(bounds[0] + bounds[2]) // 2},"
                 f"{(bounds[1] + bounds[3]) // 2}); frontmost_pid={frontmost}; "
+                f"window_title={window_title}; "
                 f"visible_state={observed['state'] or 'none'}; "
                 f"stale_labels={','.join(stale_labels) or 'none'}"
             ) from error
