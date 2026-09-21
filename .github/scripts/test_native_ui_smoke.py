@@ -110,6 +110,38 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--window", command)
 
+    def test_macos_accessibility_rect_retries_only_transient_window_server_state(self) -> None:
+        transient = subprocess.CompletedProcess(
+            ["macos_ax.py"],
+            1,
+            stdout='{"ok":false,"stage":"ax-windows","transient":true,"error":"cannot complete"}\n',
+            stderr="",
+        )
+        ready = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"control","bounds":[10,20,110,220]}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
+            self.assertEqual(smoke._macos_accessibility_rect(4321, "Connect", 1), (10, 20, 110, 220))
+        self.assertEqual(run.call_count, 2)
+
+    def test_macos_window_rect_retries_transient_window_server_state(self) -> None:
+        transient = subprocess.CompletedProcess(
+            ["macos_ax.py"],
+            1,
+            stdout='{"ok":false,"stage":"ax-windows","transient":true,"error":"cannot complete"}\n',
+            stderr="",
+        )
+        ready = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"window","bounds":[1,2,461,522]}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
+            self.assertEqual(smoke._macos_window_rect(4321, 1), (1, 2, 461, 522))
+        self.assertEqual(run.call_count, 2)
+
     def test_macos_window_raise_uses_public_helper_and_exact_pid(self) -> None:
         result = subprocess.CompletedProcess(
             ["macos_ax.py"], 0,
@@ -121,6 +153,45 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--raise-window", command)
+
+    def test_macos_window_raise_retries_transient_window_server_state(self) -> None:
+        transient = subprocess.CompletedProcess(
+            ["macos_ax.py"],
+            1,
+            stdout='{"ok":false,"stage":"ax-windows","transient":true,"error":"cannot complete"}\n',
+            stderr="",
+        )
+        ready = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"raise","ax_window_count":1}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
+            smoke._macos_ax_raise_window(4321, 1)
+        self.assertEqual(run.call_count, 2)
+
+    def test_macos_ax_retry_preserves_last_transient_at_deadline(self) -> None:
+        clock = [0.0]
+
+        def request(*_args, **_kwargs):
+            clock[0] = 1.0
+            raise smoke.NativeUIWindowNotReady("macOS AX ax-windows: cannot complete")
+
+        with patch.object(smoke.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(smoke.time, "sleep"), \
+                patch.object(smoke, "_macos_ax_request", side_effect=request):
+            with self.assertRaisesRegex(smoke.NativeUIWindowNotReady, r"cannot complete \(attempts=1\)"):
+                smoke._macos_window_rect(4321, 1)
+
+    def test_macos_ax_retry_does_not_retry_hard_control_error(self) -> None:
+        with patch.object(
+            smoke,
+            "_macos_ax_request",
+            side_effect=smoke.NativeUIElementNotFound("ambiguous control"),
+        ) as request:
+            with self.assertRaisesRegex(smoke.NativeUIElementNotFound, "ambiguous control"):
+                smoke._macos_accessibility_rect(4321, "Connect", 1)
+        self.assertEqual(request.call_count, 1)
 
     def test_macos_frontmost_query_rejects_non_pid_output(self) -> None:
         result = subprocess.CompletedProcess(

@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import TypeVar
 
 
 class NativeUISmokeError(RuntimeError):
@@ -44,6 +45,9 @@ class NativeUIWindowNotReady(NativeUISmokeError):
 
 class NativeUIWaitTimeout(NativeUISmokeError):
     """A requested UI state was not observed within its bounded wait."""
+
+
+_T = TypeVar("_T")
 
 
 _FILETIME_TO_DATETIME_TICKS = 504911232000000000
@@ -577,7 +581,7 @@ def _macos_ax_request(
     return values  # type: ignore[return-value]
 
 
-def _macos_ax_raise_window(process_pid: int, timeout: float) -> None:
+def _macos_ax_raise_window_once(process_pid: int, timeout: float) -> None:
     """Raise the exact product window through the public AX window action."""
 
     if process_pid <= 0:
@@ -613,8 +617,52 @@ def _macos_ax_raise_window(process_pid: int, timeout: float) -> None:
         raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
 
 
+def _macos_retry_ax_request(
+    timeout: float,
+    request: Callable[[float], _T],
+    description: str,
+) -> _T:
+    """Retry only WindowServer readiness failures under one absolute budget."""
+
+    deadline = time.monotonic() + max(timeout, 0.1)
+    attempts = 0
+    last_transient: NativeUIWindowNotReady | None = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if last_transient is not None:
+                raise NativeUIWindowNotReady(
+                    f"{last_transient} (attempts={attempts})"
+                )
+            raise NativeUISmokeError(
+                f"macOS AX {description} deadline expired (attempts={attempts})"
+            )
+        attempts += 1
+        try:
+            # Every attempt gets a fresh bounded helper process.  A hung AX
+            # walk therefore cannot leak into the next operation.
+            return request(min(remaining, 4.0))
+        except NativeUIWindowNotReady as error:
+            last_transient = error
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+
+def _macos_ax_raise_window(process_pid: int, timeout: float) -> None:
+    """Raise the exact window within one absolute AX readiness budget."""
+
+    _macos_retry_ax_request(
+        timeout,
+        lambda request_timeout: _macos_ax_raise_window_once(process_pid, request_timeout),
+        "window raise",
+    )
+
+
 def _macos_window_rect(process_pid: int, timeout: float) -> tuple[int, int, int, int]:
-    return _macos_ax_request(process_pid, timeout, window=True)
+    return _macos_retry_ax_request(
+        timeout,
+        lambda request_timeout: _macos_ax_request(process_pid, request_timeout, window=True),
+        "window lookup",
+    )
 
 
 def _macos_startup_diagnostic(process_pid: int) -> str:
@@ -655,7 +703,16 @@ def _macos_accessibility_rect(
 ) -> tuple[int, int, int, int]:
     """Get a Fyne element through a bounded exact-PID AXUIElement walk."""
 
-    return _macos_ax_request(process_pid, timeout, name=name, prefix=prefix)
+    return _macos_retry_ax_request(
+        timeout,
+        lambda request_timeout: _macos_ax_request(
+            process_pid,
+            request_timeout,
+            name=name,
+            prefix=prefix,
+        ),
+        f"lookup for {name!r}",
+    )
 
 
 def _macos_frontmost_pid() -> int:
@@ -1015,7 +1072,7 @@ def _macos_copy_selection_verified(
             frontmost = f"unavailable:{error}"
         details = (
             f", control_bounds={control_bounds}, window_bounds={window_bounds},"
-            f" click_center={None if control_bounds is None else ((control_bounds[0] + control_bounds[2]) // 2, (control_bounds[1] + control_bounds[3]) // 2)},"
+            f" control_center={None if control_bounds is None else ((control_bounds[0] + control_bounds[2]) // 2, (control_bounds[1] + control_bounds[3]) // 2)},"
             f" frontmost_pid={frontmost}"
         )
         raise NativeUISmokeError(
