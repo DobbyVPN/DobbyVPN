@@ -42,12 +42,15 @@ summary while retaining the exact source privately until Connect submits it.
 One-line HTTPS URLs and ordinary edits retain normal Entry behavior; the Logs
 editor is not staged.
 
-On desktop, changing the rendered status, action label, or connection details
-also re-attaches the current connection content through the public Fyne window
-API. Fyne 2.8.1 refreshes native accessibility metadata when content is
-attached, while widget text refreshes update only pixels; the re-attachment
-keeps real-window accessibility assertions aligned with the visible UI without
-forking or changing Fyne. It is skipped while Settings is displayed.
+On Windows and macOS, changing the rendered status, action label, or connection
+details also re-attaches the current connection content through the public Fyne
+window API. Fyne 2.8.1's dirty-frame accessibility refresh did not republish
+these labels within the observed macOS activation contract, while desktop
+`Window.SetContent` forces an immediate native accessibility rebuild. This
+keeps real-window assertions aligned with the visible UI without forking or
+changing Fyne. The refresh is skipped while Settings is displayed; mobile
+drivers keep their normal dirty-frame accessibility path so Entry/IME focus is
+not rebuilt unnecessarily.
 
 ## Connect and reattach
 

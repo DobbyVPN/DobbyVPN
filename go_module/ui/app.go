@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -67,14 +68,7 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 	window.Resize(fyne.NewSize(460, 520))
 	connectionContent := view.Content()
 	window.SetContent(connectionContent)
-	view.refreshNativeSemantics = func() {
-		// Settings replaces the window content. Never pull the user back to the
-		// connection screen merely because a service snapshot arrives while
-		// Settings is open.
-		if window.Content() == connectionContent {
-			window.SetContent(connectionContent)
-		}
-	}
+	view.refreshNativeSemantics = newNativeSemanticsRefresh(goruntime.GOOS, window, connectionContent)
 	window.SetCloseIntercept(func() {
 		view.Stop()
 		window.Close()
@@ -82,6 +76,28 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 	view.Settings.OnTapped = func() { window.SetContent(settings.Content()) }
 	settings.Back.OnTapped = func() { window.SetContent(view.Content()) }
 	return &Application{App: runtime, Window: window, Connection: view, Settings: settings}
+}
+
+func nativeSemanticsRefreshEnabled(goos string) bool {
+	return goos == "darwin" || goos == "windows"
+}
+
+func newNativeSemanticsRefresh(
+	goos string,
+	window fyne.Window,
+	connectionContent fyne.CanvasObject,
+) func() {
+	if !nativeSemanticsRefreshEnabled(goos) {
+		return nil
+	}
+	return func() {
+		// Settings replaces the window content. Never pull the user back to the
+		// connection screen merely because a service snapshot arrives while
+		// Settings is open.
+		if window.Content() == connectionContent {
+			window.SetContent(connectionContent)
+		}
+	}
 }
 
 func (a *Application) Run() {
@@ -882,8 +898,18 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 	v.snapshot = snapshot
 	v.sequence = snapshot.Sequence
 	v.generation = snapshot.Generation
-	v.renderedStatus = status
-	v.renderedButton = button
+	// Configure can publish a short-lived Ready/Disconnected snapshot while a
+	// user-initiated Connect is still in flight. Keep the optimistic action
+	// presentation until an authoritative connected/failed transition arrives;
+	// otherwise a real-window observer can miss the only visible acknowledgement
+	// of its physical click.
+	preserveOptimisticConnect := v.busy &&
+		v.renderedStatus == "Connecting" &&
+		(status == "Ready" || status == statusDisconnected)
+	if !preserveOptimisticConnect {
+		v.renderedStatus = status
+		v.renderedButton = button
+	}
 	v.renderedDetails = details
 	if !v.diagnosticsLoaded {
 		v.renderedLogs = snapshotLogText(snapshot)

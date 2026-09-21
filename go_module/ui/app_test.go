@@ -458,12 +458,34 @@ func TestApplicationDoesNotReattachConnectionContentOverSettings(t *testing.T) {
 	defer runtime.Quit()
 	application := NewApplication(runtime, &fakeClient{})
 	t.Cleanup(application.Close)
+	application.Connection.refreshNativeSemantics = newNativeSemanticsRefresh(
+		"darwin", application.Window, application.Connection.Content(),
+	)
 	settingsContent := application.Settings.Content()
 	application.Window.SetContent(settingsContent)
 
 	application.Connection.render(Snapshot{State: StateConnected, Generation: 1})
 	if got := application.Window.Content(); got != settingsContent {
 		t.Fatal("a service presentation switched the visible Settings screen back to Connection")
+	}
+}
+
+func TestNativeSemanticsRefreshIsDesktopOnly(t *testing.T) {
+	for _, testCase := range []struct {
+		goos    string
+		enabled bool
+	}{
+		{goos: "darwin", enabled: true},
+		{goos: "windows", enabled: true},
+		{goos: "linux", enabled: false},
+		{goos: "android", enabled: false},
+		{goos: "ios", enabled: false},
+	} {
+		t.Run(testCase.goos, func(t *testing.T) {
+			if got := nativeSemanticsRefreshEnabled(testCase.goos); got != testCase.enabled {
+				t.Fatalf("native semantics refresh for %s = %t, want %t", testCase.goos, got, testCase.enabled)
+			}
+		})
 	}
 }
 
@@ -589,6 +611,32 @@ func TestConnectionViewPublishesConnectingBeforeStartingSession(t *testing.T) {
 	}
 	if view.Connect.Disabled() {
 		t.Fatal("Connect control remained disabled after session start completed")
+	}
+}
+
+func TestConnectionViewKeepsOptimisticConnectWhileConfigureSnapshotArrives(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	gateway := make(chan struct{})
+	started := make(chan struct{})
+	client := &fakeClient{startGate: gateway, startedCh: started}
+	view := NewConnectionView(client)
+	view.ctx = context.Background()
+	view.render(Snapshot{State: StateIdle})
+	view.Input.SetText("https://example.test/profile")
+	view.toggle()
+
+	view.render(Snapshot{State: StateConfigured, Configured: true, Sequence: 1})
+	status, _, button := view.Presentation()
+	if status != "Connecting" || button != "Disconnect" {
+		t.Fatalf("configure snapshot replaced optimistic presentation: (%q, %q)", status, button)
+	}
+
+	close(gateway)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("session start did not complete")
 	}
 }
 
