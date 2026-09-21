@@ -631,6 +631,40 @@ func TestConnectionViewKeepsOptimisticConnectWhileConfigureSnapshotArrives(t *te
 	if status != "Connecting" || button != "Disconnect" {
 		t.Fatalf("configure snapshot replaced optimistic presentation: (%q, %q)", status, button)
 	}
+	view.clearBusy()
+	view.render(Snapshot{State: StateConfigured, Configured: true, Sequence: 2})
+	status, _, button = view.Presentation()
+	if status != "Connecting" || button != "Disconnect" {
+		t.Fatalf("delayed configure snapshot replaced pending presentation after Start: (%q, %q)", status, button)
+	}
+	view.render(Snapshot{State: StateProbing, Configured: true, Sequence: 3})
+	status, _, button = view.Presentation()
+	if status != "Connecting" || button != "Disconnect" {
+		t.Fatalf("authoritative probing snapshot = (%q, %q), want Connecting/Disconnect", status, button)
+	}
+	view.render(Snapshot{State: StateIdle, Sequence: 4})
+	status, _, button = view.Presentation()
+	if status != "Disconnected" || button != "Connect" {
+		t.Fatalf("post-probe idle snapshot = (%q, %q), want Disconnected/Connect", status, button)
+	}
+	view.mu.Lock()
+	view.renderedStatus = "Connecting"
+	view.snapshot = Snapshot{State: StateIdle, Sequence: 5}
+	view.mu.Unlock()
+	view.render(Snapshot{State: StateFailed, Sequence: 6})
+	status, _, button = view.Presentation()
+	if status != "Failed" || button != "Connect" {
+		t.Fatalf("failed snapshot = (%q, %q), want Failed/Connect", status, button)
+	}
+	view.mu.Lock()
+	view.renderedStatus = "Connecting"
+	view.snapshot = Snapshot{State: StateIdle, Sequence: 7}
+	view.mu.Unlock()
+	view.render(Snapshot{State: StateIdle, Recovering: true, Sequence: 8})
+	status, _, button = view.Presentation()
+	if status != "Reconnecting" || button != "Connect" {
+		t.Fatalf("recovering snapshot = (%q, %q), want Reconnecting/Connect", status, button)
+	}
 
 	close(gateway)
 	select {

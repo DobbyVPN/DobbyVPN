@@ -895,15 +895,23 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 	} else {
 		v.localError = ""
 	}
+	previousState := v.snapshot.State
+	previousRecovering := v.snapshot.Recovering
+	// The previous snapshot is the authoritative latch boundary: once Watch
+	// has delivered an active/terminal/recovery state, a later idle snapshot is
+	// allowed to render normally. Before that boundary, Ready/Disconnected can
+	// only be the Configure-stage snapshot of this same Connect action.
 	v.snapshot = snapshot
 	v.sequence = snapshot.Sequence
 	v.generation = snapshot.Generation
 	// Configure can publish a short-lived Ready/Disconnected snapshot while a
 	// user-initiated Connect is still in flight. Keep the optimistic action
-	// presentation until an authoritative connected/failed transition arrives;
-	// otherwise a real-window observer can miss the only visible acknowledgement
-	// of its physical click.
-	preserveOptimisticConnect := v.busy &&
+	// presentation until an authoritative active, terminal, or recovery state
+	// arrives; otherwise a real-window observer can miss the only visible
+	// acknowledgement of its physical click, even after Start has returned.
+	preserveOptimisticConnect := !previousRecovering &&
+		(previousState == StateIdle || previousState == StateConfigured) &&
+		(snapshot.State == StateIdle || snapshot.State == StateConfigured) &&
 		v.renderedStatus == "Connecting" &&
 		(status == "Ready" || status == statusDisconnected)
 	if !preserveOptimisticConnect {
