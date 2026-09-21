@@ -939,44 +939,44 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
         self.assertEqual(len(calls), 4)
         self.assertEqual(calls[-1][1]["input"], "")
 
-    def test_macos_paste_restores_previous_bytes_without_exposing_profile(self) -> None:
-        previous = b"user clipboard"
-        profile_bytes = b"vpn-profile-secret"
-        calls: list[tuple[list[str], dict[str, object]]] = []
-
-        def run(command, **kwargs):
-            calls.append((command, kwargs))
-            if command == ["pbpaste"]:
-                value = previous if len([call for call in calls if call[0] == ["pbpaste"]]) == 1 else profile_bytes
-                return subprocess.CompletedProcess(command, 0, stdout=value, stderr=b"")
-            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
-
+    def test_macos_profile_validation_rejects_nul_and_invalid_utf8(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             profile = smoke.Path(directory) / "profile.conf"
-            profile.write_bytes(profile_bytes)
-            with patch.object(smoke.subprocess, "run", side_effect=run):
-                restore = smoke._macos_paste(profile)
-                restore()
+            profile.write_bytes(b"ok\x00bad")
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "contains NUL"):
+                smoke._macos_profile_bytes(profile)
+            profile.write_bytes(b"ok\xffbad")
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "not UTF-8"):
+                smoke._macos_profile_bytes(profile)
 
-        self.assertEqual(calls[0][0], ["pbpaste"])
-        self.assertEqual(calls[-1][1]["input"], previous)
-        self.assertEqual(
-            [call[0] for call in calls],
-            [["pbpaste"], ["pbcopy"], ["pbpaste"], ["pbcopy"]],
+    def test_macos_clipboard_set_verification_compares_bytes_without_logging(self) -> None:
+        value = b"synthetic-profile"
+        with (
+            patch.object(smoke, "_macos_set_clipboard") as set_clipboard,
+            patch.object(smoke, "_macos_clipboard_snapshot", return_value=value),
+        ):
+            smoke._macos_clipboard_set_verified(value)
+        set_clipboard.assert_called_once_with(value)
+
+    def test_macos_pasteboard_change_count_parses_jxa_output(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["osascript"], 0, stdout="42\n", stderr=""
         )
+        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+            self.assertEqual(smoke._macos_pasteboard_change_count(), 42)
+        self.assertEqual(run.call_args.args[0][:3], ["osascript", "-l", "JavaScript"])
 
-    def test_macos_paste_rejects_clipboard_change_before_input_without_logging_profile(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            profile = smoke.Path(directory) / "profile.conf"
-            profile.write_bytes(b"vpn-profile-secret")
-            with (
-                patch.object(smoke, "_macos_clipboard_snapshot", side_effect=[b"old", b"wrong"]),
-                patch.object(smoke, "_macos_set_clipboard"),
-                patch.object(smoke, "_macos_restore_clipboard") as restore,
-            ):
-                with self.assertRaisesRegex(smoke.NativeUISmokeError, r"expected_bytes=18, observed_bytes=5"):
-                    smoke._macos_paste(profile)
-            restore.assert_called_once_with(b"old")
+    def test_macos_copy_selection_waits_for_pasteboard_generation(self) -> None:
+        expected = b"synthetic-profile"
+        with (
+            patch.object(smoke, "_macos_keystroke") as keystroke,
+            patch.object(smoke, "_macos_clipboard_set_verified") as set_clipboard,
+            patch.object(smoke, "_macos_pasteboard_change_count", side_effect=[10, 11]),
+            patch.object(smoke, "_macos_clipboard_snapshot", return_value=expected),
+        ):
+            smoke._macos_copy_selection_verified(expected, 4321, timeout=1)
+        self.assertEqual(keystroke.call_args_list, [call(4321, "a"), call(4321, "c")])
+        set_clipboard.assert_called_once_with(smoke._MACOS_COPY_MARKER)
 
     def test_configure_restores_clipboard_when_native_input_fails(self) -> None:
         controller = smoke.NativeUIController("windows", smoke.Path("ui"), smoke.Path("profile"), 1)

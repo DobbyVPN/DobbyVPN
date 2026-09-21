@@ -48,6 +48,8 @@ class NativeUIWaitTimeout(NativeUISmokeError):
 _FILETIME_TO_DATETIME_TICKS = 504911232000000000
 _MACOS_UI_PROCESS_NAME = "Dobby Vpn"
 _MACOS_AX_HELPER = Path(__file__).with_name("macos_ax.py")
+_MACOS_INPUT_SENTINEL = b"DobbyVPN-native-input-sentinel-v1"
+_MACOS_COPY_MARKER = b"DobbyVPN-native-copy-marker-v1"
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
     if (visible of process "Finder") is false then error "Finder is not visible"
@@ -764,7 +766,7 @@ def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
 
 
 def _macos_keystroke(process_pid: int, key: str) -> None:
-    if process_pid <= 0 or len(key) != 1 or key not in {"a", "v"}:
+    if process_pid <= 0 or len(key) != 1 or key not in {"a", "v", "c"}:
         raise NativeUISmokeError("macOS native UI process identity is unavailable")
     _macos_focus_window(process_pid)
     script = f'''tell application "System Events"
@@ -831,37 +833,112 @@ def _macos_restore_clipboard(previous: bytes | None) -> None:
         pass
 
 
-def _macos_paste(profile: Path) -> Callable[[], None]:
-    previous = _macos_clipboard_snapshot()
-    value = profile.read_bytes()
+_MACOS_PASTEBOARD_CHANGE_COUNT_SCRIPT = '''ObjC.import("AppKit");
+const count = ObjC.unwrap($.NSPasteboard.generalPasteboard.changeCount);
+count.toString();'''
+
+
+def _macos_profile_bytes(profile: Path) -> bytes:
     try:
-        _macos_set_clipboard(value)
-        # Verify the source clipboard before delivering Cmd+V.  Copying a
-        # Fyne Entry back through Cmd+C is not a valid oracle: official Fyne
-        # v2.8.1 exports this product wrapper as static AX text and its
-        # keyboard-selection path is not observable through AX.  The later
-        # Connect action and independent service/tunnel assertions prove that
-        # the entered profile was actually accepted.
+        value = profile.read_bytes()
+    except OSError as error:
+        raise NativeUISmokeError("macOS native configuration profile could not be read") from error
+    if b"\x00" in value:
+        raise NativeUISmokeError(
+            "macOS native configuration profile contains NUL "
+            f"(bytes={len(value)}, first_nul={value.index(b'\x00')})"
+        )
+    try:
+        value.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise NativeUISmokeError(
+            "macOS native configuration profile is not UTF-8 "
+            f"(bytes={len(value)}, invalid_byte={error.start})"
+        ) from error
+    return value
+
+
+def _macos_clipboard_set_verified(value: bytes, *, timeout: float = 3.0) -> None:
+    _macos_set_clipboard(value)
+    observed: bytes | None = None
+    try:
+        _wait_until(
+            lambda: (lambda current: current == value)(
+                _macos_clipboard_snapshot()
+            ),
+            min(max(timeout, 0.1), 5.0),
+            "macOS clipboard did not retain requested input",
+        )
+        return
+    except NativeUIWaitTimeout as error:
         observed = _macos_clipboard_snapshot()
-        if observed != value:
-            observed_length = len(observed) if observed is not None else None
-            raise NativeUISmokeError(
-                "macOS clipboard did not retain the profile before paste "
-                f"(expected_bytes={len(value)}, observed_bytes={observed_length})"
-            )
-    except Exception:
-        _macos_restore_clipboard(previous)
-        raise
-    restored = False
+        observed_length = len(observed) if observed is not None else None
+        raise NativeUISmokeError(
+            "macOS clipboard did not retain requested input "
+            f"(expected_bytes={len(value)}, observed_bytes={observed_length})"
+        ) from error
 
-    def restore() -> None:
-        nonlocal restored
-        if restored:
-            return
-        restored = True
-        _macos_restore_clipboard(previous)
 
-    return restore
+def _macos_pasteboard_change_count() -> int:
+    try:
+        completed = subprocess.run(
+            [
+                "osascript", "-l", "JavaScript", "-e",
+                _MACOS_PASTEBOARD_CHANGE_COUNT_SCRIPT,
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(
+            f"macOS pasteboard change-count query failed: {error}"
+        ) from error
+    if completed.returncode != 0:
+        raise NativeUISmokeError(
+            completed.stderr.strip() or "macOS pasteboard change-count query failed"
+        )
+    value = completed.stdout.strip()
+    if not re.fullmatch(r"[0-9]+", value):
+        raise NativeUISmokeError(
+            "macOS pasteboard change-count query returned invalid output"
+        )
+    return int(value)
+
+
+def _macos_copy_selection_verified(
+    expected: bytes,
+    process_pid: int,
+    *,
+    timeout: float,
+) -> None:
+    """Exercise Cmd+A/C and compare only after pasteboard generation changes."""
+
+    _macos_keystroke(process_pid, "a")
+    # Make a copy a detectable state transition even when the field already
+    # equals the expected value.  The marker is synthetic and never logged.
+    _macos_clipboard_set_verified(_MACOS_COPY_MARKER)
+    before = _macos_pasteboard_change_count()
+    _macos_keystroke(process_pid, "c")
+    try:
+        _wait_until(
+            lambda: _macos_pasteboard_change_count() != before,
+            min(max(timeout, 0.1), 30.0),
+            "macOS Entry did not complete Cmd+C",
+        )
+    except NativeUIWaitTimeout as error:
+        raise NativeUISmokeError(
+            "macOS Entry did not complete Cmd+C "
+            f"(expected_bytes={len(expected)}, pasteboard_changed=false)"
+        ) from error
+    observed = _macos_clipboard_snapshot()
+    if observed != expected:
+        observed_length = len(observed) if observed is not None else None
+        raise NativeUISmokeError(
+            "macOS native configuration copy-back mismatch "
+            f"(expected_bytes={len(expected)}, observed_bytes={observed_length})"
+        )
 
 
 def _macos_current_uid() -> int:
@@ -1392,10 +1469,22 @@ class NativeUIController:
     def _macos_action_state(self, process_pid: int) -> str | None:
         """Return the first current post-activation state, without secrets."""
 
-        # Error/Failed take precedence so a terminal failure cannot be hidden
-        # by a stale-looking transitional label in an older AX generation.
-        for name in ("Error", "Failed", "Connecting", "Disconnect"):
-            if _macos_has_element(process_pid, name, timeout=0.5):
+        # Probe the positive transition first.  Each AX query is a fresh,
+        # bounded helper process; a sub-second deadline can expire during
+        # Python/ctypes startup before the tree walk begins.
+        for name in ("Connecting", "Disconnect"):
+            if _macos_has_element(process_pid, name, timeout=1.5):
+                return name
+        # Error/Failed are checked only when no accepted transition is
+        # visible, so a slow negative lookup cannot hide a real Connect.
+        for name in ("Error", "Failed"):
+            if _macos_has_element(process_pid, name, timeout=1.5):
+                return name
+        return None
+
+    def _macos_failure_state(self, process_pid: int) -> str | None:
+        for name in ("Error", "Failed"):
+            if _macos_has_element(process_pid, name, timeout=1.5):
                 return name
         return None
 
@@ -1445,7 +1534,8 @@ class NativeUIController:
             finally:
                 restore_clipboard()
         else:
-            restore_clipboard = _macos_paste(self.profile)
+            profile_bytes = _macos_profile_bytes(self.profile)
+            previous_clipboard = _macos_clipboard_snapshot()
             try:
                 process_pid = self._macos_pid_or_error()
                 bounds = _macos_accessibility_rect(process_pid, "Connection configuration", 10)
@@ -1454,12 +1544,30 @@ class NativeUIController:
                     bounds,
                     process_pid,
                 )
+                _macos_clipboard_set_verified(_MACOS_INPUT_SENTINEL)
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "a")
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "v")
+                process_pid = self._macos_pid_or_error()
+                _macos_copy_selection_verified(
+                    _MACOS_INPUT_SENTINEL,
+                    process_pid,
+                    timeout=min(5.0, self.timeout),
+                )
+                _macos_clipboard_set_verified(profile_bytes)
+                process_pid = self._macos_pid_or_error()
+                _macos_keystroke(process_pid, "a")
+                process_pid = self._macos_pid_or_error()
+                _macos_keystroke(process_pid, "v")
+                process_pid = self._macos_pid_or_error()
+                _macos_copy_selection_verified(
+                    profile_bytes,
+                    process_pid,
+                    timeout=min(30.0, self.timeout),
+                )
             finally:
-                restore_clipboard()
+                _macos_restore_clipboard(previous_clipboard)
         return self.snapshot()
 
     def wait_status(self, status: str, *, timeout: float | None = None) -> dict[str, object]:
@@ -1471,7 +1579,7 @@ class NativeUIController:
             def visible() -> bool:
                 process_pid = self._macos_pid_or_error()
                 if status not in {"Error", "Failed"}:
-                    failure = self._macos_action_state(process_pid)
+                    failure = self._macos_failure_state(process_pid)
                     if failure in {"Error", "Failed"}:
                         raise NativeUISmokeError(
                             f"macOS UI reported {failure} while waiting for {status}"
