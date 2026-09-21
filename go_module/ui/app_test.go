@@ -453,6 +453,44 @@ func TestConnectionViewRefreshesNativeSemanticsAfterDynamicPresentation(t *testi
 	}
 }
 
+func TestConnectionViewCommitsNativeConnectPresentationInUICallback(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	gate := make(chan struct{})
+	started := make(chan struct{})
+	client := &fakeClient{startGate: gate, startedCh: started}
+	view := NewConnectionView(client)
+	view.ctx = context.Background()
+	view.Input.SetText("https://example.test/profile")
+	refreshes := 0
+	view.refreshNativeSemantics = func() { refreshes++ }
+
+	// Calling the production callback directly models Fyne's UI goroutine. The
+	// optimistic labels and native refresh must be committed before Configure
+	// and Start can race the real-window observer.
+	view.Connect.OnTapped()
+	status, _, button := view.Presentation()
+	if status != "Connecting" || button != "Disconnect" {
+		t.Fatalf("UI callback presentation = (%q, %q), want Connecting/Disconnect", status, button)
+	}
+	if view.Status.Text != "Connecting" || view.Connect.Text != "Disconnect" {
+		t.Fatalf("UI callback did not synchronously update widgets: (%q, %q)", view.Status.Text, view.Connect.Text)
+	}
+	if refreshes != 1 {
+		t.Fatalf("UI callback semantic refreshes = %d, want 1", refreshes)
+	}
+	if !view.Connect.Disabled() {
+		t.Fatal("Connect control remained enabled during the pending UI callback")
+	}
+
+	close(gate)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("session start did not complete")
+	}
+}
+
 func TestApplicationDoesNotReattachConnectionContentOverSettings(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
