@@ -294,7 +294,9 @@ GitHub-hosted runner; their shutdown is not separately verified.
 
 Local VM tests take one product worktree and a fresh owner profile. They build
 for iteration, not for release reproducibility, and clean up after every
-result. Android mini drives the rendered emulator UI, fresh-profile entry, VPN
+result. Desktop UI phases also receive a private run-local HOME so stale user
+diagnostic history cannot affect a later headless render or native reopen;
+that directory is removed with the disposable run. Android mini drives the rendered emulator UI, fresh-profile entry, VPN
 consent, Connect/Disconnect/reconnect, and the semantic traffic/routing
 scenarios. Its rendered lane stages the first complete non-TrustTunnel
 `Outline`/`Xray` block without reserializing it; the Android binding lane still

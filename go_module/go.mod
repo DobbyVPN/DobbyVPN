@@ -131,6 +131,6 @@ tool golang.org/x/mobile/cmd/gobind
 
 tool fyne.io/tools/cmd/fyne
 
-replace fyne.io/fyne/v2 => github.com/DobbyVPN/fyne/v2 v2.0.0-20260921083927-44c5d29914a2
+replace fyne.io/fyne/v2 => github.com/DobbyVPN/fyne/v2 v2.0.0-20260921092014-0987cd6d54b1
 
 replace github.com/go-gl/glfw/v3.4/glfw => github.com/DobbyVPN/glfw/v3.4/glfw v0.0.0-20260921083927-e9a15d43604f

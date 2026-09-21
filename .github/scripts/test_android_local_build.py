@@ -91,7 +91,7 @@ case "${1:-}" in
   list)
     case "$*" in
       *golang.org/x/mobile*) printf 'v0.0.0-20260520154334-0e4426e1883d\n' ;;
-      *fyne.io/fyne/v2*) printf 'fyne.io/fyne/v2\tv2.8.1\tgithub.com/DobbyVPN/fyne/v2\tv2.0.0-20260921083927-44c5d29914a2\n' ;;
+      *fyne.io/fyne/v2*) printf 'fyne.io/fyne/v2\tv2.8.1\tgithub.com/DobbyVPN/fyne/v2\tv2.0.0-20260921092014-0987cd6d54b1\n' ;;
       *github.com/go-gl/glfw/v3.4/glfw*) printf 'github.com/go-gl/glfw/v3.4/glfw\tv0.1.0-pre.1.0.20260707082822-2a407d02d01a\tgithub.com/DobbyVPN/glfw/v3.4/glfw\tv0.0.0-20260921083927-e9a15d43604f\n' ;;
       *) exit 2 ;;
     esac
@@ -149,7 +149,7 @@ case "$*" in
     printf 'golang.org/x/mobile@v0.0.0-20260520154334-0e4426e1883d\\n'
     ;;
   *android_dependency_provenance.py*--print-go-ui-replacements*)
-    printf 'fyne.io/fyne/v2\\tv2.8.1\\tgithub.com/DobbyVPN/fyne/v2\\tv2.0.0-20260921083927-44c5d29914a2\\t44c5d29914a2760a0358215dddaf8f295c9ae7dc\\n'
+    printf 'fyne.io/fyne/v2\\tv2.8.1\\tgithub.com/DobbyVPN/fyne/v2\\tv2.0.0-20260921092014-0987cd6d54b1\\t0987cd6d54b10d2fde5ab069131f1515bf30c906\\n'
     printf 'github.com/go-gl/glfw/v3.4/glfw\\tv0.1.0-pre.1.0.20260707082822-2a407d02d01a\\tgithub.com/DobbyVPN/glfw/v3.4/glfw\\tv0.0.0-20260921083927-e9a15d43604f\\te9a15d43604f85750bb1129227694b2a01512ec9\\n'
     ;;
   *) exit 2 ;;

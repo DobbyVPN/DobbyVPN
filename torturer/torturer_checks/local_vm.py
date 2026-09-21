@@ -61,6 +61,7 @@ _NATIVE_UI_HOST_ENVIRONMENT = frozenset({
 })
 _NATIVE_UI_RUNTIME_ENVIRONMENT = {
     "windows": frozenset({
+        "HOME",
         "PROGRAMDATA",
         "DOBBYVPN_CONTROL_ADDRESS",
         "DOBBYVPN_CONTROL_TOKEN_USER",
@@ -70,6 +71,7 @@ _NATIVE_UI_RUNTIME_ENVIRONMENT = {
         "GODEBUG",
     }),
     "macos": frozenset({
+        "HOME",
         "DOBBYVPN_CONTROL_SOCKET",
     }),
 }
@@ -105,6 +107,23 @@ def _native_ui_environment(platform: str, runtime: dict[str, Any]) -> dict[str, 
             if isinstance(runtime_environment.get(name), str)
         })
     return environment
+
+
+def _prepare_desktop_ui_home(run_dir: Path) -> str:
+    """Give each desktop UI phase an isolated user store and log history.
+
+    The production UI intentionally reads its user's diagnostics. Reusing the
+    SSH account's real home between disposable runs can therefore feed an old,
+    arbitrarily large diagnostic line into the headless Fyne renderer before a
+    new scenario starts. A run-local HOME keeps the UI journey reproducible and
+    is removed with the run; service logs remain in the run's explicit log
+    directory and are still collected normally.
+    """
+
+    home = run_dir / "ui-home"
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    home.chmod(0o700)
+    return str(home)
 
 
 def _positive_timeout(value: str) -> float:
@@ -1124,6 +1143,11 @@ def run(args: argparse.Namespace) -> int:
             runtime = _start_windows(run_dir, descriptor, logs, args.timeout)
         elif args.platform == "android":
             runtime = _start_android(run_dir, descriptor, logs, args.timeout)
+        if args.platform in {"windows", "macos"}:
+            runtime_environment = runtime.get("environment")
+            runtime_environment = dict(runtime_environment) if isinstance(runtime_environment, dict) else {}
+            runtime_environment["HOME"] = _prepare_desktop_ui_home(run_dir)
+            runtime["environment"] = runtime_environment
         state["runtime"] = runtime
         state["status"] = "running"
         _write_json(run_dir / "platform.json", state)
@@ -1186,6 +1210,10 @@ def run(args: argparse.Namespace) -> int:
                 runtime = _start_windows(run_dir, descriptor, logs, args.timeout)
             else:
                 runtime = _refresh_desktop_runtime_after_headless(runtime)
+            runtime_environment = runtime.get("environment")
+            runtime_environment = dict(runtime_environment) if isinstance(runtime_environment, dict) else {}
+            runtime_environment["HOME"] = _prepare_desktop_ui_home(run_dir)
+            runtime["environment"] = runtime_environment
             state["runtime"] = runtime
             _write_json(run_dir / "platform.json", state)
             native_environment = _native_ui_environment(args.platform, runtime)
