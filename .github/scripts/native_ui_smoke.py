@@ -2117,7 +2117,17 @@ def serve_native_ui(
                     raise NativeUISmokeError(f"unsupported native UI operation {operation!r}")
                 response = {"ok": True, **result}
             except Exception as error:
-                response = {"ok": False, "error": str(error), **controller.snapshot()}
+                # Diagnostics must never replace the operation that failed.
+                # A status snapshot is another AX walk and may fail or time
+                # out while the original error is still actionable (for
+                # example, a profile round-trip mismatch).  Preserve both
+                # independently, without turning a diagnostic failure into a
+                # misleading primary result.
+                response = {"ok": False, "error": str(error)}
+                try:
+                    response.update(controller.snapshot())
+                except Exception as snapshot_error:
+                    response["snapshot_error"] = str(snapshot_error)
             output_stream.write(encoder.encode(response) + "\n")
             output_stream.flush()
     except Exception as error:

@@ -897,6 +897,38 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         self.assertTrue(responses[-1]["ok"])
         self.assertGreaterEqual(fake.closed, 1)
 
+    def test_serve_preserves_operation_error_when_snapshot_diagnostic_fails(self) -> None:
+        class FailingOperationController:
+            def __init__(self):
+                self.snapshots = 0
+
+            def start(self):
+                pass
+
+            def snapshot(self):
+                self.snapshots += 1
+                if self.snapshots == 1:
+                    return {"status": "Disconnected"}
+                raise smoke.NativeUISmokeError("snapshot AX lookup timed out")
+
+            def configure(self):
+                raise smoke.NativeUISmokeError("primary configure sentinel mismatch")
+
+            def close_for_cleanup(self):
+                pass
+
+        output = io.StringIO()
+        with patch.object(smoke, "_controller_for", return_value=FailingOperationController()):
+            result = smoke.serve_native_ui(
+                "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1,
+                io.StringIO('{"op":"configure"}\n'), output,
+            )
+        self.assertEqual(result, 0)
+        response = json.loads(output.getvalue().splitlines()[-1])
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["error"], "primary configure sentinel mismatch")
+        self.assertEqual(response["snapshot_error"], "snapshot AX lookup timed out")
+
     def test_serve_cleans_startup_failure_before_reporting_it(self) -> None:
         events: list[str] = []
 
