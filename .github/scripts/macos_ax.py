@@ -241,9 +241,17 @@ def _windows(frameworks: Frameworks, pid: int) -> tuple[ctypes.c_void_p, ...]:
     if not app:
         raise AXLookupError("ax-application", "AXUIElementCreateApplication returned no application")
     try:
-        value = _attribute(frameworks, app, "AXWindows")
+        status, value = _copy_attribute(frameworks, app, "AXWindows")
         if value is None:
-            raise AXLookupError("ax-windows", "the process exposed no AXWindows collection")
+            try:
+                cg_count = _cg_window_count(frameworks, pid)
+            except AXLookupError as error:
+                cg_count = f"error:{error}"
+            raise AXLookupError(
+                "ax-windows",
+                "the process exposed no AXWindows collection "
+                f"(status={status}, cg_window_count={cg_count})",
+            )
         try:
             result = frameworks.array_values(value)
             for window in result:
@@ -251,7 +259,14 @@ def _windows(frameworks: Frameworks, pid: int) -> tuple[ctypes.c_void_p, ...]:
         finally:
             frameworks.release(value)
         if not result:
-            raise AXLookupError("ax-windows", "the process exposed no windows")
+            try:
+                cg_count = _cg_window_count(frameworks, pid)
+            except AXLookupError as error:
+                cg_count = f"error:{error}"
+            raise AXLookupError(
+                "ax-windows",
+                f"the process exposed no windows (cg_window_count={cg_count})",
+            )
         return result
     finally:
         frameworks.release(app)

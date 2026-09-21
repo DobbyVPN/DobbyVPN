@@ -84,13 +84,15 @@ func (a *Application) RunWithDiagnosticStore(resolve func() DiagnosticStore) {
 }
 
 func (a *Application) run(resolve func() DiagnosticStore) {
-	// Starting the service watcher before App.Run lets the first desktop
-	// snapshot race Fyne's synchronous Show/repaint/accessibility setup.  The
-	// same lifecycle boundary is useful on mobile, where the resolver may call
-	// a native bridge.  OnStarted is delivered only after the driver's event
-	// loop and first surface are ready, so every real window uses one startup
-	// ordering and the headless companion can still call Start directly.
+	// Create/show the first native surface from the driver's lifecycle callback.
+	// On macOS Fyne's accessibility tree is attached while Show runs; doing it
+	// before the GLFW driver has initialized Cocoa can leave the process with no
+	// AXWindows collection.  The same lifecycle boundary is useful on mobile,
+	// where the resolver may call a native bridge, and the headless companion
+	// can still call Start directly.
 	a.App.Lifecycle().SetOnStarted(func() {
+		a.Window.Show()
+		markUIAttached()
 		a.Start()
 		if resolve != nil {
 			go func() {
@@ -99,11 +101,6 @@ func (a *Application) run(resolve func() DiagnosticStore) {
 			}()
 		}
 	})
-	// Show after registering the lifecycle callback.  The callback is delivered
-	// only by App.Run, after the driver has initialized its event loop and first
-	// native surface; no startup work can race this synchronous first frame.
-	a.Window.Show()
-	markUIAttached()
 	a.App.Run()
 }
 
