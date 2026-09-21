@@ -124,6 +124,10 @@ workflow instructions.
 Release-only Android checks build unsigned APKs twice and compare them.
 `verify_android_reproducibility.py` verifies identical payloads;
 `verify_android_apk_source.py` checks the embedded source identity.
+The Android build also records the exact upstream Fyne/GLFW module paths,
+public DobbyVPN replacement paths, pseudo-versions, and fork revisions used by
+the Go graph. The UI check rejects local or floating replacements while
+preserving the intentional tun2socks and TrustTunnel replacements.
 Signing verification checks the established certificate and that signing did
 not change application payloads. The F-Droid Release lane then fetches the
 current upstream recipe and server, uses fdroidserver's own update logic for a

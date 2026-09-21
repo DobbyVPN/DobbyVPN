@@ -146,9 +146,13 @@ console/Finder evidence, while conflicting or malformed values fail closed.
 remain owned by `root` while a user's Aqua session is active. Native controls
 are bound to the launched window/process identity, and disposable macOS runs
 terminate pre-existing `Dobby Vpn` instances before starting a new one.
-The macOS full lane must create and drive the real production window. A failure
-to create its graphics context is reported with complete process output; do not
-infer the cause from VM display inventory alone or convert it to a pass.
+The macOS full lane must create and drive the real production window. The
+pinned GLFW Darwin bridge first requests an accelerated NSGL pixel format and
+retries the same format without only the accelerated flag when the host offers
+an Apple software renderer; this keeps the window test viable on the current
+virtualized guest without requiring Metal or a larger framebuffer. A failure
+to create its graphics context is still reported with complete process output;
+do not infer the cause from VM display inventory alone or convert it to a pass.
 GUI automation must drive visible controls and may not substitute CLI commands.
 
 The Go job emits one repository-wide coverage profile with
@@ -156,6 +160,12 @@ The Go job emits one repository-wide coverage profile with
 job summary without retaining a coverage artifact. This is the shared Go
 coverage source; platform UI qualification is reported separately and does
 not invent per-platform coverage numbers.
+
+The Go module keeps the upstream Fyne and GLFW import paths, while exact
+version-specific replacements bind them to the public DobbyVPN fork commits
+recorded by the Android provenance and reproducibility manifests. The
+intentional local tun2socks and TrustTunnel replacements remain separate and
+are not rejected by the UI dependency check.
 
 Mobile Go/Fyne qualification must use real Android/iOS rendering, keyboard,
 tap, and lifecycle interaction. Android mini combines the rendered emulator
@@ -300,11 +310,12 @@ failure. Repository-owned wrappers do not truncate or suppress output, replace
 it with byte counts or status codes, or select only supposedly useful lines.
 Credentials and private profile values are redacted without removing
 surrounding diagnostic content. Original and cleanup exceptions are both
-reported. No separate log or evidence archive is created; local retention
-keeps one completed run total. Trusted Actions workflows keep one completed run
-total; pull-request backlog is temporary and is removed by the next trusted
-workflow. A Release is publishable only while it remains the newest completed
-workflow run.
+reported. Complete redacted streams and collection status are retained under
+the current local run's private `streams/` directory while local retention
+keeps one completed run total; this is not a second evidence archive. Trusted
+Actions workflows keep one completed run total; pull-request backlog is
+temporary and is removed by the next trusted workflow. A Release is
+publishable only while it remains the newest completed workflow run.
 
 Release-only checks retain Android reproducibility and signing-certificate
 verification, and iOS signature, entitlement, provisioning, and version

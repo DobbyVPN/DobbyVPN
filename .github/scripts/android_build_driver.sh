@@ -179,6 +179,29 @@ mobile_version=${mobile_pin#*@}
   exit 2
 }
 
+# Fyne and GLFW keep their upstream module paths in go.mod so imports and
+# downstream tooling remain canonical. Their replacements must resolve to the
+# exact public DobbyVPN fork revisions used by every build; local checkouts,
+# branch names, and floating versions are not accepted.
+while IFS=$'\t' read -r go_ui_module go_ui_version go_ui_replacement go_ui_replacement_version go_ui_revision; do
+  [[ -n "$go_ui_module" && -n "$go_ui_version" && -n "$go_ui_replacement" && -n "$go_ui_replacement_version" && -n "$go_ui_revision" ]] || {
+    echo 'dependency helper returned an incomplete Go UI replacement pin' >&2
+    exit 2
+  }
+  go_ui_observed=$(cd "$source_root/go_module" && "$go_bin" list -m -f '{{.Path}}\t{{.Version}}\t{{with .Replace}}{{.Path}}\t{{.Version}}{{end}}' "$go_ui_module")
+  expected_go_ui_observed="$go_ui_module	$go_ui_version	$go_ui_replacement	$go_ui_replacement_version"
+  [[ "$go_ui_observed" == "$expected_go_ui_observed" ]] || {
+    echo "Go module graph does not resolve $go_ui_module to the approved immutable fork" >&2
+    echo "expected: $expected_go_ui_observed" >&2
+    echo "observed: $go_ui_observed" >&2
+    exit 2
+  }
+  [[ "$go_ui_replacement_version" == *"-${go_ui_revision:0:12}" ]] || {
+    echo "Go UI replacement version does not end with its pinned revision: $go_ui_module" >&2
+    exit 2
+  }
+done < <(python3 "$dependency_helper" --spec "$dependency_spec" --print-go-ui-replacements)
+
 [[ -n "${ANDROID_SDK_ROOT:-}" && -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" ]] || {
   echo 'Android SDK/build-tools 36.0.0 apksigner is required' >&2
   exit 2

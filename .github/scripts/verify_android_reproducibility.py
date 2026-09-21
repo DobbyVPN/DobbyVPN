@@ -13,8 +13,18 @@ import zipfile
 from android_dependency_provenance import (
     ANDROID_BUILD_TOOLS,
     ANDROID_NDK,
+    FYNE_MODULE,
+    FYNE_REPLACEMENT_MODULE,
+    FYNE_REPLACEMENT_VERSION,
+    FYNE_REVISION,
+    FYNE_VERSION,
     GO_SOURCE_COMMIT,
     GO_VERSION,
+    GLFW_MODULE,
+    GLFW_REPLACEMENT_MODULE,
+    GLFW_REPLACEMENT_VERSION,
+    GLFW_REVISION,
+    GLFW_VERSION,
     GRADLE_VERSION,
     JAVA_MAJOR,
 )
@@ -34,7 +44,22 @@ TOOLCHAIN = {
     "android_ndk": ANDROID_NDK,
     "go": f"go{GO_VERSION}",
     "go_source_commit": GO_SOURCE_COMMIT,
-    "fyne": "fyne.io/fyne/v2@v2.8.1",
+    "go_ui_modules": [
+        {
+            "module": FYNE_MODULE,
+            "version": FYNE_VERSION,
+            "replacement_module": FYNE_REPLACEMENT_MODULE,
+            "replacement_version": FYNE_REPLACEMENT_VERSION,
+            "revision": FYNE_REVISION,
+        },
+        {
+            "module": GLFW_MODULE,
+            "version": GLFW_VERSION,
+            "replacement_module": GLFW_REPLACEMENT_MODULE,
+            "replacement_version": GLFW_REPLACEMENT_VERSION,
+            "revision": GLFW_REVISION,
+        },
+    ],
     "gradle": GRADLE_VERSION,
     "java": str(JAVA_MAJOR),
 }

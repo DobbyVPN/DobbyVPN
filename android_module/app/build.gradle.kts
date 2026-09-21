@@ -130,18 +130,61 @@ val downloadGoModules by tasks.registering(Exec::class) {
     environment("GOFLAGS", "-trimpath -buildvcs=false")
 }
 
-val copyFyneJava by tasks.registering(Copy::class) {
-    val goCache = providers.environmentVariable("GOMODCACHE").orElse(
-        providers.provider { File(System.getProperty("user.home"), "go/pkg/mod").absolutePath }
+fun resolveGoModuleDirectory(module: String, expectedReplacement: String): File {
+    val process = ProcessBuilder(
+        goBinary.get(), "list", "-m", "-f",
+        "{{.Path}}\\t{{.Version}}\\t{{with .Replace}}{{.Path}}\\t{{.Version}}{{end}}",
+        module,
     )
-    val fyneRoot = File(goCache.get()).resolve("fyne.io/fyne/v2@v2.8.1/internal/driver/mobile/app")
+        .directory(goModule)
+        .redirectErrorStream(true)
+        .apply {
+            environment()["GOTOOLCHAIN"] = "local"
+            environment()["GOFLAGS"] = "-trimpath -buildvcs=false"
+        }
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    val exitCode = process.waitFor()
+    check(exitCode == 0) {
+        "Go module resolution failed for $module (exit $exitCode); complete output:\n$output"
+    }
+    val fields = output.trimEnd('\n').split('\t')
+    check(fields.size == 4 && fields[0] == module && fields[2] == expectedReplacement && fields[3].isNotBlank()) {
+        "Go module replacement is not the expected immutable fork for $module; complete output:\n$output"
+    }
+    val moduleDirectory = File(
+        ProcessBuilder(goBinary.get(), "list", "-m", "-f", "{{.Dir}}", module)
+            .directory(goModule)
+            .redirectErrorStream(true)
+            .apply {
+                environment()["GOTOOLCHAIN"] = "local"
+                environment()["GOFLAGS"] = "-trimpath -buildvcs=false"
+            }
+            .start()
+            .let { directoryProcess ->
+                val directoryOutput = directoryProcess.inputStream.bufferedReader().use { it.readText() }
+                val directoryExit = directoryProcess.waitFor()
+                check(directoryExit == 0) {
+                    "Go module directory resolution failed for $module (exit $directoryExit); complete output:\n$directoryOutput"
+                }
+                directoryOutput.trim()
+            },
+    )
+    check(moduleDirectory.isDirectory) { "resolved Go module directory is unavailable: $moduleDirectory" }
+    return moduleDirectory
+}
+
+val copyFyneJava by tasks.registering(Copy::class) {
     val generatedFyneJava = layout.buildDirectory.dir("generated/fyne-java/org/golang/app")
     dependsOn(downloadGoModules)
-    from(fyneRoot) { include("GoNativeActivity.java", "FyneNotificationReceiver.java") }
+    include("GoNativeActivity.java", "FyneNotificationReceiver.java")
     into(generatedFyneJava)
     rename { it }
     doFirst {
+        val fyneRoot = resolveGoModuleDirectory("fyne.io/fyne/v2", "github.com/DobbyVPN/fyne/v2")
+            .resolve("internal/driver/mobile/app")
         check(fyneRoot.isDirectory) { "pinned Fyne Java sources are unavailable: $fyneRoot" }
+        setSource(fyneRoot)
         // Go module cache files are read-only by design. Gradle preserves that
         // mode while copying, so clear the generated output before the release
         // APK and test-companion builds invoke this task again.

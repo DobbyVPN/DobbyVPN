@@ -45,6 +45,25 @@ class AndroidReproducibilityTests(unittest.TestCase):
                 first, second, SOURCE_SHA, VERSION_NAME, VERSION_CODE
             )
             self.assertTrue(document["identical"])
+            self.assertEqual(
+                document["toolchain"]["go_ui_modules"],
+                [
+                    {
+                        "module": REPRO.FYNE_MODULE,
+                        "version": REPRO.FYNE_VERSION,
+                        "replacement_module": REPRO.FYNE_REPLACEMENT_MODULE,
+                        "replacement_version": REPRO.FYNE_REPLACEMENT_VERSION,
+                        "revision": REPRO.FYNE_REVISION,
+                    },
+                    {
+                        "module": REPRO.GLFW_MODULE,
+                        "version": REPRO.GLFW_VERSION,
+                        "replacement_module": REPRO.GLFW_REPLACEMENT_MODULE,
+                        "replacement_version": REPRO.GLFW_REPLACEMENT_VERSION,
+                        "revision": REPRO.GLFW_REVISION,
+                    },
+                ],
+            )
             self.assertEqual(document["builds"][0], document["builds"][1] | {"id": "first"})
             document["builds"].reverse()
             document["native_libraries"].reverse()

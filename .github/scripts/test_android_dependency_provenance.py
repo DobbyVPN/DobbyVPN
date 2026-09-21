@@ -85,6 +85,20 @@ def test_manifest_binds_the_source_inputs_and_pins(tmp_path: Path) -> None:
     assert first["resolution"]["offline_verified"] is False
     assert first["toolchain"]["go_source_commit"] == MODULE.GO_SOURCE_COMMIT
     assert first["inputs"][-1]["path"] == ".github/android/dependency-spec.json"
+    assert first["go_modules"][1:] == [dict(module) for module in MODULE.GO_UI_MODULES]
+
+
+def test_go_ui_replacement_printout_is_exact_and_reusable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    spec = _source(tmp_path)
+    assert MODULE.main(["--spec", str(spec), "--print-go-ui-replacements"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == [
+        "\t".join(
+            str(module[key])
+            for key in ("module", "version", "replacement_module", "replacement_version", "revision")
+        )
+        for module in MODULE.GO_UI_MODULES
+    ]
 
 
 def test_manifest_requires_the_current_wrapper_checksum(tmp_path: Path) -> None:

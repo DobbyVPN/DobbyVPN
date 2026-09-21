@@ -35,9 +35,11 @@ The command writes an unbundled executable to `go_module/dobby-vpn-ui` (or
 qualification or direct injection into a test VM; Release separately tests
 the packaged installer/archive.
 
-macOS native-window qualification requires a graphics-capable host with an
-accelerated NSGL/OpenGL context; see [TESTING.md](../TESTING.md) for the
-qualification contract.
+macOS native-window qualification requires a host that can create an NSGL
+window. The pinned Darwin GLFW bridge retries with Apple's software renderer
+when accelerated pixel-format selection is unavailable, so this contract does
+not require Metal or a larger VM framebuffer; see [TESTING.md](../TESTING.md)
+for the qualification contract.
 
 Build the headless UI companion on the native target host for service-backed
 UI qualification:
@@ -76,6 +78,12 @@ cd ../android_module
 The Kotlin sources in that project contain only the Android permission,
 foreground `VpnService`, TUN allocation, and JNI callback boundary. The
 session manager and all visible state remain in Go.
+
+`go.mod` retains the upstream Fyne and GLFW module paths and replaces those
+exact versions with immutable public DobbyVPN fork revisions. Android resolves
+the Fyne Java sources from that selected Go module graph; it does not copy a
+floating or local checkout. The existing local tun2socks and TrustTunnel
+replacements remain intentional runtime dependencies.
 
 For a real Android emulator, install the matching app and test companion from
 one build, then drive the package through the accessibility and native-input

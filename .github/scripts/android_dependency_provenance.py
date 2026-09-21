@@ -18,6 +18,34 @@ MOBILE_MODULE = "golang.org/x/mobile"
 MOBILE_VERSION = "v0.0.0-20260520154334-0e4426e1883d"
 GO_VERSION = "1.26.8"
 GO_SOURCE_COMMIT = "c293dd49cbe25e1fe8d97d94a5cb618e7b6d831e"
+FYNE_MODULE = "fyne.io/fyne/v2"
+FYNE_VERSION = "v2.8.1"
+FYNE_REPLACEMENT_MODULE = "github.com/DobbyVPN/fyne/v2"
+FYNE_REPLACEMENT_VERSION = "v2.0.0-20260921083927-44c5d29914a2"
+FYNE_REVISION = "44c5d29914a2760a0358215dddaf8f295c9ae7dc"
+GLFW_MODULE = "github.com/go-gl/glfw/v3.4/glfw"
+GLFW_VERSION = "v0.1.0-pre.1.0.20260707082822-2a407d02d01a"
+GLFW_REPLACEMENT_MODULE = "github.com/DobbyVPN/glfw/v3.4/glfw"
+GLFW_REPLACEMENT_VERSION = "v0.0.0-20260921083927-e9a15d43604f"
+GLFW_REVISION = "e9a15d43604f85750bb1129227694b2a01512ec9"
+GO_UI_MODULES = (
+    {
+        "module": FYNE_MODULE,
+        "version": FYNE_VERSION,
+        "replacement_module": FYNE_REPLACEMENT_MODULE,
+        "replacement_version": FYNE_REPLACEMENT_VERSION,
+        "revision": FYNE_REVISION,
+        "commands": ["copyFyneJava", "go build"],
+    },
+    {
+        "module": GLFW_MODULE,
+        "version": GLFW_VERSION,
+        "replacement_module": GLFW_REPLACEMENT_MODULE,
+        "replacement_version": GLFW_REPLACEMENT_VERSION,
+        "revision": GLFW_REVISION,
+        "commands": ["go build"],
+    },
+)
 GRADLE_URL = "https://services.gradle.org/distributions/gradle-8.13-bin.zip"
 GRADLE_SHA256 = "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
 GRADLE_VERSION = "8.13"
@@ -204,7 +232,10 @@ def create_manifest(
             "go_version": GO_VERSION,
             "go_source_commit": GO_SOURCE_COMMIT,
         },
-        "go_modules": [{"module": MOBILE_MODULE, "version": MOBILE_VERSION, "commands": ["go build -buildmode=c-shared"]}],
+        "go_modules": [
+            {"module": MOBILE_MODULE, "version": MOBILE_VERSION, "commands": ["go build -buildmode=c-shared"]},
+            *[dict(module) for module in GO_UI_MODULES],
+        ],
         "spec": {
             "root": "source",
             "path": spec_relative,
@@ -261,6 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gradle-root", type=Path)
     parser.add_argument("--verify-gradle-distribution", action="store_true")
     parser.add_argument("--print-mobile-version", action="store_true")
+    parser.add_argument("--print-go-ui-replacements", action="store_true")
     parser.add_argument("--print-go-version", action="store_true")
     parser.add_argument("--print-go-source-commit", action="store_true")
     parser.add_argument("--print-gradle-url", action="store_true")
@@ -271,6 +303,21 @@ def main(argv: list[str] | None = None) -> int:
             if args.spec:
                 _read_spec(args.spec)
             print(f"{MOBILE_MODULE}@{MOBILE_VERSION}")
+            return 0
+        if args.print_go_ui_replacements:
+            if args.spec:
+                _read_spec(args.spec)
+            for module in GO_UI_MODULES:
+                print("\t".join(
+                    str(module[key])
+                    for key in (
+                        "module",
+                        "version",
+                        "replacement_module",
+                        "replacement_version",
+                        "revision",
+                    )
+                ))
             return 0
         if args.print_go_source_commit:
             if args.spec:
