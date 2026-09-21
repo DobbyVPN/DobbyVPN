@@ -763,23 +763,8 @@ def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
             time.sleep(0.03)
 
 
-def _macos_verify_profile_paste(profile: Path, process_pid: int) -> None:
-    """Copy the focused field back and compare bytes without logging content."""
-
-    expected = profile.read_bytes()
-    _macos_keystroke(process_pid, "a")
-    _macos_keystroke(process_pid, "c")
-    observed = _macos_clipboard_snapshot()
-    if observed != expected:
-        observed_length = len(observed) if observed is not None else None
-        raise NativeUISmokeError(
-            "macOS native configuration paste round-trip mismatch "
-            f"(expected_bytes={len(expected)}, observed_bytes={observed_length})"
-        )
-
-
 def _macos_keystroke(process_pid: int, key: str) -> None:
-    if process_pid <= 0 or len(key) != 1 or key not in {"a", "v", "c"}:
+    if process_pid <= 0 or len(key) != 1 or key not in {"a", "v"}:
         raise NativeUISmokeError("macOS native UI process identity is unavailable")
     _macos_focus_window(process_pid)
     script = f'''tell application "System Events"
@@ -848,8 +833,22 @@ def _macos_restore_clipboard(previous: bytes | None) -> None:
 
 def _macos_paste(profile: Path) -> Callable[[], None]:
     previous = _macos_clipboard_snapshot()
+    value = profile.read_bytes()
     try:
-        _macos_set_clipboard(profile.read_bytes())
+        _macos_set_clipboard(value)
+        # Verify the source clipboard before delivering Cmd+V.  Copying a
+        # Fyne Entry back through Cmd+C is not a valid oracle: official Fyne
+        # v2.8.1 exports this product wrapper as static AX text and its
+        # keyboard-selection path is not observable through AX.  The later
+        # Connect action and independent service/tunnel assertions prove that
+        # the entered profile was actually accepted.
+        observed = _macos_clipboard_snapshot()
+        if observed != value:
+            observed_length = len(observed) if observed is not None else None
+            raise NativeUISmokeError(
+                "macOS clipboard did not retain the profile before paste "
+                f"(expected_bytes={len(value)}, observed_bytes={observed_length})"
+            )
     except Exception:
         _macos_restore_clipboard(previous)
         raise
@@ -1459,8 +1458,6 @@ class NativeUIController:
                 _macos_keystroke(process_pid, "a")
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "v")
-                process_pid = self._macos_pid_or_error()
-                _macos_verify_profile_paste(self.profile, process_pid)
             finally:
                 restore_clipboard()
         return self.snapshot()

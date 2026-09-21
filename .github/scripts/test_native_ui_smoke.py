@@ -167,28 +167,6 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke.NativeUISmokeError, "outside"):
                 smoke._macos_click((90, 90, 120, 120), 4321)
 
-    def test_macos_profile_paste_round_trip_compares_bytes_without_logging(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            profile = smoke.Path(directory) / "profile"
-            profile.write_bytes(b"synthetic-profile")
-            with (
-                patch.object(smoke, "_macos_keystroke") as keystroke,
-                patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"synthetic-profile"),
-            ):
-                smoke._macos_verify_profile_paste(profile, 4321)
-        self.assertEqual(keystroke.call_args_list, [call(4321, "a"), call(4321, "c")])
-
-    def test_macos_profile_paste_round_trip_reports_lengths_only(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            profile = smoke.Path(directory) / "profile"
-            profile.write_bytes(b"synthetic-profile")
-            with (
-                patch.object(smoke, "_macos_keystroke"),
-                patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"wrong"),
-            ):
-                with self.assertRaisesRegex(smoke.NativeUISmokeError, r"expected_bytes=17, observed_bytes=5"):
-                    smoke._macos_verify_profile_paste(profile, 4321)
-
     def test_macos_has_element_only_treats_explicit_not_found_as_absent(self) -> None:
         with patch.object(
             smoke,
@@ -969,7 +947,8 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
         def run(command, **kwargs):
             calls.append((command, kwargs))
             if command == ["pbpaste"]:
-                return subprocess.CompletedProcess(command, 0, stdout=previous, stderr=b"")
+                value = previous if len([call for call in calls if call[0] == ["pbpaste"]]) == 1 else profile_bytes
+                return subprocess.CompletedProcess(command, 0, stdout=value, stderr=b"")
             return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -981,7 +960,23 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
 
         self.assertEqual(calls[0][0], ["pbpaste"])
         self.assertEqual(calls[-1][1]["input"], previous)
-        self.assertEqual([call[0] for call in calls], [["pbpaste"], ["pbcopy"], ["pbcopy"]])
+        self.assertEqual(
+            [call[0] for call in calls],
+            [["pbpaste"], ["pbcopy"], ["pbpaste"], ["pbcopy"]],
+        )
+
+    def test_macos_paste_rejects_clipboard_change_before_input_without_logging_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = smoke.Path(directory) / "profile.conf"
+            profile.write_bytes(b"vpn-profile-secret")
+            with (
+                patch.object(smoke, "_macos_clipboard_snapshot", side_effect=[b"old", b"wrong"]),
+                patch.object(smoke, "_macos_set_clipboard"),
+                patch.object(smoke, "_macos_restore_clipboard") as restore,
+            ):
+                with self.assertRaisesRegex(smoke.NativeUISmokeError, r"expected_bytes=18, observed_bytes=5"):
+                    smoke._macos_paste(profile)
+            restore.assert_called_once_with(b"old")
 
     def test_configure_restores_clipboard_when_native_input_fails(self) -> None:
         controller = smoke.NativeUIController("windows", smoke.Path("ui"), smoke.Path("profile"), 1)
