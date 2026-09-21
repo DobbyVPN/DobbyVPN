@@ -1392,7 +1392,7 @@ class AndroidHostedAdapter:
                 raise
             return
 
-        self._cleanup_routing_chain(deadline, strict=True)
+        self._cleanup_routing_chain(deadline)
 
     def _routing_chain_rule(
         self,
@@ -2027,21 +2027,45 @@ exit 0
             raise failure
         return result
 
-    def _cleanup_routing_chain(
-        self, deadline: float, *, strict: bool = False
-    ) -> None:
+    def _cleanup_routing_chain(self, deadline: float) -> None:
         """Remove only the dedicated qualification chain and its jump.
 
-        Every command tolerates absence, making this safe before a proof and
-        after a killed run while never inspecting or deleting unrelated rules.
+        Inventory first so an absent chain never produces noisy, expected
+        iptables errors.  The final inventory remains the fail-closed proof
+        that no qualification-owned rule survived.  No unrelated rule is
+        inspected for mutation or removed.
         """
-
-        commands = (
-            ("-D", "OUTPUT", "-j", ROUTING_RULE_CHAIN),
-            ("-F", ROUTING_RULE_CHAIN),
-            ("-X", ROUTING_RULE_CHAIN),
-        )
         primary: ScenarioExecutionError | None = None
+        inventory = self._adb(
+            ("shell", "iptables", "-S"),
+            _cleanup_timeout(deadline),
+            "ANDROID_ROUTING_RULE_CLEANUP_FAILED",
+            allow_nonzero=True,
+        )
+        if inventory.returncode != 0:
+            failure = ScenarioExecutionError(
+                "ANDROID_ROUTING_RULE_CLEANUP_FAILED"
+            )
+            _append_command_result_notes(failure, inventory)
+            raise failure
+
+        lines = [line.split() for line in inventory.stdout_text.splitlines()]
+        jump = ["-A", "OUTPUT", "-j", ROUTING_RULE_CHAIN]
+        jump_count = sum(tokens == jump for tokens in lines)
+        chain_exists = any(
+            tokens[:2] == ["-N", ROUTING_RULE_CHAIN]
+            or tokens[:2] == ["-A", ROUTING_RULE_CHAIN]
+            for tokens in lines
+        )
+        commands: list[tuple[str, ...]] = [
+            ("-D", "OUTPUT", "-j", ROUTING_RULE_CHAIN),
+        ] * jump_count
+        if chain_exists:
+            commands.extend((
+                ("-F", ROUTING_RULE_CHAIN),
+                ("-X", ROUTING_RULE_CHAIN),
+            ))
+
         for arguments in commands:
             result = self._adb(
                 ("shell", "iptables", *arguments),
@@ -2049,10 +2073,7 @@ exit 0
                 "ANDROID_ROUTING_RULE_CLEANUP_FAILED",
                 allow_nonzero=True,
             )
-            # An absent jump/chain is the intended idempotent state. Other
-            # iptables failures use the same nonzero status, so the subsequent
-            # full-table inventory is the idempotent fail-closed authority.
-            if strict and result.returncode != 0:
+            if result.returncode != 0:
                 failure = ScenarioExecutionError(
                     "ANDROID_ROUTING_RULE_REMOVE_FAILED"
                 )

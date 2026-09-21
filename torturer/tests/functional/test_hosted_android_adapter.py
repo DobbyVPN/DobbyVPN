@@ -109,7 +109,10 @@ class FakeAndroidRunner:
         self.routing_insert_failure: CommandResult | None = None
         self.routing_remove_failure: CommandResult | None = None
         self.routing_cleanup_residual = False
+        self.routing_cleanup_stuck = False
         self.routing_cleanup_inventory_failure = False
+        self.routing_chain_exists = False
+        self.routing_jump_count = 0
         self.activity_start_result: CommandResult | None = None
         self.staged_control_payloads: list[tuple[str, dict[str, object]]] = []
         self.staged_profile_payloads: list[tuple[str, bytes]] = []
@@ -215,6 +218,9 @@ class FakeAndroidRunner:
                 failure.stderr,
                 failure.timed_out,
             )
+        if tail == ("shell", "iptables", "-N", "DOBBYVPN_TORTURER"):
+            self.routing_chain_exists = True
+            return CommandResult(argv, 0, b"", b"")
         if (
             tail[:4] == ("shell", "iptables", "-I", "OUTPUT")
             and self.routing_insert_failure is not None
@@ -227,14 +233,33 @@ class FakeAndroidRunner:
                 failure.stderr,
                 failure.timed_out,
             )
+        if tail[:4] == ("shell", "iptables", "-I", "OUTPUT"):
+            self.routing_jump_count += 1
+            return CommandResult(argv, 0, b"", b"")
+        if tail[:4] == ("shell", "iptables", "-D", "OUTPUT"):
+            self.routing_jump_count = max(0, self.routing_jump_count - 1)
+            return CommandResult(argv, 0, b"", b"")
+        if tail == ("shell", "iptables", "-F", "DOBBYVPN_TORTURER"):
+            return CommandResult(argv, 0, b"", b"")
+        if tail == ("shell", "iptables", "-X", "DOBBYVPN_TORTURER"):
+            if not self.routing_cleanup_stuck:
+                self.routing_chain_exists = False
+                self.routing_cleanup_residual = False
+            return CommandResult(argv, 0, b"", b"")
         if tail == ("shell", "iptables", "-S"):
             if self.routing_cleanup_inventory_failure:
                 return CommandResult(argv, 1, b"", b"inventory failed\n")
-            stdout = (
-                b"-A OUTPUT -j DOBBYVPN_TORTURER\n"
-                if self.routing_cleanup_residual else b"-P OUTPUT ACCEPT\n"
+            chain_exists = self.routing_chain_exists or self.routing_cleanup_residual
+            jump_count = self.routing_jump_count
+            if self.routing_cleanup_residual and jump_count == 0:
+                jump_count = 1
+            lines = [b"-P OUTPUT ACCEPT\n"]
+            if chain_exists:
+                lines.append(b"-N DOBBYVPN_TORTURER\n")
+            lines.extend(
+                b"-A OUTPUT -j DOBBYVPN_TORTURER\n" for _ in range(jump_count)
             )
-            return CommandResult(argv, 0, stdout, b"")
+            return CommandResult(argv, 0, b"".join(lines), b"")
         if tail[:2] == ("shell", "iptables"):
             return CommandResult(argv, 0, b"", b"")
         if cat_paths is not None:
@@ -954,7 +979,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIn(jump, iptables)
         self.assertLess(iptables.index(create), iptables.index(first_rule))
         self.assertLess(iptables.index(first_rule), iptables.index(jump))
-        self.assertGreaterEqual(iptables.count(remove_jump), 2)
+        self.assertEqual(iptables.count(remove_jump), 1)
         self.assertEqual(
             iptables[-4:],
             [
@@ -1563,6 +1588,19 @@ class HostedAndroidAdapterTests(unittest.TestCase):
             if call[1:3] == ("shell", "iptables")
         ]
         self.assertEqual(cleanup, [
+            ("shell", "iptables", "-S"),
+            ("shell", "iptables", "-S"),
+        ])
+        self.runner.routing_cleanup_residual = True
+        self.assertIsNone(
+            self.adapter._cleanup_device((), time.monotonic() + 5.0)
+        )
+        cleanup = [
+            call[1:] for call in self.runner.calls
+            if call[1:3] == ("shell", "iptables")
+        ]
+        self.assertEqual(cleanup[-5:], [
+            ("shell", "iptables", "-S"),
             ("shell", "iptables", "-D", "OUTPUT", "-j", ROUTING_RULE_CHAIN),
             ("shell", "iptables", "-F", ROUTING_RULE_CHAIN),
             ("shell", "iptables", "-X", ROUTING_RULE_CHAIN),
@@ -1571,6 +1609,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
 
     def test_cleanup_reports_owned_chain_that_remains(self) -> None:
         self.runner.routing_cleanup_residual = True
+        self.runner.routing_cleanup_stuck = True
 
         failure = self.adapter._cleanup_device((), time.monotonic() + 5.0)
 
@@ -1587,6 +1626,7 @@ class HostedAndroidAdapterTests(unittest.TestCase):
 
     def test_cleanup_reports_routing_and_app_cleanup_failures_safely(self) -> None:
         self.runner.routing_cleanup_residual = True
+        self.runner.routing_cleanup_stuck = True
         self.runner.fail_cleanup = True
 
         failure = self.adapter._cleanup_device((), time.monotonic() + 5.0)
