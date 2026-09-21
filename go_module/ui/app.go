@@ -171,13 +171,18 @@ type ConnectionView struct {
 	Settings  *widget.Button
 	root      fyne.CanvasObject
 
-	mu           sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	done         chan struct{}
-	snapshot     Snapshot
-	started      bool
-	busy         bool
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	snapshot Snapshot
+	started  bool
+	busy     bool
+	// startPending is a presentation transaction for a user Connect action.
+	// Configure/Watch may briefly report IDLE or CONFIGURED after the Start
+	// RPC, so the desktop observer must keep seeing Connecting/Disconnect until
+	// an authoritative active, terminal, recovery, or error state arrives.
+	startPending bool
 	sequence     uint64
 	generation   uint64
 	sourceLoaded bool
@@ -555,6 +560,7 @@ func (v *ConnectionView) Stop() {
 	}
 	v.done = nil
 	v.started = false
+	v.startPending = false
 	v.mu.Unlock()
 	if done != nil {
 		select {
@@ -648,7 +654,7 @@ func (v *ConnectionView) renderRecovering(last Snapshot) {
 
 func (v *ConnectionView) toggle() {
 	v.mu.Lock()
-	if v.busy {
+	if v.busy || v.startPending {
 		v.mu.Unlock()
 		return
 	}
@@ -664,6 +670,7 @@ func (v *ConnectionView) toggle() {
 	}
 	v.localError = ""
 	v.busy = true
+	v.startPending = true
 	sequence := v.sequence
 	text := v.Input.SourceText()
 	if strings.TrimSpace(text) == "" {
@@ -859,6 +866,9 @@ func (v *ConnectionView) claimSourceStore() SourceStore {
 }
 
 func (v *ConnectionView) disconnect(ctx context.Context, generation uint64) {
+	v.mu.Lock()
+	v.startPending = false
+	v.mu.Unlock()
 	if generation == 0 {
 		v.showError(fmt.Errorf("no active VPN generation"))
 		v.clearBusy()
@@ -874,7 +884,7 @@ func (v *ConnectionView) clearBusy() {
 	v.mu.Lock()
 	v.busy = false
 	v.mu.Unlock()
-	onUI(func() { v.Connect.Enable() })
+	v.applyPresentation()
 }
 
 func (v *ConnectionView) render(snapshot Snapshot) {
@@ -895,22 +905,21 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 	} else {
 		v.localError = ""
 	}
-	previousState := v.snapshot.State
-	previousRecovering := v.snapshot.Recovering
-	// The previous snapshot is the authoritative latch boundary: once Watch
-	// has delivered an active/terminal/recovery state, a later idle snapshot is
-	// allowed to render normally. Before that boundary, Ready/Disconnected can
-	// only be the Configure-stage snapshot of this same Connect action.
 	v.snapshot = snapshot
 	v.sequence = snapshot.Sequence
 	v.generation = snapshot.Generation
+	if snapshot.Recovering || snapshot.State == StateProbing ||
+		snapshot.State == StatePreparing || snapshot.State == StateConnected ||
+		snapshot.State == StateStopping || snapshot.State == StateFailed {
+		v.startPending = false
+	}
 	// Configure can publish a short-lived Ready/Disconnected snapshot while a
 	// user-initiated Connect is still in flight. Keep the optimistic action
-	// presentation until an authoritative active, terminal, or recovery state
-	// arrives; otherwise a real-window observer can miss the only visible
+	// presentation until an authoritative active, terminal, recovery, or error
+	// state arrives; otherwise a real-window observer can miss the only visible
 	// acknowledgement of its physical click, even after Start has returned.
-	preserveOptimisticConnect := !previousRecovering &&
-		(previousState == StateIdle || previousState == StateConfigured) &&
+	preserveOptimisticConnect := v.startPending &&
+		!snapshot.Recovering &&
 		(snapshot.State == StateIdle || snapshot.State == StateConfigured) &&
 		v.renderedStatus == "Connecting" &&
 		(status == "Ready" || status == statusDisconnected)
@@ -934,6 +943,7 @@ func (v *ConnectionView) showError(err error) {
 	v.mu.Lock()
 	v.localError = details
 	v.localErrorAt = v.sequence
+	v.startPending = false
 	v.renderedStatus = "Error"
 	v.renderedDetails = details
 	v.mu.Unlock()
@@ -953,7 +963,7 @@ func (v *ConnectionView) applyPresentation() {
 		details := v.renderedDetails
 		logs := v.renderedLogs
 		logStatus := v.renderedLogStatus
-		busy := v.busy
+		busy := v.busy || v.startPending
 		v.mu.Unlock()
 		semanticChanged := status != v.lastSemanticStatus ||
 			button != v.lastSemanticButton || details != v.lastSemanticDetails

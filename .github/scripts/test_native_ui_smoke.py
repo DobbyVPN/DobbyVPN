@@ -288,6 +288,25 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke.NativeUISmokeError, "AX timeout"):
                 smoke._macos_has_element(4321, "Connect")
 
+    def test_macos_activation_diagnostic_reports_only_allowlisted_state_labels(self) -> None:
+        def has_element(_pid, name, *, timeout):
+            self.assertEqual(timeout, 1.5)
+            return name in {"Ready", "Connect"}
+
+        with patch.object(smoke, "_macos_has_element", side_effect=has_element):
+            self.assertEqual(
+                smoke._macos_allowlisted_state_labels(4321),
+                ("Ready", "Connect"),
+            )
+
+    def test_macos_activation_diagnostic_does_not_replace_lookup_errors(self) -> None:
+        with patch.object(
+            smoke,
+            "_macos_has_element",
+            side_effect=smoke.NativeUISmokeError("AX timeout"),
+        ):
+            self.assertEqual(smoke._macos_allowlisted_state_labels(4321), ())
+
     def test_macos_ax_windows_no_value_is_retryable_startup_state(self) -> None:
         result = subprocess.CompletedProcess(
             ["macos_ax.py"],

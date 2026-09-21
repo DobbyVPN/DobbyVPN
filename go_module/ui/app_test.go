@@ -605,6 +605,7 @@ func TestConnectionViewPublishesConnectingBeforeStartingSession(t *testing.T) {
 	if !client.startedValue() {
 		t.Fatal("session start did not complete")
 	}
+	view.render(Snapshot{State: StateConnected, Generation: 4})
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) && view.Connect.Disabled() {
 		time.Sleep(5 * time.Millisecond)
@@ -674,6 +675,45 @@ func TestConnectionViewKeepsOptimisticConnectWhileConfigureSnapshotArrives(t *te
 	}
 }
 
+func TestConnectionViewKeepsOptimisticConnectForInitialAndFailedRetries(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		initial  Snapshot
+		prewatch bool
+	}{
+		{name: "before first snapshot", prewatch: true},
+		{name: "after failed attempt", initial: Snapshot{State: StateFailed, Sequence: 4}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runtime := test.NewApp()
+			defer runtime.Quit()
+			gate := make(chan struct{})
+			started := make(chan struct{})
+			client := &fakeClient{startGate: gate, startedCh: started}
+			view := NewConnectionView(client)
+			view.ctx = context.Background()
+			if !testCase.prewatch {
+				view.render(testCase.initial)
+			}
+			view.Input.SetText("https://example.test/profile")
+			view.toggle()
+
+			view.render(Snapshot{State: StateConfigured, Configured: true, Sequence: 5})
+			status, _, button := view.Presentation()
+			if status != "Connecting" || button != "Disconnect" {
+				t.Fatalf("configure snapshot replaced optimistic presentation: (%q, %q)", status, button)
+			}
+
+			close(gate)
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("session start did not complete")
+			}
+		})
+	}
+}
+
 func TestConnectionViewPersistsOnlyAcceptedSourceAndCanRestartConfiguredSession(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
@@ -691,6 +731,8 @@ func TestConnectionViewPersistsOnlyAcceptedSourceAndCanRestartConfiguredSession(
 	for time.Now().Before(deadline) && !client.startedValue() {
 		time.Sleep(5 * time.Millisecond)
 	}
+	view.render(Snapshot{State: StateConnected, Generation: 4, Sequence: 4})
+	view.render(Snapshot{State: StateIdle, Configured: true, Sequence: 5})
 	got, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)

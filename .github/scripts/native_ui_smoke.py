@@ -953,6 +953,26 @@ def _macos_has_element(
         return False
 
 
+def _macos_allowlisted_state_labels(process_pid: int) -> tuple[str, ...]:
+    """Report only safe stale-state labels after an activation timeout.
+
+    This diagnostic deliberately asks for a short allowlist rather than
+    dumping the accessibility tree.  It distinguishes a presentation
+    publication problem (old Ready/Disconnected/Connect labels are still
+    present) from a missing/incorrect AX root without exposing profile text.
+    A diagnostic lookup must never replace the original activation timeout.
+    """
+
+    observed: list[str] = []
+    for name in ("Ready", "Disconnected", "Connect"):
+        try:
+            if _macos_has_element(process_pid, name, timeout=1.5):
+                observed.append(name)
+        except NativeUISmokeError:
+            continue
+    return tuple(observed)
+
+
 def _macos_clipboard_snapshot() -> bytes | None:
     try:
         result = subprocess.run(["pbpaste"], check=False, capture_output=True, timeout=10)
@@ -1704,10 +1724,12 @@ class NativeUIController:
                 frontmost = _macos_frontmost_pid()
             except NativeUISmokeError as frontmost_error:
                 frontmost = f"unavailable:{frontmost_error}"
+            stale_labels = _macos_allowlisted_state_labels(process_pid)
             raise NativeUISmokeError(
                 f"{error}; click_center=({(bounds[0] + bounds[2]) // 2},"
                 f"{(bounds[1] + bounds[3]) // 2}); frontmost_pid={frontmost}; "
-                f"visible_state={observed['state'] or 'none'}"
+                f"visible_state={observed['state'] or 'none'}; "
+                f"stale_labels={','.join(stale_labels) or 'none'}"
             ) from error
 
     def configure(self) -> dict[str, object]:
