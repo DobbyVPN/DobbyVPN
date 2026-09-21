@@ -1749,13 +1749,14 @@ class NativeUIController:
                 _macos_keystroke(process_pid, "a")
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "v")
-                process_pid = self._macos_pid_or_error()
-                _macos_copy_selection_verified(
-                    profile_bytes,
-                    process_pid,
-                    timeout=min(30.0, self.timeout),
-                    control_bounds=bounds,
-                )
+                # Keep the real profile on the pasteboard only for the
+                # native paste.  Cmd+A/C over a large Fyne Entry is a
+                # synchronous, diagnostic-only whole-document operation and
+                # can block the software-rendered event thread.  The small
+                # sentinel round trip above proves focus and shortcut
+                # routing; the subsequent Connect/Connected, tunnel, and
+                # routing assertions prove that this real profile was
+                # consumed by the product.
             finally:
                 _macos_restore_clipboard(previous_clipboard)
         return {"input_verified": True}
@@ -2165,7 +2166,7 @@ def serve_native_ui(
                 # Diagnostics must never replace the operation that failed.
                 # A status snapshot is another AX walk and may fail or time
                 # out while the original error is still actionable (for
-                # example, a profile round-trip mismatch).  Keep this error
+                # example, a native input mismatch).  Keep this error
                 # response bounded and preserve the primary failure verbatim;
                 # the complete child stderr stream remains available through
                 # the normal redacted run output.

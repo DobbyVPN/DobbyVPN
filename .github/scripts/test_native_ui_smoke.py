@@ -819,7 +819,7 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
             patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 200, 300)) as window_rect,
             patch.object(controller, "_macos_pid_or_error", return_value=4321),
             patch.object(smoke, "_macos_focus_next") as focus_next,
-            patch.object(smoke, "_macos_clipboard_set_verified"),
+            patch.object(smoke, "_macos_clipboard_set_verified") as clipboard_set,
             patch.object(smoke, "_macos_keystroke") as keystroke,
             patch.object(smoke, "_macos_copy_selection_verified") as copy_selection,
             patch.object(controller, "snapshot", side_effect=AssertionError("status snapshot is not part of configure")),
@@ -835,6 +835,16 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
                 call(4321, "a"),
                 call(4321, "v"),
             ],
+        )
+        copy_selection.assert_called_once_with(
+            smoke._MACOS_INPUT_SENTINEL,
+            4321,
+            timeout=5,
+            control_bounds=(1, 2, 100, 200),
+        )
+        self.assertEqual(
+            clipboard_set.call_args_list,
+            [call(smoke._MACOS_INPUT_SENTINEL), call(b"profile")],
         )
 
     def test_process_loss_recovery_reconfigures_and_connects_through_native_ui(self) -> None:
