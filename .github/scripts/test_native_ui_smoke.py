@@ -90,7 +90,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         )
         with patch.object(smoke.subprocess, "run", return_value=result) as run:
             self.assertEqual(
-                smoke._macos_accessibility_rect(4321, "Connect", 1),
+                smoke._macos_accessibility_rect(4321, "Connect", 2),
                 (10, 20, 110, 220),
             )
         command = run.call_args.args[0]
@@ -105,7 +105,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(smoke.subprocess, "run", return_value=result) as run:
-            self.assertEqual(smoke._macos_window_rect(4321, 1), (1, 2, 461, 522))
+            self.assertEqual(smoke._macos_window_rect(4321, 2), (1, 2, 461, 522))
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--window", command)
@@ -141,7 +141,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
-            self.assertEqual(smoke._macos_accessibility_rect(4321, "Connect", 1), (10, 20, 110, 220))
+            self.assertEqual(smoke._macos_accessibility_rect(4321, "Connect", 2), (10, 20, 110, 220))
         self.assertEqual(run.call_count, 2)
 
     def test_macos_window_rect_retries_transient_window_server_state(self) -> None:
@@ -157,7 +157,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
-            self.assertEqual(smoke._macos_window_rect(4321, 1), (1, 2, 461, 522))
+            self.assertEqual(smoke._macos_window_rect(4321, 2), (1, 2, 461, 522))
         self.assertEqual(run.call_count, 2)
 
     def test_macos_window_raise_uses_public_helper_and_exact_pid(self) -> None:
@@ -167,7 +167,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(smoke.subprocess, "run", return_value=result) as run:
-            smoke._macos_ax_raise_window(4321, 1)
+            smoke._macos_ax_raise_window(4321, 2)
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--raise-window", command)
@@ -185,7 +185,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             stderr="",
         )
         with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
-            smoke._macos_ax_raise_window(4321, 1)
+            smoke._macos_ax_raise_window(4321, 2)
         self.assertEqual(run.call_count, 2)
 
     def test_macos_ax_retry_preserves_last_transient_at_deadline(self) -> None:
@@ -199,7 +199,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
                 patch.object(smoke.time, "sleep"), \
                 patch.object(smoke, "_macos_ax_request", side_effect=request) as ax_request:
             with self.assertRaisesRegex(smoke.NativeUIWindowNotReady, r"cannot complete \(attempts=1\)"):
-                smoke._macos_window_rect(4321, 1)
+                smoke._macos_window_rect(4321, 2)
         self.assertEqual(ax_request.call_count, 1)
 
     def test_macos_ax_retry_does_not_retry_hard_control_error(self) -> None:
@@ -209,7 +209,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             side_effect=smoke.NativeUIElementNotFound("ambiguous control"),
         ) as request:
             with self.assertRaisesRegex(smoke.NativeUIElementNotFound, "ambiguous control"):
-                smoke._macos_accessibility_rect(4321, "Connect", 1)
+                smoke._macos_accessibility_rect(4321, "Connect", 2)
         self.assertEqual(request.call_count, 1)
 
     def test_macos_frontmost_query_rejects_non_pid_output(self) -> None:
@@ -299,7 +299,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         )
         with patch.object(smoke.subprocess, "run", return_value=result):
             with self.assertRaisesRegex(smoke.NativeUIWindowNotReady, "cg_window_count=1"):
-                smoke._macos_window_rect(4321, 1)
+                smoke._macos_window_rect(4321, 2)
 
     def test_macos_keystroke_is_bound_to_pid(self) -> None:
         result = subprocess.CompletedProcess(["osascript"], 0, stdout="", stderr="")

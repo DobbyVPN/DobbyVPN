@@ -60,6 +60,7 @@ _MACOS_COPY_MARKER = b"DobbyVPN-native-copy-marker-v1"
 # residual retry can be killed at the same instant it is writing diagnostics.
 _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS = 0.25
 _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS = 0.1
+_MACOS_AX_MESSAGE_TIMEOUT_SECONDS = 1.0
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
     if (visible of process "Finder") is false then error "Finder is not visible"
@@ -647,13 +648,14 @@ def _macos_retry_ax_request(
             )
         # Once a transient has consumed the budget, do not start a child that
         # cannot receive its own final JSON before the parent deadline.
-        if (
-            last_transient is not None
-            and remaining <= _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS
-            + _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS
-        ):
-            raise NativeUIWindowNotReady(
-                f"{last_transient} (attempts={attempts})"
+        if remaining <= _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS + _MACOS_AX_MESSAGE_TIMEOUT_SECONDS:
+            if last_transient is not None:
+                raise NativeUIWindowNotReady(
+                    f"{last_transient} (attempts={attempts})"
+                )
+            raise NativeUISmokeError(
+                f"macOS AX {description} has no safely supervised attempt "
+                f"within the remaining deadline (attempts={attempts})"
             )
         attempts += 1
         try:
@@ -817,7 +819,7 @@ def _macos_core_graphics() -> tuple[object, object]:
 def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
     if process_pid <= 0:
         raise NativeUISmokeError("macOS native UI process identity is unavailable")
-    window = _macos_window_rect(process_pid, 2.0)
+    window = _macos_window_rect(process_pid, 5.0)
     if not _macos_bounds_contained(window, bounds):
         raise NativeUISmokeError(
             "macOS native control bounds are outside the exact process window"
@@ -1714,7 +1716,7 @@ class NativeUIController:
                     process_pid,
                     timeout=min(5.0, self.timeout),
                     control_bounds=bounds,
-                    window_bounds=_macos_window_rect(process_pid, 2.0),
+                    window_bounds=_macos_window_rect(process_pid, 5.0),
                 )
                 _macos_clipboard_set_verified(profile_bytes)
                 process_pid = self._macos_pid_or_error()
@@ -1727,7 +1729,7 @@ class NativeUIController:
                     process_pid,
                     timeout=min(30.0, self.timeout),
                     control_bounds=bounds,
-                    window_bounds=_macos_window_rect(process_pid, 2.0),
+                    window_bounds=_macos_window_rect(process_pid, 5.0),
                 )
             finally:
                 _macos_restore_clipboard(previous_clipboard)
