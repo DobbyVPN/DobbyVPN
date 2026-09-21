@@ -18,6 +18,7 @@ from ctypes import wintypes
 from dataclasses import dataclass
 import getpass
 import json
+import math
 import os
 from pathlib import Path
 import plistlib
@@ -722,11 +723,15 @@ def _macos_core_graphics() -> tuple[object, object]:
     void_p = ctypes.c_void_p
     graphics.CGEventCreateMouseEvent.argtypes = [
         void_p,
-        _MacCGPoint,
         ctypes.c_uint32,
+        _MacCGPoint,
         ctypes.c_uint32,
     ]
     graphics.CGEventCreateMouseEvent.restype = void_p
+    graphics.CGEventCreate.argtypes = [void_p]
+    graphics.CGEventCreate.restype = void_p
+    graphics.CGEventGetLocation.argtypes = [void_p]
+    graphics.CGEventGetLocation.restype = _MacCGPoint
     graphics.CGEventPost.argtypes = [ctypes.c_uint32, void_p]
     graphics.CGEventPost.restype = None
     core.CFRelease.argtypes = [void_p]
@@ -747,12 +752,51 @@ def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
     _macos_focus_window(process_pid)
     graphics, core = _macos_core_graphics()
     point = _MacCGPoint(float(x), float(y))
+    width = bounds[2] - bounds[0]
+    # Cocoa/GLFW updates its cached mouse position from mouseMoved, not from
+    # mouseDown.  A distinct in-control move followed by a settled center
+    # move prevents the down event from being dispatched at the prior cursor
+    # location when a synthetic move and down arrive in the same run-loop turn.
+    lead_x = bounds[0] + max(1, min(width - 1, width // 4))
+    lead_point = _MacCGPoint(float(lead_x), float(y))
+
+    def post_move(move_point: _MacCGPoint) -> None:
+        event = graphics.CGEventCreateMouseEvent(None, 5, move_point, 0)
+        if not event:
+            raise NativeUISmokeError(
+                f"macOS CoreGraphics could not create mouse move at "
+                f"({move_point.x},{move_point.y})"
+            )
+        try:
+            graphics.CGEventPost(0, event)  # kCGHIDEventTap
+        finally:
+            core.CFRelease(event)
+
+    post_move(lead_point)
+    time.sleep(0.1)
+    post_move(point)
+    time.sleep(0.1)
+    cursor_event = graphics.CGEventCreate(None)
+    if not cursor_event:
+        raise NativeUISmokeError("macOS CoreGraphics could not read the current cursor")
+    try:
+        cursor = graphics.CGEventGetLocation(cursor_event)
+        if not all(math.isfinite(value) for value in (cursor.x, cursor.y)):
+            raise NativeUISmokeError("macOS CoreGraphics returned an invalid cursor location")
+        if abs(cursor.x - x) > 2 or abs(cursor.y - y) > 2:
+            raise NativeUISmokeError(
+                "macOS CoreGraphics cursor did not reach the validated control center "
+                f"(ax_center=({x},{y}), cursor=({cursor.x:.1f},{cursor.y:.1f}))"
+            )
+    finally:
+        core.CFRelease(cursor_event)
+
     # CGEventCreateMouseEvent/CGEventPost are physical input synthesis at the
     # AX-validated control center.  System Events ``click at`` is intentionally
     # not used: on official Fyne Darwin controls it resolves to unsupported
     # AXPress rather than delivering a widget mouse event.
-    for event_type in (5, 1, 2):  # moved, left-down, left-up
-        event = graphics.CGEventCreateMouseEvent(None, point, event_type, 0)
+    for event_type in (1, 2):  # left-down, left-up
+        event = graphics.CGEventCreateMouseEvent(None, event_type, point, 0)
         if not event:
             raise NativeUISmokeError(
                 f"macOS CoreGraphics could not create mouse event at ({x},{y})"
@@ -762,7 +806,9 @@ def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
         finally:
             core.CFRelease(event)
         if event_type == 1:
-            time.sleep(0.03)
+            time.sleep(0.05)
+        else:
+            time.sleep(0.05)
 
 
 def _macos_keystroke(process_pid: int, key: str) -> None:
@@ -912,6 +958,8 @@ def _macos_copy_selection_verified(
     process_pid: int,
     *,
     timeout: float,
+    control_bounds: tuple[int, int, int, int] | None = None,
+    window_bounds: tuple[int, int, int, int] | None = None,
 ) -> None:
     """Exercise Cmd+A/C and compare only after pasteboard generation changes."""
 
@@ -935,9 +983,18 @@ def _macos_copy_selection_verified(
     observed = _macos_clipboard_snapshot()
     if observed != expected:
         observed_length = len(observed) if observed is not None else None
+        try:
+            frontmost = _macos_frontmost_pid()
+        except NativeUISmokeError as error:
+            frontmost = f"unavailable:{error}"
+        details = (
+            f", control_bounds={control_bounds}, window_bounds={window_bounds},"
+            f" click_center={None if control_bounds is None else ((control_bounds[0] + control_bounds[2]) // 2, (control_bounds[1] + control_bounds[3]) // 2)},"
+            f" frontmost_pid={frontmost}"
+        )
         raise NativeUISmokeError(
             "macOS native configuration copy-back mismatch "
-            f"(expected_bytes={len(expected)}, observed_bytes={observed_length})"
+            f"(expected_bytes={len(expected)}, observed_bytes={observed_length}{details})"
         )
 
 
@@ -1554,6 +1611,8 @@ class NativeUIController:
                     _MACOS_INPUT_SENTINEL,
                     process_pid,
                     timeout=min(5.0, self.timeout),
+                    control_bounds=bounds,
+                    window_bounds=_macos_window_rect(process_pid, 2.0),
                 )
                 _macos_clipboard_set_verified(profile_bytes)
                 process_pid = self._macos_pid_or_error()
@@ -1565,6 +1624,8 @@ class NativeUIController:
                     profile_bytes,
                     process_pid,
                     timeout=min(30.0, self.timeout),
+                    control_bounds=bounds,
+                    window_bounds=_macos_window_rect(process_pid, 2.0),
                 )
             finally:
                 _macos_restore_clipboard(previous_clipboard)

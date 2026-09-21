@@ -135,10 +135,17 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             def __init__(self):
                 self.created = []
                 self.posted = []
+                self.cursor = smoke._MacCGPoint(60.0, 80.0)
 
-            def CGEventCreateMouseEvent(self, source, point, event_type, button):
-                self.created.append((source, point, event_type, button))
+            def CGEventCreateMouseEvent(self, source, event_type, point, button):
+                self.created.append((source, event_type, point, button))
                 return f"event-{event_type}"
+
+            def CGEventCreate(self, source):
+                return "cursor-event"
+
+            def CGEventGetLocation(self, event):
+                return self.cursor
 
             def CGEventPost(self, tap, event):
                 self.posted.append((tap, event))
@@ -158,9 +165,17 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             patch.object(smoke, "_macos_core_graphics", return_value=(graphics, core)),
         ):
             smoke._macos_click((40, 60, 80, 100), 4321)
-        self.assertEqual([event[2] for event in graphics.created], [5, 1, 2])
-        self.assertEqual(graphics.posted, [(0, "event-5"), (0, "event-1"), (0, "event-2")])
-        self.assertEqual(core.released, ["event-5", "event-1", "event-2"])
+        self.assertEqual([event[1] for event in graphics.created], [5, 5, 1, 2])
+        self.assertEqual(graphics.created[2][2].x, 60.0)
+        self.assertEqual(graphics.created[2][2].y, 80.0)
+        self.assertEqual(
+            graphics.posted,
+            [(0, "event-5"), (0, "event-5"), (0, "event-1"), (0, "event-2")],
+        )
+        self.assertEqual(
+            core.released,
+            ["event-5", "event-5", "cursor-event", "event-1", "event-2"],
+        )
 
     def test_macos_click_rejects_control_outside_exact_window(self) -> None:
         with patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 100, 100)):
