@@ -55,6 +55,11 @@ _MACOS_UI_PROCESS_NAME = "Dobby Vpn"
 _MACOS_AX_HELPER = Path(__file__).with_name("macos_ax.py")
 _MACOS_INPUT_SENTINEL = b"DobbyVPN-native-input-sentinel-v1"
 _MACOS_COPY_MARKER = b"DobbyVPN-native-copy-marker-v1"
+# Keep the parent subprocess alive long enough to receive a helper's final
+# JSON after the helper's own AX deadline expires.  Without this separation a
+# residual retry can be killed at the same instant it is writing diagnostics.
+_MACOS_AX_HELPER_EXIT_RESERVE_SECONDS = 0.25
+_MACOS_AX_MIN_HELPER_DEADLINE_SECONDS = 0.1
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
     if (visible of process "Finder") is false then error "Finder is not visible"
@@ -536,7 +541,10 @@ def _macos_ax_request(
         sys.executable,
         str(_MACOS_AX_HELPER),
         "--pid", str(process_pid),
-        "--deadline", str(max(0.1, min(timeout, 4.0))),
+        "--deadline", str(max(
+            _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS,
+            min(timeout - _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS, 4.0),
+        )),
     ]
     if window:
         command.append("--window")
@@ -636,6 +644,16 @@ def _macos_retry_ax_request(
                 )
             raise NativeUISmokeError(
                 f"macOS AX {description} deadline expired (attempts={attempts})"
+            )
+        # Once a transient has consumed the budget, do not start a child that
+        # cannot receive its own final JSON before the parent deadline.
+        if (
+            last_transient is not None
+            and remaining <= _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS
+            + _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS
+        ):
+            raise NativeUIWindowNotReady(
+                f"{last_transient} (attempts={attempts})"
             )
         attempts += 1
         try:
@@ -1713,7 +1731,7 @@ class NativeUIController:
                 )
             finally:
                 _macos_restore_clipboard(previous_clipboard)
-        return self.snapshot()
+        return {"input_verified": True}
 
     def wait_status(self, status: str, *, timeout: float | None = None) -> dict[str, object]:
         if not status:
@@ -2120,14 +2138,11 @@ def serve_native_ui(
                 # Diagnostics must never replace the operation that failed.
                 # A status snapshot is another AX walk and may fail or time
                 # out while the original error is still actionable (for
-                # example, a profile round-trip mismatch).  Preserve both
-                # independently, without turning a diagnostic failure into a
-                # misleading primary result.
+                # example, a profile round-trip mismatch).  Keep this error
+                # response bounded and preserve the primary failure verbatim;
+                # the complete child stderr stream remains available through
+                # the normal redacted run output.
                 response = {"ok": False, "error": str(error)}
-                try:
-                    response.update(controller.snapshot())
-                except Exception as snapshot_error:
-                    response["snapshot_error"] = str(snapshot_error)
             output_stream.write(encoder.encode(response) + "\n")
             output_stream.flush()
     except Exception as error:

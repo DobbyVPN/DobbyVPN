@@ -110,6 +110,24 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--window", command)
 
+    def test_macos_ax_helper_keeps_child_deadline_inside_parent_timeout(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"window","bounds":[1,2,461,522]}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+            smoke._macos_ax_request(4321, 10, window=True)
+        command = run.call_args.args[0]
+        self.assertEqual(float(command[command.index("--deadline") + 1]), 4.0)
+        self.assertEqual(run.call_args.kwargs["timeout"], 6.0)
+
+        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+            smoke._macos_ax_request(4321, 0.8, window=True)
+        command = run.call_args.args[0]
+        self.assertAlmostEqual(float(command[command.index("--deadline") + 1]), 0.55)
+        self.assertEqual(run.call_args.kwargs["timeout"], 0.8)
+
     def test_macos_accessibility_rect_retries_only_transient_window_server_state(self) -> None:
         transient = subprocess.CompletedProcess(
             ["macos_ax.py"],
@@ -179,9 +197,10 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
 
         with patch.object(smoke.time, "monotonic", side_effect=lambda: clock[0]), \
                 patch.object(smoke.time, "sleep"), \
-                patch.object(smoke, "_macos_ax_request", side_effect=request):
+                patch.object(smoke, "_macos_ax_request", side_effect=request) as ax_request:
             with self.assertRaisesRegex(smoke.NativeUIWindowNotReady, r"cannot complete \(attempts=1\)"):
                 smoke._macos_window_rect(4321, 1)
+        self.assertEqual(ax_request.call_count, 1)
 
     def test_macos_ax_retry_does_not_retry_hard_control_error(self) -> None:
         with patch.object(
@@ -786,6 +805,25 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
             self.assertEqual(controller._operation, "connect")
             self.assertEqual(controller._stage, "visible-connect")
 
+    def test_macos_configure_returns_input_result_without_status_snapshot(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 10
+        )
+        with (
+            patch.object(smoke, "_macos_profile_bytes", return_value=b"profile"),
+            patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"previous"),
+            patch.object(smoke, "_macos_restore_clipboard"),
+            patch.object(smoke, "_macos_accessibility_rect", return_value=(1, 2, 100, 200)),
+            patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 200, 300)),
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(smoke, "_macos_focus_next"),
+            patch.object(smoke, "_macos_clipboard_set_verified"),
+            patch.object(smoke, "_macos_keystroke"),
+            patch.object(smoke, "_macos_copy_selection_verified"),
+            patch.object(controller, "snapshot", side_effect=AssertionError("status snapshot is not part of configure")),
+        ):
+            self.assertEqual(controller.configure(), {"input_verified": True})
+
     def test_process_loss_recovery_reconfigures_and_connects_through_native_ui(self) -> None:
         controller = smoke.NativeUIController(
             "windows", smoke.Path("ui"), smoke.Path("profile"), 10
@@ -897,7 +935,7 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         self.assertTrue(responses[-1]["ok"])
         self.assertGreaterEqual(fake.closed, 1)
 
-    def test_serve_preserves_operation_error_when_snapshot_diagnostic_fails(self) -> None:
+    def test_serve_preserves_operation_error_without_unbounded_snapshot_diagnostic(self) -> None:
         class FailingOperationController:
             def __init__(self):
                 self.snapshots = 0
@@ -907,9 +945,7 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
 
             def snapshot(self):
                 self.snapshots += 1
-                if self.snapshots == 1:
-                    return {"status": "Disconnected"}
-                raise smoke.NativeUISmokeError("snapshot AX lookup timed out")
+                return {"status": "Disconnected"}
 
             def configure(self):
                 raise smoke.NativeUISmokeError("primary configure sentinel mismatch")
@@ -917,8 +953,9 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
             def close_for_cleanup(self):
                 pass
 
+        controller = FailingOperationController()
         output = io.StringIO()
-        with patch.object(smoke, "_controller_for", return_value=FailingOperationController()):
+        with patch.object(smoke, "_controller_for", return_value=controller):
             result = smoke.serve_native_ui(
                 "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1,
                 io.StringIO('{"op":"configure"}\n'), output,
@@ -927,7 +964,8 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         response = json.loads(output.getvalue().splitlines()[-1])
         self.assertFalse(response["ok"])
         self.assertEqual(response["error"], "primary configure sentinel mismatch")
-        self.assertEqual(response["snapshot_error"], "snapshot AX lookup timed out")
+        self.assertEqual(controller.snapshots, 1)
+        self.assertNotIn("snapshot_error", response)
 
     def test_serve_cleans_startup_failure_before_reporting_it(self) -> None:
         events: list[str] = []
