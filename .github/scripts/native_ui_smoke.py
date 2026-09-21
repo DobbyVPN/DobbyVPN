@@ -641,6 +641,7 @@ def _macos_retry_ax_request(
         if remaining <= 0:
             if last_transient is not None:
                 raise NativeUIWindowNotReady(
+                    f"macOS AX {description} remained transient: "
                     f"{last_transient} (attempts={attempts})"
                 )
             raise NativeUISmokeError(
@@ -651,6 +652,7 @@ def _macos_retry_ax_request(
         if remaining <= _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS + _MACOS_AX_MESSAGE_TIMEOUT_SECONDS:
             if last_transient is not None:
                 raise NativeUIWindowNotReady(
+                    f"macOS AX {description} remained transient: "
                     f"{last_transient} (attempts={attempts})"
                 )
             raise NativeUISmokeError(
@@ -1062,7 +1064,6 @@ def _macos_copy_selection_verified(
     *,
     timeout: float,
     control_bounds: tuple[int, int, int, int] | None = None,
-    window_bounds: tuple[int, int, int, int] | None = None,
 ) -> None:
     """Exercise Cmd+A/C and compare only after pasteboard generation changes."""
 
@@ -1091,7 +1092,7 @@ def _macos_copy_selection_verified(
         except NativeUISmokeError as error:
             frontmost = f"unavailable:{error}"
         details = (
-            f", control_bounds={control_bounds}, window_bounds={window_bounds},"
+            f", control_bounds={control_bounds},"
             f" control_center={None if control_bounds is None else ((control_bounds[0] + control_bounds[2]) // 2, (control_bounds[1] + control_bounds[3]) // 2)},"
             f" frontmost_pid={frontmost}"
         )
