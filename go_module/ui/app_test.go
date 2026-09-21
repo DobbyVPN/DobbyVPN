@@ -435,8 +435,8 @@ func TestConnectionViewPublishesNativeStatusTitleAfterDynamicPresentation(t *tes
 		t.Fatalf("initial native titles = %q, want Disconnected", titles)
 	}
 	view.render(Snapshot{State: StateIdle})
-	if len(titles) != 1 {
-		t.Fatalf("unchanged presentation republished title: %q", titles)
+	if len(titles) != 2 || titles[1] != "Dobby VPN — Disconnected" {
+		t.Fatalf("same-status presentation did not republish title: %q", titles)
 	}
 	for _, testCase := range []struct {
 		name string
@@ -458,8 +458,8 @@ func TestConnectionViewPublishesNativeStatusTitleAfterDynamicPresentation(t *tes
 			}
 		})
 	}
-	if len(titles) != 7 {
-		t.Fatalf("native title count = %d, want 7", len(titles))
+	if len(titles) != 8 {
+		t.Fatalf("native title count = %d, want 8", len(titles))
 	}
 }
 
@@ -492,6 +492,12 @@ func TestConnectionViewCommitsNativeConnectPresentationInUICallback(t *testing.T
 	}
 	if titles != 1 || observedTitle != "Dobby VPN — Connecting" {
 		t.Fatalf("UI callback native title = (%d, %q), want Connecting", titles, observedTitle)
+	}
+	// A later watcher/cleanup flush may carry the same optimistic status. It
+	// must still retry the native output after the input callback returns.
+	view.applyPresentationOnUI()
+	if titles != 2 || observedTitle != "Dobby VPN — Connecting" {
+		t.Fatalf("post-callback native title = (%d, %q), want repeated Connecting", titles, observedTitle)
 	}
 	if !view.Connect.Disabled() {
 		t.Fatal("Connect control remained enabled during the pending UI callback")

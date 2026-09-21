@@ -201,7 +201,6 @@ type ConnectionView struct {
 	// this visible status channel because Fyne's Darwin child labels are a
 	// snapshot and do not reliably republish dynamic text.
 	setNativeStatusTitle func(status string)
-	lastSemanticStatus   string
 	diagnosticIO         sync.Mutex
 }
 
@@ -998,7 +997,6 @@ func (v *ConnectionView) applyPresentationOnUI() {
 	logStatus := v.renderedLogStatus
 	busy := v.busy || v.startPending
 	v.mu.Unlock()
-	statusChanged := status != v.lastSemanticStatus
 	v.Status.SetText(status)
 	v.Connect.SetText(button)
 	if busy {
@@ -1009,10 +1007,14 @@ func (v *ConnectionView) applyPresentationOnUI() {
 	v.Details.SetText(details)
 	v.Logs.SetText(logs)
 	v.LogStatus.SetText(logStatus)
-	v.lastSemanticStatus = status
 	setNativeStatusTitle := v.setNativeStatusTitle
 	v.presentationMu.Unlock()
-	if statusChanged && setNativeStatusTitle != nil {
+	// Native title publication is an output effect, not a semantic state
+	// transition. A title write can occur re-entrantly from the GLFW input
+	// callback and be observed only after that callback returns; repeat the
+	// idempotent write on every presentation flush so a later watcher/cleanup
+	// flush cannot be suppressed by an application-side equality check.
+	if setNativeStatusTitle != nil {
 		setNativeStatusTitle(status)
 	}
 }
