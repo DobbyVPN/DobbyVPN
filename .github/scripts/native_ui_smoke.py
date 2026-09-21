@@ -55,6 +55,12 @@ _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
 end tell'''
 
 
+class _MacCGPoint(ctypes.Structure):
+    """CoreGraphics point passed by value to CGEventCreateMouseEvent."""
+
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
 @dataclass(frozen=True)
 class _MacOSProcessIdentity:
     """Stable enough identity for one product process between two observations.
@@ -568,6 +574,42 @@ def _macos_ax_request(
     return values  # type: ignore[return-value]
 
 
+def _macos_ax_raise_window(process_pid: int, timeout: float) -> None:
+    """Raise the exact product window through the public AX window action."""
+
+    if process_pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    if not _MACOS_AX_HELPER.is_file():
+        raise NativeUISmokeError("macOS native AX helper is missing")
+    command = [
+        sys.executable,
+        str(_MACOS_AX_HELPER),
+        "--pid", str(process_pid),
+        "--raise-window",
+        "--deadline", str(max(0.1, min(timeout, 4.0))),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=max(0.1, min(timeout, 6.0)),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS native AX window raise failed: {error}") from error
+    try:
+        payload = json.loads(completed.stdout.strip() or "{}")
+    except (TypeError, ValueError) as error:
+        raise NativeUISmokeError("macOS native AX helper returned invalid JSON for window raise") from error
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
+        detail = payload.get("error", "window raise failed") if isinstance(payload, dict) else "window raise failed"
+        if isinstance(payload, dict) and stage == "ax-windows" and payload.get("transient") is True:
+            raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
+        raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
+
+
 def _macos_window_rect(process_pid: int, timeout: float) -> tuple[int, int, int, int]:
     return _macos_ax_request(process_pid, timeout, window=True)
 
@@ -613,26 +655,133 @@ def _macos_accessibility_rect(
     return _macos_ax_request(process_pid, timeout, name=name, prefix=prefix)
 
 
+def _macos_frontmost_pid() -> int:
+    """Read the frontmost GUI process from System Events without guessing."""
+
+    script = '''tell application "System Events"
+    return unix id of (first process whose frontmost is true)
+end tell'''
+    try:
+        completed = subprocess.run(
+            ["osascript", "-e", script],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS frontmost-process query failed: {error}") from error
+    if completed.returncode != 0:
+        raise NativeUISmokeError(
+            completed.stderr.strip() or "macOS frontmost-process query failed"
+        )
+    value = completed.stdout.strip()
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise NativeUISmokeError("macOS frontmost-process query returned invalid output")
+    return int(value)
+
+
+def _macos_focus_window(process_pid: int, timeout: float = 3.0) -> None:
+    """Raise and verify one exact-PID window before sending input events."""
+
+    _macos_ax_raise_window(process_pid, min(max(timeout, 0.1), 3.0))
+    _wait_until(
+        lambda: _macos_frontmost_pid() == process_pid,
+        min(max(timeout, 0.1), 3.0),
+        f"macOS process {process_pid} did not become frontmost",
+    )
+
+
+def _macos_bounds_contained(
+    outer: tuple[int, int, int, int], inner: tuple[int, int, int, int]
+) -> bool:
+    return (
+        inner[0] >= outer[0]
+        and inner[1] >= outer[1]
+        and inner[2] <= outer[2]
+        and inner[3] <= outer[3]
+        and inner[2] > inner[0]
+        and inner[3] > inner[1]
+    )
+
+
+def _macos_core_graphics() -> tuple[object, object]:
+    """Load only public CoreGraphics/CoreFoundation event APIs."""
+
+    try:
+        graphics = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+        )
+        core = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+    except OSError as error:
+        raise NativeUISmokeError(f"macOS CoreGraphics input is unavailable: {error}") from error
+    void_p = ctypes.c_void_p
+    graphics.CGEventCreateMouseEvent.argtypes = [
+        void_p,
+        _MacCGPoint,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+    ]
+    graphics.CGEventCreateMouseEvent.restype = void_p
+    graphics.CGEventPost.argtypes = [ctypes.c_uint32, void_p]
+    graphics.CGEventPost.restype = None
+    core.CFRelease.argtypes = [void_p]
+    core.CFRelease.restype = None
+    return graphics, core
+
+
 def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
     if process_pid <= 0:
         raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    window = _macos_window_rect(process_pid, 2.0)
+    if not _macos_bounds_contained(window, bounds):
+        raise NativeUISmokeError(
+            "macOS native control bounds are outside the exact process window"
+        )
     x = (bounds[0] + bounds[2]) // 2
     y = (bounds[1] + bounds[3]) // 2
-    script = f'''tell application "System Events"
-    tell (first process whose unix id is {process_pid}) to set frontmost to true
-    click at {{{x}, {y}}}
-end tell'''
-    try:
-        completed = subprocess.run(["osascript", "-e", script], check=False, text=True, capture_output=True, timeout=10)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError(f"macOS native click failed: {error}") from error
-    if completed.returncode != 0:
-        raise NativeUISmokeError(completed.stderr.strip() or "macOS native click failed")
+    _macos_focus_window(process_pid)
+    graphics, core = _macos_core_graphics()
+    point = _MacCGPoint(float(x), float(y))
+    # CGEventCreateMouseEvent/CGEventPost are physical input synthesis at the
+    # AX-validated control center.  System Events ``click at`` is intentionally
+    # not used: on official Fyne Darwin controls it resolves to unsupported
+    # AXPress rather than delivering a widget mouse event.
+    for event_type in (5, 1, 2):  # moved, left-down, left-up
+        event = graphics.CGEventCreateMouseEvent(None, point, event_type, 0)
+        if not event:
+            raise NativeUISmokeError(
+                f"macOS CoreGraphics could not create mouse event at ({x},{y})"
+            )
+        try:
+            graphics.CGEventPost(0, event)  # kCGHIDEventTap
+        finally:
+            core.CFRelease(event)
+        if event_type == 1:
+            time.sleep(0.03)
+
+
+def _macos_verify_profile_paste(profile: Path, process_pid: int) -> None:
+    """Copy the focused field back and compare bytes without logging content."""
+
+    expected = profile.read_bytes()
+    _macos_keystroke(process_pid, "a")
+    _macos_keystroke(process_pid, "c")
+    observed = _macos_clipboard_snapshot()
+    if observed != expected:
+        observed_length = len(observed) if observed is not None else None
+        raise NativeUISmokeError(
+            "macOS native configuration paste round-trip mismatch "
+            f"(expected_bytes={len(expected)}, observed_bytes={observed_length})"
+        )
 
 
 def _macos_keystroke(process_pid: int, key: str) -> None:
-    if process_pid <= 0 or len(key) != 1 or key not in {"a", "v"}:
+    if process_pid <= 0 or len(key) != 1 or key not in {"a", "v", "c"}:
         raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    _macos_focus_window(process_pid)
     script = f'''tell application "System Events"
     tell (first process whose unix id is {process_pid})
         set frontmost to true
@@ -653,9 +802,15 @@ end tell'''
         raise NativeUISmokeError(completed.stderr.strip() or "macOS native keystroke failed")
 
 
-def _macos_has_element(process_pid: int, name: str, *, prefix: bool = False) -> bool:
+def _macos_has_element(
+    process_pid: int,
+    name: str,
+    *,
+    prefix: bool = False,
+    timeout: float = 10,
+) -> bool:
     try:
-        _macos_accessibility_rect(process_pid, name, 10, prefix=prefix)
+        _macos_accessibility_rect(process_pid, name, timeout, prefix=prefix)
         return True
     except NativeUIElementNotFound:
         return False
@@ -1235,6 +1390,51 @@ class NativeUIController:
             "reconnecting_seen": self._reconnecting_seen,
         }
 
+    def _macos_action_state(self, process_pid: int) -> str | None:
+        """Return the first current post-activation state, without secrets."""
+
+        # Error/Failed take precedence so a terminal failure cannot be hidden
+        # by a stale-looking transitional label in an older AX generation.
+        for name in ("Error", "Failed", "Connecting", "Disconnect"):
+            if _macos_has_element(process_pid, name, timeout=0.5):
+                return name
+        return None
+
+    def _macos_wait_for_activation(
+        self,
+        process_pid: int,
+        bounds: tuple[int, int, int, int],
+    ) -> None:
+        """Require a real Connect input acknowledgement before long polling."""
+
+        observed: dict[str, str | None] = {"state": None}
+
+        def accepted() -> bool:
+            state = self._macos_action_state(process_pid)
+            observed["state"] = state
+            if state in {"Error", "Failed"}:
+                raise NativeUISmokeError(
+                    f"macOS UI reported {state} immediately after activation"
+                )
+            return state in {"Connecting", "Disconnect"}
+
+        try:
+            self._wait(
+                accepted,
+                "macOS UI did not acknowledge Connect activation within 2 seconds",
+                timeout=min(2.0, self.timeout),
+            )
+        except NativeUIWaitTimeout as error:
+            try:
+                frontmost = _macos_frontmost_pid()
+            except NativeUISmokeError as frontmost_error:
+                frontmost = f"unavailable:{frontmost_error}"
+            raise NativeUISmokeError(
+                f"{error}; click_center=({(bounds[0] + bounds[2]) // 2},"
+                f"{(bounds[1] + bounds[3]) // 2}); frontmost_pid={frontmost}; "
+                f"visible_state={observed['state'] or 'none'}"
+            ) from error
+
     def configure(self) -> dict[str, object]:
         restore_clipboard: Callable[[], None]
         if self.platform == "windows":
@@ -1259,6 +1459,8 @@ class NativeUIController:
                 _macos_keystroke(process_pid, "a")
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "v")
+                process_pid = self._macos_pid_or_error()
+                _macos_verify_profile_paste(self.profile, process_pid)
             finally:
                 restore_clipboard()
         return self.snapshot()
@@ -1269,8 +1471,22 @@ class NativeUIController:
         if self.platform == "windows":
             self._wait(lambda: self._windows_has_name(status), f"Windows UI did not display {status}", timeout)
         else:
+            def visible() -> bool:
+                process_pid = self._macos_pid_or_error()
+                if status not in {"Error", "Failed"}:
+                    failure = self._macos_action_state(process_pid)
+                    if failure in {"Error", "Failed"}:
+                        raise NativeUISmokeError(
+                            f"macOS UI reported {failure} while waiting for {status}"
+                        )
+                return _macos_has_element(
+                    process_pid,
+                    status,
+                    timeout=min(1.0, self.timeout),
+                )
+
             self._wait(
-                lambda: _macos_has_element(self._macos_pid_or_error(), status),
+                visible,
                 f"macOS UI did not display {status}",
                 timeout,
             )
@@ -1327,6 +1543,8 @@ class NativeUIController:
             bounds = _macos_accessibility_rect(process_pid, "Connect", 10)
             process_pid = self._macos_pid_or_error()
             _macos_click(bounds, process_pid)
+            process_pid = self._macos_pid_or_error()
+            self._macos_wait_for_activation(process_pid, bounds)
         return self.wait_status("Connected")
 
     def disconnect(self) -> dict[str, object]:

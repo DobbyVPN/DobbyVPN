@@ -110,6 +110,85 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--window", command)
 
+    def test_macos_window_raise_uses_public_helper_and_exact_pid(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"raise","ax_window_count":1}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+            smoke._macos_ax_raise_window(4321, 1)
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--pid") + 1], "4321")
+        self.assertIn("--raise-window", command)
+
+    def test_macos_frontmost_query_rejects_non_pid_output(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["osascript"], 0, stdout="Dobby Vpn\n", stderr=""
+        )
+        with patch.object(smoke.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "invalid output"):
+                smoke._macos_frontmost_pid()
+
+    def test_macos_click_posts_physical_events_at_ax_validated_center(self) -> None:
+        class FakeGraphics:
+            def __init__(self):
+                self.created = []
+                self.posted = []
+
+            def CGEventCreateMouseEvent(self, source, point, event_type, button):
+                self.created.append((source, point, event_type, button))
+                return f"event-{event_type}"
+
+            def CGEventPost(self, tap, event):
+                self.posted.append((tap, event))
+
+        class FakeCore:
+            def __init__(self):
+                self.released = []
+
+            def CFRelease(self, event):
+                self.released.append(event)
+
+        graphics = FakeGraphics()
+        core = FakeCore()
+        with (
+            patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 200, 200)),
+            patch.object(smoke, "_macos_focus_window"),
+            patch.object(smoke, "_macos_core_graphics", return_value=(graphics, core)),
+        ):
+            smoke._macos_click((40, 60, 80, 100), 4321)
+        self.assertEqual([event[2] for event in graphics.created], [5, 1, 2])
+        self.assertEqual(graphics.posted, [(0, "event-5"), (0, "event-1"), (0, "event-2")])
+        self.assertEqual(core.released, ["event-5", "event-1", "event-2"])
+
+    def test_macos_click_rejects_control_outside_exact_window(self) -> None:
+        with patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 100, 100)):
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "outside"):
+                smoke._macos_click((90, 90, 120, 120), 4321)
+
+    def test_macos_profile_paste_round_trip_compares_bytes_without_logging(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = smoke.Path(directory) / "profile"
+            profile.write_bytes(b"synthetic-profile")
+            with (
+                patch.object(smoke, "_macos_keystroke") as keystroke,
+                patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"synthetic-profile"),
+            ):
+                smoke._macos_verify_profile_paste(profile, 4321)
+        self.assertEqual(keystroke.call_args_list, [call(4321, "a"), call(4321, "c")])
+
+    def test_macos_profile_paste_round_trip_reports_lengths_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            profile = smoke.Path(directory) / "profile"
+            profile.write_bytes(b"synthetic-profile")
+            with (
+                patch.object(smoke, "_macos_keystroke"),
+                patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"wrong"),
+            ):
+                with self.assertRaisesRegex(smoke.NativeUISmokeError, r"expected_bytes=17, observed_bytes=5"):
+                    smoke._macos_verify_profile_paste(profile, 4321)
+
     def test_macos_has_element_only_treats_explicit_not_found_as_absent(self) -> None:
         with patch.object(
             smoke,
@@ -141,7 +220,8 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
 
     def test_macos_keystroke_is_bound_to_pid(self) -> None:
         result = subprocess.CompletedProcess(["osascript"], 0, stdout="", stderr="")
-        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+        with patch.object(smoke, "_macos_focus_window"), \
+                patch.object(smoke.subprocess, "run", return_value=result) as run:
             smoke._macos_keystroke(4321, "v")
         script = run.call_args.args[0][2]
         self.assertIn("unix id is 4321", script)

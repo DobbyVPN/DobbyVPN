@@ -23,6 +23,7 @@ _CF_STRING_ENCODING_UTF8 = 0x08000100
 _AX_SUCCESS = 0
 _AX_ERROR_CANNOT_COMPLETE = -25204
 _AX_ERROR_NO_VALUE = -25212
+_AX_RAISE_ACTION = "AXRaise"
 _AX_CGPOINT_TYPE = 1
 _AX_CGSIZE_TYPE = 2
 _AX_CGRECT_TYPE = 3
@@ -120,6 +121,8 @@ class Frameworks:
         self.ax.AXValueGetType.restype = ctypes.c_int
         self.ax.AXValueGetValue.argtypes = [void_p, ctypes.c_int, void_p]
         self.ax.AXValueGetValue.restype = ctypes.c_bool
+        self.ax.AXUIElementPerformAction.argtypes = [void_p, void_p]
+        self.ax.AXUIElementPerformAction.restype = ctypes.c_int32
 
         self.cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
         self.cg.CGWindowListCopyWindowInfo.restype = void_p
@@ -357,6 +360,42 @@ def _window_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
             frameworks.release(window)
 
 
+def _raise_window(frameworks: Frameworks, pid: int) -> dict[str, object]:
+    """Raise the exact process window through the public AX window action.
+
+    This is deliberately limited to the window-management action.  Fyne's
+    Darwin controls expose discovery metadata but no actionable AXPress or
+    writable AXValue callback; input events are synthesized by the caller
+    only after this exact-PID/window validation succeeds.
+    """
+
+    windows = _windows(frameworks, pid)
+    action = frameworks.string(_AX_RAISE_ACTION)
+    try:
+        target = next(
+            (window for window in windows if _frame(frameworks, window) is not None),
+            None,
+        )
+        if target is None:
+            raise AXLookupError("ax-raise", "AXWindows had no visible frame")
+        _check_deadline()
+        status = int(frameworks.ax.AXUIElementPerformAction(target, action))
+        if status != _AX_SUCCESS:
+            raise AXLookupError(
+                "ax-raise",
+                f"AXRaise failed for process window (status={status})",
+            )
+        return {
+            "ok": True,
+            "stage": "raise",
+            "ax_window_count": len(windows),
+        }
+    finally:
+        frameworks.release(action)
+        for window in windows:
+            frameworks.release(window)
+
+
 def _find_control(
     frameworks: Frameworks,
     pid: int,
@@ -482,6 +521,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--name")
     parser.add_argument("--prefix", action="store_true")
     parser.add_argument("--window", action="store_true")
+    parser.add_argument("--raise-window", action="store_true")
     parser.add_argument("--deadline", type=float, default=4.0)
     return parser
 
@@ -491,8 +531,9 @@ def main() -> int:
     args = _parser().parse_args()
     if args.pid <= 0:
         raise SystemExit("pid must be positive")
-    if args.window == (args.name is not None):
-        raise SystemExit("choose exactly one of --window or --name")
+    selected = int(args.window) + int(args.raise_window) + int(args.name is not None)
+    if selected != 1:
+        raise SystemExit("choose exactly one of --window, --raise-window, or --name")
     if args.deadline <= 0 or not math.isfinite(args.deadline):
         raise SystemExit("deadline must be positive and finite")
     _DEADLINE = time.monotonic() + args.deadline
@@ -501,6 +542,8 @@ def main() -> int:
         frameworks = Frameworks()
         if args.window:
             payload = _window_probe(frameworks, args.pid)
+        elif args.raise_window:
+            payload = _raise_window(frameworks, args.pid)
         else:
             payload = _find_control(frameworks, args.pid, args.name, args.prefix)
         payload["elapsed_ms"] = int((time.monotonic() - started) * 1000)

@@ -69,6 +69,59 @@ class MacOSAXMatchTests(unittest.TestCase):
                 5: (10, 50, 90, 80),
             })
 
+    def test_raise_window_uses_only_public_ax_raise_action(self):
+        class AX:
+            @staticmethod
+            def AXUIElementPerformAction(element, action):
+                self.assertEqual(element, 1)
+                self.assertEqual(action, "AXRaise")
+                return 0
+
+        class Framework:
+            core = _Core()
+            ax = AX()
+
+            @staticmethod
+            def string(value):
+                return value
+
+            @staticmethod
+            def release(_value):
+                return None
+
+        with (
+            patch.object(macos_ax, "_windows", return_value=(1,)),
+            patch.object(macos_ax, "_frame", return_value=(0, 0, 100, 100)),
+        ):
+            result = macos_ax._raise_window(Framework(), 42)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["stage"], "raise")
+
+    def test_raise_window_fails_closed_when_ax_raise_is_rejected(self):
+        class AX:
+            @staticmethod
+            def AXUIElementPerformAction(_element, _action):
+                return -25205
+
+        class Framework:
+            core = _Core()
+            ax = AX()
+
+            @staticmethod
+            def string(value):
+                return value
+
+            @staticmethod
+            def release(_value):
+                return None
+
+        with (
+            patch.object(macos_ax, "_windows", return_value=(1,)),
+            patch.object(macos_ax, "_frame", return_value=(0, 0, 100, 100)),
+        ):
+            with self.assertRaisesRegex(macos_ax.AXLookupError, "AXRaise failed"):
+                macos_ax._raise_window(Framework(), 42)
+
 
 if __name__ == "__main__":
     unittest.main()
