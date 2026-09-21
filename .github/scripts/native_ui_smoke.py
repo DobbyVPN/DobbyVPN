@@ -54,7 +54,6 @@ _FILETIME_TO_DATETIME_TICKS = 504911232000000000
 _MACOS_UI_PROCESS_NAME = "Dobby Vpn"
 _MACOS_AX_HELPER = Path(__file__).with_name("macos_ax.py")
 _MACOS_INPUT_SENTINEL = b"DobbyVPN-native-input-sentinel-v1"
-_MACOS_COPY_MARKER = b"DobbyVPN-native-copy-marker-v1"
 # Keep the parent subprocess alive long enough to receive a helper's final
 # JSON after the helper's own AX deadline expires.  Without this separation a
 # residual retry can be killed at the same instant it is writing diagnostics.
@@ -1068,22 +1067,49 @@ def _macos_copy_selection_verified(
     """Exercise Cmd+A/C and compare after pasteboard generation changes."""
 
     _macos_keystroke(process_pid, "a")
-    # Make a copy a detectable state transition even when the field already
-    # equals the expected value.  The marker is synthetic and never logged.
-    _macos_clipboard_set_verified(_MACOS_COPY_MARKER)
     before = _macos_pasteboard_change_count()
     _macos_keystroke(process_pid, "c")
+    observed: bytes | None = None
+    generation_changed = False
+
+    def copied_expected() -> bool:
+        nonlocal observed, generation_changed
+        if _macos_pasteboard_change_count() == before:
+            return False
+        generation_changed = True
+        # Do not read the clipboard until Cmd+C has advanced the pasteboard;
+        # large profile pastes can otherwise race a test-side clipboard write.
+        observed = _macos_clipboard_snapshot()
+        return observed == expected
+
     try:
         _wait_until(
-            lambda: _macos_pasteboard_change_count() != before,
+            copied_expected,
             min(max(timeout, 0.1), 30.0),
             "macOS Entry did not complete Cmd+C",
         )
     except NativeUIWaitTimeout as error:
+        if generation_changed:
+            observed_length = len(observed) if observed is not None else None
+            try:
+                frontmost = _macos_frontmost_pid()
+            except NativeUISmokeError as frontmost_error:
+                frontmost = f"unavailable:{frontmost_error}"
+            details = (
+                f", control_bounds={control_bounds},"
+                f" control_center={None if control_bounds is None else ((control_bounds[0] + control_bounds[2]) // 2, (control_bounds[1] + control_bounds[3]) // 2)},"
+                f" frontmost_pid={frontmost}"
+            )
+            raise NativeUISmokeError(
+                "macOS native configuration copy-back mismatch "
+                f"(expected_bytes={len(expected)}, observed_bytes={observed_length}{details})"
+            ) from error
         raise NativeUISmokeError(
             "macOS Entry did not complete Cmd+C "
             f"(expected_bytes={len(expected)}, pasteboard_changed=false)"
         ) from error
+    if observed == expected:
+        return
     observed = _macos_clipboard_snapshot()
     if observed != expected:
         observed_length = len(observed) if observed is not None else None

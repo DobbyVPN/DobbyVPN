@@ -1144,7 +1144,7 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
             self.assertEqual(smoke._macos_pasteboard_change_count(), 42)
         self.assertEqual(run.call_args.args[0][:3], ["osascript", "-l", "JavaScript"])
 
-    def test_macos_copy_selection_waits_for_pasteboard_generation(self) -> None:
+    def test_macos_copy_selection_waits_for_generation_and_expected_bytes(self) -> None:
         expected = b"synthetic-profile"
         with (
             patch.object(smoke, "_macos_keystroke") as keystroke,
@@ -1154,7 +1154,39 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
         ):
             smoke._macos_copy_selection_verified(expected, 4321, timeout=1)
         self.assertEqual(keystroke.call_args_list, [call(4321, "a"), call(4321, "c")])
-        set_clipboard.assert_called_once_with(smoke._MACOS_COPY_MARKER)
+        set_clipboard.assert_not_called()
+
+    def test_macos_copy_selection_does_not_read_clipboard_before_generation_changes(self) -> None:
+        expected = b"already-on-clipboard"
+        with (
+            patch.object(smoke, "_macos_keystroke"),
+            patch.object(smoke, "_macos_pasteboard_change_count", return_value=10),
+            patch.object(smoke, "_macos_clipboard_snapshot", return_value=expected) as snapshot,
+        ):
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "pasteboard_changed=false"):
+                smoke._macos_copy_selection_verified(expected, 4321, timeout=0.1)
+        snapshot.assert_not_called()
+
+    def test_macos_copy_selection_reports_changed_wrong_bytes_without_exposing_them(self) -> None:
+        expected = b"expected-profile"
+        wrong = b"wrong-profile"
+        with (
+            patch.object(smoke, "_macos_keystroke"),
+            patch.object(smoke, "_macos_pasteboard_change_count", side_effect=[10, *([11] * 20)]),
+            patch.object(smoke, "_macos_clipboard_snapshot", return_value=wrong),
+            patch.object(smoke, "_macos_frontmost_pid", return_value=4321),
+        ):
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "observed_bytes=13"):
+                smoke._macos_copy_selection_verified(expected, 4321, timeout=0.1)
+
+    def test_macos_copy_selection_accepts_delayed_expected_bytes_after_generation_change(self) -> None:
+        expected = b"expected-profile"
+        with (
+            patch.object(smoke, "_macos_keystroke"),
+            patch.object(smoke, "_macos_pasteboard_change_count", side_effect=[10, *([11] * 20)]),
+            patch.object(smoke, "_macos_clipboard_snapshot", side_effect=[b"old", expected]),
+        ):
+            smoke._macos_copy_selection_verified(expected, 4321, timeout=1)
 
     def test_configure_restores_clipboard_when_native_input_fails(self) -> None:
         controller = smoke.NativeUIController("windows", smoke.Path("ui"), smoke.Path("profile"), 1)
