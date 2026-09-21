@@ -1417,6 +1417,49 @@ end tell''',
         return result | self.snapshot()
 
     def close_for_cleanup(self) -> None:
+        if self.platform == "macos":
+            # LaunchServices' ``open`` process is only a launcher. It may
+            # exit while the exact product process remains alive, and an
+            # AppleScript close can block when startup failed. Kill the
+            # verified product identity first, then reap only our launcher.
+            process = self.process
+            cleanup_error: BaseException | None = None
+            try:
+                if self.macos_process_identity is not None:
+                    _terminate_macos_process_tree(
+                        self.macos_process_identity, self.timeout
+                    )
+                elif self.macos_expected_executable is not None:
+                    _terminate_existing_macos_instances(
+                        self.timeout, self.macos_expected_executable
+                    )
+            except BaseException as error:
+                cleanup_error = error
+            if process is not None and process.poll() is None:
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.terminate()
+                        process.wait(timeout=2)
+                    except BaseException as error:
+                        cleanup_error = cleanup_error or error
+                    if process.poll() is None:
+                        try:
+                            process.kill()
+                            process.wait(timeout=1)
+                        except BaseException as error:
+                            cleanup_error = cleanup_error or error
+                except BaseException as error:
+                    cleanup_error = cleanup_error or error
+            self.process = None
+            self.hwnd = 0
+            self.macos_pid = None
+            self.macos_process_identity = None
+            self.macos_expected_executable = None
+            if cleanup_error is not None:
+                raise cleanup_error
+            return
         if self.process is None and not (
             self.platform == "macos" and self.macos_process_identity is not None
         ):
@@ -1511,9 +1554,24 @@ def serve_native_ui(
         }) + "\n")
         output_stream.flush()
 
+    start_failed = False
     try:
         progress("start", "window-discovery")
-        controller.start()
+        try:
+            controller.start()
+        except BaseException as error:
+            # Finish exact app cleanup before reporting the startup error. The
+            # parent receives the failure only after this child has removed
+            # its detached LaunchServices app, so it cannot kill the cleanup
+            # worker in the middle of its graceful close path.
+            start_failed = True
+            try:
+                controller.close_for_cleanup()
+            except BaseException as cleanup_error:
+                error.add_note(
+                    f"native-ui-cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise
         output_stream.write(encoder.encode({"ok": True, "event": "ready", **controller.snapshot()}) + "\n")
         output_stream.flush()
         for line in input_stream:
@@ -1571,7 +1629,8 @@ def serve_native_ui(
         output_stream.flush()
         return 1
     finally:
-        controller.close_for_cleanup()
+        if not start_failed:
+            controller.close_for_cleanup()
     return 0
 
 

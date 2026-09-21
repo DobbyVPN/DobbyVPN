@@ -342,7 +342,6 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         controller.macos_pid = identity.pid
         controller.macos_process_identity = identity
         with (
-            patch.object(controller, "close", side_effect=smoke.NativeUISmokeError("close failed")),
             patch.object(smoke, "_terminate_macos_process_tree") as terminate,
         ):
             controller.close_for_cleanup()
@@ -367,6 +366,25 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         terminate.assert_called_once_with(identity, 3)
         self.assertIsNone(controller.process)
         self.assertIsNone(controller.macos_process_identity)
+
+    def test_macos_cleanup_escalates_verified_app_identity_to_kill(self) -> None:
+        identity = smoke._MacOSProcessIdentity(
+            4321, 501, self._MACOS_EXECUTABLE, "Mon Sep 20 12:34:56 2026"
+        )
+        with (
+            patch.object(smoke, "_macos_identity_is_alive", return_value=True),
+            patch.object(smoke, "_terminate_macos_process") as terminate,
+            patch.object(
+                smoke,
+                "_wait_until",
+                side_effect=[smoke.NativeUIWaitTimeout("still alive"), None],
+            ),
+        ):
+            smoke._terminate_macos_process_tree(identity, 1)
+        self.assertEqual(
+            terminate.call_args_list,
+            [call(identity, signal.SIGTERM), call(identity, signal.SIGKILL)],
+        )
 
     def test_windows_does_not_use_title_only_stale_window_fallback(self) -> None:
         controller = smoke.NativeUIController(
@@ -725,6 +743,29 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         self.assertTrue(ready["ok"])
         self.assertTrue(responses[-1]["ok"])
         self.assertGreaterEqual(fake.closed, 1)
+
+    def test_serve_cleans_startup_failure_before_reporting_it(self) -> None:
+        events: list[str] = []
+
+        class FailingController:
+            def start(self):
+                events.append("start")
+                raise smoke.NativeUISmokeError("window discovery failed")
+
+            def close_for_cleanup(self):
+                events.append("cleanup")
+
+        output = io.StringIO()
+        with patch.object(smoke, "_controller_for", return_value=FailingController()):
+            result = smoke.serve_native_ui(
+                "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1,
+                io.StringIO(), output,
+            )
+        self.assertEqual(result, 1)
+        self.assertEqual(events, ["start", "cleanup"])
+        failure = json.loads(output.getvalue().splitlines()[-1])
+        self.assertFalse(failure["ok"])
+        self.assertIn("window discovery failed", failure["error"])
 
 
 class NativeUIClipboardCleanupTests(unittest.TestCase):

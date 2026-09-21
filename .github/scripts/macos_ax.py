@@ -367,6 +367,7 @@ def _find_control(
         seen: dict[int, list[ctypes.c_void_p]] = {}
         owned_elements: list[ctypes.c_void_p] = []
         matches: list[tuple[int, int, int, int]] = []
+        match_frames: set[tuple[int, int, int, int]] = set()
         nodes = 0
         for window in windows:
             window_frame = _frame(frameworks, window)
@@ -392,7 +393,14 @@ def _find_control(
                 if frame is not None and _contains(window_frame, frame):
                     for text in _element_texts(frameworks, element):
                         if (text.startswith(name) if prefix else text == name):
-                            matches.append(frame)
+                            # The official Darwin bridge retains regenerated
+                            # roots in a process-global array. A refresh can
+                            # therefore expose the same logical control more
+                            # than once. Collapse only exact same-frame
+                            # duplicates; distinct controls remain ambiguous.
+                            if frame not in match_frames:
+                                match_frames.add(frame)
+                                matches.append(frame)
                             if len(matches) > 1:
                                 raise AXLookupError(
                                     "ambiguous",
