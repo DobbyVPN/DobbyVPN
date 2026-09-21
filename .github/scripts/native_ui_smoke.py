@@ -785,9 +785,11 @@ def _macos_process_identities(expected_executable: str) -> tuple[_MacOSProcessId
         if identity is None:
             continue
         if identity.executable != expected_executable:
-            raise NativeUISmokeError(
-                "macOS native UI process identity returned an unexpected executable"
-            )
+            # A previous interrupted run may leave another same-name binary
+            # alive.  It is outside this run's exact executable scope and is
+            # intentionally ignored; only an exact path may be terminated or
+            # selected as this run's child.
+            continue
         # A PID can have changed between pgrep and ps.  Treat that process as
         # gone rather than ever allowing a different owner to be signalled.
         if identity.uid != uid:
