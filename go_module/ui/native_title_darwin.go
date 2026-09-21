@@ -54,6 +54,10 @@ func publishPlatformNativeWindowTitle(window fyne.Window, title string) error {
 			publicationError = fmt.Errorf("native title is unavailable")
 		case 3:
 			publicationError = fmt.Errorf("native title publication ran off the AppKit main thread")
+		case 4:
+			publicationError = fmt.Errorf("NSWindow title readback did not match requested title")
+		case 5:
+			publicationError = fmt.Errorf("NSWindow accessibility title readback did not match requested title")
 		default:
 			publicationError = fmt.Errorf("native AppKit title publication failed (status %d)", status)
 		}

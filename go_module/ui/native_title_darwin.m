@@ -15,7 +15,18 @@ int dobby_set_macos_window_title(uintptr_t windowHandle, const char *title) {
         }
 
         NSString *value = [NSString stringWithUTF8String:title];
-        [window setTitle:value ?: @""];
+        NSString *expected = value ?: @"";
+        [window setTitle:expected];
+        // GLFW/AppKit updates the visible title, but AX clients may retain
+        // the NSWindow accessibility-title value independently. Keep both
+        // public AppKit attributes aligned before announcing the change.
+        [window setAccessibilityTitle:expected];
+        if (![[window title] isEqualToString:expected]) {
+            return 4;
+        }
+        if (![[window accessibilityTitle] isEqualToString:expected]) {
+            return 5;
+        }
         NSAccessibilityPostNotification(window, NSAccessibilityTitleChangedNotification);
         return 0;
     }
