@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,14 +13,15 @@ import (
 )
 
 type fakeClient struct {
-	mu        sync.Mutex
-	snapshot  Snapshot
-	configure ConfigureResult
-	startGate <-chan struct{}
-	stopGate  <-chan struct{}
-	started   bool
-	stopped   bool
-	startedCh chan struct{}
+	mu            sync.Mutex
+	snapshot      Snapshot
+	configure     ConfigureResult
+	configuredRaw []byte
+	startGate     <-chan struct{}
+	stopGate      <-chan struct{}
+	started       bool
+	stopped       bool
+	startedCh     chan struct{}
 }
 
 type reconnectClient struct {
@@ -46,7 +48,7 @@ type startupLifecycleApp struct {
 
 type startupTrackingWindow struct {
 	fyne.Window
-	events *[]string
+	events     *[]string
 	beforeShow func()
 }
 
@@ -225,9 +227,10 @@ func (r *reconnectClient) Reset(context.Context, uint64) (Snapshot, error) {
 	return Snapshot{}, nil
 }
 
-func (f *fakeClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
+func (f *fakeClient) Configure(_ context.Context, raw []byte, _ uint64) (ConfigureResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.configuredRaw = append(f.configuredRaw[:0], raw...)
 	return f.configure, nil
 }
 func (f *fakeClient) Start(context.Context, uint64) (StartResult, error) {
@@ -313,6 +316,86 @@ func (f *fakeClient) stoppedValue() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stopped
+}
+
+func (f *fakeClient) configuredSource() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]byte(nil), f.configuredRaw...)
+}
+
+func TestAccessibleEntryStagesMultilinePasteOutsideTheRenderer(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	entry := newAccessibleEntry(true, "Connection configuration", true)
+	raw := "[[Outline]]\nendpoint = \"example.invalid\"\npassword = \"synthetic\"\n"
+	clipboard := test.NewClipboard()
+	clipboard.SetContent(raw)
+
+	entry.TypedShortcut(&fyne.ShortcutPaste{Clipboard: clipboard})
+
+	if entry.Text != inlinePasteSummary {
+		t.Fatalf("visible text = %q, want fixed summary", entry.Text)
+	}
+	if entry.SourceText() != raw {
+		t.Fatalf("staged source was not preserved exactly")
+	}
+	if strings.Contains(entry.Text, "example.invalid") || strings.Contains(entry.Text, "synthetic") {
+		t.Fatal("visible summary exposed inline source content")
+	}
+}
+
+func TestAccessibleEntryKeepsOrdinaryPasteAndClearsStagedSourceOnMutation(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	entry := newAccessibleEntry(true, "Connection configuration", true)
+	clipboard := test.NewClipboard()
+	clipboard.SetContent("https://example.test/profile")
+	entry.TypedShortcut(&fyne.ShortcutPaste{Clipboard: clipboard})
+	if entry.Text != "https://example.test/profile" || entry.SourceText() != entry.Text {
+		t.Fatalf("one-line paste did not retain ordinary Entry behavior: %q", entry.Text)
+	}
+
+	clipboard.SetContent("[[Outline]]\nendpoint = \"example.invalid\"\n")
+	entry.TypedShortcut(&fyne.ShortcutPaste{Clipboard: clipboard})
+	if entry.SourceText() == entry.Text {
+		t.Fatal("multiline paste was not staged")
+	}
+	entry.Entry.SetText("manually replaced")
+	if got := entry.SourceText(); got != "manually replaced" {
+		t.Fatalf("direct embedded SetText left stale staged source: %q", got)
+	}
+	logs := NewAccessibleEntry(true, "Connection logs")
+	logs.TypedShortcut(&fyne.ShortcutPaste{Clipboard: clipboard})
+	if logs.Text != clipboard.Content() || logs.SourceText() != clipboard.Content() {
+		t.Fatal("the Logs entry unexpectedly staged multiline paste")
+	}
+}
+
+func TestConnectionViewSubmitsExactStagedMultilineSource(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	started := make(chan struct{})
+	client := &fakeClient{
+		configure: ConfigureResult{Sequence: 2},
+		startedCh: started,
+	}
+	view := NewConnectionView(client)
+	view.ctx = context.Background()
+	raw := "[[Outline]]\nendpoint = \"example.invalid\"\npassword = \"synthetic\"\n"
+	clipboard := test.NewClipboard()
+	clipboard.SetContent(raw)
+	view.Input.TypedShortcut(&fyne.ShortcutPaste{Clipboard: clipboard})
+	view.toggle()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("staged source did not reach Connect")
+	}
+	if got := string(client.configuredSource()); got != raw {
+		t.Fatalf("configured source = %q, want exact staged source", got)
+	}
 }
 
 func TestConnectionViewRendersAuthoritativeSnapshot(t *testing.T) {

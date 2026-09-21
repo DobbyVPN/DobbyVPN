@@ -12,7 +12,13 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-const statusDisconnected = "Disconnected"
+const (
+	statusDisconnected = "Disconnected"
+	// Fyne's multiline RichText renderer is intentionally not given a large
+	// inline source.  The exact source remains private to AccessibleEntry and
+	// is supplied to the session client only when Connect is pressed.
+	inlinePasteSummary = "Inline configuration ready"
+)
 
 // Application owns only the Fyne window.  The VPN service and SessionClient
 // outlive the window, so closing and reopening the UI never stops a tunnel.
@@ -204,7 +210,7 @@ func newConnectionView(client SessionClient, exporter LogExporter, diagnostics D
 		renderedStatus: statusDisconnected,
 		renderedButton: "Connect",
 	}
-	view.Input = NewAccessibleEntry(true, "Connection configuration")
+	view.Input = newAccessibleEntry(true, "Connection configuration", true)
 	view.Input.SetPlaceHolder("HTTPS connection URL or inline configuration")
 	view.Input.SetMinRowsVisible(4)
 
@@ -292,10 +298,18 @@ func (v *ConnectionView) SetDiagnosticStore(store DiagnosticStore) {
 // in application code instead of coordinates or screenshots.
 type AccessibleEntry struct {
 	*widget.Entry
-	label string
+	label               string
+	stageMultilinePaste bool
+	sourceMu            sync.Mutex
+	stagedSource        string
+	settingPasteSummary bool
 }
 
 func NewAccessibleEntry(multiline bool, label string) *AccessibleEntry {
+	return newAccessibleEntry(multiline, label, false)
+}
+
+func newAccessibleEntry(multiline bool, label string, stageMultilinePaste bool) *AccessibleEntry {
 	// Entry's focus and keyboard path resolves the canvas object through its
 	// BaseWidget implementation.  Constructing an Entry with NewEntry first
 	// binds that implementation to the inner *widget.Entry; when the entry is
@@ -307,14 +321,84 @@ func NewAccessibleEntry(multiline bool, label string) *AccessibleEntry {
 	if multiline {
 		entry.MultiLine = true
 	}
-	view := &AccessibleEntry{Entry: entry, label: label}
+	view := &AccessibleEntry{
+		Entry:               entry,
+		label:               label,
+		stageMultilinePaste: stageMultilinePaste,
+	}
 	entry.ExtendBaseWidget(view)
+	// Fyne invokes OnChanged for ordinary typing, normal paste, and direct
+	// SetText calls.  Any such mutation invalidates a previously staged source;
+	// the one guarded SetText below is the sole exception that installs the
+	// fixed, non-secret summary.
+	entry.OnChanged = func(string) {
+		view.sourceMu.Lock()
+		if view.settingPasteSummary {
+			view.settingPasteSummary = false
+		} else {
+			view.stagedSource = ""
+		}
+		view.sourceMu.Unlock()
+	}
 	return view
 }
 
 func (e *AccessibleEntry) AccessibilityLabel() string { return e.label }
 func (e *AccessibleEntry) AccessibilityRole() fyne.AccessibleRole {
 	return fyne.AccessibleRoleText
+}
+
+// SetText clears any private staged source before applying a normal programmatic
+// value.  The embedded Entry remains the renderer and input implementation.
+func (e *AccessibleEntry) SetText(text string) {
+	e.sourceMu.Lock()
+	e.stagedSource = ""
+	e.settingPasteSummary = false
+	e.sourceMu.Unlock()
+	e.Entry.SetText(text)
+}
+
+// SourceText returns the exact source to submit.  Multiline clipboard input is
+// kept out of Fyne's RichText renderer; if the visible summary was edited by
+// any other path, the staged value is discarded before it can reach the
+// session client.
+func (e *AccessibleEntry) SourceText() string {
+	e.sourceMu.Lock()
+	defer e.sourceMu.Unlock()
+	if e.stagedSource != "" && e.Entry.Text == inlinePasteSummary {
+		return e.stagedSource
+	}
+	e.stagedSource = ""
+	return e.Entry.Text
+}
+
+// TypedShortcut intercepts only multiline paste for the connection source.
+// URLs, sentinels, direct typing, copy/select-all, and the Logs entry retain
+// Fyne's ordinary shortcut behavior.
+func (e *AccessibleEntry) TypedShortcut(shortcut fyne.Shortcut) {
+	if e.stageMultilinePaste {
+		if paste, ok := shortcut.(*fyne.ShortcutPaste); ok && paste.Clipboard != nil {
+			content := paste.Clipboard.Content()
+			if strings.ContainsAny(content, "\r\n") {
+				e.sourceMu.Lock()
+				e.stagedSource = content
+				e.settingPasteSummary = true
+				e.sourceMu.Unlock()
+				// Set only a short fixed summary in the widget.  The callback
+				// above preserves the staged source for this one update.
+				e.Entry.SetText(inlinePasteSummary)
+				e.sourceMu.Lock()
+				e.settingPasteSummary = false
+				e.sourceMu.Unlock()
+				return
+			}
+		}
+	}
+	e.sourceMu.Lock()
+	e.stagedSource = ""
+	e.settingPasteSummary = false
+	e.sourceMu.Unlock()
+	e.Entry.TypedShortcut(shortcut)
 }
 
 func (v *ConnectionView) Content() fyne.CanvasObject { return v.root }
@@ -547,7 +631,12 @@ func (v *ConnectionView) toggle() {
 	v.localError = ""
 	v.busy = true
 	sequence := v.sequence
-	text := strings.TrimSpace(v.Input.Text)
+	text := v.Input.SourceText()
+	if strings.TrimSpace(text) == "" {
+		// Preserve every byte of a non-empty staged/typed source for the
+		// service; trimming is only validation for the empty-input case.
+		text = ""
+	}
 	ctx := v.ctx
 	// Publish the attempt synchronously before the transport work starts.  A
 	// previous permission or transport error is otherwise still rendered while

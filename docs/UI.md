@@ -36,6 +36,12 @@ wiring; Android UI Automator and iOS Simulator accessibility checks cover
 mobile rendered controls. Neither duplicates the canonical functional scenario
 definitions.
 
+The connection editor keeps large multiline inline pastes outside Fyne's
+RichText renderer: it shows the fixed non-secret `Inline configuration ready`
+summary while retaining the exact source privately until Connect submits it.
+One-line HTTPS URLs and ordinary edits retain normal Entry behavior; the Logs
+editor is not staged.
+
 ## Connect and reattach
 
 At startup, the UI attaches with `Snapshot` and starts `Watch`. `Watch` sends
