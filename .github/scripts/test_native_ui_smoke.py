@@ -122,10 +122,28 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertIn("--window-title", command)
 
+    def test_macos_window_title_retries_transient_ax_title_state(self) -> None:
+        transient = subprocess.CompletedProcess(
+            ["macos_ax.py"],
+            1,
+            stdout='{"ok":false,"stage":"ax-window-title","transient":true,"error":"status=-25204"}\n',
+            stderr="",
+        )
+        ready = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"window-title","title":"Dobby VPN — Disconnected"}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", side_effect=[transient, ready]) as run:
+            self.assertEqual(smoke._macos_window_title(4321, 2), "Dobby VPN — Disconnected")
+        self.assertEqual(run.call_count, 2)
+
     def test_macos_title_state_requires_exact_product_title(self) -> None:
         self.assertTrue(smoke._macos_title_has_state("Dobby VPN — Connected", "Connected"))
         self.assertFalse(smoke._macos_title_has_state("Other window — Connected", "Connected"))
         self.assertFalse(smoke._macos_title_has_state("Dobby VPN — Connected (debug)", "Connected"))
+        self.assertTrue(smoke._macos_title_is_status("Dobby VPN — Disconnected"))
+        self.assertFalse(smoke._macos_title_is_status("Dobby VPN"))
 
     def test_macos_ax_helper_keeps_child_deadline_inside_parent_timeout(self) -> None:
         result = subprocess.CompletedProcess(

@@ -136,7 +136,12 @@ class MacOSAXMatchTests(unittest.TestCase):
 
         with (
             patch.object(macos_ax, "_windows", return_value=(1,)),
-            patch.object(macos_ax, "_attribute", return_value="Dobby VPN — Connected"),
+            patch.object(macos_ax, "_frame", return_value=(0, 0, 100, 100)),
+            patch.object(
+                macos_ax,
+                "_copy_attribute",
+                return_value=(macos_ax._AX_SUCCESS, "Dobby VPN — Connected"),
+            ),
         ):
             result = macos_ax._window_title_probe(Framework(), 42)
         self.assertEqual(result["stage"], "window-title")
@@ -156,10 +161,36 @@ class MacOSAXMatchTests(unittest.TestCase):
 
         with (
             patch.object(macos_ax, "_windows", return_value=(1,)),
-            patch.object(macos_ax, "_attribute", return_value=object()),
+            patch.object(macos_ax, "_frame", return_value=(0, 0, 100, 100)),
+            patch.object(
+                macos_ax,
+                "_copy_attribute",
+                return_value=(macos_ax._AX_SUCCESS, object()),
+            ),
         ):
             with self.assertRaisesRegex(macos_ax.AXLookupError, "no readable title"):
                 macos_ax._window_title_probe(Framework(), 42)
+
+    def test_window_title_probe_marks_ax_title_windowserver_errors_transient(self):
+        class Framework:
+            core = _Core()
+
+            @staticmethod
+            def release(_value):
+                return None
+
+        with (
+            patch.object(macos_ax, "_windows", return_value=(1,)),
+            patch.object(macos_ax, "_frame", return_value=(0, 0, 100, 100)),
+            patch.object(
+                macos_ax,
+                "_copy_attribute",
+                return_value=(macos_ax._AX_ERROR_CANNOT_COMPLETE, None),
+            ),
+        ):
+            with self.assertRaisesRegex(macos_ax.AXLookupError, "status=-25204") as raised:
+                macos_ax._window_title_probe(Framework(), 42)
+        self.assertTrue(raised.exception.transient)
 
 
 if __name__ == "__main__":

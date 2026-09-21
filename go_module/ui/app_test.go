@@ -519,6 +519,22 @@ func TestApplicationPresentationDoesNotReplaceSettingsContent(t *testing.T) {
 	}
 }
 
+func TestApplicationPublishesNativeStatusThroughRealWindowTitle(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	application := NewApplication(runtime, &fakeClient{})
+	t.Cleanup(application.Close)
+	// The test driver is Linux/headless, so install the same real Fyne window
+	// method that the desktop constructor wires on darwin/windows.
+	application.Connection.setNativeStatusTitle = func(status string) {
+		application.Window.SetTitle(nativeWindowTitle(status))
+	}
+	application.Connection.render(Snapshot{State: StateConnected, Generation: 1})
+	if got := application.Window.Title(); got != nativeWindowTitle("Connected") {
+		t.Fatalf("native window title = %q, want %q", got, nativeWindowTitle("Connected"))
+	}
+}
+
 func TestNativeDesktopStatusTitleIsDesktopOnly(t *testing.T) {
 	for _, testCase := range []struct {
 		goos    string

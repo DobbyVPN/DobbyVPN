@@ -61,6 +61,16 @@ _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS = 0.25
 _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS = 0.1
 _MACOS_AX_MESSAGE_TIMEOUT_SECONDS = 1.0
 _NATIVE_ACTION_LABEL = "VPN connection action"
+_NATIVE_STATUS_STATES = (
+    "Disconnected",
+    "Ready",
+    "Connecting",
+    "Connected",
+    "Disconnecting",
+    "Reconnecting",
+    "Failed",
+    "Error",
+)
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
     if (visible of process "Finder") is false then error "Finder is not visible"
@@ -577,7 +587,7 @@ def _macos_ax_request(
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
         detail = payload.get("error", "lookup failed") if isinstance(payload, dict) else "lookup failed"
-        if isinstance(payload, dict) and stage == "ax-windows" and payload.get("transient") is True:
+        if isinstance(payload, dict) and payload.get("transient") is True:
             raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
         if stage == "control":
             raise NativeUIElementNotFound(f"macOS AX {stage}: {detail}")
@@ -625,7 +635,7 @@ def _macos_ax_raise_window_once(process_pid: int, timeout: float) -> None:
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
         detail = payload.get("error", "window raise failed") if isinstance(payload, dict) else "window raise failed"
-        if isinstance(payload, dict) and stage == "ax-windows" and payload.get("transient") is True:
+        if isinstance(payload, dict) and payload.get("transient") is True:
             raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
         raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
 
@@ -664,7 +674,7 @@ def _macos_ax_window_title_once(process_pid: int, timeout: float) -> str:
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
         detail = payload.get("error", "window title lookup failed") if isinstance(payload, dict) else "window title lookup failed"
-        if isinstance(payload, dict) and stage == "ax-windows" and payload.get("transient") is True:
+        if isinstance(payload, dict) and payload.get("transient") is True:
             raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
         raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
     title = payload.get("title")
@@ -796,6 +806,10 @@ def _macos_window_title(process_pid: int, timeout: float = 2.0) -> str:
 
 def _macos_title_has_state(title: str, state: str) -> bool:
     return title == f"Dobby VPN — {state}"
+
+
+def _macos_title_is_status(title: str) -> bool:
+    return any(_macos_title_has_state(title, state) for state in _NATIVE_STATUS_STATES)
 
 
 def _macos_frontmost_pid() -> int:
@@ -1692,6 +1706,8 @@ class NativeUIController:
             # never turns screen coordinates into an interaction fallback.
             try:
                 _macos_window_rect(process_pid, min(2.0, self.timeout))
+                if not _macos_title_is_status(_macos_window_title(process_pid, min(2.0, self.timeout))):
+                    return False
                 return _macos_has_element(process_pid, "Connection configuration")
             except NativeUIWindowNotReady as error:
                 # A process can be discoverable a few milliseconds before
@@ -1752,11 +1768,8 @@ class NativeUIController:
                     process_pid = self._macos_pid_or_error()
                 except NativeUISmokeError:
                     break
-                try:
-                    if _macos_title_has_state(_macos_window_title(process_pid), name):
-                        status = name
-                        break
-                except NativeUISmokeError:
+                if _macos_title_has_state(_macos_window_title(process_pid), name):
+                    status = name
                     break
         return {
             "status": status,
@@ -1766,20 +1779,14 @@ class NativeUIController:
     def _macos_action_state(self, process_pid: int) -> str | None:
         """Return the first current post-activation state, without secrets."""
 
-        try:
-            title = _macos_window_title(process_pid, timeout=1.5)
-        except NativeUISmokeError:
-            title = ""
+        title = _macos_window_title(process_pid, timeout=1.5)
         for name in ("Connecting", "Connected", "Error", "Failed"):
             if _macos_title_has_state(title, name):
                 return name
         return None
 
     def _macos_failure_state(self, process_pid: int) -> str | None:
-        try:
-            title = _macos_window_title(process_pid, timeout=1.5)
-        except NativeUISmokeError:
-            title = ""
+        title = _macos_window_title(process_pid, timeout=1.5)
         for name in ("Error", "Failed"):
             if _macos_title_has_state(title, name):
                 return name
@@ -1896,13 +1903,10 @@ class NativeUIController:
                         raise NativeUISmokeError(
                             f"macOS UI reported {failure} while waiting for {status}"
                         )
-                try:
-                    return _macos_title_has_state(
-                        _macos_window_title(process_pid, timeout=min(1.0, self.timeout)),
-                        status,
-                    )
-                except NativeUISmokeError:
-                    return False
+                return _macos_title_has_state(
+                    _macos_window_title(process_pid, timeout=min(1.0, self.timeout)),
+                    status,
+                )
 
             self._wait(
                 visible,

@@ -42,15 +42,15 @@ summary while retaining the exact source privately until Connect submits it.
 One-line HTTPS URLs and ordinary edits retain normal Entry behavior; the Logs
 editor is not staged.
 
-On Windows and macOS, the native window title mirrors the rendered connection
-status (`Dobby VPN — <status>`). The connection action keeps one stable
-accessibility label while its visible text changes between Connect and
-Disconnect. Fyne 2.8.1's Darwin child-label snapshots do not reliably republish
-dynamic text, so native drivers use the exact-PID window title for live status
-and the stable action label for physical input. Settings owns a genuinely new
-content tree and temporarily owns the title; Back restores the synchronized
-connection status. This stays within the public Fyne API and requires no fork
-or upstream change.
+On Windows and macOS, the native window title mirrors the global rendered
+connection status (`Dobby VPN — <status>`), including while Settings is open.
+The connection action keeps one stable accessibility label while its visible
+text changes between Connect and Disconnect. Fyne 2.8.1's Darwin child-label
+snapshots do not reliably republish dynamic text, so native drivers use the
+exact-PID window title for live status and the stable action label for physical
+input. Settings owns a genuinely new content tree without changing the VPN
+status channel. This stays within the public Fyne API and requires no fork or
+upstream change.
 
 ## Connect and reattach
 

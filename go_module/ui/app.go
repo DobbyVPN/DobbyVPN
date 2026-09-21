@@ -71,9 +71,7 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 	window.SetContent(connectionContent)
 	if nativeDesktopStatusTitleEnabled(goruntime.GOOS) {
 		view.setNativeStatusTitle = func(status string) {
-			if window.Content() == connectionContent {
-				window.SetTitle(nativeWindowTitle(status))
-			}
+			window.SetTitle(nativeWindowTitle(status))
 		}
 		view.setNativeStatusTitle(statusDisconnected)
 	}
@@ -82,11 +80,9 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 		window.Close()
 	})
 	view.Settings.OnTapped = func() {
-		window.SetTitle(nativeWindowTitle("Settings"))
 		window.SetContent(settings.Content())
 	}
 	settings.Back.OnTapped = func() {
-		window.SetTitle(nativeWindowTitle(view.displayedStatus()))
 		window.SetContent(view.Content())
 	}
 	return &Application{App: runtime, Window: window, Connection: view, Settings: settings}

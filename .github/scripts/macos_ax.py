@@ -367,8 +367,17 @@ def _window_title_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
     try:
         for window in windows:
             _check_deadline()
-            value = _attribute(frameworks, window, "AXTitle")
-            if value is None:
+            if _frame(frameworks, window) is None:
+                continue
+            status, value = _copy_attribute(frameworks, window, "AXTitle")
+            if status in {_AX_ERROR_CANNOT_COMPLETE, _AX_ERROR_NO_VALUE}:
+                raise AXLookupError(
+                    "ax-window-title",
+                    f"AXTitle could not be read (status={status})",
+                    transient=True,
+                    details={"ax_status": status},
+                )
+            if status != _AX_SUCCESS or value is None:
                 continue
             try:
                 title = frameworks.text(value)
