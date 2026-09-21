@@ -116,6 +116,14 @@ def _path(value: str) -> Path:
     return result
 
 
+def _ui_path_is_launchable(platform: str, path: Path) -> bool:
+    if path.is_file():
+        return True
+    if platform != "macos" or path.suffix != ".app":
+        return False
+    return (path / "Contents" / "MacOS" / "Dobby Vpn").is_file()
+
+
 def _smoke_timeout(response_timeout: float) -> float:
     """Bound the real-window driver below its response deadline.
 
@@ -143,7 +151,8 @@ class _NativeUIProcess:
         self.profile = profile
         self.timeout = timeout
         # Keep the constructor boundary stable for callers that provide a
-        # disposable scratch root, but never turn it into a log sink.
+        # disposable raw-log root; the macOS app launcher writes complete
+        # stdout/stderr streams there when LaunchServices detaches the app.
         self.raw_directory = raw_directory
         self.process: subprocess.Popen[str] | None = None
         self._responses: queue.Queue[str | None] = queue.Queue()
@@ -176,6 +185,8 @@ class _NativeUIProcess:
     def start(self) -> None:
         if self.process is not None:
             return
+        child_environment = os.environ.copy()
+        child_environment["DOBBYVPN_NATIVE_UI_LOG_DIR"] = str(self.raw_directory)
         self.process = subprocess.Popen(
             [
                 sys.executable,
@@ -195,6 +206,7 @@ class _NativeUIProcess:
             text=True,
             encoding="utf-8",
             bufsize=1,
+            env=child_environment,
             start_new_session=(os.name != "nt"),
             creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
         )
@@ -237,14 +249,23 @@ class _NativeUIProcess:
         if response.get("ok") is not True or response.get("event") != "ready":
             operation = self._operation
             stage = self._stage
-            self.close()
-            raise NativeUIJourneyError(
+            primary = NativeUIJourneyError(
                 "native UI did not become ready: "
                 + str(response.get("error", response))
                 + f" (operation={operation}, stage={stage})",
                 operation=operation,
                 stage=stage,
             )
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                # Preserve the response/window-discovery failure as the
+                # primary diagnosis.  Cleanup is still reported as a note,
+                # never allowed to replace the original error.
+                primary.add_note(
+                    f"native-ui-cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            raise primary
 
     def _response(self, timeout: float) -> dict[str, object]:
         try:
@@ -584,8 +605,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if not args.cli.is_file() or not args.ui.is_file() or not args.profile.is_file() or not args.smoke_script.is_file():
-        raise SystemExit("native UI journey requires regular CLI, UI, profile, and smoke-script files")
+    if (
+        not args.cli.is_file()
+        or not _ui_path_is_launchable(args.platform, args.ui)
+        or not args.profile.is_file()
+        or not args.smoke_script.is_file()
+    ):
+        raise SystemExit("native UI journey requires regular CLI, launchable UI, profile, and smoke-script files")
     try:
         result = run_journey(args)
     except Exception as error:

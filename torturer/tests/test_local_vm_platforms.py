@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import plistlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -16,6 +17,39 @@ class LocalVMPlatformTests(unittest.TestCase):
         (root / "platform.json").write_text(json.dumps({
             "platform": platform,
         }), encoding="utf-8")
+
+    def test_macos_local_ui_is_staged_as_disposable_release_shape_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "Dobby Vpn"
+            executable.write_bytes(b"candidate")
+            executable.chmod(0o755)
+
+            bundle = local_vm_macos.stage_native_ui_bundle(root, executable)
+
+            target = bundle / "Contents" / "MacOS" / "Dobby Vpn"
+            self.assertEqual(bundle.name, "Dobby VPN.app")
+            self.assertEqual(target.read_bytes(), b"candidate")
+            self.assertTrue(target.stat().st_mode & 0o111)
+            with (bundle / "Contents" / "Info.plist").open("rb") as stream:
+                info = plistlib.load(stream)
+            self.assertEqual(info["CFBundleExecutable"], "Dobby Vpn")
+            self.assertEqual(info["CFBundlePackageType"], "APPL")
+            self.assertEqual(info["CFBundleIdentifier"], "com.dobby.vpn")
+
+    def test_macos_release_bundle_path_is_reused_without_copying(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "Dobby VPN.app"
+            executable = bundle / "Contents" / "MacOS" / "Dobby Vpn"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"release")
+            with (bundle / "Contents" / "Info.plist").open("wb") as stream:
+                plistlib.dump({"CFBundleExecutable": "Dobby Vpn"}, stream)
+
+            self.assertEqual(
+                local_vm_macos.stage_native_ui_bundle(Path(temporary), executable),
+                bundle.resolve(),
+            )
 
     def test_windows_start_records_identity_and_network_before_returning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

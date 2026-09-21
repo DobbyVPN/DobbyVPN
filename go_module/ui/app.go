@@ -84,35 +84,26 @@ func (a *Application) RunWithDiagnosticStore(resolve func() DiagnosticStore) {
 }
 
 func (a *Application) run(resolve func() DiagnosticStore) {
-	// Mobile clients call through Fyne's JNI bridge from their first
-	// Snapshot. Keep that work out of the c-shared entrypoint's pre-driver
-	// phase; desktop callers (and the headless companion) retain the existing
-	// eager start behavior because they do not pass a deferred native store.
-	if resolve == nil {
+	// Starting the service watcher before App.Run lets the first desktop
+	// snapshot race Fyne's synchronous Show/repaint/accessibility setup.  The
+	// same lifecycle boundary is useful on mobile, where the resolver may call
+	// a native bridge.  OnStarted is delivered only after the driver's event
+	// loop and first surface are ready, so every real window uses one startup
+	// ordering and the headless companion can still call Start directly.
+	a.App.Lifecycle().SetOnStarted(func() {
 		a.Start()
-	}
-	// Show before emitting the diagnostic marker so logs distinguish a window
-	// handed to the platform renderer from a widget tree that was only built.
-	// Real UI qualification still drives the platform accessibility tree.
-	a.Window.Show()
-	markUIAttached()
-	if resolve != nil {
-		// The resolver may call a platform bridge (Android JNI or an iOS
-		// native context). Do not run it between Window.Show and App.Run:
-		// mobile Fyne executes DoFromGoroutine directly until its driver loop
-		// has initialized, so an early resolver can mutate the first canvas
-		// concurrently with native-surface setup and leave a blank window.
-		// OnStarted is the first lifecycle callback delivered by that loop;
-		// resolve off the UI goroutine, then marshal only the widget mutation
-		// back through Fyne.
-		a.App.Lifecycle().SetOnStarted(func() {
-			a.Start()
+		if resolve != nil {
 			go func() {
 				store := resolve()
 				fyne.Do(func() { a.Connection.SetDiagnosticStore(store) })
 			}()
-		})
-	}
+		}
+	})
+	// Show after registering the lifecycle callback.  The callback is delivered
+	// only by App.Run, after the driver has initialized its event loop and first
+	// native surface; no startup work can race this synchronous first frame.
+	a.Window.Show()
+	markUIAttached()
 	a.App.Run()
 }
 

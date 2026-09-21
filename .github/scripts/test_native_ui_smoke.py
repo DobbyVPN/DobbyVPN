@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import base64
+import plistlib
 import signal
 import subprocess
 import tempfile
@@ -83,17 +84,46 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
 
     def test_macos_accessibility_lookup_is_bound_to_pid_not_process_name(self) -> None:
         result = subprocess.CompletedProcess(
-            ["osascript"], 0, stdout="10,20,110,220\n", stderr=""
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"control","bounds":[10,20,110,220]}\n',
+            stderr="",
         )
         with patch.object(smoke.subprocess, "run", return_value=result) as run:
             self.assertEqual(
                 smoke._macos_accessibility_rect(4321, "Connect", 1),
                 (10, 20, 110, 220),
             )
-        script = run.call_args.args[0][2]
-        self.assertIn("unix id is 4321", script)
-        self.assertNotIn('process "Dobby Vpn"', script)
-        self.assertNotIn("window 1", script)
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--pid") + 1], "4321")
+        self.assertEqual(command[command.index("--name") + 1], "Connect")
+        self.assertNotIn("osascript", command)
+
+    def test_macos_window_probe_uses_the_same_exact_pid_helper(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout='{"ok":true,"stage":"window","bounds":[1,2,461,522]}\n',
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+            self.assertEqual(smoke._macos_window_rect(4321, 1), (1, 2, 461, 522))
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--pid") + 1], "4321")
+        self.assertIn("--window", command)
+
+    def test_macos_has_element_only_treats_explicit_not_found_as_absent(self) -> None:
+        with patch.object(
+            smoke,
+            "_macos_accessibility_rect",
+            side_effect=smoke.NativeUIElementNotFound("not found"),
+        ):
+            self.assertFalse(smoke._macos_has_element(4321, "Connect"))
+        with patch.object(
+            smoke,
+            "_macos_accessibility_rect",
+            side_effect=smoke.NativeUISmokeError("AX timeout"),
+        ):
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "AX timeout"):
+                smoke._macos_has_element(4321, "Connect")
 
     def test_macos_keystroke_is_bound_to_pid(self) -> None:
         result = subprocess.CompletedProcess(["osascript"], 0, stdout="", stderr="")
@@ -244,20 +274,47 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke.NativeUISmokeError, "has exited"):
                 controller._macos_pid_or_error()
 
-    def test_macos_direct_binary_cleanup_uses_exact_path_before_launch(self) -> None:
-        binary = smoke.Path("/tmp/Dobby UI/Dobby Vpn")
-        process = Mock(pid=4321, poll=Mock(return_value=None))
+    def test_macos_bundle_launch_uses_exact_path_and_allowlisted_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            bundle = smoke.Path(temporary) / "Dobby VPN.app"
+            executable = bundle / "Contents" / "MacOS" / "Dobby Vpn"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"candidate")
+            with (bundle / "Contents" / "Info.plist").open("wb") as stream:
+                plistlib.dump({"CFBundleExecutable": "Dobby Vpn"}, stream)
+            process = Mock(pid=4321, poll=Mock(return_value=None))
+            controller = smoke.NativeUIController(
+                "macos", bundle, smoke.Path("profile"), 1
+            )
+            with (
+                patch.object(smoke, "_terminate_existing_macos_instances") as terminate,
+                patch.object(smoke.subprocess, "Popen", return_value=process) as popen,
+                patch.object(controller, "_wait"),
+                patch.object(controller, "_macos_pid_or_error", return_value=4321),
+                patch.dict(smoke.os.environ, {
+                    "HOME": "/tmp/ui-home",
+                    "DOBBYVPN_CONTROL_SOCKET": "/tmp/control.sock",
+                    "DOBBYVPN_NATIVE_UI_LOG_DIR": "/tmp/ui-logs",
+                }, clear=False),
+            ):
+                controller._launch_macos()
+            terminate.assert_called_once_with(1, str(executable.resolve()))
+            command = popen.call_args.args[0]
+            self.assertIn("--env", command)
+            self.assertIn("HOME=/tmp/ui-home", command)
+            self.assertIn("DOBBYVPN_CONTROL_SOCKET=/tmp/control.sock", command)
+            self.assertIn("--stdout", command)
+            self.assertIn("/tmp/ui-logs/macos-app.stdout.log", command)
+            self.assertIn("--stderr", command)
+            self.assertIn("/tmp/ui-logs/macos-app.stderr.log", command)
+            self.assertEqual(command[-1], str(bundle))
+
+    def test_macos_raw_binary_is_rejected_before_launch(self) -> None:
         controller = smoke.NativeUIController(
-            "macos", binary, smoke.Path("profile"), 1
+            "macos", smoke.Path("/tmp/Dobby Vpn"), smoke.Path("profile"), 1
         )
-        with (
-            patch.object(smoke, "_terminate_existing_macos_instances") as terminate,
-            patch.object(smoke.subprocess, "Popen", return_value=process),
-            patch.object(controller, "_wait"),
-            patch.object(controller, "_macos_pid_or_error", return_value=4321),
-        ):
+        with self.assertRaisesRegex(smoke.NativeUISmokeError, "product-shaped .app"):
             controller._launch_macos()
-        terminate.assert_called_once_with(1, str(binary.resolve()))
 
     def test_macos_launched_child_cleanup_uses_captured_identity(self) -> None:
         identity = smoke._MacOSProcessIdentity(

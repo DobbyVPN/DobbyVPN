@@ -122,6 +122,36 @@ func TestApplicationDefersNativeDiagnosticResolutionUntilDriverStarted(t *testin
 	}
 }
 
+func TestApplicationDefersDesktopStartUntilDriverStarted(t *testing.T) {
+	base := test.NewApp()
+	runtime := &startupLifecycleApp{
+		App:        base,
+		lifecycle:  &startupLifecycle{},
+		runEntered: make(chan struct{}),
+	}
+	client := &fakeClient{}
+	application := NewApplication(runtime, client)
+	t.Cleanup(application.Close)
+	startedBeforeLifecycle := make(chan bool, 1)
+	runtime.beforeStart = func() {
+		application.Connection.mu.Lock()
+		started := application.Connection.started
+		application.Connection.mu.Unlock()
+		startedBeforeLifecycle <- started
+	}
+
+	application.Run()
+	if started := <-startedBeforeLifecycle; started {
+		t.Fatal("desktop session watcher started before the Fyne driver lifecycle")
+	}
+	application.Connection.mu.Lock()
+	startedAfterLifecycle := application.Connection.started
+	application.Connection.mu.Unlock()
+	if !startedAfterLifecycle {
+		t.Fatal("desktop session watcher did not start from the driver lifecycle")
+	}
+}
+
 func (r *reconnectClient) Configure(context.Context, []byte, uint64) (ConfigureResult, error) {
 	return ConfigureResult{}, nil
 }

@@ -500,6 +500,26 @@ class LocalVMTests(unittest.TestCase):
         self.assertLess(inner, task_timeout)
         self.assertEqual(inner, local_vm._native_ui_driver_timeout(task_timeout))
 
+    def test_macos_native_command_uses_staged_bundle_path(self) -> None:
+        root, descriptor = self._run_directory()
+        smoke = root / "source" / ".github" / "scripts"
+        smoke.mkdir(parents=True)
+        (smoke / "native_ui_smoke.py").write_text("# candidate\n", encoding="utf-8")
+        native_module = root / "source" / "torturer" / "torturer_checks" / "hosted"
+        native_module.mkdir(parents=True)
+        (native_module / "native_ui.py").write_text("# candidate\n", encoding="utf-8")
+        ui = root / "source" / "Dobby Vpn"
+        ui.write_text("candidate", encoding="utf-8")
+        bundle = root / "native-ui" / "Dobby VPN.app"
+        descriptor.update({"cli": str(root / "source" / "dobby-cli"), "ui": str(bundle)})
+        runtime = {
+            "pid": 42,
+            "binary": str(root / "source" / "macos_grpcvpnserver"),
+            "socket": "/var/run/dobbyvpn/control.sock",
+        }
+        command = local_vm._native_ui_command(root, descriptor, runtime, "macos", 120)
+        self.assertEqual(command[command.index("--ui") + 1], str(bundle))
+
     def test_release_manifest_rejects_hash_mismatch_before_install(self) -> None:
         root, _ = self._run_directory()
         (root / "source-identity.json").write_text(json.dumps({

@@ -20,6 +20,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import signal
 import shutil
@@ -32,12 +33,17 @@ class NativeUISmokeError(RuntimeError):
     pass
 
 
+class NativeUIElementNotFound(NativeUISmokeError):
+    """The bounded AX walk completed but did not contain the requested name."""
+
+
 class NativeUIWaitTimeout(NativeUISmokeError):
     """A requested UI state was not observed within its bounded wait."""
 
 
 _FILETIME_TO_DATETIME_TICKS = 504911232000000000
 _MACOS_UI_PROCESS_NAME = "Dobby Vpn"
+_MACOS_AX_HELPER = Path(__file__).with_name("macos_ax.py")
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
     if (visible of process "Finder") is false then error "Finder is not visible"
@@ -493,6 +499,73 @@ def _windows_paste(profile: Path) -> Callable[[], None]:
     return restore
 
 
+def _macos_ax_request(
+    process_pid: int,
+    timeout: float,
+    *,
+    name: str | None = None,
+    prefix: bool = False,
+    window: bool = False,
+) -> tuple[int, int, int, int]:
+    """Run one bounded public AXUIElement lookup in a killable child process."""
+
+    if process_pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    if window == (name is not None):
+        raise NativeUISmokeError("macOS accessibility lookup requires a window or element name")
+    if not _MACOS_AX_HELPER.is_file():
+        raise NativeUISmokeError("macOS native AX helper is missing")
+    command = [
+        sys.executable,
+        str(_MACOS_AX_HELPER),
+        "--pid", str(process_pid),
+        "--deadline", str(max(0.1, min(timeout, 4.0))),
+    ]
+    if window:
+        command.append("--window")
+    else:
+        command.extend(("--name", str(name)))
+        if prefix:
+            command.append("--prefix")
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=max(0.1, min(timeout, 6.0)),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        detail = "window" if window else repr(name)
+        raise NativeUISmokeError(f"macOS native AX lookup failed for {detail}: {error}") from error
+    try:
+        payload = json.loads(completed.stdout.strip() or "{}")
+    except (TypeError, ValueError) as error:
+        raise NativeUISmokeError(
+            f"macOS native AX helper returned invalid JSON for {name or 'window'}"
+        ) from error
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
+        detail = payload.get("error", "lookup failed") if isinstance(payload, dict) else "lookup failed"
+        if stage == "control":
+            raise NativeUIElementNotFound(f"macOS AX {stage}: {detail}")
+        raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
+    raw_bounds = payload.get("bounds")
+    if not isinstance(raw_bounds, list) or len(raw_bounds) != 4:
+        raise NativeUISmokeError(f"macOS AX returned invalid bounds for {name or 'window'}")
+    try:
+        values = tuple(int(value) for value in raw_bounds)
+    except (TypeError, ValueError) as error:
+        raise NativeUISmokeError(f"macOS AX returned invalid bounds for {name or 'window'}") from error
+    if values[2] <= values[0] or values[3] <= values[1]:
+        raise NativeUISmokeError(f"macOS AX returned invalid bounds for {name or 'window'}")
+    return values  # type: ignore[return-value]
+
+
+def _macos_window_rect(process_pid: int, timeout: float) -> tuple[int, int, int, int]:
+    return _macos_ax_request(process_pid, timeout, window=True)
+
+
 def _macos_accessibility_rect(
     process_pid: int,
     name: str,
@@ -500,35 +573,9 @@ def _macos_accessibility_rect(
     *,
     prefix: bool = False,
 ) -> tuple[int, int, int, int]:
-    """Get a Fyne element from the exact launched System Events process."""
+    """Get a Fyne element through a bounded exact-PID AXUIElement walk."""
 
-    if process_pid <= 0:
-        raise NativeUISmokeError("macOS native UI process identity is unavailable")
-    apple_name = '"' + name.replace('"', '\\"') + '"'
-    match = f'name begins with {apple_name}' if prefix else f'name is {apple_name}'
-    script = f'''tell application "System Events"
-    tell (first process whose unix id is {process_pid})
-        set matches to every UI element of entire contents whose {match}
-        if (count of matches) is 0 then error "accessibility element not found: {name}"
-        set target to item 1 of matches
-        set p to position of target
-        set s to size of target
-        return ((item 1 of p) as integer) & "," & ((item 2 of p) as integer) & "," & ((item 1 of p) + (item 1 of s) as integer) & "," & ((item 2 of p) + (item 2 of s) as integer)
-    end tell
-    end tell'''
-    try:
-        completed = subprocess.run(["osascript", "-e", script], check=False, text=True, capture_output=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError(f"macOS accessibility lookup failed for {name!r}: {error}") from error
-    if completed.returncode != 0:
-        raise NativeUISmokeError(completed.stderr.strip() or f"macOS accessibility element {name!r} was not found")
-    try:
-        values = tuple(int(value) for value in completed.stdout.strip().split(","))
-    except ValueError as error:
-        raise NativeUISmokeError(f"invalid macOS accessibility bounds for {name!r}") from error
-    if len(values) != 4 or values[2] <= values[0] or values[3] <= values[1]:
-        raise NativeUISmokeError(f"invalid macOS accessibility bounds for {name!r}")
-    return values  # type: ignore[return-value]
+    return _macos_ax_request(process_pid, timeout, name=name, prefix=prefix)
 
 
 def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
@@ -575,7 +622,7 @@ def _macos_has_element(process_pid: int, name: str, *, prefix: bool = False) -> 
     try:
         _macos_accessibility_rect(process_pid, name, 10, prefix=prefix)
         return True
-    except NativeUISmokeError:
+    except NativeUIElementNotFound:
         return False
 
 
@@ -999,25 +1046,38 @@ class NativeUIController:
 
     def _launch_macos(self) -> None:
         bundle = self.binary
-        if self.binary.parent.name == "MacOS" and self.binary.parent.parent.name == "Contents":
-            bundle = self.binary.parent.parent.parent
-        if bundle.suffix == ".app":
-            self.macos_expected_executable = str(
-                (bundle / "Contents" / "MacOS" / _MACOS_UI_PROCESS_NAME).resolve()
+        if bundle.suffix != ".app":
+            raise NativeUISmokeError(
+                "macOS native UI requires a product-shaped .app bundle"
             )
-        else:
-            self.macos_expected_executable = str(self.binary.resolve())
+        executable = bundle / "Contents" / "MacOS" / _MACOS_UI_PROCESS_NAME
+        info = bundle / "Contents" / "Info.plist"
+        if not executable.is_file() or not info.is_file():
+            raise NativeUISmokeError("macOS native UI bundle is incomplete")
+        try:
+            with info.open("rb") as stream:
+                metadata = plistlib.load(stream)
+        except (OSError, plistlib.InvalidFileException, ValueError) as error:
+            raise NativeUISmokeError("macOS native UI bundle metadata is invalid") from error
+        if not isinstance(metadata, dict) or metadata.get("CFBundleExecutable") != _MACOS_UI_PROCESS_NAME:
+            raise NativeUISmokeError("macOS native UI bundle executable metadata is invalid")
+        self.macos_expected_executable = str(executable.resolve())
         if self.macos_expected_executable is None:
             raise NativeUISmokeError("macOS native UI executable identity is unavailable")
         _terminate_existing_macos_instances(self.timeout, self.macos_expected_executable)
-        if bundle.suffix == ".app":
-            launch = ["open", "-W", "-n", str(bundle)]
-        else:
-            launch = [str(self.binary)]
+        launch = ["open", "-W", "-n"]
+        for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET"):
+            value = os.environ.get(name)
+            if value:
+                launch.extend(("--env", f"{name}={value}"))
+        output_root = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
+        if output_root:
+            root = Path(output_root)
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            launch.extend(("--stdout", str(root / "macos-app.stdout.log")))
+            launch.extend(("--stderr", str(root / "macos-app.stderr.log")))
+        launch.append(str(bundle))
         self.process = subprocess.Popen(launch)
-
-        if bundle.suffix != ".app" and self.process.pid:
-            self.macos_pid = self.process.pid
 
         def visible() -> bool:
             if self.process is not None and self.process.poll() is not None:
@@ -1049,6 +1109,10 @@ class NativeUIController:
             if self.macos_process_identity is None:
                 return False
             process_pid = self._macos_pid_or_error()
+            # Keep window existence and control discovery as separate bounded
+            # stages.  The helper uses CoreGraphics only for diagnostics and
+            # never turns screen coordinates into an interaction fallback.
+            _macos_window_rect(process_pid, min(2.0, self.timeout))
             return _macos_has_element(process_pid, "Connection configuration")
 
         self._wait(
@@ -1318,6 +1382,14 @@ def _controller_for(platform: str, binary: Path, profile: Path, timeout: float) 
     return NativeUIController(platform, binary, profile, timeout)
 
 
+def _ui_path_is_launchable(platform: str, path: Path) -> bool:
+    if path.is_file():
+        return True
+    if platform != "macos" or path.suffix != ".app":
+        return False
+    return (path / "Contents" / "MacOS" / _MACOS_UI_PROCESS_NAME).is_file()
+
+
 def serve_native_ui(
     platform: str,
     binary: Path,
@@ -1435,8 +1507,8 @@ def main(argv: list[str] | None = None) -> int:
         help="keep the real window open and serve native actions over JSON lines",
     )
     args = parser.parse_args(argv)
-    if args.timeout <= 0 or not args.ui.is_file() or not args.profile.is_file():
-        raise SystemExit("native UI qualification requires regular UI and profile files")
+    if args.timeout <= 0 or not _ui_path_is_launchable(args.platform, args.ui) or not args.profile.is_file():
+        raise SystemExit("native UI qualification requires a launchable UI and profile file")
     if args.platform == "windows":
         identity = _windows_interactive_identity()
         if args.serve:

@@ -1206,6 +1206,19 @@ def run(args: argparse.Namespace) -> int:
             runtime_environment = dict(runtime_environment) if isinstance(runtime_environment, dict) else {}
             runtime_environment["HOME"] = _prepare_desktop_ui_home(run_dir)
             runtime["environment"] = runtime_environment
+            native_descriptor = descriptor
+            if args.platform == "macos":
+                # Release candidates already live inside the installed app
+                # bundle; local build candidates are naked binaries.  Stage
+                # the latter in the same disposable bundle shape so the
+                # native journey exercises the real AppKit/LaunchServices
+                # launch boundary without modifying the product candidate.
+                from .local_vm_macos import stage_native_ui_bundle
+
+                native_descriptor = {
+                    **descriptor,
+                    "ui": str(stage_native_ui_bundle(run_dir, descriptor["ui"])),
+                }
             state["runtime"] = runtime
             _write_json(run_dir / "platform.json", state)
             native_environment = _native_ui_environment(args.platform, runtime)
@@ -1215,7 +1228,7 @@ def run(args: argparse.Namespace) -> int:
             try:
                 native_result = _run_native_ui(
                     _native_ui_command(
-                        run_dir, descriptor, runtime, args.platform, native_task_timeout,
+                        run_dir, native_descriptor, runtime, args.platform, native_task_timeout,
                     ),
                     platform=args.platform,
                     run_dir=run_dir,
