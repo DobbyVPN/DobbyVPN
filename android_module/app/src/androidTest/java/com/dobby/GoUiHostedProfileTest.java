@@ -1589,20 +1589,20 @@ public final class GoUiHostedProfileTest {
             JSONObject response = new JSONObject().put("phase", phase)
                     .put("direct", networkRequest(
                             phasePhysical, identity.toString(), directRequired))
-                    // UiAutomation launches the positive request as Android's
-                    // ordinary shell UID. Unlike the VPN-owning application,
-                    // that UID follows the default VPN route. The host proves
-                    // the route with tun0 counters and proves the explicitly
-                    // physical request is blocked by the eth0 firewall rule.
-                    .put("vpn", routingVpnRequest(identity.toString()));
+                    // Run the positive oracle as an ordinary unbound request
+                    // from this instrumentation process. A shell-UID probe
+                    // is not a valid oracle for the VPN-owning app's default
+                    // route. The host separately proves tun0 traffic and
+                    // physical-interface blocking.
+                    .put("vpn", routingDefaultRequest(identity.toString()));
             writeJson(new File(control.getPath() + ".ready"), response);
         }
     }
 
-    private JSONObject routingVpnRequest(String endpoint) throws Exception {
+    private JSONObject routingDefaultRequest(String endpoint) throws Exception {
         JSONObject latest = null;
         for (int attempt = 0; attempt < ROUTING_REQUEST_ATTEMPTS; attempt++) {
-            latest = shellNetworkRequest("get", endpoint, 1);
+            latest = networkRequest(null, endpoint, false);
             if (!latest.has("error_code")) return latest;
             if (attempt + 1 < ROUTING_REQUEST_ATTEMPTS) Thread.sleep(250L);
         }
@@ -1708,13 +1708,16 @@ public final class GoUiHostedProfileTest {
     }
 
     private JSONObject networkRequest(Network network, String endpoint, boolean required) throws Exception {
-        if (network == null) {
-            return shellNetworkRequest("get", endpoint, 1);
-        }
         HttpURLConnection connection = null;
         URL url = new URL(endpoint);
         try {
-            connection = (HttpURLConnection) network.openConnection(url);
+            // A null network deliberately means an ordinary request from the
+            // instrumentation process. Android applies the app's default VPN
+            // route to this socket; it must not be replaced by a shell-UID
+            // command or by a request bound to the physical network.
+            connection = (HttpURLConnection) (network == null
+                    ? url.openConnection()
+                    : network.openConnection(url));
             connection.setConnectTimeout(8_000);
             connection.setReadTimeout(8_000);
             // Keep the Android probe equivalent to the previous hosted

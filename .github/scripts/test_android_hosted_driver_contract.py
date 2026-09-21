@@ -644,7 +644,7 @@ def test_hosted_driver_keeps_network_probe_identity_without_failure_details() ->
         assert field not in source[failure:failure_end]
 
 
-def test_hosted_driver_keeps_direct_blocked_and_vpn_required_requests() -> None:
+def test_hosted_driver_keeps_direct_blocked_and_default_vpn_requests() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (
         root
@@ -661,17 +661,32 @@ def test_hosted_driver_keeps_direct_blocked_and_vpn_required_requests() -> None:
     direct_network = source.index(
         "phasePhysical, identity.toString(), directRequired", direct
     )
-    vpn = source.index('"vpn", routingVpnRequest(', direct_network)
+    vpn = source.index('"vpn", routingDefaultRequest(', direct_network)
     vpn_network = source.index("identity.toString()", vpn)
     helper = source.index("private JSONObject networkRequest(", vpn_network)
     working_network = source.index("network.openConnection(url)", helper)
+    ordinary = source.index("url.openConnection()", helper)
 
     gradle = (root / "android_module/app/build.gradle.kts").read_text(encoding="utf-8")
     assert "okhttp" not in gradle.lower()
     assert "pinnedNetworkRequest" not in source
     assert "OkHttp" not in source
     assert resolved < announced < direct < direct_network < vpn < vpn_network
-    assert helper < working_network
+    assert helper < ordinary < working_network
+
+
+def test_hosted_driver_positive_routing_probe_is_not_shell_uid_bound() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (
+        root
+        / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+    ).read_text(encoding="utf-8")
+
+    routing = source.index("private JSONObject routingDefaultRequest(")
+    request = source.index("latest = networkRequest(null, endpoint, false);", routing)
+    next_method = source.index("private void runNetworkTransition(", request)
+    assert routing < request < next_method
+    assert "shellNetworkRequest(" not in source[routing:next_method]
 
 
 def test_hosted_driver_uses_shell_uid_for_stability_and_throughput() -> None:
@@ -737,7 +752,7 @@ def test_hosted_driver_bounds_routing_request_startup_retries() -> None:
     ).read_text(encoding="utf-8")
 
     assert "private static final int ROUTING_REQUEST_ATTEMPTS = 3;" in source
-    assert '.put("vpn", routingVpnRequest(identity.toString()))' in source
+    assert '.put("vpn", routingDefaultRequest(identity.toString()))' in source
     assert "attempt < ROUTING_REQUEST_ATTEMPTS" in source
     assert 'if (!latest.has("error_code")) return latest;' in source
 
