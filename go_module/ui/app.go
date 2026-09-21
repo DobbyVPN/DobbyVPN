@@ -65,7 +65,16 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 	settings := NewSettingsView()
 	window := runtime.NewWindow("Dobby VPN")
 	window.Resize(fyne.NewSize(460, 520))
-	window.SetContent(view.Content())
+	connectionContent := view.Content()
+	window.SetContent(connectionContent)
+	view.refreshNativeSemantics = func() {
+		// Settings replaces the window content. Never pull the user back to the
+		// connection screen merely because a service snapshot arrives while
+		// Settings is open.
+		if window.Content() == connectionContent {
+			window.SetContent(connectionContent)
+		}
+	}
 	window.SetCloseIntercept(func() {
 		view.Stop()
 		window.Close()
@@ -171,7 +180,16 @@ type ConnectionView struct {
 	localError        string
 	localErrorAt      uint64
 	presentationMu    sync.Mutex
-	diagnosticIO      sync.Mutex
+	// Fyne 2.8.1 republishes native accessibility labels when a window's
+	// content is attached, but ordinary widget SetText calls only refresh the
+	// renderer. The desktop application supplies this callback so dynamic
+	// status/button labels remain visible to the real-window AX driver without
+	// changing Fyne or switching away from the shared view.
+	refreshNativeSemantics func()
+	lastSemanticStatus     string
+	lastSemanticButton     string
+	lastSemanticDetails    string
+	diagnosticIO           sync.Mutex
 }
 
 func NewConnectionView(client SessionClient, stores ...SourceStore) *ConnectionView {
@@ -895,7 +913,6 @@ func (v *ConnectionView) showError(err error) {
 func (v *ConnectionView) applyPresentation() {
 	onUI(func() {
 		v.presentationMu.Lock()
-		defer v.presentationMu.Unlock()
 		v.mu.Lock()
 		status := v.renderedStatus
 		button := v.renderedButton
@@ -904,6 +921,8 @@ func (v *ConnectionView) applyPresentation() {
 		logStatus := v.renderedLogStatus
 		busy := v.busy
 		v.mu.Unlock()
+		semanticChanged := status != v.lastSemanticStatus ||
+			button != v.lastSemanticButton || details != v.lastSemanticDetails
 		v.Status.SetText(status)
 		v.Connect.SetText(button)
 		if busy {
@@ -914,6 +933,14 @@ func (v *ConnectionView) applyPresentation() {
 		v.Details.SetText(details)
 		v.Logs.SetText(logs)
 		v.LogStatus.SetText(logStatus)
+		v.lastSemanticStatus = status
+		v.lastSemanticButton = button
+		v.lastSemanticDetails = details
+		refresh := v.refreshNativeSemantics
+		v.presentationMu.Unlock()
+		if semanticChanged && refresh != nil {
+			refresh()
+		}
 	})
 }
 

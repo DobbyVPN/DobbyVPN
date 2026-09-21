@@ -421,6 +421,52 @@ func TestConnectionViewRendersAuthoritativeSnapshot(t *testing.T) {
 	}
 }
 
+func TestConnectionViewRefreshesNativeSemanticsAfterDynamicPresentation(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	view := NewConnectionView(nil)
+	refreshes := 0
+	var observedStatus, observedButton string
+	view.refreshNativeSemantics = func() {
+		refreshes++
+		observedStatus = view.Status.Text
+		observedButton = view.Connect.Text
+	}
+
+	view.render(Snapshot{State: StateIdle})
+	if refreshes != 1 {
+		t.Fatalf("initial semantic presentation refreshes = %d, want 1", refreshes)
+	}
+	if observedStatus != "Disconnected" || observedButton != "Connect" {
+		t.Fatalf("initial semantic labels = (%q, %q)", observedStatus, observedButton)
+	}
+	view.render(Snapshot{State: StateIdle})
+	if refreshes != 1 {
+		t.Fatalf("unchanged semantic presentation refreshes = %d, want 1", refreshes)
+	}
+	view.render(Snapshot{State: StateConnected, Generation: 1})
+	if refreshes != 2 {
+		t.Fatalf("changed semantic presentation refreshes = %d, want 2", refreshes)
+	}
+	if observedStatus != "Connected" || observedButton != "Disconnect" {
+		t.Fatalf("changed semantic labels = (%q, %q)", observedStatus, observedButton)
+	}
+}
+
+func TestApplicationDoesNotReattachConnectionContentOverSettings(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	application := NewApplication(runtime, &fakeClient{})
+	t.Cleanup(application.Close)
+	settingsContent := application.Settings.Content()
+	application.Window.SetContent(settingsContent)
+
+	application.Connection.render(Snapshot{State: StateConnected, Generation: 1})
+	if got := application.Window.Content(); got != settingsContent {
+		t.Fatal("a service presentation switched the visible Settings screen back to Connection")
+	}
+}
+
 func TestConnectionViewPrimeRefreshesSessionRevision(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()

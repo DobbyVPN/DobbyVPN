@@ -42,6 +42,13 @@ summary while retaining the exact source privately until Connect submits it.
 One-line HTTPS URLs and ordinary edits retain normal Entry behavior; the Logs
 editor is not staged.
 
+On desktop, changing the rendered status, action label, or connection details
+also re-attaches the current connection content through the public Fyne window
+API. Fyne 2.8.1 refreshes native accessibility metadata when content is
+attached, while widget text refreshes update only pixels; the re-attachment
+keeps real-window accessibility assertions aligned with the visible UI without
+forking or changing Fyne. It is skipped while Settings is displayed.
+
 ## Connect and reattach
 
 At startup, the UI attaches with `Snapshot` and starts `Watch`. `Watch` sends
