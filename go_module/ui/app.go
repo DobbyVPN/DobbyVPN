@@ -70,10 +70,12 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 	connectionContent := view.Content()
 	window.SetContent(connectionContent)
 	if nativeDesktopStatusTitleEnabled(goruntime.GOOS) {
-		view.setNativeStatusTitle = func(status string) {
-			window.SetTitle(nativeWindowTitle(status))
-		}
-		view.setNativeStatusTitle(statusDisconnected)
+		// The normal title is available before Show; the native Darwin
+		// publication is intentionally deferred until Application.run has a
+		// live NSWindow context.
+		window.SetTitle(nativeWindowTitle(statusDisconnected))
+		publisher := newNativeWindowTitlePublisher(window)
+		view.setNativeStatusTitle = publisher.Publish
 	}
 	window.SetCloseIntercept(func() {
 		view.Stop()
@@ -132,6 +134,11 @@ func (a *Application) run(resolve func() DiagnosticStore) {
 		}
 	})
 	a.Window.Show()
+	// Fyne creates the native window synchronously from Show. Publish the
+	// current status once now that NativeWindow.RunNative can address the real
+	// platform window; subsequent semantic changes are de-duplicated by the
+	// publisher.
+	a.Connection.applyPresentationOnUI()
 	markUIAttached()
 	a.App.Run()
 }

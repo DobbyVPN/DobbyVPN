@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -538,6 +540,42 @@ func TestApplicationPublishesNativeStatusThroughRealWindowTitle(t *testing.T) {
 	application.Connection.render(Snapshot{State: StateConnected, Generation: 1})
 	if got := application.Window.Title(); got != nativeWindowTitle("Connected") {
 		t.Fatalf("native window title = %q, want %q", got, nativeWindowTitle("Connected"))
+	}
+}
+
+func TestNativeWindowTitlePublisherPublishesEachSemanticStatusOnce(t *testing.T) {
+	var titles []string
+	publisher := &nativeWindowTitlePublisher{
+		publish: func(_ fyne.Window, title string) error {
+			titles = append(titles, title)
+			return nil
+		},
+	}
+
+	publisher.Publish("Disconnected")
+	publisher.Publish("Disconnected")
+	publisher.Publish("Connecting")
+	publisher.Publish("Connecting")
+
+	want := []string{"Dobby VPN — Disconnected", "Dobby VPN — Connecting"}
+	if !reflect.DeepEqual(titles, want) {
+		t.Fatalf("published titles = %q, want %q", titles, want)
+	}
+}
+
+func TestNativeWindowTitlePublisherDoesNotRetryAFailedSemanticStatus(t *testing.T) {
+	attempts := 0
+	publisher := &nativeWindowTitlePublisher{
+		publish: func(_ fyne.Window, _ string) error {
+			attempts++
+			return errors.New("native context unavailable")
+		},
+	}
+
+	publisher.Publish("Disconnected")
+	publisher.Publish("Disconnected")
+	if attempts != 1 {
+		t.Fatalf("failed title publication attempts = %d, want one", attempts)
 	}
 }
 
