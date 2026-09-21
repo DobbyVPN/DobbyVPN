@@ -35,9 +35,12 @@ The command writes an unbundled executable to `go_module/dobby-vpn-ui` (or
 qualification or direct injection into a test VM; Release separately tests
 the packaged installer/archive.
 
-macOS native-window qualification requires a graphics-capable host with an
-accelerated NSGL/OpenGL context; see [TESTING.md](../TESTING.md) for the
-qualification contract.
+macOS native-window qualification requires a host that can create an NSGL
+window. The desktop entrypoint first requests the normal accelerated pixel
+format and retries through a product-owned AppKit bridge without only the
+accelerated flag when the host offers Apple's software renderer. It does not
+require Metal or a larger VM framebuffer; see [TESTING.md](../TESTING.md) for
+the qualification contract.
 
 Build the headless UI companion on the native target host for service-backed
 UI qualification:

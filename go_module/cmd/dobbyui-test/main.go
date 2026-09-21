@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 
 	"go_module/desktop_exports/client"
@@ -58,8 +59,8 @@ func run() error {
 		}
 	}()
 
-	runtime := test.NewApp()
-	defer runtime.Quit()
+	runtime := newSerializedTestApp()
+	defer runtime.close()
 	serviceClient := ui.NewGRPCClient(grpcproto.NewVpnClient(connection))
 	application := ui.NewApplication(runtime, serviceClient)
 	application.Start()
@@ -69,6 +70,7 @@ func run() error {
 		return fmt.Errorf("prime service session: %w", err)
 	}
 	cancel()
+	fyne.DoAndWait(func() {})
 
 	return serve(os.Stdin, os.Stdout, application)
 }
@@ -80,7 +82,7 @@ func serve(input io.Reader, output io.Writer, application *ui.Application) error
 		var req request
 		if err := decoder.Decode(&req); err != nil {
 			if err == io.EOF {
-				application.Close()
+				fyne.DoAndWait(application.Close)
 				return nil
 			}
 			return err
@@ -101,19 +103,19 @@ func handle(request request, application *ui.Application) response {
 		return snapshot(application)
 	case "connect":
 		setInput(application, request.Config)
-		test.Tap(application.Connection.Connect)
+		fyne.DoAndWait(func() { test.Tap(application.Connection.Connect) })
 		if err := waitFor(application, "Connected", timeout(request.Timeout)); err != nil {
 			return errorSnapshot(application, err)
 		}
 		return snapshot(application)
 	case "configure":
 		setInput(application, request.Config)
-		if err := application.Connection.Configure(context.Background(), []byte(application.Connection.Input.Text)); err != nil {
+		if err := application.Connection.Configure(context.Background(), []byte(request.Config)); err != nil {
 			return errorSnapshot(application, err)
 		}
 		return snapshot(application)
 	case "disconnect":
-		test.Tap(application.Connection.Connect)
+		fyne.DoAndWait(func() { test.Tap(application.Connection.Connect) })
 		if err := waitForAny(application, []string{"Disconnected", "Failed", "Error"}, timeout(request.Timeout)); err != nil {
 			return errorSnapshot(application, err)
 		}
@@ -127,7 +129,7 @@ func handle(request request, application *ui.Application) response {
 		}
 		return snapshot(application)
 	case "close":
-		application.Close()
+		fyne.DoAndWait(application.Close)
 		return snapshot(application)
 	default:
 		return response{Error: fmt.Sprintf("unsupported operation %q", request.Op)}
@@ -135,14 +137,18 @@ func handle(request request, application *ui.Application) response {
 }
 
 func setInput(application *ui.Application, config string) {
-	if config == "" || application.Connection.Input.Text == config {
+	if config == "" {
 		return
 	}
 	// Real provider profiles can be hundreds of kilobytes. Fyne's test
 	// driver's rune-by-rune typing is intentionally avoided; SetText updates
 	// the production entry atomically and the subsequent operation still uses
 	// the real widget callback where applicable.
-	application.Connection.Input.SetText(config)
+	fyne.DoAndWait(func() {
+		if application.Connection.Input.Text != config {
+			application.Connection.Input.SetText(config)
+		}
+	})
 }
 
 func snapshot(application *ui.Application) response {

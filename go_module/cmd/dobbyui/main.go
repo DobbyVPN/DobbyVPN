@@ -28,6 +28,10 @@ func main() {
 }
 
 func run() error {
+	if err := installNSGLSoftwareFallback(); err != nil {
+		return fmt.Errorf("could not initialize macOS OpenGL compatibility: %w", err)
+	}
+
 	connection, err := desktopclient.Dial()
 	if err != nil {
 		return fmt.Errorf("could not connect to DobbyVPN service: %w", err)

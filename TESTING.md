@@ -146,9 +146,14 @@ console/Finder evidence, while conflicting or malformed values fail closed.
 remain owned by `root` while a user's Aqua session is active. Native controls
 are bound to the launched window/process identity, and disposable macOS runs
 terminate pre-existing `Dobby Vpn` instances before starting a new one.
-The macOS full lane must create and drive the real production window. A failure
-to create its graphics context is reported with complete process output; do not
-infer the cause from VM display inventory alone or convert it to a pass.
+The macOS full lane must create and drive the real production window. The
+desktop Go entrypoint keeps official GLFW unchanged and installs a process-local
+AppKit compatibility shim: it first requests the normal accelerated NSGL pixel
+format, then retries the same terminated attribute list without only the
+leading accelerated Boolean when the host exposes Apple's software renderer.
+This does not require Metal or a larger framebuffer. A failure to create its
+graphics context is still reported with complete process output; do not infer
+the cause from VM display inventory alone or convert it to a pass.
 GUI automation must drive visible controls and may not substitute CLI commands.
 
 The Go job emits one repository-wide coverage profile with
@@ -284,8 +289,11 @@ GitHub-hosted runner; their shutdown is not separately verified.
 
 Local VM tests take one product worktree and a fresh owner profile. They build
 for iteration, not for release reproducibility, and clean up after every
-result. Android mini drives the rendered emulator UI, fresh-profile entry, VPN
-consent, Connect/Disconnect/reconnect, and the semantic traffic/routing
+result. Desktop UI phases receive a private run-local HOME so stale user
+diagnostic history cannot affect a later headless render or native reopen; the
+directory is removed with the disposable run. Android mini drives the rendered
+emulator UI, fresh-profile entry, VPN consent, Connect/Disconnect/reconnect,
+and the semantic traffic/routing
 scenarios. Its rendered lane stages the first complete non-TrustTunnel
 `Outline`/`Xray` block without reserializing it; the Android binding lane still
 receives the untouched full bundle and exercises every profile. Windows/macOS
@@ -300,11 +308,12 @@ failure. Repository-owned wrappers do not truncate or suppress output, replace
 it with byte counts or status codes, or select only supposedly useful lines.
 Credentials and private profile values are redacted without removing
 surrounding diagnostic content. Original and cleanup exceptions are both
-reported. No separate log or evidence archive is created; local retention
-keeps one completed run total. Trusted Actions workflows keep one completed run
-total; pull-request backlog is temporary and is removed by the next trusted
-workflow. A Release is publishable only while it remains the newest completed
-workflow run.
+reported. Complete redacted streams and collection status are retained under
+the current local run's private `streams/` directory while local retention
+keeps one completed run total; this is not a second evidence archive. Trusted
+Actions workflows keep one completed run total; pull-request backlog is
+temporary and is removed by the next trusted workflow. A Release is
+publishable only while it remains the newest completed workflow run.
 
 Release-only checks retain Android reproducibility and signing-certificate
 verification, and iOS signature, entitlement, provisioning, and version

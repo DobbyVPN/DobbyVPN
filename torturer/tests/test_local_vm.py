@@ -96,6 +96,14 @@ class LocalVMTests(unittest.TestCase):
             },
         )
 
+    def test_desktop_ui_home_is_private_and_run_local(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "run"
+            home = Path(local_vm._prepare_desktop_ui_home(run_dir))
+            self.assertEqual(home, run_dir / "ui-home")
+            self.assertTrue(home.is_dir())
+            self.assertEqual(home.stat().st_mode & 0o777, 0o700)
+
     def test_capability_service_executable_is_probed_with_sudo(self):
         with mock.patch.object(local_vm, "_pid_alive", return_value=True), mock.patch.object(local_vm.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "/tmp/service\n", "")) as probe:
             self.assertTrue(local_vm._pid_matches(42, "/tmp/service"))

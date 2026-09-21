@@ -91,9 +91,10 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Race-check lifecycle and routing
+      - name: Race-check headless UI, lifecycle and routing
         working-directory: go_module
         run: |
+          go test -tags=ci -race ./cmd/dobbyui-test
           go test -race ./routing/... ./sessionapi/... ./tunnel/...
 
   android:

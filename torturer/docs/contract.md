@@ -125,8 +125,9 @@ Credentials and private profile values are redacted at the transport boundary
 without deleting surrounding diagnostic text. Public service names and error
 context such as `api.ipify.org` are not removed merely because they occur near a
 redacted value. No separate log or evidence archive is created; the retained
-structured result is compact and local/GitHub retention is governed by the
-owner and workflow policies described by the testing documentation.
+structured result, complete redacted `streams/`, and collection status are the
+one local run governed by the owner and workflow retention policies described
+by the testing documentation. No older stream copy is retained elsewhere.
 
 Local candidates are disposable and cleaned up after every run. Rerun the
 same command to repeat a test; a failed cleanup is reported separately.
