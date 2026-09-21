@@ -47,9 +47,13 @@ type startupLifecycleApp struct {
 type startupTrackingWindow struct {
 	fyne.Window
 	events *[]string
+	beforeShow func()
 }
 
 func (w *startupTrackingWindow) Show() {
+	if w.beforeShow != nil {
+		w.beforeShow()
+	}
 	*w.events = append(*w.events, "show")
 	w.Window.Show()
 }
@@ -164,6 +168,32 @@ func TestApplicationDefersDesktopStartUntilDriverStarted(t *testing.T) {
 	application.Connection.mu.Unlock()
 	if !startedAfterLifecycle {
 		t.Fatal("desktop session watcher did not start from the driver lifecycle")
+	}
+}
+
+func TestApplicationRestoresSourceBeforeWindowAndDoesNotReapplyIt(t *testing.T) {
+	base := test.NewApp()
+	runtime := &startupLifecycleApp{
+		App:        base,
+		lifecycle:  &startupLifecycle{},
+		runEntered: make(chan struct{}),
+	}
+	store := &MemorySourceStore{}
+	if err := store.Save(context.Background(), []byte("https://saved.example/profile")); err != nil {
+		t.Fatal(err)
+	}
+	application := NewApplication(runtime, &fakeClient{}, store)
+	t.Cleanup(application.Close)
+	events := []string{}
+	window := &startupTrackingWindow{Window: application.Window, events: &events}
+	window.beforeShow = func() { application.Connection.Input.SetText("typed-before-window") }
+	application.Window = window
+	application.Run()
+	if got := application.Connection.Input.Text; got != "typed-before-window" {
+		t.Fatalf("source was reapplied after the window became interactive: %q", got)
+	}
+	if len(events) != 1 || events[0] != "show" {
+		t.Fatalf("window events = %v, want [show]", events)
 	}
 }
 

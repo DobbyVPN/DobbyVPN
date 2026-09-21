@@ -84,6 +84,12 @@ func (a *Application) RunWithDiagnosticStore(resolve func() DiagnosticStore) {
 }
 
 func (a *Application) run(resolve func() DiagnosticStore) {
+	// Restore the desktop source on the UI goroutine before the window is
+	// shown.  The service watcher still starts from OnStarted, but it must not
+	// be able to queue a persisted value after a native user has begun typing.
+	// Mobile stores are injected after the native surface exists and are nil at
+	// this point, so their lifecycle remains unchanged.
+	a.Connection.loadSourceBeforeWindow(context.Background())
 	// Keep Fyne's canonical ShowAndRun ordering for every native platform.  The
 	// window must be created before Run; GLFW's OnStarted callback runs before
 	// its event-loop select and is therefore not a post-surface boundary.  Only
@@ -685,14 +691,10 @@ func (v *ConnectionView) startConfigured(ctx context.Context, sequence uint64) {
 }
 
 func (v *ConnectionView) loadSource(ctx context.Context) {
-	v.mu.Lock()
-	if v.sourceLoaded || v.store == nil {
-		v.mu.Unlock()
+	store := v.claimSourceStore()
+	if store == nil {
 		return
 	}
-	v.sourceLoaded = true
-	store := v.store
-	v.mu.Unlock()
 	raw, err := store.Load(ctx)
 	if err != nil || len(raw) == 0 {
 		if err != nil {
@@ -702,6 +704,35 @@ func (v *ConnectionView) loadSource(ctx context.Context) {
 	}
 	text := string(raw)
 	onUI(func() { v.Input.SetText(text) })
+}
+
+// loadSourceBeforeWindow is used by desktop startup, where the UI goroutine
+// is the caller and the native window has not accepted input yet.  Applying
+// the value directly closes the startup overwrite race that exists when the
+// watcher queues SetText while AX has already exposed the Entry.
+func (v *ConnectionView) loadSourceBeforeWindow(ctx context.Context) {
+	store := v.claimSourceStore()
+	if store == nil {
+		return
+	}
+	raw, err := store.Load(ctx)
+	if err != nil {
+		v.showError(err)
+		return
+	}
+	if len(raw) > 0 {
+		v.Input.SetText(string(raw))
+	}
+}
+
+func (v *ConnectionView) claimSourceStore() SourceStore {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.sourceLoaded || v.store == nil {
+		return nil
+	}
+	v.sourceLoaded = true
+	return v.store
 }
 
 func (v *ConnectionView) disconnect(ctx context.Context, generation uint64) {

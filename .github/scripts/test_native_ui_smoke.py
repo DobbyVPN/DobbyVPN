@@ -220,6 +220,15 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertIn("unix id is 4321", script)
         self.assertIn('keystroke "v" using command down', script)
 
+    def test_macos_focus_next_sends_one_native_tab_to_pid(self) -> None:
+        result = subprocess.CompletedProcess(["osascript"], 0, stdout="", stderr="")
+        with patch.object(smoke, "_macos_focus_window"), \
+                patch.object(smoke.subprocess, "run", return_value=result) as run:
+            smoke._macos_focus_next(4321)
+        script = run.call_args.args[0][2]
+        self.assertIn("unix id is 4321", script)
+        self.assertIn("key code 48", script)
+
     def test_windows_accessibility_uses_strict_pointer_sized_hwnd_conversion(self) -> None:
         result = subprocess.CompletedProcess(
             ["powershell"], 0, stdout="10,20,110,220\n", stderr=""

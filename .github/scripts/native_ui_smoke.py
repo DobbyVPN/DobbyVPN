@@ -835,6 +835,32 @@ end tell'''
         raise NativeUISmokeError(completed.stderr.strip() or "macOS native keystroke failed")
 
 
+def _macos_focus_next(process_pid: int) -> None:
+    """Move focus once through the real Fyne canvas keyboard chain."""
+
+    if process_pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    _macos_focus_window(process_pid)
+    script = f'''tell application "System Events"
+    tell (first process whose unix id is {process_pid})
+        set frontmost to true
+        key code 48
+    end tell
+end tell'''
+    try:
+        completed = subprocess.run(
+            ["osascript", "-e", script],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS native focus traversal failed: {error}") from error
+    if completed.returncode != 0:
+        raise NativeUISmokeError(completed.stderr.strip() or "macOS native focus traversal failed")
+
+
 def _macos_has_element(
     process_pid: int,
     name: str,
@@ -1597,10 +1623,11 @@ class NativeUIController:
                 process_pid = self._macos_pid_or_error()
                 bounds = _macos_accessibility_rect(process_pid, "Connection configuration", 10)
                 process_pid = self._macos_pid_or_error()
-                _macos_click(
-                    bounds,
-                    process_pid,
-                )
+                # Fyne's first focusable object is the configuration Entry.
+                # A single native Tab reaches it without depending on the
+                # renderer's cached mouse position; Connect/Disconnect below
+                # remain physical AX-discovered clicks.
+                _macos_focus_next(process_pid)
                 _macos_clipboard_set_verified(_MACOS_INPUT_SENTINEL)
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "a")
