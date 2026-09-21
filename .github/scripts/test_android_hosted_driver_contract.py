@@ -644,7 +644,7 @@ def test_hosted_driver_keeps_network_probe_identity_without_failure_details() ->
         assert field not in source[failure:failure_end]
 
 
-def test_hosted_driver_keeps_direct_blocked_and_default_vpn_requests() -> None:
+def test_hosted_driver_keeps_direct_blocked_and_provider_vpn_requests() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (
         root
@@ -661,31 +661,38 @@ def test_hosted_driver_keeps_direct_blocked_and_default_vpn_requests() -> None:
     direct_network = source.index(
         "phasePhysical, identity.toString(), directRequired", direct
     )
-    vpn = source.index('"vpn", routingDefaultRequest(', direct_network)
+    vpn = source.index('"vpn", routingProviderRequest(', direct_network)
     vpn_network = source.index("identity.toString()", vpn)
-    helper = source.index("private JSONObject networkRequest(", vpn_network)
+    provider = source.index("private JSONObject routingProviderRequest(", vpn_network)
+    call = source.index("ContentResolver resolver = testContext.getContentResolver();", provider)
+    helper = source.index("private JSONObject networkRequest(", call)
     working_network = source.index("network.openConnection(url)", helper)
-    ordinary = source.index("url.openConnection()", helper)
 
     gradle = (root / "android_module/app/build.gradle.kts").read_text(encoding="utf-8")
     assert "okhttp" not in gradle.lower()
     assert "pinnedNetworkRequest" not in source
     assert "OkHttp" not in source
-    assert resolved < announced < direct < direct_network < vpn < vpn_network
-    assert helper < ordinary < working_network
+    assert resolved < announced < direct < direct_network < vpn < vpn_network < provider < call
+    assert helper < working_network
+    assert "networkRequest(null" not in source
 
 
-def test_hosted_driver_positive_routing_probe_is_not_shell_uid_bound() -> None:
+def test_hosted_driver_positive_routing_probe_uses_test_provider_uid() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (
         root
         / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
     ).read_text(encoding="utf-8")
 
-    routing = source.index("private JSONObject routingDefaultRequest(")
-    request = source.index("latest = networkRequest(null, endpoint, false);", routing)
-    next_method = source.index("private void runNetworkTransition(", request)
-    assert routing < request < next_method
+    routing = source.index("private JSONObject routingProviderRequest(")
+    call = source.index("resolver.call(", routing)
+    test_uid = source.index("int testUid = testContext.getApplicationInfo().uid;", call)
+    target_uid = source.index("int targetUid = context.getApplicationInfo().uid;", test_uid)
+    identity = source.index("probeUid != testUid || probeUid == targetUid", target_uid)
+    next_method = source.index("private void runNetworkTransition(", identity)
+    assert routing < call < test_uid < target_uid < identity < next_method
+    assert "routingDefaultRequest" not in source
+    assert "networkRequest(null" not in source
     assert "shellNetworkRequest(" not in source[routing:next_method]
 
 
@@ -744,17 +751,38 @@ def test_hosted_driver_does_not_repeat_stale_vpn_lookup_before_metrics() -> None
     assert "ANDROID_VPN_NETWORK_UNAVAILABLE" not in metric_source
 
 
-def test_hosted_driver_bounds_routing_request_startup_retries() -> None:
+def test_hosted_driver_uses_one_bounded_provider_routing_request() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (
         root
         / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
     ).read_text(encoding="utf-8")
 
-    assert "private static final int ROUTING_REQUEST_ATTEMPTS = 3;" in source
-    assert '.put("vpn", routingDefaultRequest(identity.toString()))' in source
-    assert "attempt < ROUTING_REQUEST_ATTEMPTS" in source
-    assert 'if (!latest.has("error_code")) return latest;' in source
+    assert '.put("vpn", routingProviderRequest(identity.toString()))' in source
+    assert "ROUTING_REQUEST_ATTEMPTS" not in source
+    assert "private JSONObject routingDefaultRequest(" not in source
+    helper = source.index("private JSONObject routingProviderRequest(")
+    helper_end = source.index("private void runNetworkTransition(", helper)
+    helper_body = source[helper:helper_end]
+    assert "resolver.call(" in helper_body
+    assert "Thread.sleep" not in helper_body
+
+
+def test_hosted_driver_collects_routing_counters_before_surfacing_provider_failure() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "torturer/torturer_checks/hosted/android.py").read_text(
+        encoding="utf-8"
+    )
+    proof = source.index("def _routing_proof(")
+    blocked = source.index("blocked = self._routing_ready(", proof)
+    semantic = source.index("tunneled_ip = self._assert_routing_blocked(blocked)", blocked)
+    counters = source.index("after_rx, after_tx = self._routing_counters(vpn, deadline)", semantic)
+    rule = source.index("packets = self._routing_rule_counter(", counters)
+    finish = source.index("cleanup_deadline = max(", rule)
+    assert blocked < semantic < counters < rule < finish
+    assert "android_routing_tun_rx_delta=" in source[semantic:finish]
+    assert "android_routing_tun_tx_delta=" in source[semantic:finish]
+    assert "android_routing_rule_packets=" in source[semantic:finish]
 
 
 def test_hosted_driver_waits_for_restored_physical_network_validation() -> None:
@@ -776,7 +804,7 @@ def test_hosted_driver_waits_for_restored_physical_network_validation() -> None:
     assert 'ANDROID_PHYSICAL_NETWORK_NOT_VALIDATED' in source
 
 
-def test_hosted_driver_does_not_add_an_exported_network_probe_service() -> None:
+def test_hosted_driver_declares_a_private_test_apk_routing_provider() -> None:
     root = Path(__file__).resolve().parents[2]
     manifest = (root / "android_module/app/src/androidTest/AndroidManifest.xml").read_text(
         encoding="utf-8"
@@ -785,17 +813,22 @@ def test_hosted_driver_does_not_add_an_exported_network_probe_service() -> None:
         root
         / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
     ).read_text(encoding="utf-8")
-    probe = (
+    provider = (
+        root
+        / "android_module/app/src/androidTest/java/com/dobby/GoUiRoutingProbeProvider.java"
+    ).read_text(encoding="utf-8")
+    shell_probe = (
         root
         / "android_module/app/src/androidTest/java/com/dobby/GoUiNetworkProbeMain.java"
     ).read_text(encoding="utf-8")
 
+    assert 'android.permission.INTERNET' in manifest
+    assert 'android.permission.ACCESS_NETWORK_STATE' in manifest
+    assert 'android:name="com.dobby.GoUiRoutingProbeProvider"' in manifest
+    assert 'android:authorities="com.dobby.vpn.test.routing_probe"' in manifest
+    assert 'android:process=":routing_probe"' in manifest
+    assert 'android:exported="true"' in manifest
     assert "GoUiNetworkProbeService" not in manifest
-    assert 'android:exported="true"' not in manifest
-    assert "GoUiNetworkProbeService" not in driver
-    assert "bindService(" not in driver
-    assert "import android.app.UiAutomation" not in probe
-    assert "Process.myUid()" in probe
     assert "GoUiNetworkProbeMain.class" in driver
     assert "NETWORK_PROBE_CLASS.getName()" in driver
     assert "getContext().getApplicationInfo()" in driver
@@ -813,22 +846,127 @@ def test_hosted_driver_does_not_add_an_exported_network_probe_service() -> None:
     assert "Build.VERSION.SDK_INT < 34" in driver
     assert 'automationShell(automation, "chmod 0700 " + probeRoot)' in driver
     assert 'automationShell(automation, "chmod 0755 " + probeRoot)' in driver
-    assert "endpoint.openConnection()" in probe
-    assert "MAX_BODY_TEXT_BYTES" in probe
+    assert "endpoint.openConnection()" in shell_probe
+    assert "MAX_BODY_TEXT_BYTES" in shell_probe
     assert "app_process -cp" in driver
     assert 'device.executeShellCommand("su 2000 id -u")' in driver
     assert '"2000".equals(shellUid)' in driver
     assert 'String command = "su 2000 app_process -cp "' in driver
     assert "Base64.getUrlEncoder().withoutPadding()" in driver
-    assert "Base64.getUrlDecoder().decode(arguments[1])" in probe
+    assert "Base64.getUrlDecoder().decode(arguments[1])" in shell_probe
     assert "shellQuote(" not in driver
     assert "/data/local/tmp/dobbyvpn-probe-" in driver
     assert 'String outputPath = probeRoot + "/result.json"' in driver
     assert 'device.executeShellCommand("cat " + outputPath)' in driver
     assert 'device.executeShellCommand("rm -rf " + probeRoot)' in driver
-    assert "writeResult(outputPath, result)" in probe
-    assert "System.out.println(result.toString())" in probe
+    assert "writeResult(outputPath, result)" in shell_probe
+    assert "System.out.println(result.toString())" in shell_probe
     assert "logcat" not in driver
     assert "ANDROID_NETWORK_PROBE_OUTPUT_INVALID" in driver
     assert "reportedUid != 2000" in driver
     assert "reportedUid == context.getApplicationInfo().uid" in driver
+    assert "ContentResolver" in driver
+    assert "resolver.call(" in driver
+    assert "testContext.getApplicationInfo().uid" in driver
+    assert "context.getApplicationInfo().uid" in driver
+    assert "probeUid != testUid || probeUid == targetUid" in driver
+    assert '"default".equals(binding)' in driver
+    assert "GoUiRoutingProbeProvider.AUTHORITY" in driver
+    assert "GoUiRoutingProbeProvider.METHOD_PROBE" in driver
+    assert "ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED" in driver
+    assert "ANDROID_NETWORK_PROBE_PROVIDER_FAILED" in driver
+    assert "ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID" in driver
+    assert "ANDROID_NETWORK_PROBE_PROVIDER_IDENTITY_INVALID" in driver
+    assert "ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN" in driver
+    assert "extends ContentProvider" in provider
+    assert "HttpsURLConnection" in provider
+    assert "Process.myUid()" in provider
+    assert "endpoint.openConnection()" in provider
+    assert "Network.openConnection" not in provider
+    assert "setConnectTimeout(CONNECT_TIMEOUT_MILLIS)" in provider
+    assert "setReadTimeout(READ_TIMEOUT_MILLIS)" in provider
+    assert "readBody(response, bodyDeadline)" in provider
+    assert "MAX_BODY_BYTES" not in provider
+    assert '"https".equalsIgnoreCase(endpoint.getProtocol())' in provider
+    assert "endpoint.getQuery() != null" in provider
+    assert "containsWhitespace(value)" in provider
+    assert '"network_binding"' in provider
+    assert '"network_transport"' in provider
+    assert '"probe_uid"' in provider
+    assert '"status"' in provider
+    assert '"body"' in provider
+    assert '"error_code"' in provider
+    assert "ANDROID_NETWORK_REQUEST_FAILED" in provider
+    assert "ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN" in provider
+    assert "ConnectivityManager" in provider
+    assert "getActiveNetwork()" in provider
+    assert "NetworkCapabilities.TRANSPORT_VPN" in provider
+    assert "NETWORK_TRANSPORT_NON_VPN" in provider
+    assert "Thread.sleep" not in provider
+    assert "bindProcessToNetwork" not in provider
+
+
+def test_hosted_driver_waits_for_provider_vpn_before_publishing_routing_ready() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (
+        root
+        / "android_module/app/src/androidTest/java/com/dobby/GoUiHostedProfileTest.java"
+    ).read_text(encoding="utf-8")
+
+    routing = source.index("private void runRoutingProof(")
+    ready_probe = source.index(
+        "JSONObject providerReady = awaitProviderDefaultVpn(deadlineElapsedRealtime);",
+        routing,
+    )
+    ready = source.index("JSONObject ready = new JSONObject()", ready_probe)
+    write = source.index("writeJson(new File(control.getPath() + \".ready\"), ready);", ready)
+    provider_fields = source.index('.put("provider_uid"', ready)
+    provider_transport = source.index('.put("provider_network_transport"', provider_fields)
+
+    assert routing < ready_probe < ready < provider_fields < provider_transport < write
+    assert "deadlineElapsedRealtime" in source[routing:ready]
+    assert '"provider_network_binding"' in source[ready:write]
+
+    observe = source.index('case "observe_routing_identity":')
+    observe_call = source.index("runRoutingProof(", observe)
+    observe_deadline = source.index(
+        "SystemClock.elapsedRealtime() + operationTimeout(operation)", observe_call
+    )
+    transition = source.index('case "network_transition":')
+    transition_call = source.index("runNetworkTransition(", transition)
+    transition_deadline = source.index(
+        "SystemClock.elapsedRealtime() + operationTimeout(operation)", transition_call
+    )
+    assert observe < observe_call < observe_deadline
+    assert transition < transition_call < transition_deadline
+
+
+def test_routing_provider_waits_for_default_vpn_with_bounded_callback_race_closure() -> None:
+    root = Path(__file__).resolve().parents[2]
+    provider = (
+        root
+        / "android_module/app/src/androidTest/java/com/dobby/GoUiRoutingProbeProvider.java"
+    ).read_text(encoding="utf-8")
+
+    method = provider.index("private Bundle awaitDefaultVpn(")
+    initial = provider.index("Network current = connectivity.getActiveNetwork();", method)
+    initial_check = provider.index("isDefaultVpn(connectivity, current)", initial)
+    register = provider.index("connectivity.registerDefaultNetworkCallback(callback);", initial_check)
+    reread = provider.index("Network afterRegistration = connectivity.getActiveNetwork();", register)
+    signal = provider.index("signalIfDefaultVpn(connectivity, afterRegistration", reread)
+    await_call = provider.index("ready.await(remainingMillis, TimeUnit.MILLISECONDS)", signal)
+    finally_block = provider.index("} finally {", await_call)
+    unregister = provider.index("connectivity.unregisterNetworkCallback(callback);", finally_block)
+
+    assert method < initial < initial_check < register < reread < signal < await_call
+    assert await_call < finally_block < unregister
+    assert "SystemClock.elapsedRealtime()" in provider[method:finally_block]
+    assert "KEY_DEADLINE_ELAPSED_REALTIME" in provider[method:finally_block]
+    assert "onAvailable(Network network)" in provider[method:register]
+    assert "onCapabilitiesChanged(" in provider[method:register]
+    assert "CountDownLatch" in provider[method:finally_block]
+    assert "AtomicReference<Network>" in provider[method:finally_block]
+    assert "Thread.sleep" not in provider[method:finally_block]
+    assert "NetworkRequest" not in provider[method:finally_block]
+    assert "openConnection" not in provider[method:finally_block]
+    assert "bindProcessToNetwork" not in provider[method:finally_block]

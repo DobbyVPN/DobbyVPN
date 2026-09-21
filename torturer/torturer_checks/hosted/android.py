@@ -1129,35 +1129,69 @@ class AndroidHostedAdapter:
             blocked = self._routing_ready(
                 control_file, "blocked", deadline, abort=abort
             )
-            # Surface the app's structured network failure before secondary
-            # firewall/counter assertions can obscure the actual cause.
-            tunneled_ip = self._assert_routing_blocked(blocked)
-            after_rx, after_tx = self._routing_counters(vpn, deadline)
-            packets = self._routing_rule_counter(physical, ipv4s, port, deadline)
-            if packets <= 0:
-                raise ScenarioExecutionError(
-                    "ANDROID_ROUTING_RULE_NOT_HIT "
-                    f"interface={physical} destinations={','.join(ipv4s)} port={port} "
-                    f"packets={packets}"
+            # Keep the provider/traffic observation as the primary semantic
+            # error, but collect the independent physical-rule and TUN facts
+            # before surfacing it. A provider failure alone cannot distinguish
+            # VPN capture from a protocol data-plane failure.
+            tunneled_ip: str | None = None
+            try:
+                tunneled_ip = self._assert_routing_blocked(blocked)
+            except BaseException as error:
+                record(error)
+
+            after_rx: int | None = None
+            after_tx: int | None = None
+            try:
+                after_rx, after_tx = self._routing_counters(vpn, deadline)
+            except BaseException as error:
+                record(error)
+
+            packets: int | None = None
+            try:
+                packets = self._routing_rule_counter(
+                    physical, ipv4s, port, deadline
                 )
-            if after_rx <= before_rx or after_tx <= before_tx:
-                raise ScenarioExecutionError(
-                    "ANDROID_ROUTING_TRAFFIC_NOT_OBSERVED "
-                    f"interface={vpn} before_rx={before_rx} after_rx={after_rx} "
-                    f"before_tx={before_tx} after_tx={after_tx}"
+            except BaseException as error:
+                record(error)
+
+            if after_rx is not None and after_tx is not None:
+                rx_delta = after_rx - before_rx
+                tx_delta = after_tx - before_tx
+                if primary is not None:
+                    primary.add_note(f"android_routing_tun_rx_delta={rx_delta}")
+                    primary.add_note(f"android_routing_tun_tx_delta={tx_delta}")
+                elif rx_delta <= 0 or tx_delta <= 0:
+                    record(ScenarioExecutionError(
+                        "ANDROID_ROUTING_TRAFFIC_NOT_OBSERVED "
+                        f"interface={vpn} before_rx={before_rx} after_rx={after_rx} "
+                        f"before_tx={before_tx} after_tx={after_tx}"
+                    ))
+
+            if packets is not None:
+                if primary is not None:
+                    primary.add_note(f"android_routing_rule_packets={packets}")
+                elif packets <= 0:
+                    record(ScenarioExecutionError(
+                        "ANDROID_ROUTING_RULE_NOT_HIT "
+                        f"interface={physical} destinations={','.join(ipv4s)} "
+                        f"port={port} packets={packets}"
+                    ))
+
+            if primary is None and tunneled_ip is not None:
+                assert after_rx is not None and after_tx is not None
+                assert packets is not None
+                self._emit_progress(
+                    "native-state",
+                    kind="routing-proof",
+                    platform="android",
+                    phase="blocked",
+                    physical_interface=physical,
+                    vpn_interface=vpn,
+                    rule_packets=packets,
+                    rx_delta=after_rx - before_rx,
+                    tx_delta=after_tx - before_tx,
                 )
-            self._emit_progress(
-                "native-state",
-                kind="routing-proof",
-                platform="android",
-                phase="blocked",
-                physical_interface=physical,
-                vpn_interface=vpn,
-                rule_packets=packets,
-                rx_delta=after_rx - before_rx,
-                tx_delta=after_tx - before_tx,
-            )
-            self._observed_tunneled_ips.add(tunneled_ip)
+                self._observed_tunneled_ips.add(tunneled_ip)
         except BaseException as error:
             record(error)
 
@@ -1496,6 +1530,17 @@ class AndroidHostedAdapter:
         if not isinstance(vpn, Mapping):
             raise AndroidHostedAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_VPN_INVALID", value
+            )
+        provider_error = vpn.get("error_code")
+        if isinstance(provider_error, str) and provider_error in {
+            "ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED",
+            "ANDROID_NETWORK_PROBE_PROVIDER_FAILED",
+            "ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID",
+            "ANDROID_NETWORK_PROBE_PROVIDER_IDENTITY_INVALID",
+            "ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN",
+        }:
+            raise AndroidHostedAdapter._routing_observation_failure(
+                provider_error, value
             )
         status = vpn.get("status")
         body = vpn.get("body")

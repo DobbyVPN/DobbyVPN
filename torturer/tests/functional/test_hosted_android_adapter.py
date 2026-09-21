@@ -1166,6 +1166,38 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertFalse(finish[0]["passed"])
         self.assertIn("ANDROID_ROUTING_DIRECT_NOT_BLOCKED", finish[0]["error"])
 
+    def test_routing_proof_keeps_provider_failure_and_collects_capture_facts(self) -> None:
+        runner = FakeAndroidRunner(self.runner.raw_directory.parent / "provider-failure")
+        runner.routing_phases["routing.json.ready"] = "ready"
+        runner.routing_blocked_override = {
+            "phase": "blocked",
+            "direct": {"error_code": "ANDROID_NETWORK_REQUEST_FAILED"},
+            "vpn": {
+                "probe_uid": 10498,
+                "network_binding": "default",
+                "network_transport": "vpn",
+                "error_code": "ANDROID_NETWORK_REQUEST_FAILED",
+            },
+        }
+        adapter = AndroidHostedAdapter(
+            runner=runner,
+            profile=self.profile,
+            adb=self.adb,
+            source_sha=_SOURCE_SHA,
+            identity_url="https://identity.example.test/ip",
+            latency_url="https://latency.example.test/blob",
+            download_url="https://download.example.test/blob",
+            upload_url="https://upload.example.test/blob",
+        )
+        with self.assertRaisesRegex(
+            ScenarioExecutionError, "ANDROID_ROUTING_VPN_INVALID"
+        ) as raised:
+            adapter._routing_proof("routing.json", time.monotonic() + 5.0)
+        notes = "\n".join(raised.exception.__notes__)
+        self.assertIn("android_routing_tun_rx_delta=1", notes)
+        self.assertIn("android_routing_tun_tx_delta=1", notes)
+        self.assertIn("android_routing_rule_packets=1", notes)
+
     def test_routing_proof_rejects_same_interface_and_missing_tun_traffic(self) -> None:
         runner = FakeAndroidRunner(self.runner.raw_directory.parent / "same-interface")
         runner.routing_phases["routing.json.ready"] = "ready"

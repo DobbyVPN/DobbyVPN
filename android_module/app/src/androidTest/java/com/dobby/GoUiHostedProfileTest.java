@@ -5,16 +5,19 @@ import android.app.Instrumentation;
 import android.app.UiAutomation;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ContentResolver;
 import android.graphics.Rect;
 import android.content.pm.ApplicationInfo;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.Uri;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -95,7 +98,6 @@ public final class GoUiHostedProfileTest {
     private static final int PROFILE_INPUT_CHUNK_CODE_UNITS = 4_096;
     private static final int UI_STABILITY_SAMPLES = 10;
     private static final int STABILITY_SAMPLES = 5;
-    private static final int ROUTING_REQUEST_ATTEMPTS = 3;
     private static final String FALLBACK_ERROR_CODE = "ANDROID_HOSTED_DRIVER_FAILED";
     private static final String[] FIXED_ERROR_CODES = new String[]{
             "ANDROID_COMMAND_FILE_MISSING",
@@ -157,6 +159,11 @@ public final class GoUiHostedProfileTest {
             "ANDROID_NETWORK_PROBE_STAGE_FAILED",
             "ANDROID_NETWORK_PROBE_STAGE_SIZE_INVALID",
             "ANDROID_NETWORK_PROBE_FAILED",
+            "ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED",
+            "ANDROID_NETWORK_PROBE_PROVIDER_FAILED",
+            "ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID",
+            "ANDROID_NETWORK_PROBE_PROVIDER_IDENTITY_INVALID",
+            "ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN",
             "ANDROID_VPN_NETWORK_UNAVAILABLE",
             "ANDROID_STABILITY_HTTP_STATUS",
             "ANDROID_STABILITY_TIMEOUT",
@@ -179,6 +186,7 @@ public final class GoUiHostedProfileTest {
     };
 
     private final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    private final Context testContext = InstrumentationRegistry.getInstrumentation().getContext();
     private final ConnectivityManager connectivity =
             context.getSystemService(ConnectivityManager.class);
     private Activity foregroundActivity;
@@ -338,7 +346,8 @@ public final class GoUiHostedProfileTest {
                     case "observe_routing_identity":
                         requireConnected(connected);
                         runRoutingProof(operation.getString("control_file"),
-                                command.getJSONObject("endpoints").getString("identity_url"));
+                                command.getJSONObject("endpoints").getString("identity_url"),
+                                SystemClock.elapsedRealtime() + operationTimeout(operation));
                         observation.put("second-routing".equals(operationID)
                                 ? "second_routing_verified" : "routing_verified", true);
                         break;
@@ -363,7 +372,8 @@ public final class GoUiHostedProfileTest {
                     case "network_transition":
                         requireConnected(connected);
                         runNetworkTransition(operation.getString("control_file"),
-                                command.getJSONObject("endpoints").getString("identity_url"));
+                                command.getJSONObject("endpoints").getString("identity_url"),
+                                SystemClock.elapsedRealtime() + operationTimeout(operation));
                         observation.put("network_transition_verified", true);
                         break;
                     case "disconnect": {
@@ -1531,7 +1541,9 @@ public final class GoUiHostedProfileTest {
         return null;
     }
 
-    private void runRoutingProof(String controlName, String identityUrl) throws Exception {
+    private void runRoutingProof(
+            String controlName, String identityUrl, long deadlineElapsedRealtime)
+            throws Exception {
         File control = safeFile(controlName);
         deleteIfPresent(control);
         deleteIfPresent(new File(control.getPath() + ".ready"));
@@ -1545,11 +1557,15 @@ public final class GoUiHostedProfileTest {
         if (physicalInterface == null || vpnInterface == null) throw new IllegalStateException("ANDROID_NETWORK_INTERFACE_UNAVAILABLE");
         URL identity = new URL(identityUrl);
         JSONArray identityAddresses = resolveIdentityIpv4s(physical, identity.getHost());
+        JSONObject providerReady = awaitProviderDefaultVpn(deadlineElapsedRealtime);
         JSONObject ready = new JSONObject()
                 .put("phase", "ready")
                 .put("physical_interface", physicalInterface)
                 .put("physical_transport", physicalTransport(physical))
                 .put("vpn_interface", vpnInterface)
+                .put("provider_uid", providerReady.getInt("probe_uid"))
+                .put("provider_network_binding", providerReady.getString("network_binding"))
+                .put("provider_network_transport", providerReady.getString("network_transport"))
                 // Resolve on the selected physical network. Resolving through
                 // the process default can incorrectly follow the just-created
                 // VPN route and was the source of intermittent emulator
@@ -1589,24 +1605,130 @@ public final class GoUiHostedProfileTest {
             JSONObject response = new JSONObject().put("phase", phase)
                     .put("direct", networkRequest(
                             phasePhysical, identity.toString(), directRequired))
-                    // Run the positive oracle as an ordinary unbound request
-                    // from this instrumentation process. A shell-UID probe
-                    // is not a valid oracle for the VPN-owning app's default
-                    // route. The host separately proves tun0 traffic and
-                    // physical-interface blocking.
-                    .put("vpn", routingDefaultRequest(identity.toString()));
+                    // Run the positive oracle in the ordinary test-APK
+                    // provider process. Its default route is deliberately
+                    // unbound, and its UID is checked against the test APK
+                    // before the result crosses this process boundary.
+                    .put("vpn", routingProviderRequest(identity.toString()));
             writeJson(new File(control.getPath() + ".ready"), response);
         }
     }
 
-    private JSONObject routingDefaultRequest(String endpoint) throws Exception {
-        JSONObject latest = null;
-        for (int attempt = 0; attempt < ROUTING_REQUEST_ATTEMPTS; attempt++) {
-            latest = networkRequest(null, endpoint, false);
-            if (!latest.has("error_code")) return latest;
-            if (attempt + 1 < ROUTING_REQUEST_ATTEMPTS) Thread.sleep(250L);
+    private JSONObject awaitProviderDefaultVpn(long deadlineElapsedRealtime) throws Exception {
+        Bundle request = new Bundle();
+        request.putLong(
+                GoUiRoutingProbeProvider.KEY_DEADLINE_ELAPSED_REALTIME,
+                deadlineElapsedRealtime);
+        Bundle response;
+        try {
+            ContentResolver resolver = testContext.getContentResolver();
+            response = resolver.call(
+                    Uri.parse("content://" + GoUiRoutingProbeProvider.AUTHORITY),
+                    GoUiRoutingProbeProvider.METHOD_AWAIT_DEFAULT_VPN,
+                    null,
+                    request);
+        } catch (SecurityException failure) {
+            throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED", failure);
+        } catch (Throwable failure) {
+            throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_FAILED", failure);
         }
-        return latest;
+        if (response == null) {
+            throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
+        }
+        try {
+            int probeUid = response.getInt(GoUiRoutingProbeProvider.KEY_PROBE_UID, -1);
+            int testUid = testContext.getApplicationInfo().uid;
+            int targetUid = context.getApplicationInfo().uid;
+            String binding = response.getString(
+                    GoUiRoutingProbeProvider.KEY_NETWORK_BINDING, "");
+            String transport = response.getString(
+                    GoUiRoutingProbeProvider.KEY_NETWORK_TRANSPORT, "");
+            if (probeUid != testUid || probeUid == targetUid || !"default".equals(binding)
+                    || !("vpn".equals(transport)
+                    || "non_vpn".equals(transport)
+                    || "none".equals(transport))) {
+                throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_IDENTITY_INVALID");
+            }
+            String errorCode = response.getString(GoUiRoutingProbeProvider.KEY_ERROR_CODE);
+            if (errorCode != null && !errorCode.isEmpty()) {
+                if (!"ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN".equals(errorCode)) {
+                    throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
+                }
+                throw new IOException(errorCode);
+            }
+            if (!"vpn".equals(transport)) {
+                throw new IOException("ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN");
+            }
+            return new JSONObject()
+                    .put("probe_uid", probeUid)
+                    .put("network_binding", binding)
+                    .put("network_transport", transport);
+        } catch (IOException failure) {
+            throw failure;
+        } catch (Throwable failure) {
+            throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID", failure);
+        }
+    }
+
+    private JSONObject routingProviderRequest(String endpoint) throws Exception {
+        Bundle response;
+        try {
+            ContentResolver resolver = testContext.getContentResolver();
+            response = resolver.call(
+                    Uri.parse("content://" + GoUiRoutingProbeProvider.AUTHORITY),
+                    GoUiRoutingProbeProvider.METHOD_PROBE,
+                    endpoint,
+                    null);
+        } catch (SecurityException failure) {
+            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED");
+        } catch (Throwable failure) {
+            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_FAILED");
+        }
+        if (response == null) {
+            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
+        }
+
+        try {
+            int probeUid = response.getInt(GoUiRoutingProbeProvider.KEY_PROBE_UID, -1);
+            int testUid = testContext.getApplicationInfo().uid;
+            int targetUid = context.getApplicationInfo().uid;
+            String binding = response.getString(
+                    GoUiRoutingProbeProvider.KEY_NETWORK_BINDING, "");
+            String transport = response.getString(
+                    GoUiRoutingProbeProvider.KEY_NETWORK_TRANSPORT, "");
+            if (probeUid != testUid || probeUid == targetUid || !"default".equals(binding)
+                    || !("vpn".equals(transport)
+                    || "non_vpn".equals(transport)
+                    || "none".equals(transport))) {
+                return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_IDENTITY_INVALID");
+            }
+
+            JSONObject result = new JSONObject()
+                    .put("probe_uid", probeUid)
+                    .put("network_binding", binding)
+                    .put("network_transport", transport);
+            String errorCode = response.getString(GoUiRoutingProbeProvider.KEY_ERROR_CODE);
+            if (errorCode != null && !errorCode.isEmpty()) {
+                if (!("ANDROID_NETWORK_REQUEST_FAILED".equals(errorCode)
+                        || "ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN".equals(errorCode))) {
+                    return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
+                }
+                return result.put("error_code", errorCode);
+            }
+            if (!response.containsKey(GoUiRoutingProbeProvider.KEY_STATUS)
+                    || !response.containsKey(GoUiRoutingProbeProvider.KEY_BODY)) {
+                return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
+            }
+            return result
+                    .put("status", response.getInt(GoUiRoutingProbeProvider.KEY_STATUS))
+                    .put("body", response.getString(GoUiRoutingProbeProvider.KEY_BODY, ""));
+        } catch (Throwable failure) {
+            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
+        }
+    }
+
+    private JSONObject routingProviderFailure(String code) throws Exception {
+        return new JSONObject().put("error_code", code);
     }
 
     /**
@@ -1616,7 +1738,9 @@ public final class GoUiHostedProfileTest {
      * physical uplink. Keeping these files separate prevents a stale ready
      * response from being mistaken for the proof response.
      */
-    private void runNetworkTransition(String controlName, String identityUrl) throws Exception {
+    private void runNetworkTransition(
+            String controlName, String identityUrl, long deadlineElapsedRealtime)
+            throws Exception {
         File control = safeFile(controlName);
         deleteIfPresent(control);
         deleteIfPresent(new File(control.getPath() + ".ready"));
@@ -1631,7 +1755,7 @@ public final class GoUiHostedProfileTest {
         if (!"network_transition".equals(request.optString("operation"))) {
             throw new IllegalStateException("ANDROID_NETWORK_TRANSITION_REQUEST_INVALID");
         }
-        runRoutingProof(controlName + ".routing", identityUrl);
+        runRoutingProof(controlName + ".routing", identityUrl, deadlineElapsedRealtime);
     }
 
     private Network findPhysicalNetwork() {
@@ -1711,13 +1835,10 @@ public final class GoUiHostedProfileTest {
         HttpURLConnection connection = null;
         URL url = new URL(endpoint);
         try {
-            // A null network deliberately means an ordinary request from the
-            // instrumentation process. Android applies the app's default VPN
-            // route to this socket; it must not be replaced by a shell-UID
-            // command or by a request bound to the physical network.
-            connection = (HttpURLConnection) (network == null
-                    ? url.openConnection()
-                    : network.openConnection(url));
+            // The negative leg is always explicitly bound to the selected
+            // physical Network. The positive leg uses the separate ordinary
+            // test-APK provider process above.
+            connection = (HttpURLConnection) network.openConnection(url);
             connection.setConnectTimeout(8_000);
             connection.setReadTimeout(8_000);
             // Keep the Android probe equivalent to the previous hosted

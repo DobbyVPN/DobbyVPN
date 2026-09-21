@@ -1,8 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.dobby.vpn.test">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application>
         <meta-data
             android:name="com.dobby.test.source_sha"
             android:value="${dobbyTestSourceSha}" />
+        <provider
+            android:name="com.dobby.GoUiRoutingProbeProvider"
+            android:authorities="com.dobby.vpn.test.routing_probe"
+            android:exported="true"
+            android:process=":routing_probe" />
     </application>
 </manifest>
