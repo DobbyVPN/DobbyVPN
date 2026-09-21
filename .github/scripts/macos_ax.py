@@ -28,6 +28,7 @@ _AX_CGSIZE_TYPE = 2
 _AX_CGRECT_TYPE = 3
 _MAX_DEPTH = 64
 _MAX_NODES = 8192
+_MAX_ROOT_CANDIDATES = 64
 _DEADLINE = 0.0
 _AX_MESSAGE_TIMEOUT_SECONDS = 1.0
 
@@ -373,7 +374,52 @@ def _find_control(
             window_frame = _frame(frameworks, window)
             if window_frame is None:
                 continue
-            pending: list[tuple[ctypes.c_void_p, int, bool]] = [(window, 0, False)]
+            # The official Darwin bridge appends every regenerated content
+            # root to the window's AXChildren collection. Inspect only a
+            # bounded newest-first suffix and select the first current
+            # content/overlay root that substantially fills the window. This
+            # avoids stale dynamic labels and keeps refreshes bounded without
+            # guessing a control by name or screen position. Menus are
+            # smaller roots and are skipped in favour of that same generation's
+            # content root; an absent current root is a hard failure.
+            roots = _children(frameworks, window)
+            owned_elements.extend(roots)
+            selected_root = None
+            window_width = max(0, window_frame[2] - window_frame[0])
+            window_height = max(0, window_frame[3] - window_frame[1])
+            window_area = window_width * window_height
+            for candidate in reversed(roots[-_MAX_ROOT_CANDIDATES:]):
+                _check_deadline()
+                candidate_frame = _frame(frameworks, candidate)
+                if candidate_frame is None:
+                    continue
+                root_width = max(0, candidate_frame[2] - candidate_frame[0])
+                root_height = max(0, candidate_frame[3] - candidate_frame[1])
+                intersection_width = max(
+                    0,
+                    min(window_frame[2], candidate_frame[2])
+                    - max(window_frame[0], candidate_frame[0]),
+                )
+                intersection_height = max(
+                    0,
+                    min(window_frame[3], candidate_frame[3])
+                    - max(window_frame[1], candidate_frame[1]),
+                )
+                if (
+                    window_area > 0
+                    and root_width * root_height * 2 >= window_area
+                    and intersection_width * intersection_height * 2 >= window_area
+                ):
+                    selected_root = candidate
+                    break
+            if selected_root is None:
+                raise AXLookupError(
+                    "current-root",
+                    "Accessibility window had no current full-window root",
+                )
+            pending: list[tuple[ctypes.c_void_p, int, bool]] = [
+                (selected_root, 0, False)
+            ]
             while pending:
                 _check_deadline()
                 element, depth, owned = pending.pop()
@@ -389,24 +435,26 @@ def _find_control(
                 nodes += 1
                 if nodes > _MAX_NODES:
                     raise AXLookupError("ax-tree", "Accessibility tree exceeded the node limit")
-                frame = _frame(frameworks, element)
-                if frame is not None and _contains(window_frame, frame):
-                    for text in _element_texts(frameworks, element):
-                        if (text.startswith(name) if prefix else text == name):
-                            # The official Darwin bridge retains regenerated
-                            # roots in a process-global array. A refresh can
-                            # therefore expose the same logical control more
-                            # than once. Collapse only exact same-frame
-                            # duplicates; distinct controls remain ambiguous.
-                            if frame not in match_frames:
-                                match_frames.add(frame)
-                                matches.append(frame)
-                            if len(matches) > 1:
-                                raise AXLookupError(
-                                    "ambiguous",
-                                    f"accessibility element {name!r} matched multiple controls",
-                                )
-                            break
+                matching = any(
+                    text.startswith(name) if prefix else text == name
+                    for text in _element_texts(frameworks, element)
+                )
+                if matching:
+                    frame = _frame(frameworks, element)
+                    if frame is not None and _contains(window_frame, frame):
+                        # The official Darwin bridge retains regenerated
+                        # roots in a process-global array. A refresh can
+                        # therefore expose the same logical control more
+                        # than once. Collapse only exact same-frame
+                        # duplicates; distinct controls remain ambiguous.
+                        if frame not in match_frames:
+                            match_frames.add(frame)
+                            matches.append(frame)
+                        if len(matches) > 1:
+                            raise AXLookupError(
+                                "ambiguous",
+                                f"accessibility element {name!r} matched multiple controls",
+                            )
                 children = _children(frameworks, element)
                 for child in reversed(children):
                     if child:

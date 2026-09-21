@@ -26,11 +26,11 @@ class _Frameworks:
 
 class MacOSAXMatchTests(unittest.TestCase):
     def _find(self, frames: dict[int, tuple[int, int, int, int]]):
-        children = {1: (2, 3), 2: (), 3: ()}
+        children = {1: (2, 3), 2: (), 3: (4, 5), 4: (), 5: ()}
         framework = _Frameworks()
 
         def element_texts(_frameworks, element):
-            return ("Connection configuration",) if element in {2, 3} else ()
+            return ("Connection configuration",) if element in {4, 5} else ()
 
         with (
             patch.object(macos_ax, "_windows", return_value=(1,)),
@@ -50,8 +50,10 @@ class MacOSAXMatchTests(unittest.TestCase):
     def test_same_frame_stale_roots_are_one_logical_control(self):
         result = self._find({
             1: (0, 0, 100, 100),
-            2: (10, 10, 90, 40),
-            3: (10, 10, 90, 40),
+            2: (0, 0, 100, 100),
+            3: (0, 0, 100, 100),
+            4: (10, 10, 90, 40),
+            5: (10, 10, 90, 40),
         })
         self.assertEqual(result["bounds"], [10, 10, 90, 40])
 
@@ -61,8 +63,10 @@ class MacOSAXMatchTests(unittest.TestCase):
         ):
             self._find({
                 1: (0, 0, 100, 100),
-                2: (10, 10, 90, 40),
-                3: (10, 50, 90, 80),
+                2: (0, 0, 100, 100),
+                3: (0, 0, 100, 100),
+                4: (10, 10, 90, 40),
+                5: (10, 50, 90, 80),
             })
 
 
