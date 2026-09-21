@@ -68,13 +68,25 @@ func newApplication(runtime fyne.App, client SessionClient, exporter LogExporter
 	window.Resize(fyne.NewSize(460, 520))
 	connectionContent := view.Content()
 	window.SetContent(connectionContent)
-	view.refreshNativeSemantics = newNativeSemanticsRefresh(goruntime.GOOS, window, connectionContent)
+	connectionVisible := true
+	view.refreshNativeSemantics = newNativeSemanticsRefresh(
+		goruntime.GOOS,
+		window,
+		connectionContent,
+		func() bool { return connectionVisible },
+	)
 	window.SetCloseIntercept(func() {
 		view.Stop()
 		window.Close()
 	})
-	view.Settings.OnTapped = func() { window.SetContent(settings.Content()) }
-	settings.Back.OnTapped = func() { window.SetContent(view.Content()) }
+	view.Settings.OnTapped = func() {
+		connectionVisible = false
+		window.SetContent(settings.Content())
+	}
+	settings.Back.OnTapped = func() {
+		connectionVisible = true
+		window.SetContent(view.Content())
+	}
 	return &Application{App: runtime, Window: window, Connection: view, Settings: settings}
 }
 
@@ -86,6 +98,7 @@ func newNativeSemanticsRefresh(
 	goos string,
 	window fyne.Window,
 	connectionContent fyne.CanvasObject,
+	visible ...func() bool,
 ) func() {
 	if !nativeSemanticsRefreshEnabled(goos) {
 		return nil
@@ -94,7 +107,11 @@ func newNativeSemanticsRefresh(
 		// Settings replaces the window content. Never pull the user back to the
 		// connection screen merely because a service snapshot arrives while
 		// Settings is open.
-		if window.Content() == connectionContent {
+		connectionIsVisible := window.Content() == connectionContent
+		if len(visible) > 0 && visible[0] != nil {
+			connectionIsVisible = visible[0]()
+		}
+		if connectionIsVisible {
 			window.SetContent(connectionContent)
 		}
 	}
