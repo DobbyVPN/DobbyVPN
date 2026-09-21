@@ -572,6 +572,35 @@ def _macos_window_rect(process_pid: int, timeout: float) -> tuple[int, int, int,
     return _macos_ax_request(process_pid, timeout, window=True)
 
 
+def _macos_startup_diagnostic(process_pid: int) -> str:
+    """Collect bounded, complete diagnostics for a window that never surfaced."""
+
+    commands = [
+        ["ps", "-ww", "-p", str(process_pid), "-o", "pid=,ppid=,state=,etime=,command="],
+        ["/usr/bin/sample", str(process_pid), "2", "1"],
+    ]
+    sections: list[str] = []
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=5,
+            )
+            stdout = result.stdout if isinstance(result.stdout, str) else ""
+            stderr = result.stderr if isinstance(result.stderr, str) else ""
+            sections.append(
+                "$ " + " ".join(command) + f" (exit={result.returncode})\n"
+                + stdout
+                + stderr
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            sections.append("$ " + " ".join(command) + f" (error={error!r})\n")
+    return "\n".join(sections)
+
+
 def _macos_accessibility_rect(
     process_pid: int,
     name: str,
@@ -1162,11 +1191,18 @@ class NativeUIController:
                 "macOS UI did not expose the configuration input",
             )
         except NativeUIWaitTimeout as error:
+            failure: NativeUISmokeError = error
             if last_window_not_ready is not None:
-                raise NativeUISmokeError(
+                failure = NativeUISmokeError(
                     f"{error}: {last_window_not_ready}"
-                ) from error
-            raise
+                )
+            if self.macos_process_identity is not None:
+                diagnostic = _macos_startup_diagnostic(self.macos_process_identity.pid)
+                if diagnostic:
+                    failure = NativeUISmokeError(
+                        f"{failure}; startup-diagnostic:\n{diagnostic}"
+                    )
+            raise failure from error
 
     def start(self) -> dict[str, object]:
         if self.process is not None:

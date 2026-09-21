@@ -264,15 +264,15 @@ def _windows(frameworks: Frameworks, pid: int) -> tuple[ctypes.c_void_p, ...]:
         status, value = _copy_attribute(frameworks, app, "AXWindows")
         if value is None:
             try:
-                cg_count = _cg_window_count(frameworks, pid)
+                cg = _cg_window_diagnostics(frameworks, pid)
             except AXLookupError as error:
-                cg_count = f"error:{error}"
+                cg = f"error:{error}"
             raise AXLookupError(
                 "ax-windows",
                 "the process exposed no AXWindows collection "
-                f"(status={status}, cg_window_count={cg_count})",
+                f"(status={status}, cg={cg})",
                 transient=status in {_AX_ERROR_CANNOT_COMPLETE, _AX_ERROR_NO_VALUE},
-                details={"ax_status": status, "cg_window_count": cg_count},
+                details={"ax_status": status, "cg": cg},
             )
         try:
             result = frameworks.array_values(value)
@@ -282,24 +282,24 @@ def _windows(frameworks: Frameworks, pid: int) -> tuple[ctypes.c_void_p, ...]:
             frameworks.release(value)
         if not result:
             try:
-                cg_count = _cg_window_count(frameworks, pid)
+                cg = _cg_window_diagnostics(frameworks, pid)
             except AXLookupError as error:
-                cg_count = f"error:{error}"
+                cg = f"error:{error}"
             raise AXLookupError(
                 "ax-windows",
-                f"the process exposed no windows (cg_window_count={cg_count})",
+                f"the process exposed no windows (cg={cg})",
                 transient=True,
-                details={"cg_window_count": cg_count},
+                details={"cg": cg},
             )
         return result
     finally:
         frameworks.release(app)
 
 
-def _cg_window_count(frameworks: Frameworks, pid: int) -> int | None:
-    """Return an on-screen CoreGraphics owner count for diagnostics only."""
+def _cg_window_count(frameworks: Frameworks, pid: int, options: int = 1) -> int | None:
+    """Return a CoreGraphics owner count for diagnostics only."""
 
-    windows = frameworks.cg.CGWindowListCopyWindowInfo(1, 0)  # on-screen only
+    windows = frameworks.cg.CGWindowListCopyWindowInfo(options, 0)
     if not windows:
         return None
     try:
@@ -323,6 +323,15 @@ def _cg_window_count(frameworks: Frameworks, pid: int) -> int | None:
         frameworks.release(windows)
 
 
+def _cg_window_diagnostics(frameworks: Frameworks, pid: int) -> dict[str, int | None]:
+    """Return all-window and on-screen counts without becoming an interaction path."""
+
+    return {
+        "cg_window_count": _cg_window_count(frameworks, pid, 1),
+        "cg_window_total_count": _cg_window_count(frameworks, pid, 0),
+    }
+
+
 def _window_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
     windows = _windows(frameworks, pid)
     try:
@@ -340,7 +349,7 @@ def _window_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
             "stage": "window",
             "bounds": list(bounds),
             "ax_window_count": len(windows),
-            "cg_window_count": _cg_window_count(frameworks, pid),
+            **_cg_window_diagnostics(frameworks, pid),
         }
     finally:
         for window in windows:
@@ -401,7 +410,7 @@ def _find_control(
                 "bounds": list(matches[0]),
                 "ax_window_count": len(windows),
                 "nodes": nodes,
-                "cg_window_count": _cg_window_count(frameworks, pid),
+                **_cg_window_diagnostics(frameworks, pid),
             }
         raise AXLookupError("control", f"accessibility element {name!r} was not found")
     finally:
