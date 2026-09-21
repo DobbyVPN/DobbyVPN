@@ -44,6 +44,16 @@ type startupLifecycleApp struct {
 	beforeStart func()
 }
 
+type startupTrackingWindow struct {
+	fyne.Window
+	events *[]string
+}
+
+func (w *startupTrackingWindow) Show() {
+	*w.events = append(*w.events, "show")
+	w.Window.Show()
+}
+
 type startupLifecycle struct {
 	onStarted    func()
 	onStopped    func()
@@ -90,6 +100,8 @@ func TestApplicationDefersNativeDiagnosticResolutionUntilDriverStarted(t *testin
 	}
 	application := NewApplication(runtime, &fakeClient{})
 	t.Cleanup(application.Close)
+	events := []string{}
+	application.Window = &startupTrackingWindow{Window: application.Window, events: &events}
 	startedBeforeLifecycle := make(chan bool, 1)
 	runtime.beforeStart = func() {
 		application.Connection.mu.Lock()
@@ -100,9 +112,12 @@ func TestApplicationDefersNativeDiagnosticResolutionUntilDriverStarted(t *testin
 
 	resolved := make(chan bool, 1)
 	application.RunWithDiagnosticStore(func() DiagnosticStore {
+		application.Connection.mu.Lock()
+		started := application.Connection.started
+		application.Connection.mu.Unlock()
 		select {
 		case <-runtime.runEntered:
-			resolved <- true
+			resolved <- started && len(events) == 1 && events[0] == "show"
 		default:
 			resolved <- false
 		}

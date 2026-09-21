@@ -125,6 +125,20 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(smoke.NativeUISmokeError, "AX timeout"):
                 smoke._macos_has_element(4321, "Connect")
 
+    def test_macos_ax_windows_no_value_is_retryable_startup_state(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["macos_ax.py"],
+            1,
+            stdout=(
+                '{"ok":false,"stage":"ax-windows","transient":true,'
+                '"error":"no AXWindows (status=-25212, cg_window_count=1)"}\n'
+            ),
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(smoke.NativeUIWindowNotReady, "cg_window_count=1"):
+                smoke._macos_window_rect(4321, 1)
+
     def test_macos_keystroke_is_bound_to_pid(self) -> None:
         result = subprocess.CompletedProcess(["osascript"], 0, stdout="", stderr="")
         with patch.object(smoke.subprocess, "run", return_value=result) as run:

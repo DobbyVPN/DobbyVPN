@@ -21,6 +21,8 @@ from collections.abc import Iterator
 
 _CF_STRING_ENCODING_UTF8 = 0x08000100
 _AX_SUCCESS = 0
+_AX_ERROR_CANNOT_COMPLETE = -25204
+_AX_ERROR_NO_VALUE = -25212
 _AX_CGPOINT_TYPE = 1
 _AX_CGSIZE_TYPE = 2
 _AX_CGRECT_TYPE = 3
@@ -31,9 +33,18 @@ _AX_MESSAGE_TIMEOUT_SECONDS = 1.0
 
 
 class AXLookupError(RuntimeError):
-    def __init__(self, stage: str, message: str) -> None:
+    def __init__(
+        self,
+        stage: str,
+        message: str,
+        *,
+        transient: bool = False,
+        details: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.stage = stage
+        self.transient = transient
+        self.details = details or {}
 
 
 def _check_deadline() -> None:
@@ -221,7 +232,16 @@ def _children(frameworks: Frameworks, element: ctypes.c_void_p) -> tuple[ctypes.
     if value is None:
         return ()
     try:
-        return frameworks.array_values(value)
+        # CFArray members are borrowed. Retain them while the array is alive;
+        # the caller owns and releases the returned references after traversal.
+        retained: list[ctypes.c_void_p] = []
+        for child in frameworks.array_values(value):
+            if not child:
+                continue
+            reference = frameworks.retain(child)
+            if reference:
+                retained.append(reference)
+        return tuple(retained)
     finally:
         frameworks.release(value)
 
@@ -251,6 +271,8 @@ def _windows(frameworks: Frameworks, pid: int) -> tuple[ctypes.c_void_p, ...]:
                 "ax-windows",
                 "the process exposed no AXWindows collection "
                 f"(status={status}, cg_window_count={cg_count})",
+                transient=status in {_AX_ERROR_CANNOT_COMPLETE, _AX_ERROR_NO_VALUE},
+                details={"ax_status": status, "cg_window_count": cg_count},
             )
         try:
             result = frameworks.array_values(value)
@@ -266,6 +288,8 @@ def _windows(frameworks: Frameworks, pid: int) -> tuple[ctypes.c_void_p, ...]:
             raise AXLookupError(
                 "ax-windows",
                 f"the process exposed no windows (cg_window_count={cg_count})",
+                transient=True,
+                details={"cg_window_count": cg_count},
             )
         return result
     finally:
@@ -369,9 +393,7 @@ def _find_control(
                 children = _children(frameworks, element)
                 for child in reversed(children):
                     if child:
-                        retained = frameworks.retain(child)
-                        if retained:
-                            pending.append((retained, depth + 1, True))
+                        pending.append((child, depth + 1, True))
         if matches:
             return {
                 "ok": True,
@@ -420,18 +442,17 @@ def main() -> int:
         print(json.dumps(payload, separators=(",", ":")), flush=True)
         return 0
     except AXLookupError as error:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "stage": error.stage,
-                    "error": str(error),
-                    "elapsed_ms": int((time.monotonic() - started) * 1000),
-                },
-                separators=(",", ":"),
-            ),
-            flush=True,
-        )
+        payload: dict[str, object] = {
+            "ok": False,
+            "stage": error.stage,
+            "error": str(error),
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+        if error.transient:
+            payload["transient"] = True
+        if error.details:
+            payload["details"] = error.details
+        print(json.dumps(payload, separators=(",", ":")), flush=True)
         return 1
     except Exception as error:  # pragma: no cover - defensive native boundary
         print(

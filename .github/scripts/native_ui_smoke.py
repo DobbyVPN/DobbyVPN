@@ -37,6 +37,10 @@ class NativeUIElementNotFound(NativeUISmokeError):
     """The bounded AX walk completed but did not contain the requested name."""
 
 
+class NativeUIWindowNotReady(NativeUISmokeError):
+    """The process exists but its AX window collection is not ready yet."""
+
+
 class NativeUIWaitTimeout(NativeUISmokeError):
     """A requested UI state was not observed within its bounded wait."""
 
@@ -547,6 +551,8 @@ def _macos_ax_request(
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
         detail = payload.get("error", "lookup failed") if isinstance(payload, dict) else "lookup failed"
+        if isinstance(payload, dict) and stage == "ax-windows" and payload.get("transient") is True:
+            raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
         if stage == "control":
             raise NativeUIElementNotFound(f"macOS AX {stage}: {detail}")
         raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
@@ -1080,8 +1086,10 @@ class NativeUIController:
             launch.extend(("--stderr", str(root / "macos-app.stderr.log")))
         launch.append(str(bundle))
         self.process = subprocess.Popen(launch)
+        last_window_not_ready: NativeUIWindowNotReady | None = None
 
         def visible() -> bool:
+            nonlocal last_window_not_ready
             if self.process is not None and self.process.poll() is not None:
                 raise NativeUISmokeError(
                     f"Dobby VPN exited with code {self.process.returncode} before creating a window"
@@ -1114,13 +1122,29 @@ class NativeUIController:
             # Keep window existence and control discovery as separate bounded
             # stages.  The helper uses CoreGraphics only for diagnostics and
             # never turns screen coordinates into an interaction fallback.
-            _macos_window_rect(process_pid, min(2.0, self.timeout))
-            return _macos_has_element(process_pid, "Connection configuration")
+            try:
+                _macos_window_rect(process_pid, min(2.0, self.timeout))
+                return _macos_has_element(process_pid, "Connection configuration")
+            except NativeUIWindowNotReady as error:
+                # A process can be discoverable a few milliseconds before
+                # Fyne's OnStarted callback calls Show and attaches AX roots.
+                # Retry only this explicit no-value/empty-collection result;
+                # disabled AX, malformed helper output, and timeouts remain
+                # hard failures.
+                last_window_not_ready = error
+                return False
 
-        self._wait(
-            visible,
-            "macOS UI did not expose the configuration input",
-        )
+        try:
+            self._wait(
+                visible,
+                "macOS UI did not expose the configuration input",
+            )
+        except NativeUIWaitTimeout as error:
+            if last_window_not_ready is not None:
+                raise NativeUISmokeError(
+                    f"{error}: {last_window_not_ready}"
+                ) from error
+            raise
 
     def start(self) -> dict[str, object]:
         if self.process is not None:
