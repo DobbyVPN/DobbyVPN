@@ -306,12 +306,22 @@ final class GoFyneUIInteractionTests: XCTestCase {
                         "delete"
                     )
                 }
-                let key = keyboard.keys.matching(predicate).firstMatch
+                // Resolve the key from the stable application root. A real
+                // key tap can rebuild or dismiss the intermediate Keyboard
+                // accessibility node before the next loop iteration; a
+                // query chained through that vanished parent makes XCTest
+                // abort instead of returning control to the bounded recovery.
+                let key = app.keys.matching(predicate).firstMatch
                 // Keep this short enough to recover before the per-key
                 // deadline. Fyne's no-Metal keyboard may report the parent
                 // keyboard as existing while rebuilding its key children.
                 let keyTimeout = min(1, max(0.1, min(deadline.timeIntervalSinceNow, editDeadline.timeIntervalSinceNow)))
-                guard key.waitForExistence(timeout: keyTimeout), !key.frame.isEmpty else {
+                let keyboardFrame = keyboard.frame
+                guard keyboard.exists,
+                    !keyboardFrame.isEmpty,
+                    key.waitForExistence(timeout: keyTimeout),
+                    !key.frame.isEmpty,
+                    keyboardFrame.intersects(key.frame) else {
                     // A key subtree can be stale while the parent keyboard
                     // still reports exists=true. Give a live subtree a few
                     // quick opportunities to appear, then refocus the
