@@ -2582,8 +2582,10 @@ class NativeUIController:
         """Describe only the launched process's top-level windows."""
 
         process = self.process
+        returncode = process.poll() if process is not None else None
         diagnostics: dict[str, object] = {
-            "child_alive": bool(process is not None and process.poll() is None),
+            "child_alive": bool(process is not None and returncode is None),
+            "exit_code": returncode,
             "matching_window_count": 0,
             "matching_windows": [],
         }
@@ -2622,8 +2624,15 @@ class NativeUIController:
         if process is None:
             raise NativeUISmokeError("Windows native UI process is unavailable")
         try:
-            if process.poll() is not None:
-                raise NativeUISmokeError("Windows native UI process has exited")
+            returncode = process.poll()
+            if returncode is not None:
+                diagnostics = self._windows_window_diagnostics()
+                raise NativeUISmokeError(
+                    "Windows native UI process has exited "
+                    f"(exit_code={returncode}; "
+                    "window_diagnostics="
+                    f"{json.dumps(diagnostics, sort_keys=True, separators=(',', ':'))})"
+                )
         except NativeUISmokeError:
             raise
         except Exception as error:
