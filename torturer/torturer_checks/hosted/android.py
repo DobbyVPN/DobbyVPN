@@ -1274,6 +1274,19 @@ class AndroidHostedAdapter:
                 )
                 screenshot_failure = screenshot_failure or missing_failure
 
+        # The cumulative history is populated only after a screenshot has
+        # passed path, metadata, byte, digest, and PNG-dimension validation.
+        # It is therefore the durable indication that a rendered milestone
+        # was retained, even when the producer reported that marker as
+        # ``started`` or stored the current frame only inside ``screenshots``.
+        if (
+            self.ui_mode == "gui-auto"
+            and progress_name is not None
+            and not required_screenshot_seen
+            and screenshot_history_tuples
+        ):
+            required_screenshot_seen = True
+
         if (
             self.ui_mode == "gui-auto"
             and progress_name is not None
