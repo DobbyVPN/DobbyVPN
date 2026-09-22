@@ -89,7 +89,15 @@ final class GoFyneUIInteractionTests: XCTestCase {
         // immediately after the failed action so the error state never needs
         // to refocus Fyne's native input responder.
         app.terminate()
+        XCTAssertTrue(
+            app.wait(for: .notRunning, timeout: 20),
+            "Go/Fyne app did not terminate before the reopen check"
+        )
         app.launch()
+        XCTAssertTrue(
+            app.wait(for: .runningForeground, timeout: 30),
+            "Go/Fyne app did not return to the foreground after relaunch"
+        )
         let reopened = element(named: "Connection configuration")
         XCTAssertTrue(reopened.waitForExistence(timeout: 30), "Go/Fyne UI did not reopen after termination")
         attachScreenshot("reopened")
@@ -132,12 +140,20 @@ final class GoFyneUIInteractionTests: XCTestCase {
             tapConnectExpectingFailure(reopenedConnect),
             "reopened empty configuration did not produce a visible error"
         )
-        let reopenedDetails = app.descendants(matching: .any).matching(
-            NSPredicate(format: "label CONTAINS[c] %@", "required")
-        ).firstMatch
+        // Fyne's iOS accessibility bridge intentionally gives this dynamic
+        // text widget the stable label "Connection details".  It does not
+        // publish a second value field, so searching the label for the
+        // rendered error text would always be invalid (and would make the
+        // test demand that private/configuration-bearing text be exposed).
+        let reopenedError = element(named: "Error")
+        XCTAssertTrue(
+            reopenedError.waitForExistence(timeout: 5),
+            "reopened empty configuration did not expose the production Error state"
+        )
+        let reopenedDetails = element(named: "Connection details")
         XCTAssertTrue(
             reopenedDetails.waitForExistence(timeout: 5),
-            "reopened empty-input error did not explain that configuration is required"
+            "reopened empty-input error did not expose accessible connection details"
         )
         XCTAssertFalse(element(named: "Connected").exists, "reopened empty configuration must not claim a connected VPN")
 

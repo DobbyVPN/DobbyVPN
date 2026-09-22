@@ -147,7 +147,10 @@ class IOSSimulatorCommandsTest(unittest.TestCase):
         self.assertIn("tapConnectExpectingFailure(reopenedConnect)", source)
         self.assertIn('element(named: "Clear logs").waitForExistence(timeout: 30)', source)
         self.assertIn("reopened empty configuration did not produce a visible error", source)
-        self.assertIn("reopened empty-input error did not explain", source)
+        self.assertIn(
+            "reopened empty-input error did not expose accessible connection details",
+            source,
+        )
         self.assertNotIn("reopenedConnect.tap()", source)
         self.assertIn('value.contains("bad")', source)
         self.assertNotIn("inlinesecretmustnotpersist", source)
