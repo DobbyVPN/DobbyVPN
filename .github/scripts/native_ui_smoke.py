@@ -1417,7 +1417,7 @@ Set-Clipboard -Value $value
     else:
         command = r'''
 $ErrorActionPreference = "Stop"
-[Console]::In.ReadToEnd() | Out-Null
+$unusedInput = [Console]::In.ReadToEnd()
 Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Clipboard]::Clear()
 '''
