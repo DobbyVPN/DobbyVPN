@@ -1281,7 +1281,7 @@ class LocalVMPlatformTests(unittest.TestCase):
                     for frame in ("startup", "failure-state", "reopened"):
                         markers.append(
                             (
-                                f"DOBBY_UI_SCREENSHOT label={frame} "
+                                f"INSTRUMENTATION_STATUS: stream=DOBBY_UI_SCREENSHOT label={frame} "
                                 "path=/data/user/0/com.dobby.vpn/cache/"
                                 f"dobbyvpn-rendered-screenshots/{frame}.png "
                                 f"bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()} "

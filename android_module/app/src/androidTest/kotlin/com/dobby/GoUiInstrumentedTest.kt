@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -328,10 +329,13 @@ class GoUiInstrumentedTest {
             }
             val bytes = output.length()
             val hash = sha256(output)
-            println(
+            val marker =
                 "DOBBY_UI_SCREENSHOT label=$label path=${output.absolutePath} " +
-                    "bytes=$bytes sha256=$hash width=${options.outWidth} height=${options.outHeight}",
-            )
+                    "bytes=$bytes sha256=$hash width=${options.outWidth} height=${options.outHeight}\n"
+            val status = Bundle().apply {
+                putString(Instrumentation.REPORT_KEY_STREAMRESULT, marker)
+            }
+            instrumentation.sendStatus(0, status)
         } catch (error: Throwable) {
             if (output != null && output.exists() && !output.delete()) {
                 error.addSuppressed(

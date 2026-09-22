@@ -81,6 +81,8 @@ def test_android_failure_diagnostics_use_fixed_vocabulary_and_redacted_frames() 
     assert "CompleteThrowableReporter.report(instrumentation, finalFailure)" in kotlin
     assert "CompleteThrowableReporter.report(" in java
     assert "CompleteThrowableReporter.report" in reporter_test
+    assert "Instrumentation.REPORT_KEY_STREAMRESULT" in kotlin
+    assert "instrumentation.sendStatus(0, status)" in kotlin
     assert "cause-message" in reporter_test
     assert "suppressed-message" in reporter_test
     for source in (kotlin, java):

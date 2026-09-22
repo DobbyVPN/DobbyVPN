@@ -33,7 +33,8 @@ COMPANION_PACKAGE = "com.dobby.vpn.test"
 PROBE_ROOT_GLOB = "/data/local/tmp/dobbyvpn-probe-*"
 _SCREENSHOT_ROOT = "/data/user/0/com.dobby.vpn/cache/dobbyvpn-rendered-screenshots/"
 _SCREENSHOT_MARKER = re.compile(
-    rb"^DOBBY_UI_SCREENSHOT label=([A-Za-z0-9_-]+) "
+    rb"^(?:DOBBY_UI_SCREENSHOT|INSTRUMENTATION_STATUS: stream=DOBBY_UI_SCREENSHOT) "
+    rb"label=([A-Za-z0-9_-]+) "
     rb"path=(/data/user/0/com\.dobby\.vpn/cache/dobbyvpn-rendered-screenshots/"
     rb"[A-Za-z0-9_-]+\.png) bytes=([0-9]+) sha256=([0-9a-f]{64}) "
     rb"width=([1-9][0-9]*) height=([1-9][0-9]*)$",
