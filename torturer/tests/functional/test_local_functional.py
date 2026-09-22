@@ -373,6 +373,32 @@ class LocalScratchTests(unittest.TestCase):
                     {"kind": "test"},
                 )
 
+    def test_supervised_request_rejects_raw_logs_outside_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            request = root / "request"
+            request.mkdir()
+            profile = request / "profile"
+            profile.write_bytes(b"profile")
+            outside = root / "outside-logs"
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "DOBBYVPN_SUPERVISED_REQUEST": "1",
+                    "DOBBYVPN_REQUEST_ROOT": str(request),
+                },
+                clear=False,
+            ), self.assertRaisesRegex(
+                ValueError, "RAW_LOG_DIRECTORY_OUTSIDE_REQUEST"
+            ):
+                main([
+                    "--platform", "linux",
+                    "--profile", str(profile),
+                    "--output", str(request / "result.json"),
+                    "--raw-log-dir", str(outside),
+                ])
+            self.assertFalse(outside.exists())
+
 
 
 if __name__ == "__main__":

@@ -157,14 +157,21 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("architecture has an invalid format")
     raw_dir = args.raw_log_dir
     supervised_root = _supervised_request_root()
+    if supervised_root is not None:
+        try:
+            raw_dir.resolve().relative_to(supervised_root.resolve())
+        except ValueError as error:
+            raise ValueError("RAW_LOG_DIRECTORY_OUTSIDE_REQUEST") from error
     _ensure_directory(raw_dir)
     _prepare_output_path(args.output)
     if args.source_sha is not None and _SHA40.fullmatch(args.source_sha) is None:
         raise ValueError("source SHA must be a full lowercase SHA")
     cli = args.cli
-    runner = SubprocessRunner(
-        supervised_root / "output" if supervised_root is not None else raw_dir,
-    )
+    # Keep adapter-owned rendered artifacts (including hosted UI screenshots)
+    # in the retained raw-log tree.  The supervised-root check above keeps
+    # this path inside the disposable request even when the caller supplies
+    # command-line paths.
+    runner = SubprocessRunner(raw_dir)
     adb = args.adb or (Path(shutil.which("adb")) if shutil.which("adb") else None)
     if args.platform == "linux" and args.routing_firewall_helper is None:
         raise HostedAdapterError("ROUTING_FIREWALL_HELPER_UNAVAILABLE")
