@@ -447,6 +447,29 @@ func (e *AccessibleEntry) SetText(text string) {
 	e.Entry.SetText(text)
 }
 
+// SetSourceText installs the exact source that the connection action must
+// submit while keeping a multiline source out of Fyne's text renderer.  Real
+// paste events use the same representation through TypedShortcut; desktop
+// UI companions use this method because their protocol already owns the
+// complete source and cannot synthesize a native clipboard event reliably.
+func (e *AccessibleEntry) SetSourceText(text string) {
+	if !strings.ContainsAny(text, "\r\n") {
+		e.SetText(text)
+		return
+	}
+	e.sourceMu.Lock()
+	e.stagedSource = text
+	e.settingPasteSummary = true
+	e.sourceMu.Unlock()
+	// Keep the visible value short and non-sensitive.  SetText invokes
+	// OnChanged synchronously, so the guard must remain held until that
+	// callback has observed the summary update.
+	e.Entry.SetText(inlinePasteSummary)
+	e.sourceMu.Lock()
+	e.settingPasteSummary = false
+	e.sourceMu.Unlock()
+}
+
 // SourceText returns the exact source to submit.  Multiline clipboard input is
 // kept out of Fyne's RichText renderer; if the visible summary was edited by
 // any other path, the staged value is discarded before it can reach the

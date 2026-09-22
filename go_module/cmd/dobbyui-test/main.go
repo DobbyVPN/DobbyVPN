@@ -292,13 +292,14 @@ func setInput(application *ui.Application, config string) {
 	if config == "" {
 		return
 	}
-	// Real provider profiles can be hundreds of kilobytes. Fyne's test
-	// driver's rune-by-rune typing is intentionally avoided; SetText updates
-	// the production entry atomically and the subsequent operation still uses
-	// the real widget callback where applicable.
+	// Real provider profiles can be hundreds of kilobytes. Keep the exact
+	// source in the production entry's staged-source seam while showing only
+	// its fixed summary; rendering the whole document makes software-driver
+	// screenshots arbitrarily slow and would make capture time depend on
+	// provider profile size.
 	fyne.DoAndWait(func() {
-		if application.Connection.Input.Text != config {
-			application.Connection.Input.SetText(config)
+		if application.Connection.Input.SourceText() != config {
+			application.Connection.Input.SetSourceText(config)
 		}
 	})
 }

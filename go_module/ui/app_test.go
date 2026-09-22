@@ -347,6 +347,22 @@ func TestAccessibleEntryStagesMultilinePasteOutsideTheRenderer(t *testing.T) {
 	}
 }
 
+func TestAccessibleEntrySetSourceTextStagesMultilineSourceOutsideTheRenderer(t *testing.T) {
+	runtime := test.NewApp()
+	defer runtime.Quit()
+	entry := newAccessibleEntry(true, "Connection configuration", true)
+	raw := strings.Repeat("[[Outline]]\nendpoint = \"example.invalid\"\n", 128)
+
+	entry.SetSourceText(raw)
+
+	if entry.Text != inlinePasteSummary {
+		t.Fatalf("visible text = %q, want fixed summary", entry.Text)
+	}
+	if entry.SourceText() != raw {
+		t.Fatalf("staged source was not preserved exactly")
+	}
+}
+
 func TestAccessibleEntryKeepsOrdinaryPasteAndClearsStagedSourceOnMutation(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
