@@ -621,7 +621,11 @@ const screen = $.NSScreen.mainScreen;
 if (!screen) throw new Error('no main screen');
 const screenFrame = screen.frame;
 const windowFrame = $.NSMakeRect(120, 120, 420, 220);
-const window = $.NSWindow.alloc.initWithContentRect_styleMask_backing_defer(
+// macOS 15's JXA Objective-C bridge exposes multi-argument selectors using
+// camel-case names.  The underscore spelling used by older hosts is absent
+// here, so keep this product-independent probe compatible with the supported
+// macOS runner instead of mistaking a bridge mismatch for missing Aqua.
+const window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
     windowFrame,
     $.NSWindowStyleMaskTitled,
     $.NSBackingStoreBuffered,
@@ -633,7 +637,6 @@ button.setTitle('DobbyVPN native event probe');
 button.setButtonType($.NSButtonTypePushOnPushOff);
 window.contentView.addSubview(button);
 window.makeKeyAndOrderFront(null);
-window.orderFrontRegardless();
 app.activateIgnoringOtherApps(true);
 const centerX = windowFrame.origin.x + buttonFrame.origin.x + buttonFrame.size.width / 2;
 const centerY = screenFrame.size.height - (windowFrame.origin.y + buttonFrame.origin.y + buttonFrame.size.height / 2);
@@ -644,14 +647,12 @@ while (Date.now() < deadline) {
     if (button.state == 1) {
         console.log(JSON.stringify({clicked:true}));
         window.orderOut(null);
-        window.close();
         app.terminate(null);
         break;
     }
 }
 if (button.state != 1) {
     window.orderOut(null);
-    window.close();
     app.terminate(null);
     throw new Error('reference AppKit control did not receive the CoreGraphics click');
 }
