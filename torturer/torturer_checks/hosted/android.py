@@ -923,6 +923,23 @@ class AndroidHostedAdapter:
                 screenshot_height,
             )
             has_current_metadata = any(item is not None for item in current_metadata)
+            # The Android driver captures a rendered surface at phase start,
+            # before the phase can reach a terminal state.  Once that marker
+            # carries a complete validated screenshot, it is a required
+            # rendered milestone just like a terminal-state marker.
+            if (
+                not required_screenshot
+                and self.ui_mode == "gui-auto"
+                and progress_name is not None
+                and has_current_metadata
+                and (
+                    stage in _ANDROID_REQUIRED_RENDERED_STAGES
+                    or stage.startswith("post-tap-")
+                    or stage.endswith("-state")
+                    or stage == "consent-diagnosis"
+                )
+            ):
+                required_screenshot = True
             if has_current_metadata and not all(
                 item is not None for item in current_metadata
             ):
