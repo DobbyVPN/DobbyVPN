@@ -412,6 +412,37 @@ def _rectangles_intersect(first: list[int], second: list[int]) -> bool:
     )
 
 
+def _is_noninteractive_system_surface(record: dict[str, object]) -> bool:
+    """Ignore compositor surfaces that are not clickable obstruction windows.
+
+    macOS 15 exposes the Dock and Notification Center backing surfaces as
+    opaque-looking full-screen CoreGraphics records even while the desktop
+    screenshot shows only the small visible Dock/toast regions.  WindowServer's
+    cursor surface is likewise reported above every application.  The native
+    click path still proves real input delivery; retaining these records as
+    ``ignored_obstructions`` keeps the complete compositor diagnostic without
+    treating transparent system backing surfaces as product-window blockers.
+    """
+
+    owner = record.get("owner_name")
+    layer = record.get("layer")
+    bounds = record.get("bounds")
+    if owner == "Window Server":
+        return True
+    if (
+        owner in {"Dock", "Notification Center"}
+        and layer in {20, 23}
+        and isinstance(bounds, list)
+        and len(bounds) == 4
+        and bounds[0] == 0
+        and bounds[1] == 0
+        and bounds[2] >= 1000
+        and bounds[3] >= 700
+    ):
+        return True
+    return False
+
+
 def _window_obstruction_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
     """Report frontmost on-screen windows covering the exact PID's window."""
 
@@ -437,6 +468,7 @@ def _window_obstruction_probe(frameworks: Frameworks, pid: int) -> dict[str, obj
     target = records[target_index]
     target_bounds = target["bounds"]
     obstructions: list[dict[str, object]] = []
+    ignored_obstructions: list[dict[str, object]] = []
     seen: set[tuple[int, tuple[int, ...]]] = set()
     # CGWindowListCopyWindowInfo is front-to-back. Only records before the
     # target can cover it; the exact product PID is never considered an
@@ -446,6 +478,9 @@ def _window_obstruction_probe(frameworks: Frameworks, pid: int) -> dict[str, obj
             continue
         bounds = record.get("bounds")
         if not isinstance(bounds, list) or not _rectangles_intersect(target_bounds, bounds):
+            continue
+        if _is_noninteractive_system_surface(record):
+            ignored_obstructions.append(record)
             continue
         key = (int(record.get("owner_pid", 0)), tuple(int(value) for value in bounds))
         if key in seen:
@@ -457,6 +492,7 @@ def _window_obstruction_probe(frameworks: Frameworks, pid: int) -> dict[str, obj
         "stage": "obstruction",
         "target": target,
         "obstructions": obstructions,
+        "ignored_obstructions": ignored_obstructions,
     }
 
 

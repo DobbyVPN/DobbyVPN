@@ -28,13 +28,44 @@ class MacOSAXMatchTests(unittest.TestCase):
     def test_window_obstruction_probe_only_reports_frontmost_intersections(self):
         records = [
             {"owner_pid": 77, "layer": 0, "bounds": [0, 0, 100, 100], "owner_name": "Other"},
-            {"owner_pid": 42, "layer": 0, "bounds": [10, 10, 90, 90], "owner_name": "Dobby Vpn"},
+            {"owner_pid": 42, "layer": 0, "bounds": [10, 10, 400, 900], "owner_name": "Dobby Vpn"},
             {"owner_pid": 88, "layer": 0, "bounds": [200, 200, 300, 300], "owner_name": "Unrelated"},
         ]
         with patch.object(macos_ax, "_cg_window_records", return_value=records):
             result = macos_ax._window_obstruction_probe(_Frameworks(), 42)
         self.assertEqual(result["stage"], "obstruction")
         self.assertEqual([entry["owner_pid"] for entry in result["obstructions"]], [77])
+
+    def test_window_obstruction_probe_keeps_system_backing_surfaces_as_ignored(self):
+        records = [
+            {
+                "owner_pid": 562,
+                "layer": 23,
+                "bounds": [0, 0, 1920, 1080],
+                "owner_name": "Notification Center",
+            },
+            {
+                "owner_pid": 408,
+                "layer": 20,
+                "bounds": [0, 0, 1920, 1080],
+                "owner_name": "Dock",
+            },
+            {
+                "owner_pid": 166,
+                "layer": 2147483630,
+                "bounds": [326, 853, 343, 876],
+                "owner_name": "Window Server",
+            },
+            {"owner_pid": 77, "layer": 0, "bounds": [0, 0, 100, 100], "owner_name": "Other"},
+            {"owner_pid": 42, "layer": 0, "bounds": [10, 10, 400, 900], "owner_name": "Dobby Vpn"},
+        ]
+        with patch.object(macos_ax, "_cg_window_records", return_value=records):
+            result = macos_ax._window_obstruction_probe(_Frameworks(), 42)
+        self.assertEqual([entry["owner_pid"] for entry in result["obstructions"]], [77])
+        self.assertEqual(
+            [entry["owner_pid"] for entry in result["ignored_obstructions"]],
+            [562, 408, 166],
+        )
 
     def _find(self, frames: dict[int, tuple[int, int, int, int]]):
         children = {1: (2, 3), 2: (), 3: (4, 5), 4: (), 5: ()}
