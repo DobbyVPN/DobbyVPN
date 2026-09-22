@@ -807,15 +807,12 @@ def _macos_reference_event_preflight(timeout: float = 12.0) -> None:
         reference_rect = (x, y, x + width, y + height)
         with tempfile.TemporaryDirectory(prefix="dobbyvpn-macos-preflight-") as temporary:
             _macos_capture_rect(reference_rect, Path(temporary) / "screen.png")
-        # The AppKit window is still alive at this point. Check its on-screen
-        # CoreGraphics z-order before posting the event; the reference script
-        # closes the disposable window as soon as it observes the click.
-        obstructions = _macos_window_obstructions(getattr(process, "pid", 0), min(2.0, timeout))
-        if obstructions:
-            raise NativeUISmokeError(
-                "macOS AppKit reference control is obstructed: "
-                + json.dumps(obstructions, sort_keys=True, separators=(",", ":"))
-            )
+        # Do not use the generic product-window obstruction probe here.  The
+        # VM's CoreGraphics list contains transparent full-screen Dock and
+        # Notification Center surfaces even when the captured reference area
+        # is visibly clear.  The physical click below is the decisive check:
+        # an actual overlay would prevent the disposable button from changing
+        # state and would fail this preflight without a false positive.
         _macos_post_reference_click(x, y)
         clicked = False
         while time.monotonic() < deadline:
