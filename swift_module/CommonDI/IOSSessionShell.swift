@@ -2,10 +2,6 @@ import Foundation
 
 /// Containing-app side of the iOS session bridge. Go in the provider owns state.
 public final class IOSSessionShell: NSObject {
-    internal enum ProviderPayloadError: Error, Equatable {
-        case invalidUTF8(hex: String)
-    }
-
     private let secrets = SharedKeychainSecretStore.shared
     private let manager: VpnManagerImpl
     private let logs = IOSAppCompositionRoot.logsRepository
@@ -126,8 +122,8 @@ public final class IOSSessionShell: NSObject {
             // byte sequence is retained reversibly in the native diagnostic.
             let response: String
             do {
-                response = try Self.decodeProviderPayload(providerResponse.payload)
-            } catch let error as ProviderPayloadError {
+                response = try IOSProviderPayload.decode(providerResponse.payload)
+            } catch let error as IOSProviderPayloadError {
                 if case let .invalidUTF8(hex) = error {
                     logs.writeLog(
                         log: "iOS session provider response contained invalid UTF-8 bytes_hex=\(hex)"
@@ -147,10 +143,7 @@ public final class IOSSessionShell: NSObject {
     }
 
     internal static func decodeProviderPayload(_ payload: Data) throws -> String {
-        guard let response = String(data: payload, encoding: .utf8) else {
-            throw ProviderPayloadError.invalidUTF8(hex: payload.map { String(format: "%02x", $0) }.joined())
-        }
-        return response
+        try IOSProviderPayload.decode(payload)
     }
 
     private func failure(_ code: String, message: String) -> String {

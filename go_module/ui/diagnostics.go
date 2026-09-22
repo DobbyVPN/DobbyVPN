@@ -270,7 +270,7 @@ func readDiagnosticRecords(path string, producer int) (records []storedDiagnosti
 	records = make([]storedDiagnosticRecord, 0)
 	for {
 		line, readErr := reader.ReadString('\n')
-		if len(line) > 0 {
+		if line != "" {
 			// Remove only the framing LF. Preserve CR, blank lines, whitespace,
 			// malformed UTF-8 bytes, and a final unterminated record in the
 			// export-facing strings; filtering is a UI concern, not a read path.

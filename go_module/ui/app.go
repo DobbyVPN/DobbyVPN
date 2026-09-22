@@ -15,6 +15,7 @@ import (
 
 const (
 	statusDisconnected = "Disconnected"
+	statusConnecting   = "Connecting"
 	nativeActionLabel  = "VPN connection action"
 	// Fyne's multiline RichText renderer is intentionally not given a large
 	// inline source.  The exact source remains private to AccessibleEntry and
@@ -420,7 +421,7 @@ func newAccessibleLabel(label string) *AccessibleLabel {
 		Label: &widget.Label{Text: " "},
 		label: label,
 	}
-	view.Label.ExtendBaseWidget(view)
+	view.ExtendBaseWidget(view)
 	return view
 }
 
@@ -477,11 +478,11 @@ func (e *AccessibleEntry) SetSourceText(text string) {
 func (e *AccessibleEntry) SourceText() string {
 	e.sourceMu.Lock()
 	defer e.sourceMu.Unlock()
-	if e.stagedSource != "" && e.Entry.Text == inlinePasteSummary {
+	if e.stagedSource != "" && e.Text == inlinePasteSummary {
 		return e.stagedSource
 	}
 	e.stagedSource = ""
-	return e.Entry.Text
+	return e.Text
 }
 
 // TypedShortcut intercepts only multiline paste for the connection source.
@@ -772,7 +773,7 @@ func (v *ConnectionView) toggleWithPresentation(synchronous bool) {
 	// previous permission or transport error is otherwise still rendered while
 	// the retry is being configured, so a real UI observer can mistake that
 	// stale frame for the result of the new attempt.
-	v.renderedStatus = "Connecting"
+	v.renderedStatus = statusConnecting
 	v.renderedButton = "Disconnect"
 	v.renderedDetails = ""
 	v.mu.Unlock()
@@ -1003,38 +1004,19 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 	button := buttonText(snapshot)
 	details := detailsText(snapshot)
 	v.mu.Lock()
-	keepLocalError := v.localError != "" &&
-		snapshot.Sequence <= v.localErrorAt &&
-		snapshot.State != StatePreparing &&
-		snapshot.State != StateProbing &&
-		snapshot.State != StateConnected &&
-		snapshot.State != StateStopping &&
-		snapshot.State != StateFailed
-	if keepLocalError {
+	if v.shouldKeepLocalError(snapshot) {
 		status = "Error"
 		details = v.localError
 	} else {
 		v.localError = ""
 	}
-	v.snapshot = snapshot
-	v.sequence = snapshot.Sequence
-	v.generation = snapshot.Generation
-	if snapshot.Recovering || snapshot.State == StateProbing ||
-		snapshot.State == StatePreparing || snapshot.State == StateConnected ||
-		snapshot.State == StateStopping || snapshot.State == StateFailed {
-		v.startPending = false
-	}
+	v.updateSnapshotState(snapshot)
 	// Configure can publish a short-lived Ready/Disconnected snapshot while a
 	// user-initiated Connect is still in flight. Keep the optimistic action
 	// presentation until an authoritative active, terminal, recovery, or error
 	// state arrives; otherwise a real-window observer can miss the only visible
 	// acknowledgement of its physical click, even after Start has returned.
-	preserveOptimisticConnect := v.startPending &&
-		!snapshot.Recovering &&
-		(snapshot.State == StateIdle || snapshot.State == StateConfigured) &&
-		v.renderedStatus == "Connecting" &&
-		(status == "Ready" || status == statusDisconnected)
-	if !preserveOptimisticConnect {
+	if !v.shouldPreserveOptimisticConnect(snapshot, status) {
 		v.renderedStatus = status
 		v.renderedButton = button
 	}
@@ -1047,6 +1029,31 @@ func (v *ConnectionView) render(snapshot Snapshot) {
 	v.mu.Unlock()
 
 	v.applyPresentation()
+}
+
+func (v *ConnectionView) shouldKeepLocalError(snapshot Snapshot) bool {
+	return v.localError != "" && snapshot.Sequence <= v.localErrorAt &&
+		snapshot.State != StatePreparing && snapshot.State != StateProbing &&
+		snapshot.State != StateConnected && snapshot.State != StateStopping &&
+		snapshot.State != StateFailed
+}
+
+func (v *ConnectionView) updateSnapshotState(snapshot Snapshot) {
+	v.snapshot = snapshot
+	v.sequence = snapshot.Sequence
+	v.generation = snapshot.Generation
+	if snapshot.Recovering || snapshot.State == StateProbing ||
+		snapshot.State == StatePreparing || snapshot.State == StateConnected ||
+		snapshot.State == StateStopping || snapshot.State == StateFailed {
+		v.startPending = false
+	}
+}
+
+func (v *ConnectionView) shouldPreserveOptimisticConnect(snapshot Snapshot, status string) bool {
+	return v.startPending && !snapshot.Recovering &&
+		(snapshot.State == StateIdle || snapshot.State == StateConfigured) &&
+		v.renderedStatus == statusConnecting &&
+		(status == "Ready" || status == statusDisconnected)
 }
 
 func (v *ConnectionView) showError(err error) {
@@ -1115,7 +1122,7 @@ func statusText(snapshot Snapshot) string {
 	case StateConnected:
 		return "Connected"
 	case StateProbing, StatePreparing:
-		return "Connecting"
+		return statusConnecting
 	case StateStopping:
 		return "Disconnecting"
 	case StateConfigured:

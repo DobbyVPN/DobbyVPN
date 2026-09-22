@@ -13,18 +13,6 @@ private func stringFromCString(_ value: UnsafePointer<CChar>?) -> String {
     return String(cString: value)
 }
 
-/// Keep the Go export lossless when a native diagnostic producer left an
-/// invalid UTF-8 byte in a line. Replacement decoding would silently turn
-/// distinct bytes into the same U+FFFD character; an explicit reversible hex
-/// record keeps the archive complete while retaining normal text readability.
-internal func reversibleDiagnosticText(_ data: Data) -> String {
-    if let text = String(data: data, encoding: .utf8) {
-        return text
-    }
-    let hex = data.map { String(format: "%02x", $0) }.joined()
-    return "[invalid-utf8-hex:\(hex)]"
-}
-
 @_cdecl("dobby_ui_startup")
 public func dobbyUIStartup(_ mode: UnsafePointer<CChar>?) {
     let value = stringFromCString(mode)

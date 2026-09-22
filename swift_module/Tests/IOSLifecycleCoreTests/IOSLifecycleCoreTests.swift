@@ -160,9 +160,9 @@ final class IOSLifecycleCoreTests: XCTestCase {
 
     func testMalformedProviderPayloadIsRejectedWithoutReplacementText() {
         let payload = Data([0x7b, 0xff, 0x00, 0x80, 0x7d])
-        XCTAssertThrowsError(try IOSSessionShell.decodeProviderPayload(payload)) { error in
+        XCTAssertThrowsError(try IOSProviderPayload.decode(payload)) { error in
             XCTAssertEqual(
-                error as? IOSSessionShell.ProviderPayloadError,
+                error as? IOSProviderPayloadError,
                 .invalidUTF8(hex: "7bff00807d")
             )
         }

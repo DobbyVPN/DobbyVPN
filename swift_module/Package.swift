@@ -1,9 +1,9 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-// Compile the exact platform-neutral source that is also part of the
-// production CommonDI target. This catches drift without requiring signing,
-// NetworkExtension, or an iOS device.
+// Compile the platform-neutral protocol and lifecycle-diagnostic sources that
+// are also used by the production CommonDI target. This catches drift without
+// requiring signing, NetworkExtension, or an iOS device.
 let package = Package(
     name: "DobbyVPNIOSLifecycleCore",
     // The lifecycle-core target uses Foundation/Swift APIs available on
@@ -29,6 +29,7 @@ let package = Package(
             ],
             sources: [
                 "IOSProviderMessageProtocol.swift",
+                "IOSLifecycleDiagnostics.swift",
             ]
         ),
         .testTarget(
