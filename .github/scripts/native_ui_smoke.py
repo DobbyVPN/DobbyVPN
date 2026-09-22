@@ -3260,6 +3260,11 @@ class NativeUIController:
                 self.macos_pid = None
                 self.macos_process_identity = None
                 self.macos_expected_executable = None
+            if self.platform == "windows":
+                return {
+                    "status": "Closed",
+                    "reconnecting_seen": self._reconnecting_seen,
+                }
             return self.snapshot()
         if self.platform == "windows":
             self._windows_key(0x12, 0x73)  # Alt+F4
@@ -3299,6 +3304,11 @@ end tell''',
         self.macos_pid = None
         self.macos_process_identity = None
         self.macos_expected_executable = None
+        if self.platform == "windows":
+            return {
+                "status": "Closed",
+                "reconnecting_seen": self._reconnecting_seen,
+            }
         return self.snapshot()
 
     def reopen(self) -> dict[str, object]:

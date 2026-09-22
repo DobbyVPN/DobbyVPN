@@ -910,6 +910,29 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
                 controller._windows_click_name(smoke._NATIVE_ACTION_LABEL)
         click.assert_not_called()
 
+    def test_windows_close_returns_closed_state_after_clearing_process_handle(self) -> None:
+        controller = smoke.NativeUIController(
+            "windows", smoke.Path("ui"), smoke.Path("profile"), 1
+        )
+        process = Mock(pid=4321, poll=Mock(return_value=None), returncode=0)
+        controller.process = process
+        controller.hwnd = 123
+        with (
+            patch.object(controller, "_windows_key"),
+            patch.object(controller, "_wait") as wait,
+        ):
+            def close_wait(predicate, _message, _timeout=None):
+                process.poll.return_value = 0
+                self.assertTrue(predicate())
+
+            wait.side_effect = close_wait
+            self.assertEqual(
+                controller.close(),
+                {"status": "Closed", "reconnecting_seen": False},
+            )
+        self.assertIsNone(controller.process)
+        self.assertEqual(controller.hwnd, 0)
+
     def test_windows_click_rejects_reused_stale_hwnd_before_using_it(self) -> None:
         controller = smoke.NativeUIController(
             "windows", smoke.Path("ui"), smoke.Path("profile"), 1
