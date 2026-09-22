@@ -29,6 +29,11 @@ class IosBridgeProvenanceContractTests(unittest.TestCase):
         self.assertIn("shasum -a 256 \"$bridge\" | tee /dev/stderr", self.script)
         self.assertNotIn("| awk", self.script)
 
+    def test_simulator_framework_discovery_works_with_macos_bash(self) -> None:
+        self.assertNotIn("mapfile", self.script)
+        self.assertIn('simulator_framework_count=', self.script)
+        self.assertIn('simulator_framework="$simulator_framework_output"', self.script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,12 +90,12 @@ if [[ -z "$simulator_framework_output" ]]; then
   echo "expected exactly one generated Simulator DobbyVPNRuntime.framework" >&2
   exit 1
 fi
-mapfile -t simulator_frameworks <<<"$simulator_framework_output"
-if [[ "${#simulator_frameworks[@]}" -ne 1 ]]; then
+simulator_framework_count="$(printf '%s\n' "$simulator_framework_output" | grep -c .)"
+if [[ "$simulator_framework_count" -ne 1 ]]; then
   echo "expected exactly one generated Simulator DobbyVPNRuntime.framework" >&2
   exit 1
 fi
-simulator_framework="${simulator_frameworks[0]}"
+simulator_framework="$simulator_framework_output"
 
 if [[ -z "$simulator_architecture" ]]; then
   device_framework="$device_output/ios-arm64/DobbyVPNRuntime.framework"
