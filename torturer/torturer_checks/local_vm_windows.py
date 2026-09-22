@@ -35,12 +35,16 @@ _MESA_LLVMPIPE_URL = (
     "mesa3d-26.2.0-release-msvc.7z"
 )
 _MESA_LLVMPIPE_SHA256 = "dcb2719ef346dab5b609fcb193a5f13cfc4b0502e3f4de1ad43d349477402f47"
+_SEVEN_ZIP_URL = "https://github.com/ip7z/7zip/releases/download/26.03/7zr.exe"
+_SEVEN_ZIP_SHA256 = "ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d"
 _MESA_LLVMPIPE_MEMBERS = (
     "x64/opengl32.dll",
     "x64/libgallium_wgl.dll",
 )
 _MESA_LLVMPIPE_STAGING_NAME = "native-ui-staging"
 _MESA_LLVMPIPE_ARCHIVE_NAME = "mesa3d-26.2.0-release-msvc.7z"
+_SEVEN_ZIP_NAME = "7zr.exe"
+_MESA_DEFENDER_MARKER_NAME = ".defender-exclusion-added"
 _NATIVE_UI_ENVIRONMENT = frozenset({
     "PROGRAMDATA",
     "DOBBYVPN_CONTROL_ADDRESS",
@@ -170,6 +174,134 @@ def _remove_mesa_llvmpipe_staging(run_dir: Path) -> None:
         raise _error("Windows Mesa staging cleanup failed") from error
 
 
+def _mesa_defender_marker_path(run_dir: Path) -> Path:
+    """Return the marker recording an exclusion owned by this run."""
+
+    return _mesa_llvmpipe_staging_path(run_dir) / _MESA_DEFENDER_MARKER_NAME
+
+
+_MESA_DEFENDER_ADD_SCRIPT = r'''$ErrorActionPreference = "Stop"
+$path = [IO.Path]::GetFullPath([string]$env:DOBBYVPN_MESA_STAGING_PATH)
+$command = $null
+try { $command = Get-Command Add-MpPreference -ErrorAction Stop } catch { }
+if ($null -eq $command) {
+  Write-Output "unavailable"
+  exit 0
+}
+$preference = Get-MpPreference -ErrorAction Stop
+$existing = @($preference.ExclusionPath | Where-Object {
+  -not [string]::IsNullOrWhiteSpace([string]$_) -and
+  [IO.Path]::GetFullPath([string]$_) -ieq $path
+})
+if ($existing.Count -gt 0) {
+  Write-Output "existing"
+} else {
+  Add-MpPreference -ExclusionPath $path -ErrorAction Stop
+  Write-Output "added"
+}
+'''
+
+_MESA_DEFENDER_REMOVE_SCRIPT = r'''$ErrorActionPreference = "Stop"
+$path = [IO.Path]::GetFullPath([string]$env:DOBBYVPN_MESA_STAGING_PATH)
+$command = $null
+try { $command = Get-Command Remove-MpPreference -ErrorAction Stop } catch { }
+if ($null -ne $command) {
+  Remove-MpPreference -ExclusionPath $path -ErrorAction Stop
+}
+Write-Output "removed"
+'''
+
+
+def _ensure_mesa_defender_exclusion(
+    run_dir: Path, *, logs: Path | None, timeout: float,
+) -> bool:
+    """Allow Defender to inspect the known fixture only for this run.
+
+    Windows Defender classifies the pinned Mesa archive as potentially
+    unwanted software and blocks every normal file read.  The full lane needs
+    to hash and extract that exact archive, so add an exclusion for the
+    disposable per-run staging directory, never for a parent directory or a
+    machine-wide location.  The caller removes it after the native window
+    exits; a marker distinguishes an exclusion added by this run from one
+    already owned by the machine policy.
+    """
+
+    if os.name != "nt":
+        return False
+    if logs is None:
+        raise _error("Windows Mesa Defender exclusion requires a log directory")
+    staging = _mesa_llvmpipe_staging_path(run_dir)
+    marker = _mesa_defender_marker_path(run_dir)
+    environment = os.environ.copy()
+    environment["DOBBYVPN_MESA_STAGING_PATH"] = str(staging)
+    result = _powershell(
+        _MESA_DEFENDER_ADD_SCRIPT,
+        cwd=run_dir,
+        logs=logs,
+        label="native-ui-mesa-exclusion-add",
+        timeout=min(timeout, 30.0),
+        environment=environment,
+    )
+    state = result.stdout.decode("utf-8", errors="backslashreplace").strip().splitlines()
+    state = state[-1].strip().casefold() if state else ""
+    if state == "added":
+        try:
+            marker.write_text("added\n", encoding="ascii")
+        except OSError as error:
+            cleanup_error: Exception | None = None
+            try:
+                _powershell(
+                    _MESA_DEFENDER_REMOVE_SCRIPT,
+                    cwd=run_dir,
+                    logs=logs,
+                    label="native-ui-mesa-exclusion-remove",
+                    timeout=min(timeout, 30.0),
+                    environment=environment,
+                )
+            except Exception as remove_error:
+                cleanup_error = remove_error
+            if cleanup_error is not None:
+                raise _error(
+                    "Windows Mesa Defender exclusion marker could not be written; "
+                    f"exclusion cleanup failed: {cleanup_error}"
+                ) from error
+            raise _error("Windows Mesa Defender exclusion marker could not be written") from error
+        return True
+    if state in {"existing", "unavailable"}:
+        return False
+    raise _error("Windows Mesa Defender exclusion command returned an invalid result")
+
+
+def _remove_mesa_defender_exclusion(
+    run_dir: Path, *, logs: Path | None, timeout: float,
+) -> None:
+    """Remove only the Defender exclusion recorded as run-owned."""
+
+    if os.name != "nt":
+        return
+    marker = _mesa_defender_marker_path(run_dir)
+    if not marker.is_file():
+        return
+    if logs is None:
+        raise _error("Windows Mesa Defender exclusion cleanup requires a log directory")
+    environment = os.environ.copy()
+    environment["DOBBYVPN_MESA_STAGING_PATH"] = str(_mesa_llvmpipe_staging_path(run_dir))
+    _powershell(
+        _MESA_DEFENDER_REMOVE_SCRIPT,
+        cwd=run_dir,
+        logs=logs,
+        label="native-ui-mesa-exclusion-remove",
+        timeout=min(timeout, 30.0),
+        environment=environment,
+    )
+    try:
+        marker.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise _error("Windows Mesa Defender exclusion marker cleanup failed") from error
+
+
 def _run_mesa_fixture_command(
     command: list[str], *, cwd: Path, timeout: float, logs: Path | None = None,
     label: str = "native-ui-mesa",
@@ -241,7 +373,10 @@ def _mesa_archive_sha256(path: Path) -> str:
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
     except OSError as error:
-        raise _error("Windows Mesa fixture archive could not be hashed") from error
+        raise _error(
+            "Windows Mesa fixture file could not be hashed: "
+            f"{path.name}: {type(error).__name__}: {error}"
+        ) from error
     return digest.hexdigest()
 
 
@@ -253,8 +388,10 @@ def _prepare_mesa_llvmpipe_fixture(
     This is intentionally limited to the Windows full native-window command.
     The production UI is copied byte-for-byte to a disposable run directory;
     no installed file, registry value, System32 file, or machine environment
-    variable is changed.  The archive is checksum-verified before ``tar.exe``
-    sees it and only the two required archive members are extracted.
+    variable is changed.  The archive and the pinned 7-Zip extractor are
+    checksum-verified before extraction, and only the two required archive
+    members are extracted. Windows Defender is excluded only for this
+    disposable staging directory while it is in use.
     """
 
     if "--ui" not in command:
@@ -275,10 +412,14 @@ def _prepare_mesa_llvmpipe_fixture(
     run_dir = run_dir.resolve()
     staging = _mesa_llvmpipe_staging_path(run_dir)
     archive = staging / _MESA_LLVMPIPE_ARCHIVE_NAME
+    seven_zip = staging / _SEVEN_ZIP_NAME
     extraction = staging / ".extract"
     try:
         # A previous worker can have been terminated by the supervisor before
         # its finally block.  Remove that exact stale path before rebuilding.
+        _remove_mesa_defender_exclusion(
+            run_dir, logs=logs, timeout=min(timeout, 30.0),
+        )
         _remove_mesa_llvmpipe_staging(run_dir)
         staging.mkdir(parents=True, exist_ok=False)
         deadline = time.monotonic() + timeout
@@ -288,6 +429,26 @@ def _prepare_mesa_llvmpipe_fixture(
             if value <= 0:
                 raise _error("Windows Mesa fixture preparation timed out")
             return value
+
+        _ensure_mesa_defender_exclusion(
+            run_dir, logs=logs, timeout=remaining(),
+        )
+        _run_mesa_fixture_command(
+            [
+                "curl.exe", "--fail", "--location", "--silent", "--show-error",
+                "--retry", "2", "--connect-timeout", "15",
+                "--max-time", str(max(1, int(remaining()))),
+                "--output", str(seven_zip), _SEVEN_ZIP_URL,
+            ],
+            cwd=run_dir,
+            timeout=remaining(),
+            logs=logs,
+            label="native-ui-7zip-download",
+        )
+        if seven_zip.is_symlink() or not seven_zip.is_file() or seven_zip.stat().st_size <= 0:
+            raise _error("Windows 7-Zip fixture download did not produce an extractor")
+        if _mesa_archive_sha256(seven_zip) != _SEVEN_ZIP_SHA256:
+            raise _error("Windows 7-Zip fixture checksum mismatch")
 
         _run_mesa_fixture_command(
             [
@@ -307,13 +468,14 @@ def _prepare_mesa_llvmpipe_fixture(
         if observed_sha256 != _MESA_LLVMPIPE_SHA256:
             raise _error("Windows Mesa fixture archive checksum mismatch")
 
-        # Supplying the two member names to tar is deliberate: no archive
+        # Supplying the two member names to 7-Zip is deliberate: no archive
         # wildcard or whole-archive extraction can add an unreviewed DLL.
         extraction.mkdir()
         _run_mesa_fixture_command(
             [
-                "tar.exe", "-xf", str(archive), "-C", str(extraction),
+                str(seven_zip), "x", str(archive),
                 *_MESA_LLVMPIPE_MEMBERS,
+                f"-o{extraction}", "-y",
             ],
             cwd=run_dir,
             timeout=remaining(),
@@ -338,17 +500,29 @@ def _prepare_mesa_llvmpipe_fixture(
         # GUI runs.  Keeping only the UI and the two DLLs minimizes cleanup
         # surface and ensures no downloaded artifact is retained on success.
         archive.unlink()
+        seven_zip.unlink()
         shutil.rmtree(extraction)
         staged_command = list(command)
         staged_command[ui_index + 1] = str(destination_ui)
         return staged_command, staging
     except Exception as error:
+        cleanup_errors: list[str] = []
+        try:
+            _remove_mesa_defender_exclusion(
+                run_dir, logs=logs, timeout=min(timeout, 30.0),
+            )
+        except Exception as cleanup_error:
+            cleanup_errors.append(
+                f"Windows Mesa Defender exclusion cleanup failed: {cleanup_error}"
+            )
         try:
             _remove_mesa_llvmpipe_staging(run_dir)
         except Exception as cleanup_error:
-            raise _error(
-                f"{error}; Windows Mesa fixture cleanup failed: {cleanup_error}"
-            ) from error
+            cleanup_errors.append(
+                f"Windows Mesa fixture cleanup failed: {cleanup_error}"
+            )
+        if cleanup_errors:
+            raise _error(f"{error}; {'; '.join(cleanup_errors)}") from error
         raise
 
 
@@ -1035,6 +1209,9 @@ def run_interactive_ui(
         raise LocalVMError("Windows interactive UI control-token user is invalid")
     # A previous supervisor timeout can leave only the disposable Mesa tree
     # behind.  Remove that fixed path before probing or downloading anything.
+    _remove_mesa_defender_exclusion(
+        run_dir, logs=logs, timeout=min(timeout, 30.0),
+    )
     _remove_mesa_llvmpipe_staging(run_dir)
     # A SYSTEM worker can register an interactive task even when the target
     # account has no visible shell.  Prove the user's Explorer session first;
@@ -1200,6 +1377,14 @@ def run_interactive_ui(
                     f"marker cleanup failed ({path.name}): "
                     f"{type(cleanup_error).__name__}: {cleanup_error}"
                 )
+        try:
+            _remove_mesa_defender_exclusion(
+                run_dir, logs=logs, timeout=min(timeout, 30.0),
+            )
+        except Exception as cleanup_error:
+            cleanup_failures.append(
+                f"Mesa Defender exclusion cleanup failed: {cleanup_error}"
+            )
         try:
             _remove_mesa_llvmpipe_staging(run_dir)
         except Exception as cleanup_error:
@@ -1565,6 +1750,12 @@ def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) 
     # The supervisor runs this cleanup command even when the native UI worker
     # was terminated by its outer timeout.  Keep the fixed Mesa path out of
     # retained run directories without touching any installed/release files.
+    try:
+        _remove_mesa_defender_exclusion(
+            run_dir, logs=logs, timeout=min(timeout, 30.0),
+        )
+    except Exception as error:
+        errors.append(f"cleanup-mesa-defender-exclusion: {type(error).__name__}: {error}")
     try:
         _remove_mesa_llvmpipe_staging(run_dir)
     except Exception as error:

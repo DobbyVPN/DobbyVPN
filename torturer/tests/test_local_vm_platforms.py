@@ -144,15 +144,21 @@ class LocalVMPlatformTests(unittest.TestCase):
             ui.write_bytes(b"production-ui")
             command = ["python.exe", "native_ui.py", "--ui", str(ui)]
             archive_bytes = b"synthetic-msvc-archive"
+            seven_zip_bytes = b"synthetic-7zip-extractor"
             calls: list[list[str]] = []
 
             def fake_command(command: list[str], **_kwargs):
                 calls.append(command)
                 if command[0] == "curl.exe":
-                    archive = Path(command[command.index("--output") + 1])
-                    archive.write_bytes(archive_bytes)
+                    output = Path(command[command.index("--output") + 1])
+                    output.write_bytes(
+                        seven_zip_bytes if local_vm_windows._SEVEN_ZIP_URL in command
+                        else archive_bytes
+                    )
                 else:
-                    extraction = Path(command[command.index("-C") + 1])
+                    extraction = Path(next(
+                        argument[2:] for argument in command if argument.startswith("-o")
+                    ))
                     members = extraction / "x64"
                     members.mkdir(parents=True)
                     (members / "opengl32.dll").write_bytes(b"opengl")
@@ -164,6 +170,11 @@ class LocalVMPlatformTests(unittest.TestCase):
                     local_vm_windows,
                     "_MESA_LLVMPIPE_SHA256",
                     hashlib.sha256(archive_bytes).hexdigest(),
+                ),
+                mock.patch.object(
+                    local_vm_windows,
+                    "_SEVEN_ZIP_SHA256",
+                    hashlib.sha256(seven_zip_bytes).hexdigest(),
                 ),
                 mock.patch.object(
                     local_vm_windows,
@@ -187,10 +198,12 @@ class LocalVMPlatformTests(unittest.TestCase):
             self.assertFalse((staging / ".extract").exists())
             self.assertEqual(ui.read_bytes(), b"production-ui")
             self.assertEqual(calls[0][0], "curl.exe")
-            self.assertIn(local_vm_windows._MESA_LLVMPIPE_URL, calls[0])
-            self.assertEqual(calls[1][0], "tar.exe")
+            self.assertIn(local_vm_windows._SEVEN_ZIP_URL, calls[0])
+            self.assertEqual(calls[1][0], "curl.exe")
+            self.assertIn(local_vm_windows._MESA_LLVMPIPE_URL, calls[1])
+            self.assertEqual(calls[2][0], str(root / "native-ui-staging" / local_vm_windows._SEVEN_ZIP_NAME))
             self.assertEqual(
-                calls[1][-2:], list(local_vm_windows._MESA_LLVMPIPE_MEMBERS),
+                calls[2][3:5], list(local_vm_windows._MESA_LLVMPIPE_MEMBERS),
             )
             wrapper = local_vm_windows._native_ui_wrapper(
                 staged,
@@ -219,18 +232,28 @@ class LocalVMPlatformTests(unittest.TestCase):
             def fake_command(command: list[str], **_kwargs):
                 calls.append(command)
                 archive = Path(command[command.index("--output") + 1])
-                archive.write_bytes(b"wrong-archive")
+                archive.write_bytes(
+                    b"wrong-7zip" if local_vm_windows._SEVEN_ZIP_URL in command
+                    else b"wrong-archive"
+                )
                 return subprocess.CompletedProcess(command, 0, b"", b"")
 
-            with mock.patch.object(
-                local_vm_windows, "_run_mesa_fixture_command", side_effect=fake_command,
+            with (
+                mock.patch.object(
+                    local_vm_windows, "_run_mesa_fixture_command", side_effect=fake_command,
+                ),
+                mock.patch.object(
+                    local_vm_windows,
+                    "_SEVEN_ZIP_SHA256",
+                    hashlib.sha256(b"wrong-7zip").hexdigest(),
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
                     local_vm_windows._prepare_mesa_llvmpipe_fixture(
                         command, run_dir=root, timeout=10,
                     )
 
-            self.assertEqual([call[0] for call in calls], ["curl.exe"])
+            self.assertEqual([call[0] for call in calls], ["curl.exe", "curl.exe"])
             self.assertFalse((root / "native-ui-staging").exists())
 
     def test_windows_mesa_fixture_failure_keeps_stdout_and_stderr(self) -> None:
