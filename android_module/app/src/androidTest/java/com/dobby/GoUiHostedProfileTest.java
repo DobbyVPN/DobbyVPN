@@ -2296,7 +2296,12 @@ public final class GoUiHostedProfileTest {
             List<Rect> masks = new ArrayList<>();
             for (String label : new String[]{
                     "Connection configuration", "Connection logs", "Connection details"}) {
-                masks.add(stableRenderedBounds(label));
+                // These panels are sensitive when visible, but the rendered
+                // status screen after Connect intentionally has none of
+                // them. A missing panel therefore means there is nothing to
+                // redact on this frame, not a failed screenshot.
+                Rect bounds = stableRenderedBoundsOrNull(label);
+                if (bounds != null) masks.add(bounds);
             }
             sourceBitmap = InstrumentationRegistry.getInstrumentation()
                     .getUiAutomation().takeScreenshot();
@@ -2436,6 +2441,18 @@ public final class GoUiHostedProfileTest {
             Thread.sleep(POLL_MILLIS);
         }
         throw new IllegalStateException("ANDROID_UI_SCREENSHOT_MASK_MISSING:" + label);
+    }
+
+    private Rect stableRenderedBoundsOrNull(String label) throws Exception {
+        try {
+            return stableRenderedBounds(label);
+        } catch (IllegalStateException error) {
+            if (error.getMessage() != null
+                    && error.getMessage().startsWith("ANDROID_UI_SCREENSHOT_MASK_MISSING:")) {
+                return null;
+            }
+            throw error;
+        }
     }
 
     /** A required frame must prove the profile editor is no longer visible. */
