@@ -264,11 +264,11 @@ Product and functional tests live at one revision. See
 [the functional suite](torturer/README.md) for setup and
 [scenario definitions](torturer/docs/contract.md) for assertions.
 
-Pushes to `main` and pull requests run **Test** automatically. To check a
-feature branch before opening a pull request, use **Actions → Test → Run
-workflow** and select that branch. Its goal is source/build checks, including
-the iOS Simulator Go/Fyne rendered UI mini contract; it does not create a Render VPN
-or publish anything.
+Pushes to `main` and pull requests run **CI** automatically. To check a
+feature branch before opening a pull request, use **Actions → CI → Run
+workflow** and select that branch. CI runs source/build, lint, security, and
+workflow checks, including the iOS Simulator Go/Fyne rendered UI mini contract;
+it does not create a Render VPN or publish anything.
 
 After the intended change is merged, use **Actions → Release → Run workflow**
 on `main` when you want to qualify real signed packages. It installs and tests
@@ -288,7 +288,7 @@ Publishing credentials stay in those jobs.
 
 If a Release fails, fix the cause and dispatch a new Release workflow. Do not
 rerun the old Release: only attempt 1 can qualify for Publish. This restriction
-does not change reruns of the standalone Test workflow.
+does not change reruns of the manually dispatched CI workflow.
 
 To Publish, copy the digits after `/actions/runs/` in the successful Release
 run's URL into the required `release_run_id` field. Use a completed successful
