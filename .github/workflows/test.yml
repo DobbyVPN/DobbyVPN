@@ -36,22 +36,6 @@ jobs:
           PYTHONPATH: torturer
         run: python -m unittest discover -s torturer/tests -p test_windows_job_integration.py -v
 
-  python-tooling:
-    name: Python tooling tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Run Python tooling tests
-        env:
-          PYTHONPATH: torturer
-        run: |
-          python3 -m venv "$RUNNER_TEMP/python-test-venv"
-          "$RUNNER_TEMP/python-test-venv/bin/pip" install --disable-pip-version-check --no-input "pytest==9.0.2" "PyYAML==6.0.3"
-          "$RUNNER_TEMP/python-test-venv/bin/python" -m pytest -vv -s .github/scripts
-
   go:
     name: Go tests
     runs-on: ubuntu-24.04

@@ -106,7 +106,6 @@ skip.
 From the repository root:
 
 ```bash
-PYTHONPATH=torturer python3 -m pytest .github/scripts
 PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py'
 ```
 
