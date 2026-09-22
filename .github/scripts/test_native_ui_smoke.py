@@ -1537,7 +1537,7 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 4)
         self.assertEqual(calls[-1][1]["input"], "")
-        self.assertIn("Set-Clipboard -Clear", calls[-1][0][-1])
+        self.assertIn("[System.Windows.Forms.Clipboard]::Clear()", calls[-1][0][-1])
 
     def test_macos_profile_validation_rejects_nul_and_invalid_utf8(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

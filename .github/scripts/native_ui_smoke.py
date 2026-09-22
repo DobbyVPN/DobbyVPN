@@ -1374,11 +1374,12 @@ try {
 def _windows_set_clipboard(powershell: str, value: str) -> None:
     """Set text clipboard content without putting the value in command text."""
     # Windows PowerShell's ``Set-Clipboard -Value ''`` binds an empty string
-    # as a null parameter and fails with ``Value cannot be null``.  An empty
-    # snapshot means that the test must clear the clipboard, so use the
-    # provider's explicit clear operation instead of trying to set an empty
-    # text value.  Keep the stdin boundary for both branches so profile text
-    # never appears in command arguments or diagnostics.
+    # as a null parameter and fails with ``Value cannot be null``.  Its
+    # ``Set-Clipboard`` implementation on the supported guest does not have
+    # the newer ``-Clear`` switch either, so clear through the WinForms
+    # clipboard API instead of trying to set an empty text value.  Keep the
+    # stdin boundary for both branches so profile text never appears in
+    # command arguments or diagnostics.
     if value:
         command = r'''
 $ErrorActionPreference = "Stop"
@@ -1391,7 +1392,8 @@ Set-Clipboard -Value $value
         command = r'''
 $ErrorActionPreference = "Stop"
 [Console]::In.ReadToEnd() | Out-Null
-Set-Clipboard -Clear
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Clipboard]::Clear()
 '''
         encoded = ""
     try:
