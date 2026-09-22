@@ -166,6 +166,11 @@ This does not require Metal or a larger framebuffer. A failure to create its
 graphics context is still reported with complete process output; do not infer
 the cause from VM display inventory alone or convert it to a pass.
 GUI automation must drive visible controls and may not substitute CLI commands.
+On macOS, posting Cmd+V does not mean the app has consumed the clipboard.
+The native driver retains the submitted profile until the physical Connect
+action is acknowledged, then restores the previous clipboard. Failed or
+abandoned attempts also restore it. Qualification still requires the complete
+native journey and independent VPN observations.
 
 The Go job emits one repository-wide coverage profile with
 `go test -coverpkg=./...` and writes its `go tool cover -func` report to the

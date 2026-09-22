@@ -865,10 +865,12 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         controller = smoke.NativeUIController(
             "macos", smoke.Path("ui.app"), smoke.Path("profile"), 10
         )
+        events: list[str] = []
+        restore = Mock(side_effect=lambda previous: events.append(f"restore:{previous!r}"))
         with (
             patch.object(smoke, "_macos_profile_bytes", return_value=b"profile"),
             patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"previous"),
-            patch.object(smoke, "_macos_restore_clipboard"),
+            patch.object(smoke, "_macos_restore_clipboard", restore),
             patch.object(smoke, "_macos_accessibility_rect", return_value=(1, 2, 100, 200)),
             patch.object(smoke, "_macos_window_rect", return_value=(0, 0, 200, 300)) as window_rect,
             patch.object(controller, "_macos_pid_or_error", return_value=4321),
@@ -876,9 +878,22 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
             patch.object(smoke, "_macos_clipboard_set_verified") as clipboard_set,
             patch.object(smoke, "_macos_keystroke") as keystroke,
             patch.object(smoke, "_macos_copy_selection_verified") as copy_selection,
+            patch.object(
+                controller,
+                "_macos_wait_for_activation",
+                side_effect=lambda *_args: events.append("activation"),
+            ),
+            patch.object(smoke, "_macos_click"),
+            patch.object(
+                controller,
+                "wait_status",
+                side_effect=lambda status: events.append(f"status:{status}") or {"status": status},
+            ),
             patch.object(controller, "snapshot", side_effect=AssertionError("status snapshot is not part of configure")),
         ):
             self.assertEqual(controller.configure(), {"input_verified": True})
+            restore.assert_not_called()
+            self.assertEqual(controller.connect(), {"status": "Connected"})
         window_rect.assert_not_called()
         focus_next.assert_called_once_with(4321)
         self.assertEqual(
@@ -900,6 +915,29 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
             clipboard_set.call_args_list,
             [call(smoke._MACOS_INPUT_SENTINEL), call(b"profile")],
         )
+        self.assertEqual(events, ["activation", "restore:b'previous'", "status:Connected"])
+
+    def test_macos_reconfigure_restores_abandoned_previous_profile_first(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 10
+        )
+        abandoned_restore = Mock()
+        controller._pending_macos_clipboard_restore = abandoned_restore
+        with (
+            patch.object(smoke, "_macos_profile_bytes", return_value=b"profile"),
+            patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"previous"),
+            patch.object(smoke, "_macos_accessibility_rect", return_value=(1, 2, 100, 200)),
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(smoke, "_macos_focus_next"),
+            patch.object(smoke, "_macos_clipboard_set_verified"),
+            patch.object(smoke, "_macos_keystroke"),
+            patch.object(smoke, "_macos_copy_selection_verified"),
+            patch.object(smoke, "_macos_restore_clipboard") as restore_clipboard,
+        ):
+            self.assertEqual(controller.configure(), {"input_verified": True})
+        abandoned_restore.assert_called_once_with()
+        restore_clipboard.assert_not_called()
+        self.assertIsNotNone(controller._pending_macos_clipboard_restore)
 
     def test_macos_activation_uses_exact_window_title_not_dynamic_child_label(self) -> None:
         controller = smoke.NativeUIController(
@@ -911,6 +949,52 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         ):
             self.assertEqual(controller._macos_action_state(4321), "Connecting")
         has_element.assert_not_called()
+
+    def test_macos_wait_status_connected_runs_bounded_ax_title_helper(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 3
+        )
+        with (
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(
+                smoke,
+                "_macos_ax_window_title_once",
+                return_value="Dobby VPN — Connected",
+            ) as title_once,
+            patch.object(controller, "snapshot", return_value={"status": "Connected"}),
+        ):
+            self.assertEqual(
+                controller.wait_status("Connected"),
+                {"status": "Connected"},
+            )
+        title_once.assert_called_once()
+        self.assertEqual(title_once.call_args.args[0], 4321)
+        self.assertGreater(
+            title_once.call_args.args[1],
+            smoke._MACOS_AX_HELPER_EXIT_RESERVE_SECONDS
+            + smoke._MACOS_AX_MESSAGE_TIMEOUT_SECONDS,
+        )
+
+    def test_macos_wait_status_rejects_error_from_same_ax_title_read(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 3
+        )
+        with (
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(
+                smoke,
+                "_macos_ax_window_title_once",
+                return_value="Dobby VPN — Error",
+            ) as title_once,
+            patch.object(controller, "snapshot") as snapshot,
+        ):
+            with self.assertRaisesRegex(
+                smoke.NativeUISmokeError,
+                r"macOS UI reported Error while waiting for Connected",
+            ):
+                controller.wait_status("Connected")
+        title_once.assert_called_once()
+        snapshot.assert_not_called()
 
     def test_process_loss_recovery_reconfigures_and_connects_through_native_ui(self) -> None:
         controller = smoke.NativeUIController(
@@ -1211,6 +1295,35 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
             smoke._macos_clipboard_set_verified(value)
         set_clipboard.assert_called_once_with(value)
 
+    def test_macos_clipboard_restore_reports_restore_and_clear_failures(self) -> None:
+        with patch.object(
+            smoke,
+            "_macos_set_clipboard",
+            side_effect=[
+                smoke.NativeUISmokeError("restore failed"),
+                smoke.NativeUISmokeError("clear failed"),
+            ],
+        ) as set_clipboard:
+            with self.assertRaisesRegex(
+                smoke.NativeUISmokeError,
+                r"restore_error=restore failed; clear_error=clear failed",
+            ):
+                smoke._macos_restore_clipboard(b"previous")
+        self.assertEqual(set_clipboard.call_args_list, [call(b"previous"), call(b"")])
+
+    def test_macos_clipboard_restore_reports_primary_failure_when_clear_succeeds(self) -> None:
+        with patch.object(
+            smoke,
+            "_macos_set_clipboard",
+            side_effect=[smoke.NativeUISmokeError("restore failed"), None],
+        ) as set_clipboard:
+            with self.assertRaisesRegex(
+                smoke.NativeUISmokeError,
+                r"clipboard was cleared \(restore_error=restore failed\)",
+            ):
+                smoke._macos_restore_clipboard(b"previous")
+        self.assertEqual(set_clipboard.call_args_list, [call(b"previous"), call(b"")])
+
     def test_macos_pasteboard_change_count_parses_jxa_output(self) -> None:
         result = subprocess.CompletedProcess(
             ["osascript"], 0, stdout="42\n", stderr=""
@@ -1277,6 +1390,94 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
             with self.assertRaises(smoke.NativeUISmokeError):
                 controller.configure()
         restore.assert_called_once_with()
+
+    def test_macos_configure_failure_preserves_input_and_restore_errors(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 10
+        )
+        restore = Mock(side_effect=smoke.NativeUISmokeError("restore failed"))
+        with (
+            patch.object(smoke, "_macos_profile_bytes", return_value=b"profile"),
+            patch.object(smoke, "_macos_clipboard_snapshot", return_value=b"previous"),
+            patch.object(smoke, "_macos_restore_clipboard", restore),
+            patch.object(smoke, "_macos_accessibility_rect", return_value=(1, 2, 100, 200)),
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(smoke, "_macos_focus_next"),
+            patch.object(smoke, "_macos_clipboard_set_verified"),
+            patch.object(
+                smoke,
+                "_macos_keystroke",
+                side_effect=[None, None, smoke.NativeUISmokeError("input failed")],
+            ),
+            patch.object(smoke, "_macos_copy_selection_verified"),
+        ):
+            with self.assertRaisesRegex(
+                smoke.NativeUISmokeError,
+                r"input failed; macOS clipboard restore also failed: restore failed",
+            ):
+                controller.configure()
+        restore.assert_called_once_with(b"previous")
+        controller._restore_pending_macos_clipboard()
+
+    def test_macos_connect_failure_preserves_activation_and_restore_errors(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 10
+        )
+        restore = Mock(side_effect=smoke.NativeUISmokeError("restore failed"))
+        controller._pending_macos_clipboard_restore = restore
+        with (
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(smoke, "_macos_accessibility_rect", return_value=(1, 2, 100, 200)),
+            patch.object(smoke, "_macos_click"),
+            patch.object(
+                controller,
+                "_macos_wait_for_activation",
+                side_effect=smoke.NativeUISmokeError("activation failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                smoke.NativeUISmokeError,
+                r"activation failed; macOS clipboard restore also failed: restore failed",
+            ):
+                controller.connect()
+        restore.assert_called_once_with()
+        controller._restore_pending_macos_clipboard()
+
+    def test_macos_cleanup_restores_abandoned_clipboard_once(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1
+        )
+        restore = Mock()
+        controller._pending_macos_clipboard_restore = restore
+        controller.close_for_cleanup()
+        controller.close_for_cleanup()
+        restore.assert_called_once_with()
+
+    def test_macos_cleanup_preserves_cleanup_and_restore_errors(self) -> None:
+        identity = smoke._MacOSProcessIdentity(
+            4321, 501, "/tmp/Dobby Vpn.app/Contents/MacOS/Dobby Vpn", "start"
+        )
+        process = Mock(pid=9001, poll=Mock(return_value=None))
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1
+        )
+        controller.process = process
+        controller.macos_pid = identity.pid
+        controller.macos_process_identity = identity
+        controller._pending_macos_clipboard_restore = Mock(
+            side_effect=smoke.NativeUISmokeError("restore failed")
+        )
+        with patch.object(
+            smoke,
+            "_terminate_macos_process_tree",
+            side_effect=smoke.NativeUISmokeError("cleanup failed"),
+        ):
+            with self.assertRaisesRegex(
+                smoke.NativeUISmokeError,
+                r"cleanup failed; macOS clipboard restore also failed: restore failed",
+            ):
+                controller.close_for_cleanup()
+        process.wait.assert_called_once_with(timeout=2)
 
     def test_configure_replaces_existing_profile_before_native_paste(self) -> None:
         controller = smoke.NativeUIController(

@@ -1067,16 +1067,23 @@ def _macos_set_clipboard(value: bytes) -> None:
 
 
 def _macos_restore_clipboard(previous: bytes | None) -> None:
-    """Restore text clipboard content, falling back to clearing it silently."""
+    """Restore text clipboard content, reporting both restore attempts."""
+    value = previous if previous is not None else b""
     try:
-        _macos_set_clipboard(previous if previous is not None else b"")
+        _macos_set_clipboard(value)
         return
-    except (NativeUISmokeError, OSError, subprocess.SubprocessError):
-        pass
-    try:
-        _macos_set_clipboard(b"")
-    except (NativeUISmokeError, OSError, subprocess.SubprocessError):
-        pass
+    except (NativeUISmokeError, OSError, subprocess.SubprocessError) as restore_error:
+        try:
+            _macos_set_clipboard(b"")
+        except (NativeUISmokeError, OSError, subprocess.SubprocessError) as clear_error:
+            raise NativeUISmokeError(
+                "macOS clipboard restore failed "
+                f"(restore_error={restore_error}; clear_error={clear_error})"
+            ) from restore_error
+        raise NativeUISmokeError(
+            "macOS clipboard restore failed; clipboard was cleared "
+            f"(restore_error={restore_error})"
+        ) from restore_error
 
 
 _MACOS_PASTEBOARD_CHANGE_COUNT_SCRIPT = '''ObjC.import("AppKit");
@@ -1444,6 +1451,7 @@ class NativeUIController:
         self.macos_pid: int | None = None
         self.macos_process_identity: _MacOSProcessIdentity | None = None
         self.macos_expected_executable: str | None = None
+        self._pending_macos_clipboard_restore: Callable[[], None] | None = None
         self._reconnecting_seen = False
         marker = os.environ.get("DOBBYVPN_NATIVE_UI_CHILD_PID_FILE")
         self._windows_child_pid_file = (
@@ -1452,6 +1460,23 @@ class NativeUIController:
 
     def _wait(self, predicate, message: str, timeout: float | None = None) -> None:
         _wait_until(predicate, self.timeout if timeout is None else timeout, message)
+
+    def _restore_pending_macos_clipboard(
+        self,
+        primary_error: BaseException | None = None,
+    ) -> None:
+        restore = self._pending_macos_clipboard_restore
+        self._pending_macos_clipboard_restore = None
+        if restore is None:
+            return
+        try:
+            restore()
+        except BaseException as restore_error:
+            if primary_error is None:
+                raise
+            raise NativeUISmokeError(
+                f"{primary_error}; macOS clipboard restore also failed: {restore_error}"
+            ) from primary_error
 
     def _windows_matching_windows(self) -> list[dict[str, object]]:
         if self.process is None:
@@ -1785,13 +1810,6 @@ class NativeUIController:
                 return name
         return None
 
-    def _macos_failure_state(self, process_pid: int) -> str | None:
-        title = _macos_window_title(process_pid, timeout=1.5)
-        for name in ("Error", "Failed"):
-            if _macos_title_has_state(title, name):
-                return name
-        return None
-
     def _macos_wait_for_activation(
         self,
         process_pid: int,
@@ -1845,8 +1863,14 @@ class NativeUIController:
             finally:
                 restore_clipboard()
         else:
+            # A second configure abandons the first staged paste. Restore it
+            # before taking a new snapshot so only one profile is ever held.
+            self._restore_pending_macos_clipboard()
             profile_bytes = _macos_profile_bytes(self.profile)
             previous_clipboard = _macos_clipboard_snapshot()
+            self._pending_macos_clipboard_restore = (
+                lambda: _macos_restore_clipboard(previous_clipboard)
+            )
             try:
                 process_pid = self._macos_pid_or_error()
                 bounds = _macos_accessibility_rect(process_pid, "Connection configuration", 10)
@@ -1873,16 +1897,14 @@ class NativeUIController:
                 _macos_keystroke(process_pid, "a")
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "v")
-                # Keep the real profile on the pasteboard only for the
-                # native paste.  Cmd+A/C over a large Fyne Entry is a
-                # synchronous, diagnostic-only whole-document operation and
-                # can block the software-rendered event thread.  The small
-                # sentinel round trip above proves focus and shortcut
-                # routing; the subsequent Connect/Connected, tunnel, and
-                # routing assertions prove that this real profile was
-                # consumed by the product.
-            finally:
-                _macos_restore_clipboard(previous_clipboard)
+                # Posting Cmd+V does not await Fyne's clipboard read. Keep
+                # the source available through the physical Connect callback,
+                # which reads SourceText before acknowledging activation.
+                # The subsequent VPN observations prove the entered profile
+                # actually establishes the required connection.
+            except BaseException as error:
+                self._restore_pending_macos_clipboard(error)
+                raise
         return {"input_verified": True}
 
     def wait_status(self, status: str, *, timeout: float | None = None) -> dict[str, object]:
@@ -1897,16 +1919,14 @@ class NativeUIController:
         else:
             def visible() -> bool:
                 process_pid = self._macos_pid_or_error()
+                title = _macos_window_title(process_pid, timeout=min(2.0, self.timeout))
                 if status not in {"Error", "Failed"}:
-                    failure = self._macos_failure_state(process_pid)
-                    if failure in {"Error", "Failed"}:
-                        raise NativeUISmokeError(
-                            f"macOS UI reported {failure} while waiting for {status}"
-                        )
-                return _macos_title_has_state(
-                    _macos_window_title(process_pid, timeout=min(1.0, self.timeout)),
-                    status,
-                )
+                    for failure in ("Error", "Failed"):
+                        if _macos_title_has_state(title, failure):
+                            raise NativeUISmokeError(
+                                f"macOS UI reported {failure} while waiting for {status}"
+                            )
+                return _macos_title_has_state(title, status)
 
             self._wait(
                 visible,
@@ -1962,12 +1982,19 @@ class NativeUIController:
         if self.platform == "windows":
             self._windows_click_name(_NATIVE_ACTION_LABEL)
         else:
-            process_pid = self._macos_pid_or_error()
-            bounds = _macos_accessibility_rect(process_pid, _NATIVE_ACTION_LABEL, 10)
-            process_pid = self._macos_pid_or_error()
-            _macos_click(bounds, process_pid)
-            process_pid = self._macos_pid_or_error()
-            self._macos_wait_for_activation(process_pid, bounds)
+            try:
+                process_pid = self._macos_pid_or_error()
+                bounds = _macos_accessibility_rect(process_pid, _NATIVE_ACTION_LABEL, 10)
+                process_pid = self._macos_pid_or_error()
+                _macos_click(bounds, process_pid)
+                process_pid = self._macos_pid_or_error()
+                self._macos_wait_for_activation(process_pid, bounds)
+            except BaseException as error:
+                self._restore_pending_macos_clipboard(error)
+                raise
+            # The title transition is the existing acknowledgement that the
+            # queued Connect event reached Fyne after the profile paste.
+            self._restore_pending_macos_clipboard()
         return self.wait_status("Connected")
 
     def disconnect(self) -> dict[str, object]:
@@ -2011,6 +2038,8 @@ class NativeUIController:
         return {"settings_version": True, "settings_source_commit": True, **self.snapshot()}
 
     def close(self) -> dict[str, object]:
+        if self.platform == "macos":
+            self._restore_pending_macos_clipboard()
         process = self.process
         if process is None:
             if self.platform == "macos" and self.macos_process_identity is not None:
@@ -2065,6 +2094,11 @@ end tell''',
             # verified product identity first, then reap only our launcher.
             process = self.process
             cleanup_error: BaseException | None = None
+            clipboard_error: BaseException | None = None
+            try:
+                self._restore_pending_macos_clipboard()
+            except BaseException as error:
+                clipboard_error = error
             try:
                 if self.macos_process_identity is not None:
                     _terminate_macos_process_tree(
@@ -2099,7 +2133,14 @@ end tell''',
             self.macos_process_identity = None
             self.macos_expected_executable = None
             if cleanup_error is not None:
+                if clipboard_error is not None:
+                    raise NativeUISmokeError(
+                        f"{cleanup_error}; macOS clipboard restore also failed: "
+                        f"{clipboard_error}"
+                    ) from cleanup_error
                 raise cleanup_error
+            if clipboard_error is not None:
+                raise clipboard_error
             return
         if self.process is None and not (
             self.platform == "macos" and self.macos_process_identity is not None
