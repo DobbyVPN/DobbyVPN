@@ -1,1 +1,1 @@
-"""Standard-library tests for the public iOS Simulator contract helpers."""
+"""iOS Simulator qualification launcher."""

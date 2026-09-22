@@ -103,15 +103,6 @@ unavailable on an x86_64 emulator; the emulator contract therefore uses a
 supported test profile and does not turn that ABI limitation into an accepted
 skip.
 
-From the repository root:
-
-```bash
-PYTHONPATH=torturer python3 -m unittest discover -s torturer/tests -p 'test_*.py'
-```
-
-The functional-tooling suite includes Windows-only process tests, skipped on
-other operating systems. Running its Python unit tests is not a live VPN test.
-
 Go/Fyne component tests cover UI state without opening a window. The native
 `dobby-vpn-ui-test` companion drives the production widgets with Fyne's test
 driver and the authenticated desktop service; hosted Windows/macOS mini runs

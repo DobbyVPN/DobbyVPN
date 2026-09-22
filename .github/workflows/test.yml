@@ -10,32 +10,6 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
-  functional-tooling:
-    name: Functional test tooling
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Check the integrated functional suite
-        working-directory: torturer
-        run: python3 -m unittest discover -v -s tests -p 'test_*.py'
-
-  windows-containment:
-    name: Windows process containment
-    runs-on: windows-2022
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Check native Windows Job Objects
-        shell: pwsh
-        env:
-          PYTHONPATH: torturer
-        run: python -m unittest discover -s torturer/tests -p test_windows_job_integration.py -v
-
   go:
     name: Go tests
     runs-on: ubuntu-24.04

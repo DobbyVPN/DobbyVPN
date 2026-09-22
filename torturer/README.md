@@ -4,18 +4,6 @@ This directory contains the product's functional suite, formerly the separate
 Torturer repository. Product and tests now share one commit and review process.
 It is test tooling, not a production runtime dependency.
 
-## Run checks
-
-From this directory:
-
-```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
-```
-
-Windows Job Object integration checks require Windows. Actual VPN qualification
-uses the private Harness launcher or the product's explicitly started Release
-workflow. A push or pull request runs checks, not publication.
-
 ## Ownership
 
 `torturer_contract/` defines scenarios, assertions, and result semantics.
