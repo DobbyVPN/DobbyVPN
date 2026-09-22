@@ -349,13 +349,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 // Keep this short enough to recover before the per-key
                 // deadline. Fyne's no-Metal keyboard may report the parent
                 // keyboard as existing while rebuilding its key children.
+                // Do not read the parent's frame here: iOS Simulator can
+                // remove that accessibility snapshot between the wait above
+                // and this query, which makes XCTest fail instead of retry.
                 let keyTimeout = min(1, max(0.1, min(deadline.timeIntervalSinceNow, editDeadline.timeIntervalSinceNow)))
-                let keyboardFrame = keyboard.frame
                 guard keyboard.exists,
-                    !keyboardFrame.isEmpty,
                     key.waitForExistence(timeout: keyTimeout),
-                    !key.frame.isEmpty,
-                    keyboardFrame.intersects(key.frame) else {
+                    !key.frame.isEmpty else {
                     // A key subtree can be stale while the parent keyboard
                     // still reports exists=true. Give a live subtree a few
                     // quick opportunities to appear, then refocus the
