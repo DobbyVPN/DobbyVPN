@@ -1373,13 +1373,27 @@ try {
 
 def _windows_set_clipboard(powershell: str, value: str) -> None:
     """Set text clipboard content without putting the value in command text."""
-    command = r'''
+    # Windows PowerShell's ``Set-Clipboard -Value ''`` binds an empty string
+    # as a null parameter and fails with ``Value cannot be null``.  An empty
+    # snapshot means that the test must clear the clipboard, so use the
+    # provider's explicit clear operation instead of trying to set an empty
+    # text value.  Keep the stdin boundary for both branches so profile text
+    # never appears in command arguments or diagnostics.
+    if value:
+        command = r'''
 $ErrorActionPreference = "Stop"
 $encoded = [Console]::In.ReadToEnd()
 $value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
 Set-Clipboard -Value $value
 '''
-    encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+        encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+    else:
+        command = r'''
+$ErrorActionPreference = "Stop"
+[Console]::In.ReadToEnd() | Out-Null
+Set-Clipboard -Clear
+'''
+        encoded = ""
     try:
         result = _native_run(
             [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
