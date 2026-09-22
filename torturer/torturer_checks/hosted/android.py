@@ -1236,6 +1236,14 @@ class AndroidHostedAdapter:
                 and state in {"completed", "observed"}
                 for _operation, stage, state in required_milestones
             )
+            # Progress files are replaced for every phase, so a short-lived
+            # ``surface/completed`` marker can be overwritten before a poll.
+            # The cumulative history is the durable marker: a validated
+            # ``*-surface.png`` can only be produced by that surface phase.
+            surface_seen = surface_seen or any(
+                label.endswith("-surface.png")
+                for label, *_metadata in screenshot_history_tuples.values()
+            )
             if worker_failure is None and not surface_seen:
                 missing_surface = AndroidScreenshotCollectionError(
                     "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: hosted GUI run "
