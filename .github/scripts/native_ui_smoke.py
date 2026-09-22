@@ -617,20 +617,36 @@ _MACOS_REFERENCE_EVENT_SCRIPT = r'''ObjC.import('Cocoa');
 ObjC.import('Foundation');
 const app = $.NSApplication.sharedApplication;
 app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+const stdoutHandle = $.NSFileHandle.fileHandleWithStandardOutput;
+function writeProtocol(payload) {
+    const text = $.NSString.alloc.initWithUTF8String(JSON.stringify(payload) + '\n');
+    stdoutHandle.writeData(text.dataUsingEncoding($.NSUTF8StringEncoding));
+}
 const screen = $.NSScreen.mainScreen;
 if (!screen) throw new Error('no main screen');
 const screenFrame = screen.frame;
 const windowFrame = $.NSMakeRect(120, 120, 420, 220);
 // macOS 15's JXA Objective-C bridge exposes multi-argument selectors using
-// camel-case names.  The underscore spelling used by older hosts is absent
-// here, so keep this product-independent probe compatible with the supported
-// macOS runner instead of mistaking a bridge mismatch for missing Aqua.
-const window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-    windowFrame,
-    $.NSWindowStyleMaskTitled,
-    $.NSBackingStoreBuffered,
-    false
-);
+// camel-case names. Keep the older underscore spelling as a fallback so a
+// supported older macOS host is not mistaken for a missing Aqua session.
+let window;
+if (typeof $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer === 'function') {
+    window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
+        windowFrame,
+        $.NSWindowStyleMaskTitled,
+        $.NSBackingStoreBuffered,
+        false
+    );
+} else if (typeof $.NSWindow.alloc.initWithContentRect_styleMask_backing_defer === 'function') {
+    window = $.NSWindow.alloc.initWithContentRect_styleMask_backing_defer(
+        windowFrame,
+        $.NSWindowStyleMaskTitled,
+        $.NSBackingStoreBuffered,
+        false
+    );
+} else {
+    throw new Error('NSWindow content-rect initializer is unavailable in the JXA bridge');
+}
 const buttonFrame = $.NSMakeRect(95, 75, 230, 56);
 const button = $.NSButton.alloc.initWithFrame(buttonFrame);
 button.setTitle('DobbyVPN native event probe');
@@ -640,12 +656,12 @@ window.makeKeyAndOrderFront(null);
 app.activateIgnoringOtherApps(true);
 const centerX = windowFrame.origin.x + buttonFrame.origin.x + buttonFrame.size.width / 2;
 const centerY = screenFrame.size.height - (windowFrame.origin.y + buttonFrame.origin.y + buttonFrame.size.height / 2);
-console.log(JSON.stringify({ready:true,x:Math.round(centerX),y:Math.round(centerY),width:420,height:220}));
+writeProtocol({ready:true,x:Math.round(centerX),y:Math.round(centerY),width:420,height:220});
 const deadline = Date.now() + 5000;
 while (Date.now() < deadline) {
     $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
     if (button.state == 1) {
-        console.log(JSON.stringify({clicked:true}));
+        writeProtocol({clicked:true});
         window.orderOut(null);
         app.terminate(null);
         break;
