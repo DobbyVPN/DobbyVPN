@@ -71,7 +71,10 @@ _COMMON_CONNECT = (
     _step("configure", "configure", 60),
     _step("connect", "connect", 40),
     _step("tunnel", "observe_tunnel"),
-    _step("routing", "observe_routing_identity", 15),
+    # Android performs two sequential bounded identity probes during this
+    # operation, in addition to the host/device routing handshake. Give that
+    # shared observation enough time for both eight-second network bounds.
+    _step("routing", "observe_routing_identity", 30),
 )
 
 
@@ -139,7 +142,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             "disconnect.clean",
             "cleanup.restored",
         ),
-        max_duration_seconds=193,
+        max_duration_seconds=208,
     ),
     ScenarioDefinition(
         id="functional.start-stop-start",
@@ -148,7 +151,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             _step("disconnect", "disconnect", 10),
             _step("reconnect", "reconnect", 30),
             _step("second-tunnel", "observe_tunnel", 8),
-            _step("second-routing", "observe_routing_identity", 15),
+            _step("second-routing", "observe_routing_identity", 30),
             _step("final-disconnect", "disconnect", 10),
             _step("cleanup", "inspect_cleanup", 15),
         ),
@@ -175,7 +178,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             "disconnect.final_clean",
             "cleanup.restored",
         ),
-        max_duration_seconds=211,
+        max_duration_seconds=241,
     ),
     ScenarioDefinition(
         id="functional.network-transition",
@@ -204,7 +207,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             "disconnect.clean",
             "cleanup.restored",
         ),
-        max_duration_seconds=178,
+        max_duration_seconds=193,
     ),
     ScenarioDefinition(
         id="functional.product-process-loss",
@@ -236,7 +239,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
         # Android proves real process absence between two bounded product
         # sessions. Reserve the shared adapter's finalization tail outside
         # that work without weakening the per-operation bounds.
-        max_duration_seconds=276,
+        max_duration_seconds=283,
     ),
 )
 

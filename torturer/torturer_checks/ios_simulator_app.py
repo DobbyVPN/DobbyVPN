@@ -13,6 +13,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Protocol, Sequence
 
@@ -32,6 +33,7 @@ from torturer_checks.ios_simulator import (
     simctl_terminate_command,
     xcodebuild_ui_test_command,
 )
+from torturer_checks.screenshot_artifacts import png_metadata
 
 
 def _load_build_runtime_framework_validator():
@@ -104,6 +106,7 @@ STAGE_TIMEOUT_SECONDS = {
     "bootstatus": 360,
     "install": 180,
     "xctest-ui": IOS_UI_TEST_TIMEOUT_SECONDS,
+    "export-xctest-screenshots": 120,
     "terminate": 60,
     "shutdown": 120,
     "build-ios-framework": IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
@@ -590,6 +593,128 @@ def _retain_xctest_result_bundle(result_bundle: Path, work_dir: Path) -> Path:
     )
 
 
+def _retain_xctest_screenshots(
+    runner: CommandRunner,
+    result_bundle: Path,
+    work_dir: Path,
+    *,
+    budget: RunBudget,
+) -> Path:
+    """Copy the XCTest's named UI screenshots beside the complete result bundle."""
+    diagnostics = _ios_diagnostics_directory(work_dir)
+    destination = diagnostics / "ui-screenshots"
+    if destination.exists() or destination.is_symlink():
+        raise IOSSimulatorAppContractError(
+            f"iOS XCTest screenshot destination already exists: {destination}"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="ios-xcresult-attachments-", dir=work_dir,
+    ) as temporary_directory:
+        exported = Path(temporary_directory)
+        _require_success(
+            runner,
+            [
+                "xcrun", "xcresulttool", "export", "attachments",
+                "--path", str(result_bundle),
+                "--output-path", str(exported),
+            ],
+            "export-xctest-screenshots",
+            budget=budget,
+            timeout_seconds=STAGE_TIMEOUT_SECONDS["export-xctest-screenshots"],
+        )
+
+        manifest_path = next(
+            (
+                candidate for candidate in (
+                    exported / "manifest.json",
+                    exported / "attachments" / "manifest.json",
+                )
+                if candidate.is_file() and not candidate.is_symlink()
+            ),
+            None,
+        )
+        if manifest_path is None:
+            raise IOSSimulatorAppContractError(
+                "xcresulttool attachment export did not create manifest.json"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise IOSSimulatorAppContractError(
+                "xcresulttool attachment manifest is unreadable"
+            ) from error
+        if not isinstance(manifest, list):
+            raise IOSSimulatorAppContractError(
+                "xcresulttool attachment manifest has an invalid shape"
+            )
+
+        screenshot_dir = manifest_path.parent
+        copied: set[str] = set()
+        for test in manifest:
+            attachments = test.get("attachments") if isinstance(test, dict) else None
+            if not isinstance(attachments, list):
+                raise IOSSimulatorAppContractError(
+                    "xcresulttool attachment manifest has an invalid test entry"
+                )
+            for attachment in attachments:
+                if not isinstance(attachment, dict):
+                    raise IOSSimulatorAppContractError(
+                        "xcresulttool attachment manifest has an invalid attachment entry"
+                    )
+                human_name = attachment.get("suggestedHumanReadableName")
+                if not isinstance(human_name, str) or not human_name.startswith("dobbyvpn-ui-"):
+                    continue
+                if not human_name.lower().endswith(".png"):
+                    raise IOSSimulatorAppContractError(
+                        f"named iOS UI screenshot is not a PNG: {human_name}"
+                    )
+                label_match = re.fullmatch(
+                    r"dobbyvpn-ui-([a-z][a-z0-9-]*)_\d+_[0-9A-Fa-f-]+\.png",
+                    human_name,
+                )
+                exported_name = attachment.get("exportedFileName")
+                if (
+                    label_match is None
+                    or not isinstance(exported_name, str)
+                    or Path(exported_name).name != exported_name
+                    or exported_name in {"", ".", ".."}
+                ):
+                    raise IOSSimulatorAppContractError(
+                        f"xcresulttool returned an unsafe iOS UI screenshot entry: {human_name}"
+                    )
+                label = label_match.group(1)
+                if label in copied:
+                    raise IOSSimulatorAppContractError(
+                        f"xcresulttool returned duplicate iOS UI screenshot: {label}"
+                    )
+                source = screenshot_dir / exported_name
+                if source.is_symlink() or not source.is_file():
+                    raise IOSSimulatorAppContractError(
+                        f"xcresulttool did not export complete iOS UI screenshot: {human_name}"
+                    )
+                diagnostics.mkdir(parents=True, exist_ok=True)
+                destination.mkdir(mode=0o700, exist_ok=True)
+                destination.chmod(0o700)
+                screenshot = destination / f"{label}.png"
+                try:
+                    shutil.copy2(source, screenshot)
+                    screenshot.chmod(0o600)
+                    png_metadata(screenshot)
+                except (OSError, ValueError) as error:
+                    raise IOSSimulatorAppContractError(
+                        f"could not retain complete iOS UI screenshot: {label}"
+                    ) from error
+                copied.add(label)
+
+        if not copied:
+            raise IOSSimulatorAppContractError(
+                "xcresult contained no named DobbyVPN UI screenshots"
+            )
+        destination.chmod(0o700)
+    return destination
+
+
 def _collect_ios_app_log_exports(
     runner: CommandRunner,
     simulator: AvailableSimulator,
@@ -631,6 +756,23 @@ def _collect_ios_app_log_exports(
         )
     destination_dir = _ios_diagnostics_directory(work_dir)
     destination_dir.mkdir(parents=True, exist_ok=True)
+
+    native_log = container / "tmp" / "app_logs.txt"
+    if native_log.is_symlink() or not native_log.is_file():
+        raise IOSSimulatorStageError(
+            "collect-ios-native-log",
+            "Simulator app did not leave its complete app_logs.txt diagnostic",
+        )
+    native_log_copy = destination_dir / "app-native.log"
+    try:
+        shutil.copy2(native_log, native_log_copy)
+    except OSError as error:
+        raise IOSSimulatorStageError(
+            "collect-ios-native-log",
+            f"could not copy complete native app log: {native_log_copy}",
+        ) from error
+    native_log_copy.chmod(0o600)
+
     retained: list[Path] = []
     for source in candidates:
         _validate_gzip_export(source)
@@ -666,6 +808,27 @@ def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path,
         destination = destination_dir / source.name
         if source.name.endswith(".xcresult"):
             retained.append(_copy_complete_directory(source, destination, label="XCTest result bundle"))
+            continue
+        if source.name == "ui-screenshots":
+            retained.append(_copy_complete_directory(source, destination, label="iOS UI screenshots"))
+            for screenshot in destination.iterdir():
+                png_metadata(screenshot)
+                screenshot.chmod(0o600)
+            destination.chmod(0o700)
+            continue
+        if source.name == "app-native.log":
+            if source.is_symlink() or not source.is_file():
+                raise IOSSimulatorAppContractError(
+                    f"native app log is not a regular file: {source}"
+                )
+            try:
+                shutil.copy2(source, destination)
+            except OSError as error:
+                raise IOSSimulatorAppContractError(
+                    f"could not retain complete native app log: {destination}"
+                ) from error
+            destination.chmod(0o600)
+            retained.append(destination)
             continue
         if source.name.startswith("DobbyVPN_logs_") and source.name.endswith(".jsonl.gz"):
             _validate_gzip_export(source)
@@ -954,10 +1117,11 @@ def run_ios_simulator_app_contract(
                     retained_result_bundle = _retain_xctest_result_bundle(
                         result_bundle, work_dir
                     )
-                except BaseException as error:
-                    failure = _add_note(
-                        failure, "iOS XCTest result collection failed", error
+                    _retain_xctest_screenshots(
+                        runner, retained_result_bundle, work_dir, budget=budget
                     )
+                except BaseException as error:
+                    failure = _add_note(failure, "iOS XCTest result collection failed", error)
             else:
                 failure = _add_note(
                     failure,

@@ -65,6 +65,7 @@ public final class ExportLogsInteractorImpl: NSObject, UIAdaptivePresentationCon
         })
         prompt.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak prompt] _ in
             guard let self, let prompt else { return }
+            self.logs.writeLog(log: "Log export Save action selected")
             self.continueAfterPromptDismissal(prompt) { [weak self] in
                 self?.presentDocumentPicker(fileURL: fileURL)
             }
@@ -82,11 +83,14 @@ public final class ExportLogsInteractorImpl: NSObject, UIAdaptivePresentationCon
             if self?.exportPrompt === prompt {
                 self?.exportPrompt = nil
             }
+            self?.logs.writeLog(log: "Log export prompt dismissal completed")
             action()
         }
         if prompt.presentingViewController != nil {
+            logs.writeLog(log: "Log export prompt dismissal requested")
             prompt.dismiss(animated: true, completion: finish)
         } else {
+            logs.writeLog(log: "Log export prompt already detached")
             DispatchQueue.main.async(execute: finish)
         }
     }
@@ -160,6 +164,7 @@ public final class ExportLogsInteractorImpl: NSObject, UIAdaptivePresentationCon
             return
         }
 
+        logs.writeLog(log: "Log export document picker presentation requested")
         let picker = UIDocumentPickerViewController(forExporting: [fileURL], asCopy: true)
         picker.delegate = self
         self.documentPicker = picker
@@ -173,7 +178,12 @@ public final class ExportLogsInteractorImpl: NSObject, UIAdaptivePresentationCon
             )
             popover.permittedArrowDirections = []
         }
-        active.viewController.present(picker, animated: true)
+        active.viewController.present(picker, animated: true) { [weak self, weak picker] in
+            self?.logs.writeLog(
+                log: "Log export document picker presentation completed "
+                    + "presented=\(picker?.presentingViewController != nil)"
+            )
+        }
     }
 
     private func activeWindowScene() -> UIWindowScene? {

@@ -1684,6 +1684,17 @@ class AndroidHostedAdapter:
     ) -> Mapping[str, object]:
         name = f"{control_file}.ready"
         last_value: Mapping[str, object] | None = None
+
+        def phase_timeout() -> ScenarioExecutionError:
+            failure = ScenarioExecutionError("ANDROID_ROUTING_PHASE_TIMEOUT")
+            last_phase = last_value.get("phase") if last_value is not None else None
+            failure.add_note(
+                "android_routing_phase="
+                + (last_phase if isinstance(last_phase, str) else "invalid")
+            )
+            failure.add_note(f"android_routing_expected_phase={phase}")
+            return failure
+
         while True:
             self._wait_device_file(name, deadline, abort=abort)
             result = self._adb(
@@ -1705,16 +1716,13 @@ class AndroidHostedAdapter:
             if value.get("phase") == phase:
                 return value
             if time.monotonic() >= deadline:
-                failure = ScenarioExecutionError("ANDROID_ROUTING_PHASE_TIMEOUT")
-                phase = last_value.get("phase") if last_value is not None else None
-                failure.add_note(
-                    "android_routing_phase="
-                    + (phase if isinstance(phase, str) else "invalid")
-                )
-                raise failure
+                raise phase_timeout()
             if abort is not None:
                 abort()
-            time.sleep(min(0.1, deadline - time.monotonic()))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise phase_timeout()
+            time.sleep(min(0.1, remaining))
 
     @staticmethod
     def _routing_ready_values(
