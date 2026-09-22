@@ -205,7 +205,10 @@ public final class GoUiHostedProfileTest {
     private boolean consentTimeoutDiagnosed;
     private final JSONArray screenshotHistory = new JSONArray();
     private final File screenshotDirectory = new File(
-            testContext.getCacheDir(), "dobbyvpn-rendered-screenshots");
+            // Instrumentation executes in the target application's UID. The
+            // instrumentation APK's cache is a different sandbox and is not
+            // writable from this process.
+            context.getCacheDir(), "dobbyvpn-rendered-screenshots");
 
     @Before
     public void configureBoundedSelectorPolling() {
@@ -496,6 +499,13 @@ public final class GoUiHostedProfileTest {
                 }
             }
             observation.put("error_code", fixedFailureCode(failure));
+            try {
+                CompleteThrowableReporter.report(
+                        InstrumentationRegistry.getInstrumentation(), failure);
+            } catch (Throwable reportError) {
+                failure.addSuppressed(new IllegalStateException(
+                        "ANDROID_COMPLETE_THROWABLE_REPORT_FAILED", reportError));
+            }
         } finally {
             String cleanupError = null;
             try {
@@ -2278,6 +2288,7 @@ public final class GoUiHostedProfileTest {
                 || "consent-diagnosis".equals(stage))) {
             return null;
         }
+        Bitmap sourceBitmap = null;
         Bitmap bitmap = null;
         File output = null;
         try {
@@ -2287,11 +2298,20 @@ public final class GoUiHostedProfileTest {
                     "Connection configuration", "Connection logs", "Connection details"}) {
                 masks.add(stableRenderedBounds(label));
             }
-            bitmap = InstrumentationRegistry.getInstrumentation()
+            sourceBitmap = InstrumentationRegistry.getInstrumentation()
                     .getUiAutomation().takeScreenshot();
-            if (bitmap == null || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) {
+            if (sourceBitmap == null
+                    || sourceBitmap.getWidth() <= 0 || sourceBitmap.getHeight() <= 0) {
                 throw new IllegalStateException("ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY");
             }
+            // UiAutomation.takeScreenshot() returns an immutable bitmap on
+            // current Android images. Copy it before applying redaction.
+            bitmap = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true);
+            if (bitmap == null) {
+                throw new IllegalStateException("ANDROID_UI_SCREENSHOT_COPY_FAILED");
+            }
+            sourceBitmap.recycle();
+            sourceBitmap = null;
             Canvas canvas = new Canvas(bitmap);
             Paint paint = new Paint();
             paint.setColor(Color.BLACK);
@@ -2346,6 +2366,7 @@ public final class GoUiHostedProfileTest {
             throw failure;
         } finally {
             if (bitmap != null) bitmap.recycle();
+            if (sourceBitmap != null) sourceBitmap.recycle();
         }
     }
 

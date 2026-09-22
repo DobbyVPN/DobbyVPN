@@ -1,6 +1,9 @@
 import unittest
 
-from torturer_checks.android_instrumentation import parse_instrumentation_result
+from torturer_checks.android_instrumentation import (
+    parse_instrumentation_result,
+    validate_complete_throwable_report,
+)
 
 
 class AndroidInstrumentationParserTests(unittest.TestCase):
@@ -58,6 +61,23 @@ class AndroidInstrumentationParserTests(unittest.TestCase):
                     timed_out=timed_out,
                 )
                 self.assertFalse(parsed.succeeded)
+
+    def test_complete_throwable_report_requires_one_ordered_complete_sequence(self):
+        valid = (
+            b"DOBBY_COMPLETE_THROWABLE_BEGIN id=4 chunks=2 bytes=3 chars=3\n"
+            b"DOBBY_COMPLETE_THROWABLE_CHUNK id=4 sequence=1/2\nxy\n"
+            b"DOBBY_COMPLETE_THROWABLE_CHUNK id=4 sequence=2/2\nz\n"
+            b"DOBBY_COMPLETE_THROWABLE_END id=4 chunks=2 bytes=3 chars=3\n"
+        )
+        validate_complete_throwable_report(valid)
+        for invalid in (
+            valid.replace(b"sequence=2/2", b"sequence=1/2"),
+            valid.replace(b"chunks=2 bytes=3", b"chunks=3 bytes=3"),
+            valid.replace(b"DOBBY_COMPLETE_THROWABLE_END", b"OTHER"),
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    validate_complete_throwable_report(invalid)
 
 
 if __name__ == "__main__":

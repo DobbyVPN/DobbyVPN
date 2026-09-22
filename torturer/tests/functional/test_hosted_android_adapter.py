@@ -204,7 +204,7 @@ class FakeAndroidRunner:
             path.endswith(".progress.json") for path in tail[3:]
         ):
             screenshot_path = (
-                "/data/user/0/com.dobby.vpn.test/cache/"
+                "/data/user/0/com.dobby.vpn/cache/"
                 "dobbyvpn-rendered-screenshots/fake-surface.png"
             )
             progress = {

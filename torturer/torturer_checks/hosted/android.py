@@ -136,7 +136,7 @@ _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
     ),
 }
 _ANDROID_SCREENSHOT_PATH = re.compile(
-    r"^/data/user/0/com\.dobby\.vpn\.test/cache/"
+    r"^/data/user/0/com\.dobby\.vpn/cache/"
     r"dobbyvpn-rendered-screenshots/([A-Za-z0-9_-]+\.png)$"
 )
 _ANDROID_REQUIRED_RENDERED_STAGES = frozenset({"surface"})

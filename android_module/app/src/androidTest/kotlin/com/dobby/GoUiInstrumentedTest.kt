@@ -31,13 +31,18 @@ class GoUiInstrumentedTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val packageName = instrumentation.targetContext.packageName
     private val screenshotDirectory = File(
-        instrumentation.context.cacheDir,
+        // Instrumentation executes in the target application's UID. The
+        // instrumentation APK's Context points at a different sandbox, which
+        // is not writable from this process. Keep rendered frames in the
+        // target app's cache, where the test process can create and pull them.
+        instrumentation.targetContext.cacheDir,
         "dobbyvpn-rendered-screenshots",
     )
 
     @get:Rule
     val screenshotOnFailure: TestWatcher = object : TestWatcher() {
         override fun failed(error: Throwable?, description: Description?) {
+            var finalFailure = error
             try {
                 captureScreenshot("failure")
             } catch (captureError: Throwable) {
@@ -46,12 +51,22 @@ class GoUiInstrumentedTest {
                         (captureError.message ?: captureError::class.java.simpleName),
                     captureError,
                 )
-                if (error != null) {
-                    error.addSuppressed(failure)
+                if (finalFailure != null) {
+                    finalFailure.addSuppressed(failure)
                 } else {
-                    throw failure
+                    finalFailure = failure
                 }
             }
+            if (finalFailure != null) {
+                try {
+                    CompleteThrowableReporter.report(instrumentation, finalFailure)
+                } catch (reportError: Throwable) {
+                    finalFailure.addSuppressed(
+                        AssertionError("ANDROID_COMPLETE_THROWABLE_REPORT_FAILED", reportError),
+                    )
+                }
+            }
+            if (error == null && finalFailure != null) throw finalFailure
         }
     }
 
@@ -252,15 +267,25 @@ class GoUiInstrumentedTest {
         check(label.matches(Regex("[A-Za-z0-9_-]+"))) {
             "ANDROID_UI_SCREENSHOT_LABEL_INVALID"
         }
+        var sourceBitmap: Bitmap? = null
         var bitmap: Bitmap? = null
         var output: File? = null
         try {
             ensureNativeInputDismissedForScreenshot()
-            bitmap = instrumentation.uiAutomation.takeScreenshot()
+            sourceBitmap = instrumentation.uiAutomation.takeScreenshot()
                 ?: throw IllegalStateException("ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY")
-            check(bitmap.width > 0 && bitmap.height > 0) {
+            val source = sourceBitmap ?: throw IllegalStateException(
+                "ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY",
+            )
+            check(source.width > 0 && source.height > 0) {
                 "ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY"
             }
+            // UiAutomation.takeScreenshot() returns an immutable bitmap on
+            // current Android images. Copy it before applying redaction.
+            bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
+                ?: throw IllegalStateException("ANDROID_UI_SCREENSHOT_COPY_FAILED")
+            source.recycle()
+            sourceBitmap = null
             val masks = listOf(
                 "Connection configuration",
                 "Connection logs",
@@ -320,6 +345,7 @@ class GoUiInstrumentedTest {
             )
         } finally {
             bitmap?.recycle()
+            sourceBitmap?.recycle()
         }
     }
 

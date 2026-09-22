@@ -28,6 +28,18 @@ _JUNIT_FAILURES = re.compile(rb"^[ \t]*FAILURES!!![ \t]*$")
 _INSTRUMENTATION_SUCCESS = re.compile(
     rb"^[ \t]*INSTRUMENTATION_CODE: -1[ \t]*$"
 )
+_COMPLETE_THROWABLE_BEGIN = re.compile(
+    rb"DOBBY_COMPLETE_THROWABLE_BEGIN id=([0-9]+) chunks=([1-9][0-9]*) "
+    rb"bytes=([0-9]+) chars=([0-9]+)"
+)
+_COMPLETE_THROWABLE_CHUNK = re.compile(
+    rb"DOBBY_COMPLETE_THROWABLE_CHUNK id=([0-9]+) "
+    rb"sequence=([1-9][0-9]*)/([1-9][0-9]*)"
+)
+_COMPLETE_THROWABLE_END = re.compile(
+    rb"DOBBY_COMPLETE_THROWABLE_END id=([0-9]+) chunks=([1-9][0-9]*) "
+    rb"bytes=([0-9]+) chars=([0-9]+)"
+)
 
 
 @dataclass(frozen=True)
@@ -81,8 +93,7 @@ def parse_instrumentation_result(
         _JUNIT_SUCCESS.fullmatch(line) for line in stdout_lines
     )
     failures_marker_present = any(
-        _JUNIT_FAILURES.fullmatch(line)
-        for line in _lines_without_trailing_newlines(stdout)
+        _JUNIT_FAILURES.fullmatch(line) for line in stdout_lines
     ) or any(
         _JUNIT_FAILURES.fullmatch(line)
         for line in _lines_without_trailing_newlines(stderr)
@@ -97,12 +108,43 @@ def parse_instrumentation_result(
     )
 
 
+def validate_complete_throwable_report(output: bytes) -> None:
+    """Validate ordered, exhaustive reporter transport framing."""
+
+    begins = list(_COMPLETE_THROWABLE_BEGIN.finditer(output))
+    ends = list(_COMPLETE_THROWABLE_END.finditer(output))
+    chunks = list(_COMPLETE_THROWABLE_CHUNK.finditer(output))
+    if len(begins) != 1 or len(ends) != 1:
+        raise ValueError("complete throwable output must contain one begin and end")
+    begin = begins[0]
+    end = ends[0]
+    report_id = begin.group(1)
+    expected_chunks = int(begin.group(2))
+    if (
+        end.group(1) != report_id
+        or int(end.group(2)) != expected_chunks
+        or int(end.group(3)) != int(begin.group(3))
+        or int(end.group(4)) != int(begin.group(4))
+        or len(chunks) != expected_chunks
+    ):
+        raise ValueError("complete throwable output framing is inconsistent")
+    sequences = [
+        (match.group(1), int(match.group(2)), int(match.group(3)))
+        for match in chunks
+    ]
+    if any(item[0] != report_id or item[2] != expected_chunks for item in sequences):
+        raise ValueError("complete throwable chunk identity is invalid")
+    if [item[1] for item in sequences] != list(range(1, expected_chunks + 1)):
+        raise ValueError("complete throwable chunks are not ordered")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stdout", type=Path, required=True)
     parser.add_argument("--stderr", type=Path, required=True)
     parser.add_argument("--returncode", type=int, required=True)
     parser.add_argument("--timed-out", action="store_true")
+    parser.add_argument("--complete-throwable", action="store_true")
     return parser
 
 
@@ -120,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
         stderr=stderr,
         timed_out=args.timed_out,
     )
+    if args.complete_throwable:
+        try:
+            validate_complete_throwable_report(stdout)
+        except ValueError as error:
+            print(f"Android complete throwable report failed: {error}", file=sys.stderr)
+            return 1
     if not parsed.succeeded:
         print(
             "Android instrumentation failed: "

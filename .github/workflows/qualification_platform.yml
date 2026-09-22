@@ -261,6 +261,37 @@ jobs:
           test "$platform_version" != "$PLATFORM"
           printf 'PLATFORM_VERSION=%s\n' "$platform_version" >> "$GITHUB_ENV"
 
+      - name: Validate complete Android failure diagnostics
+        if: inputs.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          reporter_stdout="$RUN_DIR/android-complete-throwable-self-test.stdout.log"
+          reporter_stderr="$RUN_DIR/android-complete-throwable-self-test.stderr.log"
+          reporter_status=0
+          reporter_timed_out=false
+          timeout --foreground 60s "$ADB" shell am instrument -w -r \
+            -e class com.dobby.CompleteThrowableReporterTest \
+            com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
+            >"$reporter_stdout" 2>"$reporter_stderr" || reporter_status=$?
+          if [ "$reporter_status" -eq 124 ]; then
+            reporter_timed_out=true
+          fi
+          parser_args=(
+            --stdout "$reporter_stdout" --stderr "$reporter_stderr"
+            --returncode "$reporter_status" --complete-throwable
+          )
+          if [ "$reporter_timed_out" = true ]; then
+            parser_args+=(--timed-out)
+          fi
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
+            python3 -m torturer_checks.android_instrumentation \
+            "${parser_args[@]}"
+          printf '%s\n' '[android-complete-throwable-self-test stdout]' >&2
+          cat "$reporter_stdout" >&2
+          printf '%s\n' '[android-complete-throwable-self-test stderr]' >&2
+          cat "$reporter_stderr" >&2
+
       - name: Exercise real Android Go/Fyne controls
         if: inputs.platform == 'android'
         shell: bash

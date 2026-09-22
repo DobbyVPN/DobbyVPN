@@ -67,6 +67,32 @@ def test_android_failure_diagnostics_use_fixed_vocabulary_and_redacted_frames() 
         assert "dumpWindowHierarchy" not in source
     assert "takeScreenshot" in kotlin
     assert "takeScreenshot" in java
+    reporter = (root / "android_module/app/src/androidTest/java/com/dobby/CompleteThrowableReporter.java").read_text()
+    reporter_test = (root / "android_module/app/src/androidTest/java/com/dobby/CompleteThrowableReporterTest.java").read_text()
+    assert "DOBBY_COMPLETE_THROWABLE_BEGIN" in reporter
+    assert "DOBBY_COMPLETE_THROWABLE_CHUNK" in reporter
+    assert "DOBBY_COMPLETE_THROWABLE_END" in reporter
+    assert "REPORT_KEY_STREAMRESULT" in reporter
+    assert "IdentityHashMap" in reporter
+    assert "MAX_CHUNK_BYTES" in reporter
+    assert "CIRCULAR_REFERENCE" in reporter
+    assert "... N more" not in reporter
+    assert "trimmed" not in reporter
+    assert "CompleteThrowableReporter.report(instrumentation, finalFailure)" in kotlin
+    assert "CompleteThrowableReporter.report(" in java
+    assert "CompleteThrowableReporter.report" in reporter_test
+    assert "cause-message" in reporter_test
+    assert "suppressed-message" in reporter_test
+    for source in (kotlin, java):
+        copy = source.index("copy(Bitmap.Config.ARGB_8888, true)")
+        canvas = source.index("Canvas(bitmap)")
+        assert copy < canvas
+        assert "ANDROID_UI_SCREENSHOT_COPY_FAILED" in source
+    assert "instrumentation.targetContext.cacheDir" in kotlin
+    assert "context.getCacheDir()" in java
+    assert "testContext.getCacheDir()" not in java
+    assert "/data/user/0/com.dobby.vpn/cache/" in local
+    assert "/data/user/0/com.dobby.vpn.test/cache/" not in local
     assert "DOBBY_UI_SCREENSHOT" in kotlin
     assert "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED" in local
     assert 'marker.put("screenshots"' in java

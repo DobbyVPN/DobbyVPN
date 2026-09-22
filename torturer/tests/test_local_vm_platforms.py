@@ -1282,13 +1282,21 @@ class LocalVMPlatformTests(unittest.TestCase):
                         markers.append(
                             (
                                 f"DOBBY_UI_SCREENSHOT label={frame} "
-                                "path=/data/user/0/com.dobby.vpn.test/cache/"
+                                "path=/data/user/0/com.dobby.vpn/cache/"
                                 f"dobbyvpn-rendered-screenshots/{frame}.png "
                                 f"bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()} "
                                 "width=2 height=2\n"
                             ).encode()
                         )
                     output = b"".join(markers) + b"OK (1 test)\nINSTRUMENTATION_CODE: -1\n"
+                elif label == "android-complete-throwable-self-test":
+                    output = (
+                        b"DOBBY_COMPLETE_THROWABLE_BEGIN id=1 chunks=1 bytes=1 chars=1\n"
+                        b"DOBBY_COMPLETE_THROWABLE_CHUNK id=1 sequence=1/1\n"
+                        b"x\n"
+                        b"DOBBY_COMPLETE_THROWABLE_END id=1 chunks=1 bytes=1 chars=1\n"
+                        b"OK (1 test)\nINSTRUMENTATION_CODE: -1\n"
+                    )
                 elif label.startswith("android-screenshot-"):
                     Path(command[-1]).write_bytes(payload)
                     output = b"1 file pulled\n"
@@ -1310,7 +1318,16 @@ class LocalVMPlatformTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             commands = [command for command, _ in calls]
             labels = [kwargs["label"] for _, kwargs in calls]
-            instrument = next(command for command in commands if "instrument" in command)
+            instrument = next(
+                command
+                for command in commands
+                if any("GoUiInstrumentedTest" in item for item in command)
+            )
+            reporter_instrument = next(
+                command
+                for command in commands
+                if any("CompleteThrowableReporterTest" in item for item in command)
+            )
             cold_start = next(
                 command for command, kwargs in calls
                 if kwargs["label"] == "android-native-ui-cold-start"
@@ -1320,7 +1337,12 @@ class LocalVMPlatformTests(unittest.TestCase):
                 labels.index("android-native-ui-cold-start"),
                 labels.index("android-native-ui"),
             )
+            self.assertLess(
+                labels.index("android-complete-throwable-self-test"),
+                labels.index("android-native-ui"),
+            )
             self.assertIn("com.dobby.GoUiInstrumentedTest", instrument)
+            self.assertIn("com.dobby.CompleteThrowableReporterTest", reporter_instrument)
             self.assertNotIn("dobby.ui_profile", instrument)
             self.assertFalse(any("push" in command or "chmod" in command for command in commands))
 
