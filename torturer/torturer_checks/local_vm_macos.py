@@ -17,6 +17,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 from typing import Any
 
 from .local_vm import LocalVMError
@@ -152,11 +153,47 @@ def _probe(
         ) from error
 
 
+def preflight_native_ui_capabilities(
+    smoke_script: Path,
+    *,
+    run_dir: Path,
+    logs: Path,
+    timeout: float,
+) -> None:
+    """Invoke the single-owned product-independent native capability gate."""
+
+    if not smoke_script.is_file() or smoke_script.is_symlink():
+        raise MacOSInteractiveDesktopUnavailable(
+            "native UI capability preflight script is unavailable"
+        )
+    try:
+        result = _run_logged(
+            [
+                sys.executable,
+                str(smoke_script),
+                "--platform", "macos",
+                "--preflight-only",
+                "--timeout", str(max(1.0, min(timeout, 30.0))),
+            ],
+            cwd=smoke_script.parents[2],
+            logs=logs,
+            label="macos-native-capability-preflight",
+            timeout=min(timeout, 30.0),
+            check=False,
+        )
+    except Exception as error:
+        raise MacOSInteractiveDesktopUnavailable(
+            "macOS native capability preflight could not complete"
+        ) from error
+    if result.returncode != 0:
+        raise MacOSInteractiveDesktopUnavailable(
+            f"macOS native capability preflight exited with status {result.returncode}"
+        )
+
+
 def _parse_console_user_state(stdout: bytes) -> tuple[str, int] | None:
     """Extract the ConsoleUser name and UID without exposing raw state."""
 
-    if len(stdout) > 64 * 1024:
-        return None
     user: str | None = None
     uid: int | None = None
     for line in stdout.decode("utf-8", errors="replace").splitlines():
@@ -182,10 +219,6 @@ def _parse_console_user_state(stdout: bytes) -> tuple[str, int] | None:
 def _screen_values(stdout: bytes) -> tuple[str, ...] | None:
     """Parse WindowServer's lock values, rejecting a malformed key."""
 
-    # The probe is depth-limited to the Root property dictionary. Keep this
-    # parser guard as a second line of defense against unexpected output.
-    if len(stdout) > 64 * 1024:
-        return None
     text = stdout.decode("utf-8", errors="replace")
     if not text.strip():
         return None
@@ -327,6 +360,20 @@ def run_interactive_ui(
     console_user, console_uid = preflight_interactive_desktop(
         run_dir=run_dir, logs=logs, timeout=timeout
     )
+    if "--smoke-script" in command:
+        try:
+            smoke_index = command.index("--smoke-script")
+            smoke_script = Path(command[smoke_index + 1])
+        except (ValueError, IndexError):
+            raise MacOSInteractiveDesktopUnavailable(
+                "native UI capability preflight script argument is missing"
+            )
+        preflight_native_ui_capabilities(
+            smoke_script,
+            run_dir=run_dir,
+            logs=logs,
+            timeout=timeout,
+        )
     filtered_environment = _filtered_native_ui_environment(environment)
     asuser_command = [
         "sudo", "-n", "launchctl", "asuser", str(console_uid),

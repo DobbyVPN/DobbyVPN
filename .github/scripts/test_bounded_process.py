@@ -12,6 +12,33 @@ import bounded_process
 
 
 class BoundedProcessTests(unittest.TestCase):
+    def test_output_text_preserves_invalid_bytes_reversibly(self) -> None:
+        self.assertEqual(bounded_process.output_text(b"ok\xff"), r"ok\xff")
+
+    def test_taskkill_forwards_complete_success_streams(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["taskkill"], 0, stdout=b"taskkill stdout", stderr=b"taskkill stderr",
+        )
+        output = io.StringIO()
+        with mock.patch.object(bounded_process.subprocess, "run", return_value=result), \
+                mock.patch.object(bounded_process.sys, "stderr", output):
+            bounded_process._run_windows_taskkill(123, 1)
+        self.assertIn("taskkill stdout", output.getvalue())
+        self.assertIn("taskkill stderr", output.getvalue())
+        self.assertIn("[taskkill 123 stdout end]", output.getvalue())
+
+    def test_taskkill_forwards_streams_before_failure(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["taskkill"], 1, stdout=b"failed stdout", stderr=b"failed stderr",
+        )
+        output = io.StringIO()
+        with mock.patch.object(bounded_process.subprocess, "run", return_value=result), \
+                mock.patch.object(bounded_process.sys, "stderr", output):
+            with self.assertRaises(bounded_process.ProcessCleanupError):
+                bounded_process._run_windows_taskkill(123, 1)
+        self.assertIn("failed stdout", output.getvalue())
+        self.assertIn("failed stderr", output.getvalue())
+
     def test_output_fragments_merge_aliases_and_cumulative_snapshots(self) -> None:
         error = subprocess.TimeoutExpired("probe", 1, output=b"first")
         error.stdout = b"first"

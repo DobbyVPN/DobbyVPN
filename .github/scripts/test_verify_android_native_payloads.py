@@ -62,3 +62,18 @@ def test_readelf_failure_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyP
     )
     with pytest.raises(MODULE.NativePayloadError, match="exit code 9.*bad ELF"):
         MODULE.read_dynamic_symbols(readelf, library, "arm64-v8a")
+
+
+def test_successful_readelf_symbols_are_kept_when_written_to_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readelf = tmp_path / "llvm-readelf"
+    readelf.write_text("synthetic", encoding="utf-8")
+    library = tmp_path / "libdobby_vpn.so"
+    library.write_bytes(b"synthetic")
+    monkeypatch.setattr(
+        MODULE,
+        "run_bounded_capture",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", "symbol table\n"),
+    )
+    assert MODULE.read_dynamic_symbols(readelf, library, "arm64-v8a") == "symbol table\n"

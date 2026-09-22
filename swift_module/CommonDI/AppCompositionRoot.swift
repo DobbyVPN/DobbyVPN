@@ -7,21 +7,45 @@ public let appGroupIdentifier = "group.vpn.dobby.app"
 public final class DobbyLogStore {
     private let lock = NSLock()
     public let path: URL
-    public let additionalPaths: [URL]
 
-    public init(path: URL, additionalPaths: [URL] = []) {
+    public init(path: URL) {
         self.path = path
-        self.additionalPaths = additionalPaths
-        try? FileManager.default.createDirectory(
-            at: path.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        do {
+            try FileManager.default.createDirectory(
+                at: path.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            reportFileFailure("create diagnostic directory", error: error)
+        }
         if !FileManager.default.fileExists(atPath: path.path) {
-            FileManager.default.createFile(atPath: path.path, contents: nil)
+            if !FileManager.default.createFile(atPath: path.path, contents: nil) {
+                reportFileFailure(
+                    "create diagnostic file",
+                    error: NSError(
+                        domain: "DobbyLogStore",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "FileManager.createFile returned false"]
+                    )
+                )
+            }
         }
     }
 
-    public func writeLog(log: String) {
+    private func reportFileFailure(_ operation: String, error: Error) {
+        let message = "DobbyLogStore \(operation) failed path=\(path.path): \(String(reflecting: error))\n"
+        do {
+            try FileHandle.standardError.write(contentsOf: Data(message.utf8))
+        } catch {
+            // There is no second diagnostic sink available if stderr itself is
+            // unavailable. Keep the original write failure as the return
+            // value of writeLog; this catch only prevents reporting from
+            // masking the native operation that failed.
+        }
+    }
+
+    @discardableResult
+    public func writeLog(log: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         // Keep the native producer in the same structured JSONL format as Go.
@@ -35,31 +59,52 @@ public final class DobbyLogStore {
             "event": "log.message",
             "message": log,
         ]
-        guard let encoded = try? JSONSerialization.data(withJSONObject: record),
-              var data = String(data: encoded, encoding: .utf8)?.data(using: .utf8) else { return }
+        let encoded: Data
+        do {
+            encoded = try JSONSerialization.data(withJSONObject: record)
+        } catch {
+            reportFileFailure("encode diagnostic record", error: error)
+            return false
+        }
+        var data = encoded
         data.append(contentsOf: [0x0A])
-        guard let handle = try? FileHandle(forWritingTo: path) else { return }
-        defer { try? handle.close() }
-        try? handle.seekToEnd()
-        try? handle.write(contentsOf: data)
-    }
-
-    public func cleanupOldLogs() {
-        // Keep cleanup bounded and local to the known shared files. Never
-        // remove another process's active log; only rotate files older than a
-        // week. The Go logger owns JSONL retention inside its own process.
-        let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
-        for candidate in additionalPaths {
-            guard candidate != path,
-                  let attributes = try? FileManager.default.attributesOfItem(atPath: candidate.path),
-                  let modified = attributes[.modificationDate] as? Date,
-                  modified < cutoff else { continue }
-            try? FileManager.default.removeItem(at: candidate)
+        do {
+            let handle = try FileHandle(forWritingTo: path)
+            var operationError: Error?
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                operationError = error
+            }
+            do {
+                try handle.close()
+            } catch {
+                if operationError == nil {
+                    operationError = error
+                } else {
+                    reportFileFailure("close diagnostic file", error: error)
+                }
+            }
+            if let operationError {
+                reportFileFailure("write diagnostic record", error: operationError)
+                return false
+            }
+            return true
+        } catch {
+            reportFileFailure("open diagnostic file", error: error)
+            return false
         }
     }
 
     public func lines() -> [String] {
-        guard let text = try? String(contentsOf: path, encoding: .utf8) else { return [] }
+        let text: String
+        do {
+            text = try String(contentsOf: path, encoding: .utf8)
+        } catch {
+            reportFileFailure("read diagnostic file", error: error)
+            return []
+        }
         return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
     }
 }
@@ -106,13 +151,7 @@ public enum IOSAppCompositionRoot {
 
     public static let logsRepository: DobbyLogStore = {
         let current = appLogPath()
-        let all = [
-            sharedLogPath("app_logs.txt"),
-            sharedLogPath("tunnel_logs.jsonl"),
-            sharedLogPath("go_app_logs.jsonl"),
-            sharedLogPath("go_tunnel_logs.jsonl"),
-        ]
-        return DobbyLogStore(path: current, additionalPaths: all)
+        return DobbyLogStore(path: current)
     }()
 
     public static let exportLogsInteractor = ExportLogsInteractorImpl()

@@ -23,18 +23,31 @@ from typing import Any, Callable, Mapping
 from torturer_contract.functional.engine import ScenarioExecutionError
 from torturer_contract.functional.results import ConnectionIdentity
 from torturer_contract.functional.scenarios import ScenarioStep
-from torturer_checks.diagnostics import add_exception_notes, redact_text, register_sensitive_values
+from torturer_checks.diagnostics import (
+    StreamingRedactor,
+    add_exception_notes,
+    register_sensitive_values,
+)
 
 from ..windows_job import (
     close_for as close_windows_job,
     popen_with_windows_job,
     terminate_and_prove_empty as terminate_windows_job,
 )
+from ..screenshot_artifacts import (
+    ScreenshotIntegrityError,
+    assert_marker_matches,
+    png_metadata,
+)
 
 
 _UI_START_TIMEOUT_SECONDS = 10.0
 _UI_CONFIGURE_TIMEOUT_SECONDS = 60.0
 _UI_CONNECT_TIMEOUT_SECONDS = 60.0
+
+
+class _UIStreamFailure(RuntimeError):
+    """A companion output reader failed and the JSON protocol is unreliable."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +57,12 @@ class _UIResponse:
     status: str = ""
     details: str = ""
     button: str = ""
+    path: str = ""
+    mime: str = ""
+    sha256: str = ""
+    bytes: int = 0
+    width: int = 0
+    height: int = 0
 
 
 def _response(value: object) -> _UIResponse:
@@ -55,6 +74,12 @@ def _response(value: object) -> _UIResponse:
         status=value.get("status") if isinstance(value.get("status"), str) else "",
         details=value.get("details") if isinstance(value.get("details"), str) else "",
         button=value.get("button") if isinstance(value.get("button"), str) else "",
+        path=value.get("path") if isinstance(value.get("path"), str) else "",
+        mime=value.get("mime") if isinstance(value.get("mime"), str) else "",
+        sha256=value.get("sha256") if isinstance(value.get("sha256"), str) else "",
+        bytes=value.get("bytes") if type(value.get("bytes")) is int else 0,
+        width=value.get("width") if type(value.get("width")) is int else 0,
+        height=value.get("height") if type(value.get("height")) is int else 0,
     )
 
 
@@ -84,14 +109,17 @@ class HeadlessUIAdapter:
             self._profile_text = profile.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
             raise ValueError("PROFILE_INVALID") from error
-        self._process: subprocess.Popen[str] | None = None
-        self._responses: queue.Queue[str | None] = queue.Queue()
+        self._process: subprocess.Popen[bytes] | None = None
+        self._responses: queue.Queue[bytes | str | None | BaseException] = queue.Queue()
         self._reader_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
+        self._stdout_done = threading.Event()
         self._stderr_done = threading.Event()
         self._request_lock = threading.Lock()
         self._base_selected: ConnectionIdentity | None = None
         self._ui_connected = False
+        self._capture_counter = 0
+        self._captured_startup = False
         register_sensitive_values(runner, self._profile_text)
 
     @property
@@ -143,6 +171,10 @@ class HeadlessUIAdapter:
                     operation_id=step.id,
                     code=getattr(error, "reason_code", type(error).__name__),
                 )
+                try:
+                    self._capture("failure")
+                except BaseException as capture_error:
+                    add_exception_notes(error, "ui_failure_capture", capture_error)
                 raise
             observations.update(result)
             self._emit(
@@ -192,6 +224,7 @@ class HeadlessUIAdapter:
                     },
                     timeout,
                 )
+                self._capture("process-loss-recovery")
             return result
         return self.base.execute(step)
 
@@ -216,8 +249,13 @@ class HeadlessUIAdapter:
         if not result.ok or result.status != "Connected":
             raise ScenarioExecutionError("UI_CONNECT_FAILED")
         self._ui_connected = True
+        self._capture("connected")
 
     def _configure_ui(self, timeout: float) -> None:
+        if not self._captured_startup:
+            self._capture("startup")
+            self._capture("settings", settings=True)
+            self._captured_startup = True
         result = self._request(
             {
                 "op": "configure",
@@ -228,6 +266,7 @@ class HeadlessUIAdapter:
         )
         if not result.ok or result.status not in {"Ready", "Disconnected"}:
             raise ScenarioExecutionError("UI_CONFIGURE_FAILED")
+        self._capture("configured")
 
     def _disconnect_ui(self, timeout: float) -> None:
         if not self._ui_connected:
@@ -239,6 +278,42 @@ class HeadlessUIAdapter:
         if not result.ok or result.status not in {"Disconnected", "Failed"}:
             raise ScenarioExecutionError("UI_DISCONNECT_FAILED")
         self._ui_connected = False
+        self._capture("disconnected")
+
+    def _capture(self, label: str, *, settings: bool = False) -> Path:
+        self._capture_counter += 1
+        capture_label = f"{self._capture_counter:03d}-{label}"
+        directory = self.runner.raw_directory / "screenshots" / "desktop-mini"
+        operation = "capture-settings" if settings else "capture"
+        result = self._request(
+            {"op": operation, "path": str(directory), "label": capture_label},
+            _UI_START_TIMEOUT_SECONDS,
+        )
+        path = Path(result.path)
+        if (
+            not result.ok
+            or result.mime != "image/png"
+            or path != directory / f"{capture_label}.png"
+            or not path.is_file()
+            or result.width <= 0
+            or result.height <= 0
+            or result.bytes <= 0
+        ):
+            raise ScenarioExecutionError("UI_CAPTURE_INVALID")
+        try:
+            metadata = png_metadata(path)
+            assert_marker_matches(
+                metadata,
+                bytes_count=result.bytes,
+                sha256_value=result.sha256,
+                width=result.width,
+                height=result.height,
+            )
+        except ScreenshotIntegrityError as error:
+            raise ScenarioExecutionError("UI_CAPTURE_INTEGRITY_FAILED") from error
+        if result.mime != metadata["mime"]:
+            raise ScenarioExecutionError("UI_CAPTURE_INVALID")
+        return path
 
     def reset(self, timeout_seconds: float = 30.0) -> None:
         error: BaseException | None = None
@@ -258,10 +333,18 @@ class HeadlessUIAdapter:
 
     def finalize(self, timeout_seconds: float = 30.0, *, deadline: float | None = None) -> None:
         error: BaseException | None = None
+        if self._process is not None:
+            try:
+                self._capture("final")
+            except BaseException as failure:
+                error = failure
         try:
             self._close_process(timeout_seconds, deadline=deadline)
         except BaseException as failure:
-            error = failure
+            if error is None:
+                error = failure
+            else:
+                add_exception_notes(error, "ui_close", failure)
         try:
             self.base.finalize(timeout_seconds, deadline=deadline)
         except BaseException as failure:
@@ -280,6 +363,8 @@ class HeadlessUIAdapter:
     def _start_process(self, timeout: float) -> None:
         if self._process is not None:
             return
+        self._stdout_done.clear()
+        self._stderr_done.clear()
         environment = dict(getattr(self.runner, "environment", os.environ))
         deadline = time.monotonic() + min(max(timeout, 0.1), _UI_START_TIMEOUT_SECONDS)
         try:
@@ -292,9 +377,8 @@ class HeadlessUIAdapter:
                 # drained separately and forwarded to the invoking process.
                 stderr=subprocess.PIPE,
                 env=environment,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
+                text=False,
+                bufsize=0,
                 start_new_session=(os.name != "nt"),
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
                 stage="ui-companion-start",
@@ -306,14 +390,31 @@ class HeadlessUIAdapter:
         def read_responses() -> None:
             assert self._process is not None
             stdout = self._process.stdout
-            if stdout is None:
-                self._responses.put(None)
-                return
+            redactor = StreamingRedactor((self._profile_text,))
             try:
-                for line in stdout:
+                sys.stderr.write("[headless-ui stdout begin]\n")
+                sys.stderr.flush()
+                if stdout is None:
+                    raise _UIStreamFailure("stdout pipe is unavailable")
+                while True:
+                    line = stdout.readline()
+                    if not line:
+                        break
+                    rendered = redactor.feed(line)
+                    if rendered:
+                        sys.stderr.write(rendered)
+                        sys.stderr.flush()
                     self._responses.put(line)
+            except BaseException as error:
+                self._responses.put(_UIStreamFailure(f"stdout reader failed: {type(error).__name__}: {error}"))
             finally:
+                rendered = redactor.finish()
+                if rendered:
+                    sys.stderr.write(rendered)
+                sys.stderr.write("[headless-ui stdout end]\n")
+                sys.stderr.flush()
                 self._responses.put(None)
+                self._stdout_done.set()
 
         self._reader_thread = threading.Thread(target=read_responses, name="dobbyvpn-ui-test-reader", daemon=True)
         self._reader_thread.start()
@@ -321,13 +422,31 @@ class HeadlessUIAdapter:
         def read_stderr() -> None:
             process = self._process
             stderr = None if process is None else process.stderr
+            redactor = StreamingRedactor((self._profile_text,))
             try:
-                if stderr is not None:
-                    sys.stderr.write("[headless-ui stderr]\n")
-                    for chunk in stderr:
-                        sys.stderr.write(redact_text(chunk, (self._profile_text,)))
+                sys.stderr.write("[headless-ui stderr begin]\n")
+                sys.stderr.flush()
+                if stderr is None:
+                    raise _UIStreamFailure("stderr pipe is unavailable")
+                while True:
+                    chunk = stderr.read(64 * 1024)
+                    if not chunk:
+                        break
+                    rendered = redactor.feed(chunk)
+                    if rendered:
+                        sys.stderr.write(rendered)
                         sys.stderr.flush()
+            except BaseException as error:
+                # The protocol reader must still fail closed if diagnostics
+                # cannot be drained; otherwise a full stderr pipe can hang
+                # the companion while stdout appears healthy.
+                self._responses.put(_UIStreamFailure(f"stderr reader failed: {type(error).__name__}: {error}"))
             finally:
+                rendered = redactor.finish()
+                if rendered:
+                    sys.stderr.write(rendered)
+                sys.stderr.write("[headless-ui stderr end]\n")
+                sys.stderr.flush()
                 self._stderr_done.set()
 
         self._stderr_thread = threading.Thread(
@@ -346,7 +465,9 @@ class HeadlessUIAdapter:
             if process is None or process.stdin is None:
                 raise ScenarioExecutionError("UI_TEST_UNAVAILABLE")
             try:
-                process.stdin.write(json.dumps(document, separators=(",", ":")) + "\n")
+                process.stdin.write(
+                    (json.dumps(document, separators=(",", ":")) + "\n").encode("utf-8")
+                )
                 process.stdin.flush()
             except (BrokenPipeError, OSError) as error:
                 raise ScenarioExecutionError("UI_TEST_PIPE_FAILED") from error
@@ -361,9 +482,13 @@ class HeadlessUIAdapter:
             if line is None:
                 self._stderr_done.wait(timeout=1.0)
                 raise ScenarioExecutionError("UI_TEST_EXITED")
+            if isinstance(line, BaseException):
+                raise ScenarioExecutionError("UI_TEST_OUTPUT_FAILED") from line
             try:
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8")
                 result = _response(json.loads(line))
-            except (TypeError, ValueError) as error:
+            except (UnicodeDecodeError, TypeError, ValueError) as error:
                 raise ScenarioExecutionError("UI_RESPONSE_INVALID") from error
             if not result.ok and result.error:
                 failure = ScenarioExecutionError("UI_ACTION_FAILED")
@@ -428,7 +553,11 @@ class HeadlessUIAdapter:
                 except BaseException as error:
                     errors.append(error)
         finally:
+            self._stdout_done.wait(timeout=max(1.0, min(timeout, 15.0)))
             self._stderr_done.wait(timeout=max(1.0, min(timeout, 15.0)))
+            for thread in (self._reader_thread, self._stderr_thread):
+                if thread is not None and thread.is_alive():
+                    errors.append(ScenarioExecutionError("UI_TEST_OUTPUT_DRAIN_FAILED"))
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     try:
@@ -436,6 +565,7 @@ class HeadlessUIAdapter:
                     except OSError as error:
                         errors.append(error)
             self._process = None
+            self._reader_thread = None
             self._stderr_thread = None
         if errors:
             failure = ScenarioExecutionError("UI_TEST_CLEANUP_FAILED")

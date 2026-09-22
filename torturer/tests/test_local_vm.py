@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import stat
 from pathlib import Path
 import socket
@@ -191,6 +192,27 @@ class LocalVMTests(unittest.TestCase):
             ):
                 local_vm.run(args)
         prepare.assert_not_called()
+
+    def test_macos_full_runs_aqua_preflight_before_candidate_setup(self) -> None:
+        root, _ = self._run_directory()
+        args = local_vm.build_parser().parse_args([
+            "run", "--platform", "macos", "--run-dir", str(root),
+            "--timeout", "30", "--suite", "full",
+        ])
+        from torturer_checks import local_vm_macos
+
+        unavailable = local_vm_macos.MacOSInteractiveDesktopUnavailable("locked")
+        with (
+            mock.patch.object(local_vm_macos, "preflight_interactive_desktop", side_effect=unavailable) as preflight,
+            mock.patch.object(local_vm, "_prepare_candidate") as prepare,
+            mock.patch.object(local_vm, "_prepare_release_candidate") as release_prepare,
+        ):
+            self.assertEqual(local_vm.run(args), 1)
+        preflight.assert_called_once()
+        prepare.assert_not_called()
+        release_prepare.assert_not_called()
+        state = json.loads((root / "platform.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["status"], "failed")
 
     def _run_directory(self) -> tuple[Path, dict[str, object]]:
         temporary = tempfile.TemporaryDirectory()
@@ -660,6 +682,87 @@ class LocalVMTests(unittest.TestCase):
             (root / "logs" / "interactive-probe.stdout.log").read_bytes(),
             result.stdout,
         )
+
+    def test_command_runner_keeps_repeated_labels_in_sequence_files(self) -> None:
+        root, _ = self._run_directory()
+        first = local_vm._run_logged(
+            ["python3", "-c", "print('first')"], cwd=root,
+            logs=root / "logs", label="repeated", timeout=10,
+        )
+        second = local_vm._run_logged(
+            ["python3", "-c", "print('second')"], cwd=root,
+            logs=root / "logs", label="repeated", timeout=10,
+        )
+        self.assertEqual(first.stdout, b"first\n")
+        self.assertEqual(second.stdout, b"second\n")
+        self.assertEqual((root / "logs" / "repeated.stdout.log").read_bytes(), first.stdout)
+        self.assertEqual((root / "logs" / "repeated.2.stdout.log").read_bytes(), second.stdout)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
+    def test_command_runner_timeout_keeps_both_streams_and_cleanup_note(self) -> None:
+        root, _ = self._run_directory()
+        command = [
+            "python3", "-c",
+            "import sys,time; print('timeout stdout', flush=True); "
+            "print('timeout stderr', file=sys.stderr, flush=True); time.sleep(30)",
+        ]
+        with self.assertRaisesRegex(local_vm.LocalVMError, "command timed out") as raised:
+            local_vm._run_logged(
+                command, cwd=root, logs=root / "logs", label="timeout", timeout=0.1,
+            )
+        self.assertIn("timeout stdout", "\n".join(raised.exception.__notes__))
+        self.assertIn("timeout stderr", "\n".join(raised.exception.__notes__))
+        self.assertEqual((root / "logs" / "timeout.stdout.log").read_bytes(), b"timeout stdout\n")
+        self.assertEqual((root / "logs" / "timeout.stderr.log").read_bytes(), b"timeout stderr\n")
+
+    def test_direct_probe_streams_are_retained_for_readlink_ps_and_kill(self) -> None:
+        root, _ = self._run_directory()
+        logs = root / "logs"
+        with mock.patch.object(local_vm, "_pid_alive", return_value=True):
+            with mock.patch.object(
+                local_vm.subprocess,
+                "run",
+                side_effect=[
+                    subprocess.CompletedProcess([], 0, b"/tmp/service\n", b"readlink warning\n"),
+                    subprocess.CompletedProcess([], 0, b"1234\n", b"ps warning\n"),
+                    subprocess.CompletedProcess([], 0, b"kill output\n", b"kill warning\n"),
+                ],
+            ):
+                self.assertTrue(local_vm._pid_matches(42, "/tmp/service", logs=logs, cwd=root))
+                with mock.patch.object(local_vm, "_pid_matches", return_value=True):
+                    self.assertEqual(
+                        local_vm._checked_process_group(42, "/tmp/service", logs=logs, cwd=root),
+                        "1234",
+                    )
+                self.assertTrue(
+                    local_vm._signal_process_group("1234", "-TERM", logs=logs, cwd=root)
+                )
+
+        self.assertEqual((logs / "service-pid-executable.stdout.log").read_bytes(), b"/tmp/service\n")
+        self.assertEqual((logs / "service-pid-executable.stderr.log").read_bytes(), b"readlink warning\n")
+        self.assertEqual((logs / "service-pid-group.stdout.log").read_bytes(), b"1234\n")
+        self.assertEqual((logs / "service-pid-group.stderr.log").read_bytes(), b"ps warning\n")
+        self.assertEqual((logs / "service-pid-signal.stdout.log").read_bytes(), b"kill output\n")
+        self.assertEqual((logs / "service-pid-signal.stderr.log").read_bytes(), b"kill warning\n")
+
+    def test_probe_timeout_retains_partial_streams_and_notes(self) -> None:
+        root, _ = self._run_directory()
+        logs = root / "logs"
+        timeout = subprocess.TimeoutExpired(
+            ["sudo", "-n", "readlink"], 5,
+            output=b"partial stdout\xff", stderr=b"partial stderr\xfe",
+        )
+        with mock.patch.object(local_vm.subprocess, "run", side_effect=timeout):
+            with self.assertRaisesRegex(local_vm.LocalVMError, "command timed out") as raised:
+                local_vm._run_probe_logged(
+                    ["sudo", "-n", "readlink"], cwd=root, logs=logs,
+                    label="probe-timeout", timeout=5,
+                )
+        self.assertEqual((logs / "probe-timeout.stdout.log").read_bytes(), b"partial stdout\xff")
+        self.assertEqual((logs / "probe-timeout.stderr.log").read_bytes(), b"partial stderr\xfe")
+        notes = "\n".join(raised.exception.__notes__)
+        self.assertIn(r"partial stdout\xff", notes)
+        self.assertIn(r"partial stderr\xfe", notes)
 
     def test_linux_cleanup_prefers_pid_file_updated_by_process_loss(self) -> None:
         root, _ = self._run_directory()

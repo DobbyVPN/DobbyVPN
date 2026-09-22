@@ -11,13 +11,13 @@ if [[ ! -f "$CANONICAL" ]]; then
   exit 1
 fi
 
-if ! command -v protoc >/dev/null; then
+if ! command -v protoc; then
   echo "error: protoc not found on PATH; install protoc and retry." >&2
   exit 1
 fi
 
 for plugin in protoc-gen-go protoc-gen-go-grpc; do
-  if ! command -v "$plugin" >/dev/null; then
+  if ! command -v "$plugin"; then
     echo "error: $plugin not found. Run: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11 && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2" >&2
     exit 1
   fi

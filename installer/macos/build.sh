@@ -15,8 +15,12 @@ install_service() {
   local destination="$3"
   local actual_arches
 
-  actual_arches="$(lipo -archs "$service")"
-  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fx "$expected_arch"; then
+  actual_arches="$(lipo -archs "$service" | tee /dev/stderr)"
+  local found=false architecture
+  for architecture in $actual_arches; do
+    if [[ "$architecture" == "$expected_arch" ]]; then found=true; fi
+  done
+  if [[ "$found" != true ]]; then
     echo "[!] Refusing to package $service: expected $expected_arch, found $actual_arches" >&2
     exit 1
   fi
@@ -30,8 +34,12 @@ install_trusttunnel_helper() {
   local destination="$2"
   local actual_arches
 
-  actual_arches="$(lipo -archs "$helper")"
-  if ! tr ' ' '\n' <<<"$actual_arches" | grep -Fx "x86_64"; then
+  actual_arches="$(lipo -archs "$helper" | tee /dev/stderr)"
+  local found=false architecture
+  for architecture in $actual_arches; do
+    if [[ "$architecture" == "x86_64" ]]; then found=true; fi
+  done
+  if [[ "$found" != true ]]; then
     echo "[!] Refusing to package TrustTunnel helper: x86_64 slice is missing ($actual_arches)" >&2
     exit 1
   fi

@@ -47,7 +47,9 @@ func clearLocalLogFileAtBase(path, base string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect local log path: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// Clear is a durable view boundary, not a destructive deletion. Append the
+	// marker so a later complete export can retain all earlier producer bytes.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open local log path: %w", err)
 	}

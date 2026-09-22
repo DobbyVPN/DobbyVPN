@@ -71,12 +71,41 @@ test -f "$reference_apk"
 test -f "$metadata_helper"
 
 cleanup() {
+  local primary_status=$?
+  local cleanup_status=0
   if [[ -n "$server_pid" ]]; then
-    kill "$server_pid" 2>/dev/null || true
-    wait "$server_pid" 2>/dev/null || true
+    if kill "$server_pid"; then
+      :
+    else
+      local kill_status=$?
+      printf 'F-Droid HTTPS server cleanup kill failed (status=%s, pid=%s)\n' \
+        "$kill_status" "$server_pid" >&2
+      cleanup_status=1
+    fi
+    if wait "$server_pid"; then
+      :
+    else
+      local wait_status=$?
+      # A process terminated by our SIGTERM commonly reports 143; it was
+      # still reaped successfully. Preserve any other wait failure.
+      if [[ "$wait_status" != 143 && "$wait_status" != 0 ]]; then
+        printf 'F-Droid HTTPS server cleanup wait failed (status=%s, pid=%s)\n' \
+          "$wait_status" "$server_pid" >&2
+        cleanup_status=1
+      fi
+    fi
   fi
-  rm -f "$baseline_path" "$reference_cert" "$reference_key" \
-    "$reference_ca_bundle" "$https_log"
+  if ! rm -f "$baseline_path" "$reference_cert" "$reference_key" \
+    "$reference_ca_bundle" "$https_log"; then
+    printf 'F-Droid temporary-file cleanup failed\n' >&2
+    cleanup_status=1
+  fi
+  # Preserve the primary build/scanner result. A cleanup failure blocks an
+  # otherwise successful run, but never replaces an already-failed result.
+  if (( primary_status == 0 && cleanup_status != 0 )); then
+    return 1
+  fi
+  return "$primary_status"
 }
 trap cleanup EXIT
 
@@ -85,8 +114,7 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -out "$reference_cert" \
   -days 1 \
   -subj "/CN=127.0.0.1" \
-  -addext "subjectAltName=IP:127.0.0.1" \
-  >/dev/null 2>&1
+  -addext "subjectAltName=IP:127.0.0.1"
 if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
   cat /etc/ssl/certs/ca-certificates.crt "$reference_cert" > "$reference_ca_bundle"
 else
@@ -141,8 +169,11 @@ export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 
 apt-get update
 apt-get dist-upgrade -y
-if command -v sdkmanager >/dev/null 2>&1; then
-  sdkmanager "platform-tools" "build-tools;31.0.0" >/dev/null
+if sdkmanager_path="$(command -v sdkmanager)"; then
+  printf 'sdkmanager: %s\n' "$sdkmanager_path"
+  sdkmanager "platform-tools" "build-tools;31.0.0"
+else
+  printf '%s\n' 'sdkmanager is unavailable; Android SDK package refresh was skipped' >&2
 fi
 
 fdroid_environment=(
@@ -163,6 +194,7 @@ run_fdroid_vagrant() {
 
 collect_native_diagnostics() {
   local status=$1
+  local diagnostic_failures=()
   [[ -n "$diagnostic_dir" ]] || return 0
   mkdir -p "$diagnostic_dir"
   {
@@ -173,27 +205,95 @@ collect_native_diagnostics() {
     echo "reference_apk=$reference_apk"
     echo "built_apk=$fdroid_home/tmp/com.dobby.vpn_${version_code}.apk"
   } > "$diagnostic_dir/summary.txt"
+  if ! cat "$diagnostic_dir/summary.txt" >&2; then
+    printf 'F-Droid diagnostic summary could not be emitted\n' >&2
+    diagnostic_failures+=("summary output emission")
+  fi
 
   local built_apk="$fdroid_home/tmp/com.dobby.vpn_${version_code}.apk"
-  [[ -f "$built_apk" ]] || return 0
+  if [[ ! -f "$built_apk" ]]; then
+    printf 'F-Droid diagnostic built APK is unavailable: %s\n' "$built_apk" >&2
+    return 0
+  fi
+
+  run_text_diagnostic() {
+    local label=$1
+    local output=$2
+    shift 2
+    local command_status
+    if "$@" >"$output" 2>&1; then
+      command_status=0
+    else
+      command_status=$?
+    fi
+    cat "$output" >&2 || {
+      printf 'F-Droid diagnostic output could not be emitted: %s\n' "$output" >&2
+      diagnostic_failures+=("$label output emission")
+    }
+    if (( command_status != 0 )); then
+      printf 'F-Droid diagnostic command failed (%s, status=%s)\n' "$label" "$command_status" >&2
+      diagnostic_failures+=("$label (status $command_status)")
+    fi
+  }
+
+  run_binary_diagnostic() {
+    local label=$1
+    local output=$2
+    local error_output="${output}.stderr"
+    shift 2
+    local command_status
+    if "$@" >"$output" 2>"$error_output"; then
+      command_status=0
+    else
+      command_status=$?
+    fi
+    cat "$error_output" >&2 || {
+      printf 'F-Droid diagnostic error output could not be emitted: %s\n' "$error_output" >&2
+      diagnostic_failures+=("$label error output emission")
+    }
+    if (( command_status != 0 )); then
+      printf 'F-Droid diagnostic command failed (%s, status=%s)\n' "$label" "$command_status" >&2
+      diagnostic_failures+=("$label (status $command_status)")
+    fi
+  }
+
   for abi in arm64-v8a x86_64; do
     local reference_so="$diagnostic_dir/reference-${abi}.so"
     local built_so="$diagnostic_dir/fdroid-${abi}.so"
-    unzip -p "$reference_apk" "lib/$abi/libdobby_vpn.so" > "$reference_so" || true
-    unzip -p "$built_apk" "lib/$abi/libdobby_vpn.so" > "$built_so" || true
-    sha256sum "$reference_so" "$built_so" >> "$diagnostic_dir/sha256.txt" 2>/dev/null || true
+    run_binary_diagnostic "extract reference $abi" "$reference_so" \
+      unzip -p "$reference_apk" "lib/$abi/libdobby_vpn.so"
+    run_binary_diagnostic "extract built $abi" "$built_so" \
+      unzip -p "$built_apk" "lib/$abi/libdobby_vpn.so"
+    run_text_diagnostic "hash $abi" "$diagnostic_dir/sha256-${abi}.txt" \
+      sha256sum "$reference_so" "$built_so"
     if [[ -s "$reference_so" && -s "$built_so" ]]; then
-      cmp -l "$reference_so" "$built_so" | head -n 32 > "$diagnostic_dir/cmp-${abi}.txt" || true
-      readelf -S "$reference_so" > "$diagnostic_dir/reference-${abi}.sections.txt" 2>&1 || true
-      readelf -S "$built_so" > "$diagnostic_dir/fdroid-${abi}.sections.txt" 2>&1 || true
-      readelf -p .comment "$reference_so" > "$diagnostic_dir/reference-${abi}.comment.txt" 2>&1 || true
-      readelf -p .comment "$built_so" > "$diagnostic_dir/fdroid-${abi}.comment.txt" 2>&1 || true
-      strings -a "$reference_so" | grep -E '/home|/opt|/tmp|runner|vagrant|go-build|android-sdk|clang' \
-        > "$diagnostic_dir/reference-${abi}.paths.txt" || true
-      strings -a "$built_so" | grep -E '/home|/opt|/tmp|runner|vagrant|go-build|android-sdk|clang' \
-        > "$diagnostic_dir/fdroid-${abi}.paths.txt" || true
+      # Keep the complete byte comparison. A head pipeline used to discard
+      # the tail of a large mismatch, which is often where the useful build
+      # provenance difference appears. cmp returns 1 for an expected
+      # difference, so handle that status explicitly without suppressing its
+      # output.
+      run_text_diagnostic "compare $abi" "$diagnostic_dir/cmp-${abi}.txt" \
+        cmp -l "$reference_so" "$built_so"
+      run_text_diagnostic "reference sections $abi" "$diagnostic_dir/reference-${abi}.sections.txt" \
+        readelf -S "$reference_so"
+      run_text_diagnostic "built sections $abi" "$diagnostic_dir/fdroid-${abi}.sections.txt" \
+        readelf -S "$built_so"
+      run_text_diagnostic "reference comment $abi" "$diagnostic_dir/reference-${abi}.comment.txt" \
+        readelf -p .comment "$reference_so"
+      run_text_diagnostic "built comment $abi" "$diagnostic_dir/fdroid-${abi}.comment.txt" \
+        readelf -p .comment "$built_so"
+      # Keep the complete string table. Filtering it through grep used to
+      # discard non-path strings that can identify the first divergent build
+      # stage, while still leaving operators without the original bytes.
+      run_text_diagnostic "reference strings $abi" "$diagnostic_dir/reference-${abi}.paths.txt" \
+        strings -a "$reference_so"
+      run_text_diagnostic "built strings $abi" "$diagnostic_dir/fdroid-${abi}.paths.txt" \
+        strings -a "$built_so"
     fi
   done
+  if ((${#diagnostic_failures[@]} > 0)); then
+    printf 'F-Droid secondary diagnostic failures: %s\n' "${diagnostic_failures[*]}" >&2
+  fi
 }
 
 mode="$(python3 "$metadata_helper" prepare \

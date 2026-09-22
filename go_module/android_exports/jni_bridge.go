@@ -392,8 +392,6 @@ import (
 	"go_module/sessionapi/mobilebinding"
 )
 
-const maxAndroidLogExportBytes = 4 * 1024 * 1024
-
 type jniPlatformCallbacks struct{}
 
 func (jniPlatformCallbacks) AcquireTunnel(sessionID string, generation int64) int32 {
@@ -431,9 +429,6 @@ func setAndroidContext(vm, env, context uintptr) {
 func prepareAndroidService() int { return int(C.dobby_call_prepare()) }
 
 func exportAndroidLogs(raw []byte) bool {
-	if len(raw) > maxAndroidLogExportBytes {
-		return false
-	}
 	if len(raw) == 0 {
 		return bool(C.dobby_call_export_logs(nil, 0))
 	}

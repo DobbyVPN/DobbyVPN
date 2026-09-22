@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import os
 import plistlib
 from pathlib import Path
@@ -28,6 +29,7 @@ from torturer_checks.ios_simulator_app import (
     run_ios_simulator_app_contract,
     select_available_iphone,
     xcodebuild_app_command,
+    _decode,
 )
 
 
@@ -88,10 +90,16 @@ class FakeRunner:
             return CommandResult(0, f"{self.sdk_version}\n")
         if command[:3] == ["xcrun", "lipo", "-archs"]:
             return CommandResult(0, self.lipo_arches)
-        if command[:1] == ["xcodebuild"]:
-            return CommandResult(0)
         if command[:2] == ["/usr/bin/defaults", "read"]:
             return CommandResult(1, stderr="The domain/default pair does not exist")
+        if command[:5] == ["xcrun", "simctl", "get_app_container", UDID, BUNDLE]:
+            container = self.root / "simulator-data" / "Containers" / "Data"
+            container.mkdir(parents=True, exist_ok=True)
+            archive = container / "tmp" / "DobbyVPN_logs_fixture.jsonl.gz"
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            with gzip.open(archive, "wb") as output:
+                output.write(b'{"schema":"dobby.log/v1","event":"fixture"}\n')
+            return CommandResult(0, f"{container}\n")
         if command[:2] == ["/bin/bash", "scripts/build_ios_xcframework.sh"]:
             architecture = "arm64" if command[-1] == "arm64" else "x86_64"
             framework = Path(cwd) / "DobbyVPNRuntime.xcframework"
@@ -126,12 +134,21 @@ class FakeRunner:
             if source.is_dir():
                 shutil.copytree(source, destination, dirs_exist_ok=True)
             return CommandResult(0)
+        if command[:1] == ["xcodebuild"]:
+            result_index = command.index("-resultBundlePath") + 1
+            result_bundle = Path(command[result_index])
+            result_bundle.mkdir(parents=True, exist_ok=True)
+            (result_bundle / "fixture.xcresult").write_bytes(b"complete XCTest fixture")
+            return CommandResult(0)
         if command[:3] == ["xcrun", "simctl", "boot"]:
             return CommandResult(0)
         return CommandResult(0)
 
 
 class IOSSimulatorSimplificationTests(unittest.TestCase):
+    def test_decode_preserves_invalid_utf8_as_reversible_text(self) -> None:
+        self.assertEqual(_decode(b"prefix\xff\xfe\n"), "prefix\\xff\\xfe\n")
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -269,7 +286,11 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         )
         self.assertEqual(terminate_timeout, STAGE_TIMEOUT_SECONDS["terminate"])
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
-        self.assertFalse((self.root / "logs").exists())
+        self.assertTrue(evidence.result_bundle.is_dir())
+        self.assertTrue(evidence.result_bundle.is_relative_to(work / "diagnostics"))
+        self.assertEqual(len(evidence.log_exports), 1)
+        self.assertTrue(evidence.log_exports[0].is_file())
+        self.assertTrue(evidence.log_exports[0].is_relative_to(work / "diagnostics"))
 
     def test_ui_test_failure_still_shuts_down(self) -> None:
         runner = FakeRunner(
@@ -392,7 +413,29 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 
-    def test_ui_test_does_not_collect_app_logs(self) -> None:
+    def test_missing_app_log_export_is_an_explicit_collection_failure(self) -> None:
+        runner = FakeRunner(
+            self.root,
+            fail={
+                ("xcrun", "simctl", "get_app_container"): CommandResult(
+                    1, stderr="data container unavailable"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            IOSSimulatorAppContractError,
+            r"stage 'collect-app-container'.*exit code 1",
+        ) as raised:
+            run_ios_simulator_app_contract(
+                candidate_root=self.candidate,
+                work_dir=self.root / "work",
+                runner=runner,
+                contract=self.contract,
+            )
+        self.assertIn("data container unavailable", "\n".join(raised.exception.__notes__))
+        self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
+
+    def test_ui_test_collects_complete_app_log_export_before_cleanup(self) -> None:
         runner = FakeRunner(self.root)
         evidence = run_ios_simulator_app_contract(
             candidate_root=self.candidate, work_dir=self.root / "work", runner=runner,
@@ -400,6 +443,9 @@ class IOSSimulatorSimplificationTests(unittest.TestCase):
         )
         self.assertTrue(evidence.app.app_path.is_dir())
         self.assertTrue(any(command[:1] == ["xcodebuild"] for command in runner.commands))
+        self.assertTrue(evidence.result_bundle.is_dir())
+        self.assertEqual(len(evidence.log_exports), 1)
+        self.assertGreater(evidence.log_exports[0].stat().st_size, 8)
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "terminate"] for command in runner.commands))
         self.assertTrue(any(command[:3] == ["xcrun", "simctl", "shutdown"] for command in runner.commands))
 

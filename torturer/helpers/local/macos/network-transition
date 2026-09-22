@@ -30,6 +30,7 @@ case ${1-} in
     state=$3; restore_stdout=$4; restore_stderr=$5
     [ -f "$state" ] && [ -f "$restore_stdout" ] && [ -f "$restore_stderr" ] || exit 2
     route_output=$(/sbin/route -n get default -ifscope "$interface")
+    printf '%s\n' "$route_output"
     gateway=$(printf '%s\n' "$route_output" | /usr/bin/awk '$1 == "gateway:" { print $2 }'); valid_ipv4 "$gateway" || exit 2
     : > "$state"; printf 'baseline_gateway=%s\n' "$gateway" >> "$state"
     /usr/bin/nohup "$0" restore "$interface" "$state" > "$restore_stdout" 2> "$restore_stderr" < /dev/null &
@@ -43,7 +44,7 @@ case ${1-} in
     printf 'restore_ready=1\n' >> "$state"; count=0
     while ! /usr/bin/grep -q '^restore_requested=1$' "$state"; do count=$((count + 1)); [ "$count" -lt 50 ] || { printf 'restore_status=2\n' >> "$state"; exit 2; }; /bin/sleep 0.1; done
     /bin/sleep 3; gateway=$(/usr/bin/sed -n 's/^baseline_gateway=//p' "$state"); valid_ipv4 "$gateway" || { printf 'restore_status=2\n' >> "$state"; exit 2; }
-    set +e; /sbin/ifconfig "$interface" up; status=$?; if [ "$status" -eq 0 ]; then /sbin/route -n get default >/dev/null 2>&1 || { /sbin/route -n add default "$gateway"; status=$?; }; fi; set -e
+    set +e; /sbin/ifconfig "$interface" up; status=$?; if [ "$status" -eq 0 ]; then /sbin/route -n get default || { /sbin/route -n add default "$gateway"; status=$?; }; fi; set -e
     printf 'restore_status=%s\n' "$status" >> "$state"; exit "$status"
     ;;
   finish)

@@ -50,7 +50,10 @@ func clearLocalLogFileAtBase(path, base string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect local log path: %w", err)
 	}
-	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+	// Clear is a durable view boundary, not a destructive deletion. O_APPEND
+	// keeps every prior producer byte available to the dedicated export while
+	// making the marker atomic with respect to concurrent writers.
+	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_APPEND|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return fmt.Errorf("open local log path: %w", err)
 	}

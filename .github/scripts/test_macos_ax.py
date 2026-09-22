@@ -25,6 +25,17 @@ class _Frameworks:
 
 
 class MacOSAXMatchTests(unittest.TestCase):
+    def test_window_obstruction_probe_only_reports_frontmost_intersections(self):
+        records = [
+            {"owner_pid": 77, "layer": 0, "bounds": [0, 0, 100, 100], "owner_name": "Other"},
+            {"owner_pid": 42, "layer": 0, "bounds": [10, 10, 90, 90], "owner_name": "Dobby Vpn"},
+            {"owner_pid": 88, "layer": 0, "bounds": [200, 200, 300, 300], "owner_name": "Unrelated"},
+        ]
+        with patch.object(macos_ax, "_cg_window_records", return_value=records):
+            result = macos_ax._window_obstruction_probe(_Frameworks(), 42)
+        self.assertEqual(result["stage"], "obstruction")
+        self.assertEqual([entry["owner_pid"] for entry in result["obstructions"]], [77])
+
     def _find(self, frames: dict[int, tuple[int, int, int, int]]):
         children = {1: (2, 3), 2: (), 3: (4, 5), 4: (), 5: ()}
         framework = _Frameworks()

@@ -29,7 +29,7 @@ version=${VERSION_NAME:-$(tr -d '[:space:]' < "$script_root/VERSION")}
 build=${APP_BUILD:-1005001}
 if [[ -n "${SOURCE_COMMIT:-}" ]]; then
   source_commit=$SOURCE_COMMIT
-elif source_commit=$(git -C "$script_root" rev-parse HEAD 2>/dev/null); then
+elif source_commit=$(git -C "$script_root" rev-parse HEAD); then
   :
 else
   # Disposable local candidates are transferred without .git. Keep their
@@ -41,11 +41,10 @@ fi
 [[ "$build" =~ ^[1-9][0-9]*$ ]] || { echo "APP_BUILD must be a positive integer" >&2; exit 2; }
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "SOURCE_COMMIT must be a full commit SHA" >&2; exit 2; }
 [[ -d "$runtime" ]] || { echo "DobbyVPNRuntime.xcframework is unavailable: $runtime" >&2; exit 2; }
-command -v xcodebuild >/dev/null || { echo "xcodebuild is required" >&2; exit 2; }
-command -v codesign >/dev/null || { echo "codesign is required" >&2; exit 2; }
-command -v install_name_tool >/dev/null || { echo "install_name_tool is required" >&2; exit 2; }
-command -v otool >/dev/null || { echo "otool is required" >&2; exit 2; }
-command -v python3 >/dev/null || { echo "python3 is required for XCFramework validation" >&2; exit 2; }
+for required_tool in xcodebuild codesign install_name_tool otool python3; do
+  required_path="$(command -v "$required_tool")" || { echo "$required_tool is required" >&2; exit 2; }
+  printf 'tool %s=%s\n' "$required_tool" "$required_path"
+done
 
 if [[ "$device" == 1 ]]; then
   identity=${IOS_SIGNING_IDENTITY:-Apple\ Distribution}
@@ -192,7 +191,7 @@ if [[ "$device" == 0 ]]; then
   mkdir -p "$cert_dir"
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -subj "/CN=Dobby Simulator/O=DobbyVPN/OU=SIMULATOR" \
-    -keyout "$cert_dir/key.pem" -out "$cert_dir/cert.pem" >/dev/null 2>&1
+    -keyout "$cert_dir/key.pem" -out "$cert_dir/cert.pem"
   cat > "$cert_dir/security" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -272,13 +271,18 @@ cp -R "$common_framework" "$app/Frameworks/CommonDI.framework"
 # CommonDI.framework and the app will exit before Go can write its startup log.
 main_executable="$app/main"
 [[ -x "$main_executable" ]] || { echo "Fyne app executable is unavailable: $main_executable" >&2; exit 1; }
-if ! otool -l "$main_executable" | grep -F -q '@executable_path/Frameworks'; then
+otool_output="$(otool -l "$main_executable")"
+printf '%s\n' "$otool_output"
+if [[ "$otool_output" != *'@executable_path/Frameworks'* ]]; then
   install_name_tool -add_rpath '@executable_path/Frameworks' "$main_executable"
 fi
 
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier vpn.dobby.app" "$app/Info.plist" 2>/dev/null || true
-/usr/libexec/PlistBuddy -c "Add :DobbySourceCommit string $source_commit" "$app/Info.plist" 2>/dev/null || \
+if ! /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier vpn.dobby.app" "$app/Info.plist"; then
+  /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string vpn.dobby.app" "$app/Info.plist"
+fi
+if ! /usr/libexec/PlistBuddy -c "Add :DobbySourceCommit string $source_commit" "$app/Info.plist"; then
   /usr/libexec/PlistBuddy -c "Set :DobbySourceCommit $source_commit" "$app/Info.plist"
+fi
 
 if [[ "$device" == 1 ]]; then
   mkdir -p "$app/PlugIns"
@@ -303,8 +307,9 @@ if [[ "$device" == 1 ]]; then
   /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $team_id" "$expanded_tunnel_entitlements"
   codesign --force --sign "$identity" --timestamp --entitlements "$expanded_tunnel_entitlements" "$app/PlugIns/tunnel.appex"
   codesign --force --sign "$identity" --timestamp "$app/Frameworks/CommonDI.framework"
-  /usr/libexec/PlistBuddy -c "Add :DobbyKeychainAccessGroup string $team_id.vpn.dobby.app" "$app/Info.plist" 2>/dev/null || \
+  if ! /usr/libexec/PlistBuddy -c "Add :DobbyKeychainAccessGroup string $team_id.vpn.dobby.app" "$app/Info.plist"; then
     /usr/libexec/PlistBuddy -c "Set :DobbyKeychainAccessGroup $team_id.vpn.dobby.app" "$app/Info.plist"
+  fi
   codesign --force --sign "$identity" --timestamp --entitlements "$expanded_app_entitlements" "$app"
   payload=$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-payload.XXXXXX")
   mkdir -p "$payload/Payload"
@@ -324,7 +329,9 @@ else
   # Simulator cannot host a NetworkExtension packet-tunnel provider and
   # SpringBoard rejects a GUI bundle carrying that unsupported plug-in.
   codesign --force --sign - "$app/Frameworks/CommonDI.framework"
-  /usr/libexec/PlistBuddy -c "Delete :DobbyKeychainAccessGroup" "$app/Info.plist" 2>/dev/null || true
+  if ! /usr/libexec/PlistBuddy -c "Delete :DobbyKeychainAccessGroup" "$app/Info.plist"; then
+    echo "DobbyKeychainAccessGroup was already absent from the Simulator plist" >&2
+  fi
   codesign --force --sign - "$app"
   rm -rf "$output"
   mkdir -p "$(dirname "$output")"

@@ -20,11 +20,25 @@ from .android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
 )
+from .screenshot_artifacts import (
+    ScreenshotIntegrityError,
+    assert_marker_matches,
+    png_metadata,
+)
 
 _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
 COMPANION_PACKAGE = "com.dobby.vpn.test"
 PROBE_ROOT_GLOB = "/data/local/tmp/dobbyvpn-probe-*"
+_SCREENSHOT_ROOT = "/data/user/0/com.dobby.vpn.test/cache/dobbyvpn-rendered-screenshots/"
+_SCREENSHOT_MARKER = re.compile(
+    rb"^DOBBY_UI_SCREENSHOT label=([A-Za-z0-9_-]+) "
+    rb"path=(/data/user/0/com\.dobby\.vpn\.test/cache/dobbyvpn-rendered-screenshots/"
+    rb"[A-Za-z0-9_-]+\.png) bytes=([0-9]+) sha256=([0-9a-f]{64}) "
+    rb"width=([1-9][0-9]*) height=([1-9][0-9]*)$",
+    re.MULTILINE,
+)
+_LOCAL_REQUIRED_SCREENSHOT_LABELS = ("startup", "failure-state", "reopened")
 
 
 def _error(message: str) -> Exception:
@@ -120,11 +134,15 @@ def _owned_routing_cleanup_command() -> str:
     """Build the exact dedicated-chain stale-rule cleanup script."""
 
     return (
-        f"while iptables -D OUTPUT -j {ROUTING_RULE_CHAIN} 2>/dev/null; "
-        "do :; done; "
-        f"iptables -F {ROUTING_RULE_CHAIN} 2>/dev/null || true; "
-        f"iptables -X {ROUTING_RULE_CHAIN} 2>/dev/null || true; "
-        "inventory=$(iptables -S) || exit $?; "
+        "inventory=$(iptables -S) || exit $?; printf '%s\\n' \"$inventory\"; "
+        f'while case "$inventory" in *"-A OUTPUT -j {ROUTING_RULE_CHAIN}"*) '
+        "true;; *) false;; esac; do "
+        f"iptables -D OUTPUT -j {ROUTING_RULE_CHAIN} || exit $?; "
+        "inventory=$(iptables -S) || exit $?; printf '%s\\n' \"$inventory\"; done; "
+        f'case "$inventory" in *"-N {ROUTING_RULE_CHAIN}"*) '
+        f"iptables -F {ROUTING_RULE_CHAIN} || exit $?; "
+        f"iptables -X {ROUTING_RULE_CHAIN} || exit $?;; esac; "
+        "inventory=$(iptables -S) || exit $?; printf '%s\\n' \"$inventory\"; "
         f'case "$inventory" in *{ROUTING_RULE_CHAIN}*) '
         f'echo "Android qualification routing chain remains: '
         f'{ROUTING_RULE_CHAIN}" >&2; exit 1;; esac'
@@ -215,15 +233,150 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         stdout=result.stdout,
         stderr=result.stderr,
     )
+    collection_error: BaseException | None = None
+    try:
+        _collect_rendered_screenshots(
+            adb_value,
+            serial,
+            result.stdout,
+            succeeded=parsed.succeeded,
+            run_dir=run_dir,
+            logs=logs,
+            timeout=min(timeout, 30),
+            environment=environment,
+        )
+    except BaseException as error:
+        collection_error = error
     if parsed.succeeded:
+        if collection_error is not None:
+            raise collection_error
         return result
-    # Preserve the original instrumentation result. Screenshots and
-    # accessibility hierarchies can contain profile text, user-entered
-    # values, and private system details, so Android qualification keeps no
-    # failure artifacts from the rendered surface.
+    # Preserve the original instrumentation result as primary. A required
+    # screenshot collection failure is appended as secondary diagnostics so
+    # it cannot hide the product assertion that caused the test to fail.
+    stderr = result.stderr or b""
+    if collection_error is not None:
+        stderr += (
+            b"\nANDROID_UI_SCREENSHOT_COLLECTION_FAILED: "
+            + str(collection_error).encode("utf-8", errors="backslashreplace")
+            + b"\n"
+        )
     return subprocess.CompletedProcess(
-        result.args, result.returncode or 1, result.stdout, result.stderr
+        result.args, result.returncode or 1, result.stdout, stderr
     )
+
+
+def _collect_rendered_screenshots(
+    adb: str,
+    serial: str,
+    instrumentation_stdout: bytes,
+    *,
+    succeeded: bool = True,
+    run_dir: Path,
+    logs: Path,
+    timeout: float,
+    environment: dict[str, str],
+) -> None:
+    """Pull required redacted UI frames and validate complete PNG integrity."""
+
+    matches = list(_SCREENSHOT_MARKER.finditer(instrumentation_stdout))
+    if not matches:
+        raise _error(
+            "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: instrumentation emitted no required screenshot markers"
+        )
+    destination = logs / "screenshots" / "android"
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    labels = [match.group(1).decode("ascii") for match in matches]
+    if succeeded:
+        if tuple(labels) != _LOCAL_REQUIRED_SCREENSHOT_LABELS:
+            raise _error(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: required local "
+                "milestones must be startup, failure-state, reopened in order"
+            )
+    else:
+        # TestWatcher adds one final failure frame. It may run before any
+        # success milestone, so accept only an ordered prefix followed by one
+        # failure classification; any duplicate/conflicting marker is unsafe.
+        if labels.count("failure") != 1 or labels[-1] != "failure":
+            raise _error(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: failed local run "
+                "must end with exactly one failure milestone"
+            )
+        if tuple(labels[:-1]) != _LOCAL_REQUIRED_SCREENSHOT_LABELS[: len(labels) - 1]:
+            raise _error(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: local failure "
+                "milestones are out of order"
+            )
+    seen: dict[str, tuple[str, int, str, int, int]] = {}
+    for match in matches:
+        label = match.group(1).decode("ascii")
+        remote = match.group(2).decode("ascii")
+        expected_bytes = int(match.group(3))
+        expected_sha256 = match.group(4).decode("ascii")
+        expected_width = int(match.group(5))
+        expected_height = int(match.group(6))
+        if (
+            not remote.startswith(_SCREENSHOT_ROOT)
+            or Path(remote).name != f"{label}.png"
+        ):
+            raise _error(
+                f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: invalid screenshot path for {label}"
+            )
+        tuple_value = (
+            label,
+            expected_bytes,
+            expected_sha256,
+            expected_width,
+            expected_height,
+        )
+        prior = seen.get(remote)
+        if prior is not None:
+            if prior != tuple_value:
+                raise _error(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate "
+                    f"screenshot marker conflicts for {remote}"
+                )
+            raise _error(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate "
+                f"screenshot marker for {remote}"
+            )
+        seen[remote] = tuple_value
+        local = destination / f"{label}.png"
+        pulled = _adb_call(
+            adb,
+            serial,
+            ["pull", remote, str(local)],
+            run_dir=run_dir,
+            logs=logs,
+            label=f"android-screenshot-{label}",
+            timeout=max(1.0, timeout),
+            environment=environment,
+            check=False,
+        )
+        if pulled.returncode != 0:
+            raise _error(
+                f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: pull failed for {label}"
+            )
+        try:
+            metadata = png_metadata(local)
+            assert_marker_matches(
+                metadata,
+                bytes_count=expected_bytes,
+                sha256_value=expected_sha256,
+                width=expected_width,
+                height=expected_height,
+            )
+        except (ScreenshotIntegrityError, OSError) as error:
+            try:
+                local.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise _error(
+                    f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: invalid {label}; "
+                    f"cleanup also failed: {cleanup_error}"
+                ) from error
+            raise _error(
+                f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: invalid {label}: {error}"
+            ) from error
 
 
 def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) -> None:
@@ -296,21 +449,35 @@ def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) 
         if not isinstance(package, str) or package not in {APP_PACKAGE, COMPANION_PACKAGE}:
             errors.append(f"invalid owned Android package: {package!r}")
             continue
-        present = _adb_call(
-            adb_value, serial, ["shell", "pm", "list", "packages", package], run_dir=run_dir, logs=logs,
-            label=f"android-cleanup-probe-{package.replace('.', '-')}", timeout=min(timeout, 30),
-            environment=environment, check=True,
-        )
+        package_label = package.replace('.', '-')
+        try:
+            present = _adb_call(
+                adb_value, serial, ["shell", "pm", "list", "packages", package],
+                run_dir=run_dir, logs=logs,
+                label=f"android-cleanup-probe-{package_label}",
+                timeout=min(timeout, 30), environment=environment, check=True,
+            )
+        except Exception as error:
+            # A failed ownership probe must not prevent the companion package
+            # from receiving its own stop/uninstall attempt. Keep the exact
+            # command stream in the shared log and aggregate this error.
+            errors.append(
+                f"{package} probe: {type(error).__name__}: {error}"
+            )
+            continue
         if f"package:{package}".encode() not in present.stdout.splitlines():
             continue  # Already absent is a clean, idempotent teardown.
         try:
             _adb_call(adb_value, serial, ["shell", "am", "force-stop", package], run_dir=run_dir,
-                      logs=logs, label=f"android-cleanup-stop-{package.replace('.', '-')}", timeout=timeout,
-                      environment=environment)
-            _adb_call(adb_value, serial, ["uninstall", package], run_dir=run_dir, logs=logs,
-                      label=f"android-cleanup-uninstall-{package.replace('.', '-')}", timeout=timeout,
+                      logs=logs, label=f"android-cleanup-stop-{package_label}", timeout=timeout,
                       environment=environment)
         except Exception as error:
-            errors.append(f"{package}: {type(error).__name__}: {error}")
+            errors.append(f"{package} force-stop: {type(error).__name__}: {error}")
+        try:
+            _adb_call(adb_value, serial, ["uninstall", package], run_dir=run_dir, logs=logs,
+                      label=f"android-cleanup-uninstall-{package_label}", timeout=timeout,
+                      environment=environment)
+        except Exception as error:
+            errors.append(f"{package} uninstall: {type(error).__name__}: {error}")
     if errors:
         raise _error("; ".join(errors))

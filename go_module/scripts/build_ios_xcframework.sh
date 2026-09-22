@@ -24,7 +24,7 @@ if [[ "$#" -gt 0 ]]; then
   fi
 fi
 
-gopath="$(go env GOPATH)"
+gopath="$(go env GOPATH | tee /dev/stderr)"
 tool_dir="$gopath/bin"
 gomobile_bin="${GOMOBILE_BIN:-$tool_dir/gomobile}"
 gobind_bin="${GOBIND_BIN:-$tool_dir/gobind}"
@@ -33,18 +33,20 @@ if [[ ! -x "$gomobile_bin" || ! -x "$gobind_bin" ]]; then
   exit 2
 fi
 for tool in "$gomobile_bin" "$gobind_bin"; do
-  tool_metadata="$(go version -m "$tool" 2>&1)"
-  printf '%s\n' "$tool_metadata"
-  if ! grep -F 'golang.org/x/mobile' <<<"$tool_metadata" | grep -F "$mobile_version" >/dev/null; then
+  # Keep the complete tool report visible while retaining it for the module
+  # pin check.  A command substitution alone would hide successful stdout
+  # from the invoking build log.
+  tool_metadata="$(go version -m "$tool" | tee /dev/stderr)"
+  if [[ "$tool_metadata" != *"golang.org/x/mobile"*"$mobile_version"* ]]; then
     echo "tool module closure is not pinned to golang.org/x/mobile@$mobile_version: $tool" >&2
     exit 2
   fi
 done
 export GOMOBILE="${GOMOBILE:-$gopath/pkg/gomobile}"
 mkdir -p "$GOMOBILE"
-export PATH="$(dirname "$gomobile_bin"):$(dirname "$gobind_bin"):$PATH"
+export PATH="${gomobile_bin%/*}:${gobind_bin%/*}:$PATH"
 
-module_version="$(go list -m -f '{{.Version}}' golang.org/x/mobile)"
+module_version="$(go list -m -f '{{.Version}}' golang.org/x/mobile | tee /dev/stderr)"
 if [[ "$module_version" != "$mobile_version" ]]; then
   echo "go.mod resolves golang.org/x/mobile@$module_version; expected $mobile_version" >&2
   exit 2
@@ -81,12 +83,19 @@ GO111MODULE=on gomobile bind \
   -o "$simulator_output" \
   ./ios_exports
 
-simulator_framework="$(find "$simulator_output" -type d -name DobbyVPNRuntime.framework -print)"
-if [[ -z "$simulator_framework" ]] \
-  || [[ "$(printf '%s\n' "$simulator_framework" | wc -l | tr -d ' ')" -ne 1 ]]; then
+simulator_framework_output="$(
+  find "$simulator_output" -type d -name DobbyVPNRuntime.framework -print | tee /dev/stderr
+)"
+if [[ -z "$simulator_framework_output" ]]; then
   echo "expected exactly one generated Simulator DobbyVPNRuntime.framework" >&2
   exit 1
 fi
+mapfile -t simulator_frameworks <<<"$simulator_framework_output"
+if [[ "${#simulator_frameworks[@]}" -ne 1 ]]; then
+  echo "expected exactly one generated Simulator DobbyVPNRuntime.framework" >&2
+  exit 1
+fi
+simulator_framework="${simulator_frameworks[0]}"
 
 if [[ -z "$simulator_architecture" ]]; then
   device_framework="$device_output/ios-arm64/DobbyVPNRuntime.framework"
@@ -95,7 +104,7 @@ if [[ -z "$simulator_architecture" ]]; then
     exit 1
   fi
 
-  module_dir="$(go list -m -f '{{.Dir}}' trusttunnel-go)"
+  module_dir="$(go list -m -f '{{.Dir}}' trusttunnel-go | tee /dev/stderr)"
   bridge="$module_dir/lib/ios/libdobby_bridge.a"
   device_library="$device_framework/DobbyVPNRuntime"
 
@@ -109,7 +118,8 @@ if [[ -z "$simulator_architecture" ]]; then
     echo "missing TrustTunnel static-library provenance: $provenance" >&2
     exit 1
   fi
-  expected_bridge_hash="$(python3 - "$provenance" <<'PY'
+  parser_status=0
+  expected_bridge_output="$(python3 - "$provenance" <<'PY' | tee /dev/stderr
 import json
 import re
 import sys
@@ -141,8 +151,23 @@ if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
 
 print(value)
 PY
-)"
-  actual_bridge_hash="$(shasum -a 256 "$bridge" | awk '{print $1}')"
+)" || parser_status=$?
+  # Stdout is forwarded by tee before it is parsed; stderr remains inherited
+  # directly from Python. A successful substitution therefore hides neither.
+  if [[ "$parser_status" -ne 0 ]]; then
+    exit "$parser_status"
+  fi
+  if [[ ! "$expected_bridge_output" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "TrustTunnel bridge provenance parser returned an invalid hash" >&2
+    exit 1
+  fi
+  expected_bridge_hash="$expected_bridge_output"
+  bridge_hash_output="$(shasum -a 256 "$bridge" | tee /dev/stderr)"
+  if [[ ! "$bridge_hash_output" =~ ^([0-9a-f]{64})[[:space:]] ]]; then
+    echo "TrustTunnel bridge SHA-256 command returned an invalid record" >&2
+    exit 1
+  fi
+  actual_bridge_hash="${BASH_REMATCH[1]}"
   if [[ "$actual_bridge_hash" != "$expected_bridge_hash" ]]; then
     echo "TrustTunnel bridge SHA-256 verification failed" >&2
     echo "expected: $expected_bridge_hash" >&2

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,8 +16,8 @@ import (
 )
 
 const (
-	// maxDiagnosticTail keeps the rendered widget bounded while export retains
-	// every record after the most recent clear marker.
+	// maxDiagnosticTail keeps the rendered widget bounded. Export retains every
+	// append-only record, including records hidden by a clear marker.
 	maxDiagnosticTail = 50
 	logSchema         = "dobby.log/v1"
 	logClearedEvent   = "logs.cleared"
@@ -133,15 +134,21 @@ func (s *FileDiagnosticStore) Read(ctx context.Context) (DiagnosticHistory, erro
 
 	filtered := recordsAfterClear(all)
 	history := diagnosticHistoryFromRecords(filtered)
+	// The visible tail intentionally starts after the latest clear marker, but
+	// export is an append-only support record and must not discard bytes merely
+	// because the user hid them from the UI. Include the marker and all
+	// pre/post-clear producer records in their stable chronological order.
+	history.ExportLines = diagnosticExportLines(all)
 	if len(readErrors) > 0 {
 		return history, errors.Join(readErrors...)
 	}
 	return history, nil
 }
 
-// Clear truncates only the UI-owned primary file and writes a timestamped
-// marker. Producer files remain untouched; their older records are hidden by
-// the marker when the merged history is read again.
+// Clear appends a timestamped marker to the UI-owned primary file. Producer
+// files and the primary's earlier bytes remain untouched; older records are
+// hidden from the bounded view by the marker, while a later export still
+// contains the complete append-only history.
 func (s *FileDiagnosticStore) Clear(ctx context.Context) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -159,9 +166,11 @@ func (s *FileDiagnosticStore) Clear(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(s.primary), 0o700); err != nil {
 		return fmt.Errorf("create diagnostic directory: %w", err)
 	}
-	_ = os.Chmod(filepath.Dir(s.primary), 0o700)
+	if err := os.Chmod(filepath.Dir(s.primary), 0o700); err != nil {
+		return fmt.Errorf("protect diagnostic directory: %w", err)
+	}
 
-	file, err := os.OpenFile(s.primary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	file, err := os.OpenFile(s.primary, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open diagnostic history for clear: %w", err)
 	}
@@ -182,16 +191,22 @@ func (s *FileDiagnosticStore) Clear(ctx context.Context) error {
 		}
 	}
 	closeErr := file.Close()
+	var clearErrors []error
 	if marshalErr != nil {
-		return fmt.Errorf("encode diagnostic clear marker: %w", marshalErr)
+		clearErrors = append(clearErrors, fmt.Errorf("encode diagnostic clear marker: %w", marshalErr))
 	}
 	if writeErr != nil {
-		return fmt.Errorf("write diagnostic clear marker: %w", writeErr)
+		clearErrors = append(clearErrors, fmt.Errorf("write diagnostic clear marker: %w", writeErr))
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close diagnostic history after clear: %w", closeErr)
+		clearErrors = append(clearErrors, fmt.Errorf("close diagnostic history after clear: %w", closeErr))
 	}
-	_ = os.Chmod(s.primary, 0o600)
+	if err := os.Chmod(s.primary, 0o600); err != nil {
+		clearErrors = append(clearErrors, fmt.Errorf("protect diagnostic history: %w", err))
+	}
+	if len(clearErrors) > 0 {
+		return errors.Join(clearErrors...)
+	}
 	return nil
 }
 
@@ -246,36 +261,45 @@ func readDiagnosticRecords(path string, producer int) (records []storedDiagnosti
 		}
 	}()
 
-	scanner := bufio.NewScanner(file)
-	// A service diagnostic may contain a large serialized failure. Keep a
-	// bounded but generous line limit; malformed oversized records are reported
-	// by Scanner rather than silently truncated.
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	// Do not use bufio.Scanner here. A diagnostic record may contain a large
+	// serialized failure and Scanner's token limit would turn a complete record
+	// into a read error at an arbitrary repository-defined size. ReadString
+	// grows only for the current record, preserves every byte, and still lets
+	// us return the records recovered before a non-EOF read failure.
+	reader := bufio.NewReader(file)
 	records = make([]storedDiagnosticRecord, 0)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" {
+	for {
+		line, readErr := reader.ReadString('\n')
+		if len(line) > 0 {
+			// Remove only the framing LF. Preserve CR, blank lines, whitespace,
+			// malformed UTF-8 bytes, and a final unterminated record in the
+			// export-facing strings; filtering is a UI concern, not a read path.
+			line = strings.TrimSuffix(line, "\n")
+			if len(records) > 0 && !strings.HasPrefix(line, "{") {
+				last := &records[len(records)-1]
+				last.lines = append(last.lines, line)
+			} else {
+				timestamp, timestamped, event := diagnosticLineMetadata(line)
+				records = append(records, storedDiagnosticRecord{
+					timestamp:   timestamp,
+					timestamped: timestamped,
+					event:       event,
+					producer:    producer,
+					recordIndex: len(records),
+					lines:       []string{line},
+				})
+			}
+		}
+		if readErr == nil {
 			continue
 		}
-		if len(records) > 0 && !strings.HasPrefix(line, "{") {
-			last := &records[len(records)-1]
-			last.lines = append(last.lines, line)
-			continue
+		if errors.Is(readErr, io.EOF) {
+			return records, nil
 		}
-		timestamp, timestamped, event := diagnosticLineMetadata(line)
-		records = append(records, storedDiagnosticRecord{
-			timestamp:   timestamp,
-			timestamped: timestamped,
-			event:       event,
-			producer:    producer,
-			recordIndex: len(records),
-			lines:       []string{line},
-		})
+		// Keep records already read, and any bytes returned with the failing
+		// read, but make the caller distinguish this from a complete export.
+		return records, readErr
 	}
-	if err := scanner.Err(); err != nil {
-		return records, err
-	}
-	return records, nil
 }
 
 func recordsAfterClear(records []storedDiagnosticRecord) []storedDiagnosticRecord {
@@ -308,7 +332,7 @@ func recordsAfterClear(records []storedDiagnosticRecord) []storedDiagnosticRecor
 	return filtered
 }
 
-func diagnosticHistoryFromRecords(records []storedDiagnosticRecord) DiagnosticHistory {
+func orderedDiagnosticRecords(records []storedDiagnosticRecord) []storedDiagnosticRecord {
 	ordered := append([]storedDiagnosticRecord(nil), records...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		left, right := ordered[i], ordered[j]
@@ -327,26 +351,40 @@ func diagnosticHistoryFromRecords(records []storedDiagnosticRecord) DiagnosticHi
 		}
 		return left.timestamp.Before(right.timestamp)
 	})
+	return ordered
+}
 
+func diagnosticExportLines(records []storedDiagnosticRecord) []string {
+	ordered := orderedDiagnosticRecords(records)
 	raw := make([]string, 0)
-	readable := make([]string, 0)
 	for _, record := range ordered {
 		raw = append(raw, record.lines...)
-		// The marker is retained in an export so support can see where the
-		// user cleared history, but it is storage metadata rather than a new
-		// diagnostic event. A successful clear with no newer events therefore
-		// leaves the visible history empty.
+	}
+	return rawCopy(raw)
+}
+
+func diagnosticHistoryFromRecords(records []storedDiagnosticRecord) DiagnosticHistory {
+	ordered := orderedDiagnosticRecords(records)
+
+	readable := make([]string, 0)
+	for _, record := range ordered {
+		// The marker is retained in an export by diagnosticExportLines, but it is
+		// storage metadata rather than a new visible diagnostic event. A
+		// successful clear with no newer events therefore leaves the view empty.
 		if record.event == logClearedEvent {
 			continue
 		}
 		for _, line := range record.lines {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
 			readable = append(readable, renderDiagnosticLine(line))
 		}
 	}
 	if len(readable) > maxDiagnosticTail {
 		readable = readable[len(readable)-maxDiagnosticTail:]
 	}
-	return DiagnosticHistory{UILines: rawCopy(readable), ExportLines: rawCopy(raw)}
+	return DiagnosticHistory{UILines: rawCopy(readable)}
 }
 
 func rawCopy(values []string) []string { return append([]string(nil), values...) }

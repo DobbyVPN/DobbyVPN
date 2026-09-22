@@ -244,6 +244,24 @@ class DesktopBuildTests(unittest.TestCase):
         self.assertIn("exit code 7", diagnostics.getvalue())
         self.assertIn("probe stdout\nprobe stderr\n", diagnostics.getvalue())
 
+    def test_successful_probe_uses_stderr_when_stdout_has_only_whitespace(self) -> None:
+        completed = mock.Mock(returncode=0, stdout=" \n", stderr="tool version 1.2\n")
+        diagnostics = io.StringIO()
+        with (
+            mock.patch.object(desktop_build, "run_bounded_capture", return_value=completed),
+            mock.patch.object(desktop_build.sys, "stderr", diagnostics),
+        ):
+            self.assertEqual(
+                desktop_build.run_capture(["probe", "version"]),
+                "tool version 1.2",
+            )
+        rendered = diagnostics.getvalue()
+        self.assertIn("[probe probe version stdout begin]", rendered)
+        self.assertIn(" \n", rendered)
+        self.assertIn("[probe probe version stdout end]", rendered)
+        self.assertIn("tool version 1.2\n", rendered)
+        self.assertIn("[probe probe version stderr end]", rendered)
+
     def test_failed_windows_compiler_probe_preserves_child_output(self) -> None:
         compiler = Path("C:/tools/mingw64/bin/gcc.exe")
         completed = mock.Mock(returncode=2, stdout="compiler stdout\n", stderr="compiler stderr\n")
@@ -461,6 +479,18 @@ class DesktopBuildTests(unittest.TestCase):
                     desktop_build.print_service_logs([handle])
                 handle.close()
         self.assertIn("first diagnostic line\nsecond diagnostic line\n", output.getvalue())
+
+    def test_service_log_reporting_preserves_invalid_bytes_reversibly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(desktop_build, "ROOT_DIR", root):
+                handle = desktop_build.open_service_log()
+                handle.write(b"diagnostic\xff\n")
+                output = io.StringIO()
+                with mock.patch.object(desktop_build.sys, "stdout", output):
+                    desktop_build.print_service_logs([handle])
+                handle.close()
+        self.assertIn(r"diagnostic\xff", output.getvalue())
 
     def test_service_log_reporting_prints_complete_output_in_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -45,7 +45,7 @@ if [ ! -e "$path" ]; then
   printf 'service_probe_absent\n'
   exit 2
 fi
-if ! record=$(cat "$path" 2>/dev/null); then
+if ! record=$(cat "$path"); then
   # The process may exit after the existence check but before cat opens the
   # proc record.  Re-check the path so normal process disappearance remains
   # distinct from a real permission or I/O failure.
@@ -1112,7 +1112,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         repair_unit = _NETWORK_REPAIR_UNIT
         repair = self._privileged(
             (
-                "/usr/bin/systemd-run", "--quiet", "--collect", f"--unit={repair_unit}",
+                "/usr/bin/systemd-run", "--collect", f"--unit={repair_unit}",
                 "--on-active=3s", "/usr/sbin/ip", "link", "set", "dev",
                 self.network_interface, "up",
             ),
@@ -1159,6 +1159,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
           while true; do
             timer_state=$(systemctl show "$unit.timer" --property=LoadState --value) || exit 1
             service_state=$(systemctl show "$unit.service" --property=LoadState --value) || exit 1
+            printf 'timer LoadState=%s\nservice LoadState=%s\n' "$timer_state" "$service_state"
             if [ "$timer_state" = not-found ] && [ "$service_state" = not-found ]; then exit 0; fi
             sleep 0.1
           done

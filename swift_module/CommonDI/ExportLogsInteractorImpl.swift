@@ -271,8 +271,6 @@ public final class ExportLogsInteractorImpl: NSObject, UIAdaptivePresentationCon
     }
 
     private func writeGzip(_ text: String, to fileURL: URL) throws {
-        let data = Data(text.utf8)
-
         try fileURL.path.withCString { path in
             try "wb9".withCString { mode in
                 guard let gzipFile = gzopen(path, mode) else {
@@ -282,24 +280,66 @@ public final class ExportLogsInteractorImpl: NSObject, UIAdaptivePresentationCon
                         userInfo: [NSLocalizedDescriptionKey: "Unable to open gzip file"]
                     )
                 }
-                defer {
-                    gzclose(gzipFile)
+
+                let chunkSize = 64 * 1024
+                let writeChunk: ([UInt8]) throws -> Void = { chunk in
+                    let count = chunk.count
+                    let written = chunk.withUnsafeBytes { bytes -> Int32 in
+                        guard let baseAddress = bytes.baseAddress else { return 0 }
+                        return gzwrite(gzipFile, baseAddress, UInt32(count))
+                    }
+                    if written != Int32(count) {
+                        throw NSError(
+                            domain: "ExportLogsInteractorImpl",
+                            code: 2,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "Incomplete gzip write (wrote \(written) of \(count) bytes)"
+                            ]
+                        )
+                    }
+                }
+                var writeError: Error?
+                do {
+                    var chunk: [UInt8] = []
+                    chunk.reserveCapacity(chunkSize)
+                    for byte in text.utf8 {
+                        chunk.append(byte)
+                        if chunk.count == chunkSize {
+                            try writeChunk(chunk)
+                            chunk.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    if !chunk.isEmpty {
+                        try writeChunk(chunk)
+                    }
+                } catch {
+                    writeError = error
                 }
 
-                if data.isEmpty {
-                    return
+                let closeStatus = gzclose(gzipFile)
+                if let writeError {
+                    if closeStatus != 0 {
+                        throw NSError(
+                            domain: "ExportLogsInteractorImpl",
+                            code: 4,
+                            userInfo: [
+                                NSLocalizedDescriptionKey:
+                                    "Gzip write failed and close returned status \(closeStatus)",
+                                NSUnderlyingErrorKey: writeError,
+                            ]
+                        )
+                    }
+                    throw writeError
                 }
-
-                let written = data.withUnsafeBytes { bytes -> Int32 in
-                    guard let baseAddress = bytes.baseAddress else { return 0 }
-                    return gzwrite(gzipFile, baseAddress, UInt32(data.count))
-                }
-
-                if written != Int32(data.count) {
+                if closeStatus != 0 {
                     throw NSError(
                         domain: "ExportLogsInteractorImpl",
-                        code: 2,
-                        userInfo: [NSLocalizedDescriptionKey: "Incomplete gzip write"]
+                        code: 3,
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                "Gzip close failed with status \(closeStatus)"
+                        ]
                     )
                 }
             }

@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.content.FileProvider
 import java.io.File
+import java.io.IOException
 import java.io.OutputStreamWriter
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -31,7 +32,6 @@ object NativeVpnBridge {
     private const val CONSENT_LAUNCH_STARTED = "STARTED"
     private const val CONSENT_LAUNCH_RETURNED = "RETURNED"
     private const val CONSENT_LAUNCH_FAILED = "FAILED"
-    private const val MAX_LOG_EXPORT_BYTES = 4 * 1024 * 1024
     private const val DIAGNOSTIC_DIRECTORY = "diagnostics"
     private const val UI_DIAGNOSTIC_FILE = "ui_diagnostics.jsonl"
     private const val NATIVE_DIAGNOSTIC_FILE = "native_logs.jsonl"
@@ -191,11 +191,6 @@ object NativeVpnBridge {
     /** Compress diagnostics and open Android's explicit share chooser. */
     @JvmStatic
     fun exportLogs(context: Context, rawLogs: ByteArray): Boolean {
-        if (rawLogs.size > MAX_LOG_EXPORT_BYTES) {
-            recordDiagnostic(context, "logs.export_failed", "Diagnostic export is too large")
-            Log.e("DobbyVPN", "Log export failed: diagnostic export is too large")
-            return false
-        }
         val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
         // Keep concurrent exports independent. A timestamp-only name can
         // collide when two UI callbacks run in the same second and would
@@ -230,9 +225,26 @@ object NativeVpnBridge {
             // A failed chooser or FileProvider setup must not leave a private
             // archive in the cache on every attempted export. A successful
             // chooser keeps the file alive for the receiving application.
-            archive?.delete()
+            val cleanupError = try {
+                val createdArchive = archive
+                if (createdArchive != null && createdArchive.exists() && !createdArchive.delete()) {
+                    IOException("partial diagnostic archive could not be deleted: ${createdArchive.absolutePath}")
+                } else {
+                    null
+                }
+            } catch (cleanup: Exception) {
+                cleanup
+            }
             recordDiagnostic(context, "logs.export_failed", "Diagnostic export chooser failed")
             Log.e("DobbyVPN", "Log export failed", error)
+            if (cleanupError != null) {
+                recordDiagnostic(
+                    context,
+                    "logs.export_cleanup_failed",
+                    "Partial diagnostic archive cleanup failed",
+                )
+                Log.e("DobbyVPN", "Partial diagnostic archive cleanup failed", cleanupError)
+            }
             false
         }
     }

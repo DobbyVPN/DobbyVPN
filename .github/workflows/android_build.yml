@@ -204,13 +204,28 @@ jobs:
             --key-pass env:KEY_PASSWORD \
             --out "$companion_signed" \
             "$companion_unsigned"
+          verify_signer() {
+            local apk=$1 label=$2 stdout_file stderr_file status
+            stdout_file="$RUNNER_TEMP/${label}.apksigner.stdout"
+            stderr_file="$RUNNER_TEMP/${label}.apksigner.stderr"
+            set +e
+            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$apk" \
+              >"$stdout_file" 2>"$stderr_file"
+            status=$?
+            set -e
+            cat "$stdout_file"
+            cat "$stderr_file" >&2
+            test "$status" -eq 0
+          }
+          verify_signer "$signed" signed
+          verify_signer "$companion_signed" companion
           mapfile -t signer_digests < <(
-            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" | \
-              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+            sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' \
+              "$RUNNER_TEMP/signed.apksigner.stdout"
           )
           mapfile -t companion_signer_digests < <(
-            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$companion_signed" | \
-              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+            sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' \
+              "$RUNNER_TEMP/companion.apksigner.stdout"
           )
           test "${#signer_digests[@]}" -eq 1
           test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"

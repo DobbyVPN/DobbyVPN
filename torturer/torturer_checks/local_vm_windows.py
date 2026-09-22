@@ -21,6 +21,7 @@ import time
 from typing import Any
 import uuid
 
+from .diagnostics import emit_streams
 from .local_vm import LocalVMError
 
 _PID = re.compile(r"^[1-9][0-9]*$")
@@ -170,12 +171,28 @@ def _remove_mesa_llvmpipe_staging(run_dir: Path) -> None:
 
 
 def _run_mesa_fixture_command(
-    command: list[str], *, cwd: Path, timeout: float,
+    command: list[str], *, cwd: Path, timeout: float, logs: Path | None = None,
+    label: str = "native-ui-mesa",
 ) -> subprocess.CompletedProcess[bytes]:
     """Run one shell-free, disposable fixture command with a hard bound."""
 
     if timeout <= 0:
         raise _error("Windows Mesa fixture command timeout is exhausted")
+    if logs is not None:
+        try:
+            return _run_logged(
+                command,
+                cwd=cwd,
+                logs=logs,
+                label=label,
+                timeout=timeout,
+                check=True,
+            )
+        except LocalVMError as error:
+            # The shared runner retains complete stdout/stderr, including
+            # output emitted before a timeout or nonzero exit. Keep the Mesa
+            # context in the exception without replacing those streams.
+            raise _error(f"Windows Mesa fixture command failed: {error}") from error
     try:
         result = subprocess.run(
             command,
@@ -189,15 +206,31 @@ def _run_mesa_fixture_command(
     except FileNotFoundError as error:
         raise _error(f"Windows Mesa fixture tool is unavailable: {command[0]}") from error
     except subprocess.TimeoutExpired as error:
-        raise _error(f"Windows Mesa fixture command timed out: {command[0]}") from error
+        stdout = getattr(error, "stdout", None) or b""
+        stderr = getattr(error, "stderr", None) or b""
+        detail = b"\n".join(part for part in (stdout, stderr) if part)
+        suffix = f": {detail.decode('utf-8', errors='backslashreplace')}" if detail else ""
+        raise _error(
+            f"Windows Mesa fixture command timed out: {command[0]}{suffix}"
+        ) from error
     except OSError as error:
         raise _error(f"Windows Mesa fixture command could not start: {command[0]}") from error
     if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        details = []
+        for stream, value in (("stdout", result.stdout), ("stderr", result.stderr)):
+            if value:
+                details.append(
+                    f"{stream}: {value.decode('utf-8', errors='backslashreplace')}"
+                )
         message = f"Windows Mesa fixture command failed: {command[0]} exited {result.returncode}"
-        if detail:
-            message += f": {detail}"
+        if details:
+            message += ": " + " ".join(details)
         raise _error(message)
+    # Focused callers may not have a run-log directory. Keep their successful
+    # fixture diagnostics visible as explicit stream-delimited output rather
+    # than silently discarding either stream. Production callers pass ``logs``
+    # and the shared runner has already retained both complete streams there.
+    emit_streams(label, result.stdout, result.stderr)
     return result
 
 
@@ -213,7 +246,7 @@ def _mesa_archive_sha256(path: Path) -> str:
 
 
 def _prepare_mesa_llvmpipe_fixture(
-    command: list[str], *, run_dir: Path, timeout: float,
+    command: list[str], *, run_dir: Path, timeout: float, logs: Path | None = None,
 ) -> tuple[list[str], Path | None]:
     """Stage the exact Windows UI beside Mesa's two WGL DLLs.
 
@@ -265,6 +298,8 @@ def _prepare_mesa_llvmpipe_fixture(
             ],
             cwd=run_dir,
             timeout=remaining(),
+            logs=logs,
+            label="native-ui-mesa-download",
         )
         if archive.is_symlink() or not archive.is_file() or archive.stat().st_size <= 0:
             raise _error("Windows Mesa fixture download did not produce an archive")
@@ -282,6 +317,8 @@ def _prepare_mesa_llvmpipe_fixture(
             ],
             cwd=run_dir,
             timeout=remaining(),
+            logs=logs,
+            label="native-ui-mesa-extract",
         )
         for member in _MESA_LLVMPIPE_MEMBERS:
             extracted = extraction.joinpath(*member.split("/"))
@@ -387,7 +424,17 @@ public static class DobbyVpnWts {
 '@
 
 function Get-ConfiguredExplorerProbe {
-  $explorerMatches = @(Get-Process -Name "explorer" -IncludeUserName -ErrorAction SilentlyContinue |
+  $explorerProcesses = @()
+  try {
+    $explorerProcesses = @(Get-Process -Name "explorer" -IncludeUserName -ErrorAction Stop)
+  } catch {
+    # An absent Explorer is an expected unavailable-desktop result. Preserve
+    # its complete provider diagnostic while continuing with an empty set;
+    # unexpected provider failures remain fatal.
+    if ($_.Exception.Message -notmatch "Cannot find a process|No process") { throw }
+    [Console]::Error.WriteLine(($_ | Out-String))
+  }
+  $explorerMatches = @($explorerProcesses |
     ForEach-Object {
       $session = [int]$_.SessionId
       $owner = [string]$_.UserName
@@ -396,7 +443,7 @@ function Get-ConfiguredExplorerProbe {
         $ownerAccount = New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $owner
         $ownerSid = $ownerAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
       } catch {
-        return
+        throw
       }
       if ($ownerSid -eq $targetSid) {
         [pscustomobject]@{
@@ -428,7 +475,7 @@ if ($activeConsole -ne [uint32]$session) {
   # session ID and the fixed console destination; never disconnect or target a
   # broad user/session set.
   $tscon = Join-Path $env:SystemRoot "System32\tscon.exe"
-  & $tscon ([string]$session) "/dest:console" *> $null
+  & $tscon ([string]$session) "/dest:console"
   if ($LASTEXITCODE -ne 0) {
     Write-Error ("validated Explorer session {0} could not be attached to the console" -f $session)
     exit 3
@@ -603,12 +650,19 @@ def _native_ui_wrapper(
         f"  [IO.File]::WriteAllText({_powershell_literal(str(stdout))}, $stdoutTask.Result)",
         f"  [IO.File]::WriteAllText({_powershell_literal(str(stderr))}, $stderrTask.Result)",
         "  $exitCode = $process.ExitCode",
-        "} catch {",
+    "} catch {",
+        "  $failure = ($_ | Out-String)",
         "  if ($null -ne $process -and -not $process.HasExited) {",
-        "    try { $process.Kill() } catch { }",
+        "    try {",
+        "      $process.Kill()",
+        "      $process.WaitForExit()",
+        "    } catch {",
+        "      $failure += [Environment]::NewLine + ($_ | Out-String)",
+        "    }",
         "  }",
         f"  [IO.File]::AppendAllText({_powershell_literal(str(stderr))}, "
-        "($_ | Out-String) + [Environment]::NewLine)",
+        "$failure + [Environment]::NewLine)",
+        "  $exitCode = -1",
         "}",
         f"Set-Content -LiteralPath {_powershell_literal(str(exit_code))} "
         "-Value ([string]$exitCode) -Encoding ASCII -NoNewline",
@@ -647,7 +701,7 @@ def _native_ui_register_script(
         f"-Argument {_powershell_literal(action_arguments)} "
         f"-WorkingDirectory {_powershell_literal(str(cwd))}",
         f"Register-ScheduledTask -TaskName {_powershell_literal(task_name)} "
-        "-Action $action -Principal $principal -Force | Out-Null",
+        "-Action $action -Principal $principal -Force",
         f"Start-ScheduledTask -TaskName {_powershell_literal(task_name)}",
         # Start-ScheduledTask is asynchronous and normally returns success
         # even when Task Scheduler cannot create the user-session process.
@@ -734,7 +788,7 @@ def _native_ui_access_script(
         "  $arguments = @($Path, '/grant', $grant)",
         "  if ($Recurse) { $arguments += '/T' }",
         "  $arguments += '/C'",
-        "  & \"$env:SystemRoot\\System32\\icacls.exe\" @arguments | Out-Null",
+        "  & \"$env:SystemRoot\\System32\\icacls.exe\" @arguments",
         "  if ($LASTEXITCODE -ne 0) { throw \"native UI access grant failed\" }",
         "}",
     ]
@@ -776,11 +830,19 @@ def _native_ui_access_script(
 def _native_ui_unregister_script(task_name: str) -> str:
     return "\n".join([
         '$ErrorActionPreference = "Stop"',
-        f"$task = Get-ScheduledTask -TaskName {_powershell_literal(task_name)} "
-        "-ErrorAction SilentlyContinue",
+        "$task = $null",
+        "try {",
+        f"  $task = Get-ScheduledTask -TaskName {_powershell_literal(task_name)} "
+        "-ErrorAction Stop",
+        "} catch {",
+        "  $detail = $_ | Out-String",
+        "  if ($detail -match 'cannot find|does not exist|not found|0x80070002') {",
+        "    Write-Output $detail",
+        "  } else { throw }",
+        "}",
         "if ($null -ne $task) {",
         f"  Stop-ScheduledTask -TaskName {_powershell_literal(task_name)} "
-        "-ErrorAction SilentlyContinue",
+        "-ErrorAction Stop",
         f"  Unregister-ScheduledTask -TaskName {_powershell_literal(task_name)} "
         "-Confirm:$false -ErrorAction Stop",
         "}",
@@ -831,14 +893,14 @@ $observedCreationTicks = [int64]$record.CreationDate.ToUniversalTime().Ticks
 $creationDelta = $observedCreationTicks - $expectedCreationTicks
 if ($creationDelta -lt 0) { $creationDelta = -$creationDelta }
 if ($creationDelta -ge 10) { throw "native UI controller identity did not match the launched process" }
-& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
+& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F
 if ($LASTEXITCODE -ne 0) {
-  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue)
   if ($null -ne $still) { throw "native UI controller process tree did not terminate" }
 }
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 while ([DateTime]::UtcNow -lt $deadline) {
-  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue)
   if ($null -eq $still) { exit 0 }
   Start-Sleep -Milliseconds 100
 }
@@ -897,14 +959,14 @@ if ($creationDelta -lt 0) { $creationDelta = -$creationDelta }
 if ($creationDelta -ge 10) {
   throw "native UI child identity did not match the launched process"
 }
-& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
+& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F
 if ($LASTEXITCODE -ne 0) {
-  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue)
   if ($null -ne $still) { throw "native UI child process tree did not terminate" }
 }
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 while ([DateTime]::UtcNow -lt $deadline) {
-  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue)
   if ($null -eq $still) { exit 0 }
   Start-Sleep -Milliseconds 100
 }
@@ -989,7 +1051,7 @@ def run_interactive_ui(
         except OSError as error:
             raise LocalVMError(f"Windows native UI marker is not removable: {path.name}") from error
     staged_command, staging = _prepare_mesa_llvmpipe_fixture(
-        command, run_dir=run_dir, timeout=timeout,
+        command, run_dir=run_dir, timeout=timeout, logs=logs,
     )
     if staging is not None:
         filtered_environment["GALLIUM_DRIVER"] = "llvmpipe"
@@ -1133,10 +1195,11 @@ def run_interactive_ui(
                 path.unlink()
             except FileNotFoundError:
                 pass
-            except OSError:
-                # These are disposable markers.  The task cleanup result and
-                # UI output remain authoritative diagnostics.
-                pass
+            except OSError as cleanup_error:
+                cleanup_failures.append(
+                    f"marker cleanup failed ({path.name}): "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
         try:
             _remove_mesa_llvmpipe_staging(run_dir)
         except Exception as cleanup_error:
@@ -1348,14 +1411,14 @@ try {
   throw "service owner unavailable"
 }
 if ($ownerSid -ne "S-1-5-18" -and $ownerSid -ne $expectedSid) { exit 0 }
-& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F | Out-Null
+& "$env:SystemRoot\System32\taskkill.exe" /PID $pidValue /T /F
 if ($LASTEXITCODE -ne 0) {
-  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue)
   if ($null -ne $still) { throw "service taskkill failed" }
 }
 $deadline = [DateTime]::UtcNow.AddSeconds(15)
 while ([DateTime]::UtcNow -lt $deadline) {
-  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue) -ErrorAction SilentlyContinue
+  $still = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $pidValue)
   if ($null -eq $still) { exit 0 }
   Start-Sleep -Milliseconds 100
 }
@@ -1388,7 +1451,7 @@ $index = [int]$env:DOBBYVPN_NETWORK_INTERFACE
 if ($index -le 0) { throw "network interface index is invalid" }
 $adapters = @(Get-NetAdapter -ErrorAction Stop | Where-Object { [int]$_.ifIndex -eq $index })
 if ($adapters.Count -ne 1) { throw "recorded network adapter is absent or ambiguous" }
-$adapters | Enable-NetAdapter -Confirm:$false -ErrorAction Stop | Out-Null
+$adapters | Enable-NetAdapter -Confirm:$false -ErrorAction Stop
 $adapter = Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop
 if ($adapter.Status -ne "Up") { throw "recorded network adapter is not up" }
 '''

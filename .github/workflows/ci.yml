@@ -51,4 +51,12 @@ jobs:
       - name: Remove older workflow runs and caches
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/actions_retention.py --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" --delete-caches --delete-intermediate-artifacts
+        run: |
+          python3 .github/scripts/actions_retention.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --delete-caches \
+            --delete-intermediate-artifacts \
+            --keep-artifact dobbyvpn-go-coverage \
+            --keep-artifact dobbyvpn-swift-coverage \
+            --keep-artifact dobbyvpn-ios-simulator-mini

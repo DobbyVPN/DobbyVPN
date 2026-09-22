@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from torturer_checks.hosted import native_ui
+from torturer_checks.diagnostics import StreamingRedactor, redact_text
 from torturer_contract.functional.results import ConnectionIdentity
 
 
@@ -109,6 +110,84 @@ class _FakeUI:
 
 
 class NativeUIJourneyTests(unittest.TestCase):
+    def test_native_process_forwards_binary_redacted_streams_and_final_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.write_bytes(b"secret-value")
+            script = root / "driver.py"
+            script.write_text(
+                "import json, sys\n"
+                "sys.stdout.buffer.write(b'{\"event\":\"ready\",\"ok\":true}\\n')\n"
+                "sys.stdout.buffer.flush()\n"
+                "for raw in sys.stdin.buffer:\n"
+                "    request = json.loads(raw)\n"
+                "    if request.get('op') == 'close':\n"
+                "        sys.stderr.buffer.write(b'prefix secret-')\n"
+                "        sys.stderr.buffer.write(b'value\\xff-tail')\n"
+                "        sys.stderr.buffer.flush()\n"
+                "        sys.stdout.buffer.write(b'{\"event\":\"closed\",\"ok\":true}\\n')\n"
+                "        sys.stdout.buffer.flush()\n"
+                "        break\n"
+                "    sys.stdout.buffer.write(b'{\"event\":\"configured\",\"ok\":true}\\n')\n"
+                "    sys.stdout.buffer.flush()\n",
+                encoding="utf-8",
+            )
+            process = native_ui._NativeUIProcess(
+                script=script,
+                platform="linux",
+                binary=root / "ui",
+                profile=profile,
+                timeout=10,
+                raw_directory=root / "logs",
+            )
+            diagnostic = io.StringIO()
+            with mock.patch.object(native_ui.sys, "stderr", diagnostic):
+                process.start()
+                self.assertEqual(process.request("configure")["event"], "configured")
+                process.close()
+
+            output = diagnostic.getvalue()
+            self.assertIn("[native-ui stdout begin]", output)
+            self.assertIn("[native-ui stdout end]", output)
+            self.assertIn("[native-ui stderr begin]", output)
+            self.assertIn("[native-ui stderr end]", output)
+            self.assertIn("prefix ", output)
+            self.assertIn("[REDACTED]", output)
+            self.assertIn(r"\xff-tail", output)
+            self.assertNotIn("secret-value", output)
+
+    def test_streaming_redactor_keeps_split_private_value_secret(self) -> None:
+        redactor = StreamingRedactor(("prefix=private-secret-value",))
+        rendered = "".join(
+            (
+                redactor.feed("prefix=private-"),
+                redactor.feed("secret-value\npublic context\n"),
+                redactor.finish(),
+            )
+        )
+        self.assertEqual(rendered, "[REDACTED]\npublic context\n")
+
+    def test_short_registered_values_are_contextual_not_global(self) -> None:
+        profile = "host=public.example\npassword=xy\n"
+        rendered = redact_text(
+            "password=xy\nordinary xy text\nxy\n",
+            (profile,),
+        )
+        self.assertEqual(
+            rendered,
+            "password=[REDACTED]\nordinary xy text\n[REDACTED]\n",
+        )
+
+    def test_streaming_redactor_preserves_split_utf8_and_malformed_bytes(self) -> None:
+        redactor = StreamingRedactor((b"private-\xc3\xa9",))
+        rendered = "".join((
+            redactor.feed(b"prefix private-\xc3"),
+            redactor.feed(b"\xa9 suffix\nmalformed\xff\n"),
+            redactor.finish(),
+        ))
+        self.assertEqual(rendered, "prefix [REDACTED] suffix\nmalformed\\xff\n")
+
     def test_throughput_proof_requires_positive_measured_values(self) -> None:
         self.assertTrue(native_ui._positive_throughput({
             "latency_ms": 1.0,

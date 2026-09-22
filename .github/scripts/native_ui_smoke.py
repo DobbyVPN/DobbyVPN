@@ -22,13 +22,18 @@ import math
 import os
 from pathlib import Path
 import plistlib
+import queue
 import re
 import signal
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from typing import TypeVar
+import zlib
 
 
 class NativeUISmokeError(RuntimeError):
@@ -47,6 +52,184 @@ class NativeUIWaitTimeout(NativeUISmokeError):
     """A requested UI state was not observed within its bounded wait."""
 
 
+class NativeUIScreenshotError(NativeUISmokeError):
+    """A native-window screenshot could not be captured or validated."""
+
+
+try:
+    # The hosted runner exposes this shared helper through PYTHONPATH.  Keep a
+    # tiny fallback for direct invocation from a checked-out source tree where
+    # the torturer package is not importable yet.
+    from torturer_checks.diagnostics import redact_text as _shared_redact_text
+except ImportError:  # pragma: no cover - exercised only by direct script use
+    _torturer_root = Path(__file__).resolve().parents[2] / "torturer"
+    if _torturer_root.is_dir():
+        sys.path.insert(0, str(_torturer_root))
+    try:
+        from torturer_checks.diagnostics import redact_text as _shared_redact_text
+    except ImportError:
+        _FALLBACK_PRIVATE_ASSIGNMENT = re.compile(
+            r"(?i)(?:^|[,{ \t])['\"]?[\w.-]*(?:"
+            r"password|passphrase|secret|token|private[_-]?key|credential|"
+            r"access[_-]?key|username|server|address|url"
+            r")[\w.-]*['\"]?[ \t]*[:=][ \t]*['\"]?"
+            r"([^'\"\r\n,}\]]+)"
+        )
+
+        def _shared_redact_text(
+            value: bytes | str | None,
+            sensitive_values: object = None,
+        ) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, bytes):
+                rendered = value.decode("utf-8", errors="backslashreplace")
+            else:
+                rendered = str(value)
+            if sensitive_values is None:
+                return rendered
+            values = (
+                (sensitive_values,)
+                if isinstance(sensitive_values, (bytes, str))
+                else sensitive_values
+            )
+            normalized: list[str] = []
+            for secret in values:
+                if secret is None:
+                    continue
+                if isinstance(secret, bytes):
+                    secret = secret.decode("utf-8", errors="backslashreplace")
+                secret_text = str(secret)
+                if not secret_text:
+                    continue
+                normalized.append(secret_text)
+                for match in _FALLBACK_PRIVATE_ASSIGNMENT.finditer(secret_text):
+                    field_value = match.group(1).strip()
+                    if field_value:
+                        normalized.append(field_value)
+            for secret in sorted(set(normalized), key=len, reverse=True):
+                if len(secret) >= 4:
+                    rendered = rendered.replace(secret, "[REDACTED]")
+                    continue
+                if rendered.strip() == secret:
+                    rendered = rendered.replace(secret, "[REDACTED]")
+                    continue
+                contextual = re.compile(
+                    r"(?i)((?:password|passphrase|secret|token|private[_-]?key|"
+                    r"credential|access[_-]?key|username|server|address|url)"
+                    r"[\w.-]*[ \t]*[:=][ \t]*['\"]?)"
+                    + re.escape(secret)
+                    + r"(?=['\"]?(?:[ \t\r\n,;}]|$))"
+                )
+                rendered = contextual.sub(r"\1[REDACTED]", rendered)
+            return rendered
+
+
+def _subprocess_streams(
+    result: subprocess.CompletedProcess[object],
+    *,
+    sensitive_values: object = None,
+    redact_stdout: bool = False,
+) -> str:
+    """Render both complete streams from a captured native subprocess result."""
+
+    stdout = _redact_native_text(result.stdout, sensitive_values)
+    stderr = _redact_native_text(result.stderr, sensitive_values)
+    if redact_stdout and stdout:
+        stdout = "[REDACTED sensitive clipboard payload]"
+    return f"stdout:\n{stdout}stderr:\n{stderr}"
+
+
+def _redact_native_text(value: object, sensitive_values: object = None) -> str:
+    """Use shared contextual redaction plus exact registered values."""
+
+    return _shared_redact_text(value, sensitive_values)
+
+
+def _emit_native_streams(
+    label: str,
+    stdout: object,
+    stderr: object,
+    *,
+    sensitive_values: object = None,
+    redact_stdout: bool = False,
+) -> None:
+    """Forward every captured native stream with explicit boundaries.
+
+    Native stdout is often a machine-readable response, so diagnostics go to
+    this process's stderr.  Clipboard snapshots are the one intentional
+    exception to literal stream forwarding: their stdout is the opaque
+    clipboard payload, not a diagnostic, and is represented by an explicit
+    redaction marker while stderr and all surrounding output remain complete.
+    """
+
+    for name, value in (("stdout", stdout), ("stderr", stderr)):
+        rendered = _redact_native_text(value, sensitive_values)
+        if redact_stdout and name == "stdout" and rendered:
+            rendered = "[REDACTED sensitive clipboard payload]"
+        sys.stderr.write(f"[native subprocess {label} {name} begin]\n")
+        sys.stderr.write(rendered)
+        if rendered and not rendered.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.write(f"[native subprocess {label} {name} end]\n")
+    sys.stderr.flush()
+
+
+def _native_run(
+    command: object,
+    *args: object,
+    stream_label: str | None = None,
+    sensitive_values: object = None,
+    redact_stdout: bool = False,
+    **kwargs: object,
+) -> subprocess.CompletedProcess[object]:
+    """Run one captured native command and emit both complete streams first."""
+
+    if stream_label is not None:
+        label = stream_label
+    elif isinstance(command, (list, tuple)):
+        # Do not put a full PowerShell/AppleScript program in the boundary
+        # label. It can contain newlines and would make the stream framing
+        # ambiguous; the complete program output remains in the streams.
+        label = str(command[0]) if command else "native-command"
+    else:
+        label = str(command)
+    try:
+        result = subprocess.run(command, *args, **kwargs)
+    except BaseException as error:
+        _emit_native_streams(
+            label,
+            getattr(error, "stdout", None),
+            getattr(error, "stderr", None),
+            sensitive_values=sensitive_values,
+            redact_stdout=redact_stdout,
+        )
+        raise
+    _emit_native_streams(
+        label,
+        result.stdout,
+        result.stderr,
+        sensitive_values=sensitive_values,
+        redact_stdout=redact_stdout,
+    )
+    return result
+
+
+def _subprocess_failure(
+    label: str,
+    result: subprocess.CompletedProcess[object],
+    *,
+    sensitive_values: object = None,
+    redact_stdout: bool = False,
+) -> str:
+    """Include status and complete captured output in a native failure."""
+
+    return (
+        f"{label} (exit={result.returncode})\n"
+        f"{_subprocess_streams(result, sensitive_values=sensitive_values, redact_stdout=redact_stdout)}"
+    )
+
+
 _T = TypeVar("_T")
 
 
@@ -60,6 +243,9 @@ _MACOS_INPUT_SENTINEL = b"DobbyVPN-native-input-sentinel-v1"
 _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS = 0.25
 _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS = 0.1
 _MACOS_AX_MESSAGE_TIMEOUT_SECONDS = 1.0
+_SCREENSHOT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PNG_MAX_PIXELS = 64 * 1024 * 1024
 _NATIVE_ACTION_LABEL = "VPN connection action"
 _NATIVE_STATUS_STATES = (
     "Disconnected",
@@ -76,6 +262,618 @@ _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if (visible of process "Finder") is false then error "Finder is not visible"
     return "Finder"
 end tell'''
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    """Encode one metadata-free PNG chunk."""
+
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+    )
+
+
+def _png_unfilter(raw: bytes, width: int, height: int, bytes_per_pixel: int) -> bytes:
+    stride = width * bytes_per_pixel
+    expected = height * (stride + 1)
+    if len(raw) != expected:
+        raise NativeUIScreenshotError("PNG scanline data has an invalid length")
+    rows: list[bytes] = []
+    offset = 0
+    previous = bytes(stride)
+    for _ in range(height):
+        filter_type = raw[offset]
+        offset += 1
+        encoded = raw[offset:offset + stride]
+        offset += stride
+        row = bytearray(encoded)
+        if filter_type == 1:
+            for index in range(stride):
+                left = row[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                row[index] = (row[index] + left) & 0xFF
+        elif filter_type == 2:
+            for index in range(stride):
+                row[index] = (row[index] + previous[index]) & 0xFF
+        elif filter_type == 3:
+            for index in range(stride):
+                left = row[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                row[index] = (row[index] + ((left + previous[index]) // 2)) & 0xFF
+        elif filter_type == 4:
+            for index in range(stride):
+                left = row[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                above = previous[index]
+                upper_left = previous[index - bytes_per_pixel] if index >= bytes_per_pixel else 0
+                estimate = left + above - upper_left
+                distances = (abs(estimate - left), abs(estimate - above), abs(estimate - upper_left))
+                predictor = (left, above, upper_left)[distances.index(min(distances))]
+                row[index] = (row[index] + predictor) & 0xFF
+        elif filter_type != 0:
+            raise NativeUIScreenshotError(f"PNG uses unsupported filter {filter_type}")
+        decoded = bytes(row)
+        rows.append(decoded)
+        previous = decoded
+    return b"".join(rows)
+
+
+def _read_png(path: Path) -> tuple[int, int, bytearray]:
+    """Read a bounded RGB/RGBA PNG into an opaque RGBA pixel buffer."""
+
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise NativeUIScreenshotError(f"could not read screenshot {path}: {error}") from error
+    if not data.startswith(_PNG_SIGNATURE):
+        raise NativeUIScreenshotError(f"screenshot {path} is not a PNG")
+    offset = len(_PNG_SIGNATURE)
+    width = height = color_type = bit_depth = interlace = None
+    compressed = bytearray()
+    saw_iend = False
+    while offset < len(data):
+        if len(data) - offset < 12:
+            raise NativeUIScreenshotError(f"screenshot {path} has a truncated PNG chunk")
+        length = struct.unpack_from(">I", data, offset)[0]
+        offset += 4
+        kind = data[offset:offset + 4]
+        offset += 4
+        end = offset + length
+        if end + 4 > len(data):
+            raise NativeUIScreenshotError(f"screenshot {path} has a truncated PNG payload")
+        payload = data[offset:end]
+        offset = end
+        expected_crc = struct.unpack_from(">I", data, offset)[0]
+        offset += 4
+        if zlib.crc32(kind + payload) & 0xFFFFFFFF != expected_crc:
+            raise NativeUIScreenshotError(f"screenshot {path} has an invalid PNG checksum")
+        if kind == b"IHDR":
+            if len(payload) != 13:
+                raise NativeUIScreenshotError(f"screenshot {path} has an invalid PNG header")
+            width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(">IIBBBBB", payload)
+            if (
+                width <= 0 or height <= 0 or width * height > _PNG_MAX_PIXELS
+                or bit_depth != 8 or color_type not in {2, 6}
+                or compression != 0 or filter_method != 0 or interlace != 0
+            ):
+                raise NativeUIScreenshotError(f"screenshot {path} uses unsupported PNG encoding")
+        elif kind == b"IDAT":
+            compressed.extend(payload)
+        elif kind == b"IEND":
+            saw_iend = True
+            break
+    if not saw_iend or width is None or height is None or bit_depth is None or color_type is None:
+        raise NativeUIScreenshotError(f"screenshot {path} has no complete PNG image")
+    channels = 4 if color_type == 6 else 3
+    try:
+        raw = zlib.decompress(bytes(compressed))
+    except zlib.error as error:
+        raise NativeUIScreenshotError(f"screenshot {path} has invalid compressed pixels") from error
+    decoded = _png_unfilter(raw, width, height, channels)
+    rgba = bytearray(width * height * 4)
+    source_index = output_index = 0
+    for _ in range(width * height):
+        rgba[output_index:output_index + 3] = decoded[source_index:source_index + 3]
+        rgba[output_index + 3] = decoded[source_index + 3] if channels == 4 else 255
+        source_index += channels
+        output_index += 4
+    return width, height, rgba
+
+
+def _write_png(path: Path, width: int, height: int, rgba: bytes | bytearray) -> None:
+    if width <= 0 or height <= 0 or width * height > _PNG_MAX_PIXELS or len(rgba) != width * height * 4:
+        raise NativeUIScreenshotError("cannot write an invalid screenshot image")
+    scanlines = bytearray()
+    row_size = width * 4
+    for row in range(height):
+        scanlines.append(0)
+        start = row * row_size
+        scanlines.extend(rgba[start:start + row_size])
+    payload = (
+        _PNG_SIGNATURE
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(bytes(scanlines), level=6))
+        + _png_chunk(b"IEND", b"")
+    )
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        no_follow = getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags | no_follow, 0o600)
+        try:
+            fchmod = getattr(os, "fchmod", None)
+            if callable(fchmod):
+                fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(payload)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    except OSError as error:
+        raise NativeUIScreenshotError(f"could not write screenshot {path}: {error}") from error
+
+
+def _validate_nonblank_png(path: Path) -> tuple[int, int]:
+    width, height, rgba = _read_png(path)
+    first_color: bytes | None = None
+    has_nonzero_color = False
+    has_visible_pixel = False
+    has_distinct_color = False
+    for index in range(0, len(rgba), 4):
+        color = bytes(rgba[index:index + 3])
+        if first_color is None:
+            first_color = color
+        elif color != first_color:
+            has_distinct_color = True
+        if any(color):
+            has_nonzero_color = True
+        if rgba[index + 3]:
+            has_visible_pixel = True
+    if first_color is None or not has_nonzero_color:
+        raise NativeUIScreenshotError(f"screenshot {path} is blank")
+    if not has_distinct_color:
+        raise NativeUIScreenshotError(f"screenshot {path} is uniformly blank")
+    if not has_visible_pixel:
+        raise NativeUIScreenshotError(f"screenshot {path} has no visible pixels")
+    return width, height
+
+
+def _mask_png(
+    path: Path,
+    source_rect: tuple[int, int, int, int],
+    masks: list[tuple[int, int, int, int]],
+) -> tuple[int, int]:
+    """Mask known sensitive screen regions and strip any source metadata."""
+
+    width, height, rgba = _read_png(path)
+    source_width = source_rect[2] - source_rect[0]
+    source_height = source_rect[3] - source_rect[1]
+    if source_width <= 0 or source_height <= 0:
+        raise NativeUIScreenshotError("screenshot source bounds are invalid")
+    for left, top, right, bottom in masks:
+        start_x = max(0, math.floor((left - source_rect[0]) * width / source_width))
+        start_y = max(0, math.floor((top - source_rect[1]) * height / source_height))
+        end_x = min(width, math.ceil((right - source_rect[0]) * width / source_width))
+        end_y = min(height, math.ceil((bottom - source_rect[1]) * height / source_height))
+        for y in range(start_y, end_y):
+            for x in range(start_x, end_x):
+                index = (y * width + x) * 4
+                rgba[index:index + 4] = b"\x80\x80\x80\xff"
+    _write_png(path, width, height, rgba)
+    _validate_nonblank_png(path)
+    return width, height
+
+
+def _screenshot_directory(explicit: Path | None = None) -> Path | None:
+    value = explicit
+    if value is None:
+        configured = os.environ.get("DOBBYVPN_NATIVE_UI_SCREENSHOT_DIR")
+        if configured:
+            value = Path(configured)
+        else:
+            raw = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
+            value = Path(raw) / "screenshots" if raw else None
+    if value is None:
+        return None
+    try:
+        value.mkdir(mode=0o700, parents=True, exist_ok=True)
+        value.chmod(0o700)
+    except OSError as error:
+        raise NativeUIScreenshotError(f"could not create screenshot directory {value}: {error}") from error
+    return value
+
+
+def _screenshot_path(directory: Path, milestone: str, pid: int) -> Path:
+    if not _SCREENSHOT_NAME.fullmatch(milestone):
+        raise NativeUIScreenshotError("screenshot milestone is invalid")
+    for attempt in range(100):
+        path = directory / f"{time.time_ns()}-{pid}-{attempt}-{milestone}.png"
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        except OSError as error:
+            raise NativeUIScreenshotError(f"could not reserve screenshot path {path}: {error}") from error
+        os.close(descriptor)
+        try:
+            path.unlink()
+        except OSError as error:
+            raise NativeUIScreenshotError(f"could not prepare screenshot path {path}: {error}") from error
+        return path
+    raise NativeUIScreenshotError("could not allocate a unique screenshot path")
+
+
+def _macos_capture_rect(rect: tuple[int, int, int, int], path: Path) -> tuple[int, int]:
+    left, top, right, bottom = rect
+    if right <= left or bottom <= top:
+        raise NativeUIScreenshotError("macOS screenshot bounds are invalid")
+    command = [
+        "/usr/sbin/screencapture", "-x", "-t", "png", "-R",
+        f"{left},{top},{right - left},{bottom - top}", str(path),
+    ]
+    try:
+        result = _native_run(command, check=False, text=True, capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUIScreenshotError(f"macOS screen capture failed: {error}") from error
+    if result.returncode != 0:
+        raise NativeUIScreenshotError(
+            _subprocess_failure("macOS screen capture failed", result)
+        )
+    return _validate_nonblank_png(path)
+
+
+def _macos_capture_window(window_id: int, path: Path) -> tuple[int, int]:
+    """Capture one CoreGraphics window after its PID/obstruction proof."""
+
+    if isinstance(window_id, bool) or not isinstance(window_id, int) or window_id <= 0:
+        raise NativeUIScreenshotError("macOS screenshot window identity is invalid")
+    command = ["/usr/sbin/screencapture", "-x", "-t", "png", "-l", str(window_id), str(path)]
+    try:
+        result = _native_run(command, check=False, text=True, capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUIScreenshotError(f"macOS window capture failed: {error}") from error
+    if result.returncode != 0:
+        raise NativeUIScreenshotError(
+            _subprocess_failure("macOS window capture failed", result)
+        )
+    return _validate_nonblank_png(path)
+
+
+def _windows_capture_rect(
+    rect: tuple[int, int, int, int], path: Path, masks: list[tuple[int, int, int, int]],
+) -> tuple[int, int]:
+    left, top, right, bottom = rect
+    width, height = right - left, bottom - top
+    if width <= 0 or height <= 0:
+        raise NativeUIScreenshotError("Windows screenshot bounds are invalid")
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        raise NativeUIScreenshotError("PowerShell is required for Windows screen capture")
+    mask_json = json.dumps(masks, separators=(",", ":"))
+    command = r'''
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Drawing
+$left = [int]$env:DOBBY_SCREEN_LEFT
+$top = [int]$env:DOBBY_SCREEN_TOP
+$width = [int]$env:DOBBY_SCREEN_WIDTH
+$height = [int]$env:DOBBY_SCREEN_HEIGHT
+$bitmap = New-Object System.Drawing.Bitmap($width, $height)
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+try {
+    $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
+    $masks = ConvertFrom-Json $env:DOBBY_SCREEN_MASKS
+    $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255,128,128,128))
+    try {
+        foreach ($mask in $masks) {
+            $x = [int][Math]::Floor(([double]$mask[0] - $left) * $width / $env:DOBBY_SCREEN_SOURCE_WIDTH)
+            $y = [int][Math]::Floor(([double]$mask[1] - $top) * $height / $env:DOBBY_SCREEN_SOURCE_HEIGHT)
+            $w = [int][Math]::Ceiling(([double]$mask[2] - $mask[0]) * $width / $env:DOBBY_SCREEN_SOURCE_WIDTH)
+            $h = [int][Math]::Ceiling(([double]$mask[3] - $mask[1]) * $height / $env:DOBBY_SCREEN_SOURCE_HEIGHT)
+            if ($w -gt 0 -and $h -gt 0) { $graphics.FillRectangle($brush, $x, $y, $w, $h) }
+        }
+    } finally { $brush.Dispose() }
+    $bitmap.Save($env:DOBBY_SCREEN_PATH, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally { $graphics.Dispose(); $bitmap.Dispose() }
+'''
+    environment = os.environ.copy()
+    environment.update({
+        "DOBBY_SCREEN_LEFT": str(left), "DOBBY_SCREEN_TOP": str(top),
+        "DOBBY_SCREEN_WIDTH": str(width), "DOBBY_SCREEN_HEIGHT": str(height),
+        "DOBBY_SCREEN_SOURCE_WIDTH": str(width), "DOBBY_SCREEN_SOURCE_HEIGHT": str(height),
+        "DOBBY_SCREEN_MASKS": mask_json, "DOBBY_SCREEN_PATH": str(path),
+    })
+    try:
+        result = _native_run(
+            [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            check=False, text=True, capture_output=True, env=environment, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUIScreenshotError(f"Windows screen capture failed: {error}") from error
+    if result.returncode != 0:
+        raise NativeUIScreenshotError(
+            _subprocess_failure("Windows screen capture failed", result)
+        )
+    return _validate_nonblank_png(path)
+
+
+def _macos_post_reference_click(x: int, y: int) -> None:
+    """Post a bounded HID click for the disposable AppKit reference control."""
+
+    graphics, core = _macos_core_graphics()
+    point = _MacCGPoint(float(x), float(y))
+    for event_type in (1, 2):
+        event = graphics.CGEventCreateMouseEvent(None, event_type, point, 0)
+        if not event:
+            raise NativeUISmokeError(
+                f"macOS CoreGraphics could not create reference event at ({x},{y})"
+            )
+        try:
+            graphics.CGEventPost(0, event)
+        finally:
+            core.CFRelease(event)
+        time.sleep(0.05)
+
+
+_MACOS_REFERENCE_EVENT_SCRIPT = r'''ObjC.import('Cocoa');
+ObjC.import('Foundation');
+const app = $.NSApplication.sharedApplication;
+app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+const screen = $.NSScreen.mainScreen;
+if (!screen) throw new Error('no main screen');
+const screenFrame = screen.frame;
+const windowFrame = $.NSMakeRect(120, 120, 420, 220);
+const window = $.NSWindow.alloc.initWithContentRect_styleMask_backing_defer(
+    windowFrame,
+    $.NSWindowStyleMaskTitled,
+    $.NSBackingStoreBuffered,
+    false
+);
+const buttonFrame = $.NSMakeRect(95, 75, 230, 56);
+const button = $.NSButton.alloc.initWithFrame(buttonFrame);
+button.setTitle('DobbyVPN native event probe');
+button.setButtonType($.NSButtonTypePushOnPushOff);
+window.contentView.addSubview(button);
+window.makeKeyAndOrderFront(null);
+window.orderFrontRegardless();
+app.activateIgnoringOtherApps(true);
+const centerX = windowFrame.origin.x + buttonFrame.origin.x + buttonFrame.size.width / 2;
+const centerY = screenFrame.size.height - (windowFrame.origin.y + buttonFrame.origin.y + buttonFrame.size.height / 2);
+console.log(JSON.stringify({ready:true,x:Math.round(centerX),y:Math.round(centerY),width:420,height:220}));
+const deadline = Date.now() + 5000;
+while (Date.now() < deadline) {
+    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
+    if (button.state == 1) {
+        console.log(JSON.stringify({clicked:true}));
+        window.orderOut(null);
+        window.close();
+        app.terminate(null);
+        break;
+    }
+}
+if (button.state != 1) {
+    window.orderOut(null);
+    window.close();
+    app.terminate(null);
+    throw new Error('reference AppKit control did not receive the CoreGraphics click');
+}
+'''
+
+
+def _macos_reference_event_preflight(timeout: float = 12.0) -> None:
+    """Prove AX, HID event posting, Screen Recording, and unobstructed Aqua.
+
+    The reference window is owned by a disposable ``osascript`` process.  It
+    is intentionally independent of the product, so a product AX tree cannot
+    make this gate pass accidentally.  No TCC database is edited and the
+    process is always terminated by this function's finally block.
+    """
+
+    if sys.platform != "darwin":
+        # Unit tests and static checks run on Linux; the real native boundary
+        # is only meaningful on the Aqua host.
+        return
+    if timeout <= 0:
+        raise NativeUISmokeError("macOS reference event preflight timeout is invalid")
+    try:
+        process = subprocess.Popen(
+            ["osascript", "-l", "JavaScript", "-e", _MACOS_REFERENCE_EVENT_SCRIPT],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS AppKit reference control could not start: {error}") from error
+    ready_line: str | None = None
+    consumed_stdout: list[str] = []
+    consumed_stderr: list[str] = []
+    deadline = time.monotonic() + min(timeout, 20.0)
+    primary_error: BaseException | None = None
+    cleanup_errors: list[str] = []
+    stdout_queue: queue.Queue[bytes | str | None] = queue.Queue()
+    reader_errors: list[str] = []
+    reader_lock = threading.Lock()
+
+    def render_chunk(chunk: bytes | str) -> str:
+        if isinstance(chunk, bytes):
+            return chunk.decode("utf-8", errors="backslashreplace")
+        return str(chunk)
+
+    def read_stdout() -> None:
+        stream = process.stdout
+        try:
+            if stream is not None:
+                for line in stream:
+                    stdout_queue.put(line)
+        except BaseException as error:
+            with reader_lock:
+                reader_errors.append(f"reference stdout reader: {type(error).__name__}: {error}")
+        finally:
+            stdout_queue.put(None)
+
+    def read_stderr() -> None:
+        stream = process.stderr
+        try:
+            if stream is not None:
+                while True:
+                    read = getattr(stream, "read1", None) or stream.read
+                    chunk = read(64 * 1024)
+                    if not chunk:
+                        break
+                    with reader_lock:
+                        consumed_stderr.append(render_chunk(chunk))
+        except BaseException as error:
+            with reader_lock:
+                reader_errors.append(f"reference stderr reader: {type(error).__name__}: {error}")
+
+    stdout_reader = threading.Thread(target=read_stdout, name="dobbyvpn-reference-stdout", daemon=True)
+    stderr_reader = threading.Thread(target=read_stderr, name="dobbyvpn-reference-stderr", daemon=True)
+    stdout_reader.start()
+    stderr_reader.start()
+
+    def remember_cleanup_error(label: str, error: BaseException) -> None:
+        # A process can exit between poll/terminate/kill.  That absence is the
+        # one expected cleanup race; every other cleanup failure must remain in
+        # the final diagnostic rather than being hidden by the primary error.
+        if isinstance(error, ProcessLookupError):
+            return
+        cleanup_errors.append(f"{label}: {type(error).__name__}: {error}")
+
+    def next_stdout_line() -> str | None:
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining <= 0:
+            return None
+        try:
+            line = stdout_queue.get(timeout=remaining)
+        except queue.Empty:
+            return None
+        if line is None:
+            return None
+        rendered = render_chunk(line)
+        consumed_stdout.append(rendered)
+        return rendered
+
+    def drain_queued_stdout() -> None:
+        while True:
+            try:
+                line = stdout_queue.get_nowait()
+            except queue.Empty:
+                return
+            if line is None:
+                return
+            consumed_stdout.append(render_chunk(line))
+
+    try:
+        while time.monotonic() < deadline:
+            line = next_stdout_line()
+            if line is None:
+                break
+            try:
+                payload = json.loads(line)
+            except (TypeError, ValueError) as error:
+                raise NativeUISmokeError(
+                    f"macOS AppKit reference control returned invalid JSON: {line!r}"
+                ) from error
+            if isinstance(payload, dict) and payload.get("ready") is True:
+                ready_line = line
+                break
+        if ready_line is None:
+            raise NativeUISmokeError("macOS AppKit reference control did not become ready")
+        payload = json.loads(ready_line)
+        try:
+            x = int(payload["x"])
+            y = int(payload["y"])
+            width = int(payload["width"])
+            height = int(payload["height"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise NativeUISmokeError("macOS AppKit reference control returned invalid bounds") from error
+        if width <= 0 or height <= 0:
+            raise NativeUISmokeError("macOS AppKit reference control returned invalid bounds")
+        reference_rect = (x, y, x + width, y + height)
+        with tempfile.TemporaryDirectory(prefix="dobbyvpn-macos-preflight-") as temporary:
+            _macos_capture_rect(reference_rect, Path(temporary) / "screen.png")
+        # The AppKit window is still alive at this point. Check its on-screen
+        # CoreGraphics z-order before posting the event; the reference script
+        # closes the disposable window as soon as it observes the click.
+        obstructions = _macos_window_obstructions(getattr(process, "pid", 0), min(2.0, timeout))
+        if obstructions:
+            raise NativeUISmokeError(
+                "macOS AppKit reference control is obstructed: "
+                + json.dumps(obstructions, sort_keys=True, separators=(",", ":"))
+            )
+        _macos_post_reference_click(x, y)
+        clicked = False
+        while time.monotonic() < deadline:
+            line = next_stdout_line()
+            if line is None:
+                break
+            try:
+                result = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(result, dict) and result.get("clicked") is True:
+                clicked = True
+                break
+        if not clicked:
+            raise NativeUISmokeError("macOS AppKit reference control did not receive the CoreGraphics click")
+    except BaseException as error:
+        primary_error = error
+    finally:
+        try:
+            process_running = process.poll() is None
+        except BaseException as error:
+            remember_cleanup_error("reference process status", error)
+            process_running = False
+        if process_running:
+            try:
+                process.terminate()
+            except BaseException as error:
+                remember_cleanup_error("reference process terminate", error)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except BaseException as kill_error:
+                remember_cleanup_error("reference process kill", kill_error)
+            try:
+                process.wait(timeout=2)
+            except BaseException as reap_error:
+                remember_cleanup_error("reference process reap", reap_error)
+        except BaseException as error:
+            remember_cleanup_error("reference process reap", error)
+        stdout_reader.join(timeout=2)
+        stderr_reader.join(timeout=2)
+        if stdout_reader.is_alive():
+            remember_cleanup_error(
+                "reference stdout reader", RuntimeError("reader did not finish")
+            )
+        if stderr_reader.is_alive():
+            remember_cleanup_error(
+                "reference stderr reader", RuntimeError("reader did not finish")
+            )
+        with reader_lock:
+            cleanup_errors.extend(reader_errors)
+        drain_queued_stdout()
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            if stream is not None:
+                try:
+                    stream.close()
+                except BaseException as error:
+                    remember_cleanup_error(f"reference {name} close", error)
+    _emit_native_streams(
+        "macOS AppKit reference control",
+        "".join(consumed_stdout),
+        "".join(consumed_stderr),
+    )
+    if primary_error is not None or cleanup_errors:
+        diagnostics = (
+            f"; reference-stdout:\n{''.join(consumed_stdout)}"
+            f"; reference-stderr:\n{''.join(consumed_stderr)}"
+        )
+        if cleanup_errors:
+            diagnostics += "; reference-cleanup:\n" + "\n".join(cleanup_errors)
+        if primary_error is not None:
+            raise NativeUISmokeError(f"{primary_error}{diagnostics}") from primary_error
+        raise NativeUISmokeError(f"macOS AppKit reference control cleanup failed{diagnostics}")
 
 
 class _MacCGPoint(ctypes.Structure):
@@ -124,7 +922,7 @@ Write-Output ("{0}|session={1}|userInteractive={2}" -f $identity, $process.Sessi
     environment = os.environ.copy()
     environment["DOBBY_UI_PARENT_PID"] = str(os.getpid())
     try:
-        result = subprocess.run(
+        result = _native_run(
             [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
             check=False,
             text=True,
@@ -137,15 +935,15 @@ Write-Output ("{0}|session={1}|userInteractive={2}" -f $identity, $process.Sessi
     identity = result.stdout.strip()
     if result.returncode != 0 or not identity:
         detail = result.stderr.strip() or "current process is not attached to an interactive user session"
-        raise NativeUISmokeError(f"Windows native UI is unavailable: {detail}")
+        raise NativeUISmokeError(
+            f"Windows native UI is unavailable: {detail}\n{_subprocess_streams(result)}"
+        )
     return identity
 
 
 def _parse_macos_console_user_state(stdout: bytes) -> tuple[str, int] | None:
     """Extract the authoritative SystemConfiguration ConsoleUser identity."""
 
-    if len(stdout) > 64 * 1024:
-        return None
     user: str | None = None
     uid: int | None = None
     for line in stdout.decode("utf-8", errors="replace").splitlines():
@@ -172,7 +970,7 @@ def _macos_accessibility_preflight(timeout: float = 5.0) -> None:
     """Require System Events accessibility before launching the production UI."""
 
     try:
-        result = subprocess.run(
+        result = _native_run(
             ["osascript", "-e", _MACOS_ACCESSIBILITY_PROBE],
             check=False,
             text=True,
@@ -190,17 +988,20 @@ def _macos_accessibility_preflight(timeout: float = 5.0) -> None:
     )
     if result.returncode != 0 or output.strip() != "Finder":
         raise NativeUISmokeError(
-            "macOS native UI is unavailable: System Events accessibility permission is unavailable"
+            "macOS native UI is unavailable: System Events accessibility permission is unavailable\n"
+            + _subprocess_streams(result)
         )
 
 
-def _macos_interactive_identity() -> str:
+def _macos_interactive_identity(timeout: float = 12.0) -> str:
     """Return the Aqua console user after checking the current launch context."""
     if os.name != "posix":
         raise NativeUISmokeError("macOS native UI qualification requires a macOS host")
+    if timeout <= 0:
+        raise NativeUISmokeError("macOS native UI identity timeout is invalid")
     current_user = getpass.getuser()
     try:
-        console = subprocess.run(
+        console = _native_run(
             ["scutil"],
             input=b"show State:/Users/ConsoleUser\nquit\n",
             check=False,
@@ -222,7 +1023,10 @@ def _macos_interactive_identity() -> str:
         else None
     )
     if parsed_console is None:
-        raise NativeUISmokeError("macOS native UI is unavailable: no logged-in Aqua console user")
+        raise NativeUISmokeError(
+            "macOS native UI is unavailable: no logged-in Aqua console user\n"
+            + _subprocess_streams(console)
+        )
     console_user, console_uid = parsed_console
     if console_user.lower() in {"root", "loginwindow"} or console_uid <= 0:
         raise NativeUISmokeError("macOS native UI is unavailable: no logged-in Aqua console user")
@@ -232,7 +1036,7 @@ def _macos_interactive_identity() -> str:
         )
     uid = str(console_uid)
     try:
-        session = subprocess.run(
+        session = _native_run(
             ["launchctl", "print", f"gui/{uid}"],
             check=False,
             text=True,
@@ -242,9 +1046,30 @@ def _macos_interactive_identity() -> str:
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"macOS GUI session inspection failed: {error}") from error
     if session.returncode != 0:
-        raise NativeUISmokeError("macOS native UI is unavailable: no Aqua GUI launchd session")
-    _macos_accessibility_preflight()
+        raise NativeUISmokeError(
+            "macOS native UI is unavailable: no Aqua GUI launchd session\n"
+            + _subprocess_streams(session)
+        )
+    _macos_accessibility_preflight(timeout=min(timeout, 5.0))
+    _macos_reference_event_preflight(timeout=min(timeout, 20.0))
     return f"{current_user}|uid={uid}|console={console_user}"
+
+
+def preflight_macos_capabilities(timeout: float = 20.0) -> str:
+    """Run the product-independent macOS full-lane capability preflight.
+
+    This is the single entrypoint used both before candidate preparation and
+    again at the native-command boundary.  It proves the current Aqua
+    identity, Accessibility, HID event posting, exact reference-window
+    capture/Screen Recording, and unobstructed AppKit event delivery without
+    starting the product UI.
+    """
+
+    if sys.platform != "darwin":
+        raise NativeUISmokeError("macOS capability preflight requires a Darwin host")
+    if timeout <= 0:
+        raise NativeUISmokeError("macOS capability preflight timeout is invalid")
+    return _macos_interactive_identity(timeout)
 
 
 def _wait_until(predicate, timeout: float, message: str) -> None:
@@ -264,6 +1089,44 @@ def _windows_rect(hwnd: int) -> tuple[int, int, int, int]:
     if not _windows_user32().GetWindowRect(hwnd, ctypes.byref(rect)):
         raise NativeUISmokeError("GetWindowRect failed")
     return rect.left, rect.top, rect.right, rect.bottom
+
+
+def _windows_window_obstructions(hwnd: int, process_pid: int) -> list[dict[str, object]]:
+    """Inspect the validated HWND's front-to-back desktop neighbors."""
+
+    if hwnd <= 0 or process_pid <= 0:
+        raise NativeUISmokeError("Windows native UI window identity is unavailable")
+    user32 = _windows_user32()
+    target = _windows_rect(hwnd)
+    records: list[dict[str, object]] = []
+    previous = user32.GetWindow(hwnd, 3)  # GW_HWNDPREV
+    seen: set[int] = set()
+    while previous:
+        previous_int = int(getattr(previous, "value", previous) or 0)
+        if previous_int <= 0 or previous_int in seen:
+            break
+        seen.add(previous_int)
+        if bool(user32.IsWindow(previous)) and bool(user32.IsWindowVisible(previous)):
+            owner_pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(previous, ctypes.byref(owner_pid))
+            if owner_pid.value != process_pid:
+                try:
+                    bounds = _windows_rect(previous_int)
+                except NativeUISmokeError as error:
+                    raise NativeUISmokeError(
+                        f"Windows obstruction bounds lookup failed for HWND {previous_int}: {error}"
+                    ) from error
+                if (
+                    bounds[2] > target[0] and target[2] > bounds[0]
+                    and bounds[3] > target[1] and target[3] > bounds[1]
+                ):
+                    records.append({
+                        "hwnd": previous_int,
+                        "owner_pid": int(owner_pid.value),
+                        "bounds": list(bounds),
+                    })
+        previous = user32.GetWindow(previous_int, 3)
+    return records
 
 
 def _windows_user32() -> object:
@@ -301,6 +1164,8 @@ def _windows_user32() -> object:
     user32.GetWindowTextLengthW.restype = ctypes.c_int
     user32.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.POINTER(ctypes.c_wchar), ctypes.c_int]
     user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindow.argtypes = [wintypes.HWND, ctypes.c_uint]
+    user32.GetWindow.restype = wintypes.HWND
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
     user32.SetForegroundWindow.restype = wintypes.BOOL
     return user32
@@ -404,7 +1269,7 @@ Write-Output ("{0},{1},{2},{3}" -f $rect.Left, $rect.Top, $rect.Right, $rect.Bot
     environment["DOBBY_UI_NAME"] = name
     environment["DOBBY_UI_PREFIX"] = "1" if prefix else "0"
     try:
-        result = subprocess.run(
+        result = _native_run(
             [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
             check=False,
             text=True,
@@ -416,13 +1281,27 @@ Write-Output ("{0},{1},{2},{3}" -f $rect.Left, $rect.Top, $rect.Right, $rect.Bot
         raise NativeUISmokeError(f"Windows accessibility lookup failed for {name!r}: {error}") from error
     if result.returncode != 0:
         detail = result.stderr.strip() or f"element {name!r} was not found"
-        raise NativeUISmokeError(f"Windows accessibility lookup failed for {name!r}: {detail}")
+        if result.returncode == 3:
+            raise NativeUIElementNotFound(
+                f"Windows accessibility element {name!r} was not found\n"
+                + _subprocess_streams(result)
+            )
+        raise NativeUISmokeError(
+            f"Windows accessibility lookup failed for {name!r}: {detail}\n"
+            + _subprocess_streams(result)
+        )
     try:
         values = tuple(round(float(value)) for value in result.stdout.strip().split(","))
     except ValueError as error:
-        raise NativeUISmokeError(f"invalid Windows accessibility bounds for {name!r}") from error
+        raise NativeUISmokeError(
+            f"invalid Windows accessibility bounds for {name!r}\n"
+            + _subprocess_streams(result)
+        ) from error
     if len(values) != 4 or values[2] <= values[0] or values[3] <= values[1]:
-        raise NativeUISmokeError(f"invalid Windows accessibility bounds for {name!r}")
+        raise NativeUISmokeError(
+            f"invalid Windows accessibility bounds for {name!r}\n"
+            + _subprocess_streams(result)
+        )
     return values  # type: ignore[return-value]
 
 
@@ -437,12 +1316,12 @@ def _windows_has_element(hwnd: int, name: str, *, prefix: bool = False) -> bool:
     try:
         _windows_accessibility_rect(hwnd, name, prefix=prefix)
         return True
-    except NativeUISmokeError:
+    except NativeUIElementNotFound:
         return False
 
 
 def _windows_clipboard_snapshot(powershell: str) -> str | None:
-    """Return the current text clipboard, or None when it cannot be saved.
+    """Return the current text clipboard, or None when it is empty.
 
     The value crosses the PowerShell boundary as base64 so neither command
     arguments nor diagnostics contain clipboard text.  A missing snapshot is
@@ -456,25 +1335,40 @@ try {
     if ($null -eq $value) { exit 3 }
     [Console]::Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$value)))
 } catch {
-    exit 3
+    [Console]::Error.WriteLine(($_ | Out-String))
+    exit 2
 }
 '''
     try:
-        result = subprocess.run(
+        result = _native_run(
             [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
             check=False,
             text=True,
             capture_output=True,
             timeout=10,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"Windows clipboard snapshot failed: {error}") from error
+    if result.returncode == 3:
         return None
     if result.returncode != 0:
+        # An empty/unsupported clipboard is an allowed pre-test state. Keep
+        # the complete provider diagnostic visible so it is never mistaken
+        # for a successful snapshot, then let cleanup clear the clipboard.
+        print(
+            _subprocess_failure(
+                "Windows clipboard snapshot unavailable", result, redact_stdout=True,
+            ),
+            file=sys.stderr,
+        )
         return None
     try:
         return base64.b64decode(result.stdout.strip(), validate=True).decode("utf-8")
-    except (UnicodeDecodeError, ValueError):
-        return None
+    except (UnicodeDecodeError, ValueError) as error:
+        raise NativeUISmokeError(
+            "Windows clipboard snapshot returned invalid base64\n"
+            + _subprocess_streams(result, redact_stdout=True)
+        ) from error
 
 
 def _windows_set_clipboard(powershell: str, value: str) -> None:
@@ -487,31 +1381,40 @@ Set-Clipboard -Value $value
 '''
     encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
     try:
-        result = subprocess.run(
+        result = _native_run(
             [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
             input=encoded,
             check=False,
             text=True,
             capture_output=True,
             timeout=10,
+            stream_label="Windows clipboard setup",
+            sensitive_values=(value,),
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError("Windows clipboard setup failed") from error
+        raise NativeUISmokeError(f"Windows clipboard setup failed: {error}") from error
     if result.returncode != 0:
-        raise NativeUISmokeError("Windows clipboard setup failed")
+        raise NativeUISmokeError(_subprocess_failure("Windows clipboard setup failed", result))
 
 
 def _windows_restore_clipboard(powershell: str, previous: str | None) -> None:
-    """Restore text clipboard content, falling back to clearing it silently."""
+    """Restore text clipboard content, reporting a clear fallback as well."""
+    value = previous if previous is not None else ""
     try:
-        _windows_set_clipboard(powershell, previous if previous is not None else "")
+        _windows_set_clipboard(powershell, value)
         return
-    except (NativeUISmokeError, OSError, subprocess.SubprocessError):
-        pass
-    try:
-        _windows_set_clipboard(powershell, "")
-    except (NativeUISmokeError, OSError, subprocess.SubprocessError):
-        pass
+    except (NativeUISmokeError, OSError, subprocess.SubprocessError) as restore_error:
+        try:
+            _windows_set_clipboard(powershell, "")
+        except (NativeUISmokeError, OSError, subprocess.SubprocessError) as clear_error:
+            raise NativeUISmokeError(
+                "Windows clipboard restore failed "
+                f"(restore_error={restore_error}; clear_error={clear_error})"
+            ) from restore_error
+        raise NativeUISmokeError(
+            "Windows clipboard restore failed; clipboard was cleared "
+            f"(restore_error={restore_error})"
+        ) from restore_error
 
 
 def _windows_paste(profile: Path) -> Callable[[], None]:
@@ -521,8 +1424,14 @@ def _windows_paste(profile: Path) -> Callable[[], None]:
     previous = _windows_clipboard_snapshot(powershell)
     try:
         _windows_set_clipboard(powershell, profile.read_text(encoding="utf-8"))
-    except Exception:
-        _windows_restore_clipboard(powershell, previous)
+    except BaseException as error:
+        try:
+            _windows_restore_clipboard(powershell, previous)
+        except BaseException as restore_error:
+            error.add_note(
+                "Windows clipboard setup cleanup failed: "
+                f"{type(restore_error).__name__}: {restore_error}"
+            )
         raise
     restored = False
 
@@ -568,7 +1477,7 @@ def _macos_ax_request(
         if prefix:
             command.append("--prefix")
     try:
-        completed = subprocess.run(
+        completed = _native_run(
             command,
             check=False,
             text=True,
@@ -582,25 +1491,41 @@ def _macos_ax_request(
         payload = json.loads(completed.stdout.strip() or "{}")
     except (TypeError, ValueError) as error:
         raise NativeUISmokeError(
-            f"macOS native AX helper returned invalid JSON for {name or 'window'}"
+            f"macOS native AX helper returned invalid JSON for {name or 'window'}\n"
+            + _subprocess_streams(completed)
         ) from error
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
         detail = payload.get("error", "lookup failed") if isinstance(payload, dict) else "lookup failed"
         if isinstance(payload, dict) and payload.get("transient") is True:
-            raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
+            raise NativeUIWindowNotReady(
+                f"macOS AX {stage}: {detail}\n{_subprocess_streams(completed)}"
+            )
         if stage == "control":
-            raise NativeUIElementNotFound(f"macOS AX {stage}: {detail}")
-        raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
+            raise NativeUIElementNotFound(
+                f"macOS AX {stage}: {detail}\n{_subprocess_streams(completed)}"
+            )
+        raise NativeUISmokeError(
+            f"macOS AX {stage}: {detail}\n{_subprocess_streams(completed)}"
+        )
     raw_bounds = payload.get("bounds")
     if not isinstance(raw_bounds, list) or len(raw_bounds) != 4:
-        raise NativeUISmokeError(f"macOS AX returned invalid bounds for {name or 'window'}")
+        raise NativeUISmokeError(
+            f"macOS AX returned invalid bounds for {name or 'window'}\n"
+            + _subprocess_streams(completed)
+        )
     try:
         values = tuple(int(value) for value in raw_bounds)
     except (TypeError, ValueError) as error:
-        raise NativeUISmokeError(f"macOS AX returned invalid bounds for {name or 'window'}") from error
+        raise NativeUISmokeError(
+            f"macOS AX returned invalid bounds for {name or 'window'}\n"
+            + _subprocess_streams(completed)
+        ) from error
     if values[2] <= values[0] or values[3] <= values[1]:
-        raise NativeUISmokeError(f"macOS AX returned invalid bounds for {name or 'window'}")
+        raise NativeUISmokeError(
+            f"macOS AX returned invalid bounds for {name or 'window'}\n"
+            + _subprocess_streams(completed)
+        )
     return values  # type: ignore[return-value]
 
 
@@ -619,7 +1544,7 @@ def _macos_ax_raise_window_once(process_pid: int, timeout: float) -> None:
         "--deadline", str(max(0.1, min(timeout, 4.0))),
     ]
     try:
-        completed = subprocess.run(
+        completed = _native_run(
             command,
             check=False,
             text=True,
@@ -631,13 +1556,20 @@ def _macos_ax_raise_window_once(process_pid: int, timeout: float) -> None:
     try:
         payload = json.loads(completed.stdout.strip() or "{}")
     except (TypeError, ValueError) as error:
-        raise NativeUISmokeError("macOS native AX helper returned invalid JSON for window raise") from error
+        raise NativeUISmokeError(
+            "macOS native AX helper returned invalid JSON for window raise\n"
+            + _subprocess_streams(completed)
+        ) from error
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
         detail = payload.get("error", "window raise failed") if isinstance(payload, dict) else "window raise failed"
         if isinstance(payload, dict) and payload.get("transient") is True:
-            raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
-        raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
+            raise NativeUIWindowNotReady(
+                f"macOS AX {stage}: {detail}\n{_subprocess_streams(completed)}"
+            )
+        raise NativeUISmokeError(
+            f"macOS AX {stage}: {detail}\n{_subprocess_streams(completed)}"
+        )
 
 
 def _macos_ax_window_title_once(process_pid: int, timeout: float) -> str:
@@ -658,7 +1590,7 @@ def _macos_ax_window_title_once(process_pid: int, timeout: float) -> str:
         )),
     ]
     try:
-        completed = subprocess.run(
+        completed = _native_run(
             command,
             check=False,
             text=True,
@@ -670,13 +1602,20 @@ def _macos_ax_window_title_once(process_pid: int, timeout: float) -> str:
     try:
         payload = json.loads(completed.stdout.strip() or "{}")
     except (TypeError, ValueError) as error:
-        raise NativeUISmokeError("macOS native AX helper returned invalid window title JSON") from error
+        raise NativeUISmokeError(
+            "macOS native AX helper returned invalid window title JSON\n"
+            + _subprocess_streams(completed)
+        ) from error
     if not isinstance(payload, dict) or payload.get("ok") is not True:
         stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
         detail = payload.get("error", "window title lookup failed") if isinstance(payload, dict) else "window title lookup failed"
         if isinstance(payload, dict) and payload.get("transient") is True:
-            raise NativeUIWindowNotReady(f"macOS AX {stage}: {detail}")
-        raise NativeUISmokeError(f"macOS AX {stage}: {detail}")
+            raise NativeUIWindowNotReady(
+                f"macOS AX {stage}: {detail}\n{_subprocess_streams(completed)}"
+            )
+        raise NativeUISmokeError(
+            f"macOS AX {stage}: {detail}\n{_subprocess_streams(completed)}"
+        )
     title = payload.get("title")
     if not isinstance(title, str) or not title:
         raise NativeUISmokeError("macOS AX returned an invalid window title")
@@ -744,6 +1683,89 @@ def _macos_window_rect(process_pid: int, timeout: float) -> tuple[int, int, int,
     )
 
 
+def _macos_window_info(
+    process_pid: int, timeout: float,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    """Return the exact CoreGraphics target window and its frontmost covers."""
+
+    if process_pid <= 0:
+        raise NativeUISmokeError("macOS native UI process identity is unavailable")
+    command = [
+        sys.executable,
+        str(_MACOS_AX_HELPER),
+        "--pid", str(process_pid),
+        "--obstructions",
+        "--deadline", str(max(
+            _MACOS_AX_MIN_HELPER_DEADLINE_SECONDS,
+            min(timeout - _MACOS_AX_HELPER_EXIT_RESERVE_SECONDS, 4.0),
+        )),
+    ]
+    try:
+        completed = _native_run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=max(0.1, min(timeout, 6.0)),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS obstruction lookup failed: {error}") from error
+    try:
+        payload = json.loads(completed.stdout.strip() or "{}")
+    except (TypeError, ValueError) as error:
+        raise NativeUISmokeError(
+            "macOS obstruction helper returned invalid JSON\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        ) from error
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        stage = payload.get("stage", "helper") if isinstance(payload, dict) else "helper"
+        detail = payload.get("error", "obstruction lookup failed") if isinstance(payload, dict) else "obstruction lookup failed"
+        if isinstance(payload, dict) and payload.get("transient") is True:
+            raise NativeUIWindowNotReady(
+                f"macOS AX {stage}: {detail}\n"
+                f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+            )
+        raise NativeUISmokeError(
+            f"macOS obstruction {stage}: {detail}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    target = payload.get("target")
+    if not isinstance(target, dict):
+        raise NativeUISmokeError(
+            "macOS obstruction helper returned no target record\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    window_id = target.get("window_id")
+    owner_pid = target.get("owner_pid")
+    bounds = target.get("bounds")
+    if (
+        isinstance(window_id, bool)
+        or not isinstance(window_id, int)
+        or window_id <= 0
+        or owner_pid != process_pid
+        or not isinstance(bounds, list)
+        or len(bounds) != 4
+    ):
+        raise NativeUISmokeError(
+            "macOS obstruction helper returned an invalid target record\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    obstructions = payload.get("obstructions")
+    if not isinstance(obstructions, list) or not all(isinstance(item, dict) for item in obstructions):
+        raise NativeUISmokeError(
+            "macOS obstruction helper returned invalid records\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    return target, obstructions
+
+
+def _macos_window_obstructions(process_pid: int, timeout: float) -> list[dict[str, object]]:
+    """Return frontmost CoreGraphics windows covering the exact product PID."""
+
+    _target, obstructions = _macos_window_info(process_pid, timeout)
+    return obstructions
+
+
 def _macos_startup_diagnostic(process_pid: int) -> str:
     """Collect bounded, complete diagnostics for a window that never surfaced."""
 
@@ -754,7 +1776,7 @@ def _macos_startup_diagnostic(process_pid: int) -> str:
     sections: list[str] = []
     for command in commands:
         try:
-            result = subprocess.run(
+            result = _native_run(
                 command,
                 check=False,
                 text=True,
@@ -819,7 +1841,7 @@ def _macos_frontmost_pid() -> int:
     return unix id of (first process whose frontmost is true)
 end tell'''
     try:
-        completed = subprocess.run(
+        completed = _native_run(
             ["osascript", "-e", script],
             check=False,
             text=True,
@@ -829,12 +1851,13 @@ end tell'''
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"macOS frontmost-process query failed: {error}") from error
     if completed.returncode != 0:
-        raise NativeUISmokeError(
-            completed.stderr.strip() or "macOS frontmost-process query failed"
-        )
+        raise NativeUISmokeError(_subprocess_failure("macOS frontmost-process query failed", completed))
     value = completed.stdout.strip()
     if not re.fullmatch(r"[1-9][0-9]*", value):
-        raise NativeUISmokeError("macOS frontmost-process query returned invalid output")
+        raise NativeUISmokeError(
+            "macOS frontmost-process query returned invalid output\n"
+            + _subprocess_streams(completed)
+        )
     return int(value)
 
 
@@ -976,7 +1999,7 @@ def _macos_keystroke(process_pid: int, key: str) -> None:
     end tell
 end tell'''
     try:
-        completed = subprocess.run(
+        completed = _native_run(
             ["osascript", "-e", script],
             check=False,
             text=True,
@@ -986,7 +2009,7 @@ end tell'''
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"macOS native keystroke failed for {key!r}: {error}") from error
     if completed.returncode != 0:
-        raise NativeUISmokeError(completed.stderr.strip() or "macOS native keystroke failed")
+        raise NativeUISmokeError(_subprocess_failure("macOS native keystroke failed", completed))
 
 
 def _macos_focus_next(process_pid: int) -> None:
@@ -1002,7 +2025,7 @@ def _macos_focus_next(process_pid: int) -> None:
     end tell
 end tell'''
     try:
-        completed = subprocess.run(
+        completed = _native_run(
             ["osascript", "-e", script],
             check=False,
             text=True,
@@ -1012,7 +2035,7 @@ end tell'''
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"macOS native focus traversal failed: {error}") from error
     if completed.returncode != 0:
-        raise NativeUISmokeError(completed.stderr.strip() or "macOS native focus traversal failed")
+        raise NativeUISmokeError(_subprocess_failure("macOS native focus traversal failed", completed))
 
 
 def _macos_has_element(
@@ -1045,25 +2068,38 @@ def _macos_allowlisted_state_labels(process_pid: int) -> tuple[str, ...]:
             if _macos_has_element(process_pid, name, timeout=1.5):
                 observed.append(name)
         except NativeUISmokeError:
-            continue
+            # The activation timeout remains the primary failure at the
+            # caller, but an AX probe failure is real diagnostic information;
+            # do not turn it into an indistinguishable "no stale label".
+            raise
     return tuple(observed)
 
 
 def _macos_clipboard_snapshot() -> bytes | None:
     try:
-        result = subprocess.run(["pbpaste"], check=False, capture_output=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout if result.returncode == 0 else None
+        result = _native_run(
+            ["pbpaste"], check=False, capture_output=True, timeout=10,
+            stream_label="macOS clipboard snapshot", redact_stdout=True,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"macOS clipboard snapshot failed: {error}") from error
+    if result.returncode != 0:
+        raise NativeUISmokeError(
+            _subprocess_failure("macOS clipboard snapshot failed", result, redact_stdout=True)
+        )
+    return result.stdout
 
 
 def _macos_set_clipboard(value: bytes) -> None:
     try:
-        result = subprocess.run(["pbcopy"], input=value, check=False, capture_output=True, timeout=10)
+        result = _native_run(
+            ["pbcopy"], input=value, check=False, capture_output=True, timeout=10,
+            stream_label="macOS clipboard setup", sensitive_values=(value,),
+        )
     except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError("macOS clipboard setup failed") from error
+        raise NativeUISmokeError(f"macOS clipboard setup failed: {error}") from error
     if result.returncode != 0:
-        raise NativeUISmokeError("macOS clipboard setup failed")
+        raise NativeUISmokeError(_subprocess_failure("macOS clipboard setup failed", result))
 
 
 def _macos_restore_clipboard(previous: bytes | None) -> None:
@@ -1134,7 +2170,7 @@ def _macos_clipboard_set_verified(value: bytes, *, timeout: float = 3.0) -> None
 
 def _macos_pasteboard_change_count() -> int:
     try:
-        completed = subprocess.run(
+        completed = _native_run(
             [
                 "osascript", "-l", "JavaScript", "-e",
                 _MACOS_PASTEBOARD_CHANGE_COUNT_SCRIPT,
@@ -1150,7 +2186,7 @@ def _macos_pasteboard_change_count() -> int:
         ) from error
     if completed.returncode != 0:
         raise NativeUISmokeError(
-            completed.stderr.strip() or "macOS pasteboard change-count query failed"
+            _subprocess_failure("macOS pasteboard change-count query failed", completed)
         )
     value = completed.stdout.strip()
     if not re.fullmatch(r"[0-9]+", value):
@@ -1252,7 +2288,7 @@ def _macos_process_pids() -> tuple[int, ...]:
     uid = _macos_current_uid()
 
     try:
-        result = subprocess.run(
+        result = _native_run(
             ["pgrep", "-x", "-u", str(uid), _MACOS_UI_PROCESS_NAME],
             check=False,
             text=True,
@@ -1260,14 +2296,17 @@ def _macos_process_pids() -> tuple[int, ...]:
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError("macOS native UI process discovery failed") from error
+        raise NativeUISmokeError(f"macOS native UI process discovery failed: {error}") from error
     if result.returncode not in {0, 1}:
-        raise NativeUISmokeError("macOS native UI process discovery failed")
+        raise NativeUISmokeError(_subprocess_failure("macOS native UI process discovery failed", result))
     if not isinstance(result.stdout, str):
         raise NativeUISmokeError("macOS native UI process discovery returned invalid output")
     if result.returncode == 1:
         if not isinstance(result.stderr, str) or result.stdout.strip() or result.stderr.strip():
-            raise NativeUISmokeError("macOS native UI process discovery returned invalid output")
+            raise NativeUISmokeError(
+                "macOS native UI process discovery returned invalid output\n"
+                + _subprocess_streams(result)
+            )
     pids: list[int] = []
     for line in result.stdout.splitlines():
         value = line.strip()
@@ -1292,7 +2331,7 @@ def _macos_process_identity(pid: int) -> _MacOSProcessIdentity | None:
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         raise NativeUISmokeError("macOS native UI process identity is unavailable")
     try:
-        result = subprocess.run(
+        result = _native_run(
             ["ps", "-ww", "-p", str(pid), "-o", "pid=,uid=,lstart=,command="],
             check=False,
             text=True,
@@ -1300,7 +2339,7 @@ def _macos_process_identity(pid: int) -> _MacOSProcessIdentity | None:
             timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError("macOS native UI process identity check failed") from error
+        raise NativeUISmokeError(f"macOS native UI process identity check failed: {error}") from error
     if not isinstance(result.stdout, str) or not isinstance(result.stderr, str):
         raise NativeUISmokeError("macOS native UI process identity check returned invalid output")
     if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
@@ -1308,10 +2347,13 @@ def _macos_process_identity(pid: int) -> _MacOSProcessIdentity | None:
         # scoped discovery and this identity check.
         return None
     if result.returncode != 0:
-        raise NativeUISmokeError("macOS native UI process identity check failed")
+        raise NativeUISmokeError(_subprocess_failure("macOS native UI process identity check failed", result))
     values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if len(values) != 1:
-        raise NativeUISmokeError("macOS native UI process identity check returned invalid output")
+        raise NativeUISmokeError(
+            "macOS native UI process identity check returned invalid output\n"
+            + _subprocess_streams(result)
+        )
     match = re.fullmatch(
         r"\s*(?P<pid>[1-9][0-9]*)\s+"
         r"(?P<uid>[1-9][0-9]*)\s+"
@@ -1437,7 +2479,14 @@ class NativeUIController:
     test-only UI hooks.
     """
 
-    def __init__(self, platform: str, binary: Path, profile: Path, timeout: float) -> None:
+    def __init__(
+        self,
+        platform: str,
+        binary: Path,
+        profile: Path,
+        timeout: float,
+        screenshot_dir: Path | None = None,
+    ) -> None:
         if platform not in {"windows", "macos"}:
             raise NativeUISmokeError(f"native UI controller is unsupported on {platform}")
         if timeout <= 0:
@@ -1446,6 +2495,8 @@ class NativeUIController:
         self.binary = binary
         self.profile = profile
         self.timeout = timeout
+        self.screenshot_dir = _screenshot_directory(screenshot_dir)
+        self._screenshot_counter = 0
         self.process: subprocess.Popen[bytes] | None = None
         self.hwnd = 0
         self.macos_pid: int | None = None
@@ -1522,25 +2573,25 @@ class NativeUIController:
         }
         try:
             matched = self._windows_matching_windows()
-        except Exception:
+        except Exception as error:
             diagnostics["matching_window_count"] = None
             diagnostics["window_enumeration"] = "failed"
+            diagnostics["window_enumeration_error"] = f"{type(error).__name__}: {error}"
             return diagnostics
         diagnostics["window_enumeration"] = "ok"
         diagnostics["matching_window_count"] = len(matched)
         windows: list[dict[str, object]] = []
-        for candidate in matched[:8]:
+        for candidate in matched:
             record = dict(candidate)
             if record.get("is_window") is True:
                 try:
                     record["rect"] = _windows_rect(int(record["hwnd"]))
-                except Exception:
-                    record["rect"] = None
+                except Exception as error:
+                    record["rect_error"] = f"{type(error).__name__}: {error}"
             else:
                 record["rect"] = None
             windows.append(record)
         diagnostics["matching_windows"] = windows
-        diagnostics["matching_windows_truncated"] = len(matched) > len(windows)
         return diagnostics
 
     def _windows_find_window(self) -> bool:
@@ -1577,6 +2628,143 @@ class NativeUIController:
             raise NativeUISmokeError(
                 "Windows native UI window is stale or is not owned by the launched process"
             )
+
+    def _screenshot_masks(
+        self,
+        window: tuple[int, int, int, int],
+        *,
+        require_configuration: bool,
+    ) -> list[tuple[int, int, int, int]]:
+        """Find only known sensitive regions through the existing UI APIs."""
+
+        masks: list[tuple[int, int, int, int]] = []
+        names = (
+            ("Connection configuration", False, require_configuration),
+            ("Details", True, False),
+            ("Diagnostics", True, False),
+            ("Logs", True, False),
+            ("Error details", True, False),
+        )
+        for name, prefix, required in names:
+            try:
+                if self.platform == "windows":
+                    self._windows_validate_window()
+                    bounds = _windows_accessibility_rect(self.hwnd, name, prefix=prefix)
+                else:
+                    bounds = _macos_accessibility_rect(
+                        self._macos_pid_or_error(), name, 2.0, prefix=prefix
+                    )
+            except NativeUIElementNotFound:
+                if required:
+                    raise NativeUIScreenshotError(
+                        f"could not identify sensitive screenshot region {name!r}"
+                    )
+                # A known-absent optional surface is safe to omit.  Other
+                # lookup failures are not: an unavailable accessibility tree
+                # must never silently turn a potentially sensitive capture
+                # into an unmasked image.
+                continue
+            except NativeUISmokeError as error:
+                raise NativeUIScreenshotError(
+                    f"could not inspect sensitive screenshot region {name!r}: {error}"
+                ) from error
+            if _macos_bounds_contained(window, bounds):
+                masks.append(bounds)
+            elif required:
+                raise NativeUIScreenshotError(
+                    f"sensitive screenshot region {name!r} is outside the exact window"
+                )
+        return masks
+
+    def capture(self, milestone: str, *, required: bool = False) -> dict[str, object]:
+        """Capture one exact native window with masked sensitive regions."""
+
+        if self.screenshot_dir is None:
+            return {"screenshot_skipped": "no screenshot directory configured"}
+        if not _SCREENSHOT_NAME.fullmatch(milestone):
+            raise NativeUIScreenshotError("screenshot milestone is invalid")
+        if self.platform == "windows":
+            self._windows_validate_window()
+            if self.process is None or self.process.pid <= 0:
+                raise NativeUIScreenshotError("Windows native UI process identity is unavailable")
+            process_pid = self.process.pid
+            window = _windows_rect(self.hwnd)
+        else:
+            process_pid = self._macos_pid_or_error()
+            window = _macos_window_rect(process_pid, min(3.0, self.timeout))
+        if window[2] <= window[0] or window[3] <= window[1]:
+            raise NativeUIScreenshotError("native UI screenshot window bounds are invalid")
+        if self.platform == "macos" and (
+            window[2] - window[0] < 300 or window[3] - window[1] < 300
+        ):
+            raise NativeUIScreenshotError(
+                "macOS renderer window is unexpectedly small "
+                f"({window[2] - window[0]}x{window[3] - window[1]})"
+            )
+        masks = self._screenshot_masks(window, require_configuration=required)
+        path = _screenshot_path(self.screenshot_dir, milestone, process_pid)
+        try:
+            if self.platform == "windows":
+                _windows_capture_rect(window, path, masks)
+                self._windows_validate_window()
+                obstructions = _windows_window_obstructions(self.hwnd, process_pid)
+            else:
+                target, obstructions = _macos_window_info(
+                    process_pid, min(3.0, self.timeout)
+                )
+                target_bounds = target.get("bounds")
+                target_window_id = target.get("window_id")
+                if (
+                    not isinstance(target_bounds, list)
+                    or len(target_bounds) != 4
+                    or not all(isinstance(value, int) for value in target_bounds)
+                    or not isinstance(target_window_id, int)
+                ):
+                    raise NativeUIScreenshotError(
+                        "macOS exact-window capture returned invalid target geometry"
+                    )
+                exact_window = tuple(target_bounds)  # type: ignore[assignment]
+                if not _macos_bounds_contained(exact_window, window):
+                    raise NativeUIScreenshotError(
+                        "macOS AX window is outside its exact CoreGraphics window"
+                    )
+                if obstructions:
+                    raise NativeUIScreenshotError(
+                        "macOS native screenshot target is obstructed: "
+                        + json.dumps(obstructions, sort_keys=True, separators=(",", ":"))
+                    )
+                _macos_capture_window(target_window_id, path)
+                _mask_png(path, exact_window, masks)
+                target_after, obstructions = _macos_window_info(
+                    process_pid, min(3.0, self.timeout)
+                )
+                if (
+                    target_after.get("window_id") != target_window_id
+                    or target_after.get("owner_pid") != process_pid
+                ):
+                    raise NativeUIScreenshotError(
+                        "macOS exact-window identity changed during capture"
+                    )
+        except BaseException as error:
+            # Keep the original native error and the path of any partial
+            # capture; the caller decides whether this is fatal for a
+            # milestone while preserving the operation that triggered it.
+            raise NativeUIScreenshotError(
+                f"native screenshot {milestone!r} failed (path={path}): {error}"
+            ) from error
+        result: dict[str, object] = {
+            "screenshot_path": str(path),
+            "screenshot_width": _read_png(path)[0],
+            "screenshot_height": _read_png(path)[1],
+            "masked_regions": len(masks),
+            "obstructions": obstructions,
+        }
+        if obstructions:
+            raise NativeUIScreenshotError(
+                f"native screenshot {milestone!r} is obstructed (path={path}): "
+                + json.dumps(obstructions, sort_keys=True, separators=(",", ":"))
+            )
+        return result
 
     def _windows_key(self, *virtual_keys: int) -> None:
         self._windows_validate_window()
@@ -1658,6 +2846,7 @@ class NativeUIController:
             raise NativeUISmokeError("Dobby VPN window is unexpectedly small")
         self._windows_validate_window()
         user32.SetForegroundWindow(self.hwnd)
+        self.capture("startup", required=True)
 
     def _launch_macos(self) -> None:
         bundle = self.binary
@@ -1761,6 +2950,7 @@ class NativeUIController:
                         f"{failure}; startup-diagnostic:\n{diagnostic}"
                     )
             raise failure from error
+        self.capture("startup", required=True)
 
     def start(self) -> dict[str, object]:
         if self.process is not None:
@@ -1777,11 +2967,8 @@ class NativeUIController:
             status = next((name for name in names if self._windows_has_name(name)), "Unknown")
             if status == "Unknown":
                 for name in names:
-                    try:
-                        if self._windows_title_has_state(name):
-                            status = name
-                            break
-                    except NativeUISmokeError:
+                    if self._windows_title_has_state(name):
+                        status = name
                         break
         else:
             names = ("Connected", "Connecting", "Reconnecting", "Disconnected", "Failed", "Error")
@@ -1789,10 +2976,7 @@ class NativeUIController:
             for name in names:
                 if self.macos_pid is None:
                     break
-                try:
-                    process_pid = self._macos_pid_or_error()
-                except NativeUISmokeError:
-                    break
+                process_pid = self._macos_pid_or_error()
                 if _macos_title_has_state(_macos_window_title(process_pid), name):
                     status = name
                     break
@@ -1843,7 +3027,10 @@ class NativeUIController:
                 window_title = repr(_macos_window_title(process_pid, timeout=1.5))
             except NativeUISmokeError as title_error:
                 window_title = f"unavailable:{title_error}"
-            stale_labels = _macos_allowlisted_state_labels(process_pid)
+            try:
+                stale_labels = _macos_allowlisted_state_labels(process_pid)
+            except NativeUISmokeError as stale_error:
+                stale_labels = (f"lookup-error:{stale_error}",)
             raise NativeUISmokeError(
                 f"{error}; click_center=({(bounds[0] + bounds[2]) // 2},"
                 f"{(bounds[1] + bounds[3]) // 2}); frontmost_pid={frontmost}; "
@@ -1944,7 +3131,7 @@ class NativeUIController:
             return False
         try:
             return _macos_has_element(self._macos_pid_or_error(), _NATIVE_ACTION_LABEL)
-        except NativeUISmokeError:
+        except NativeUIElementNotFound:
             return False
 
     def recover_after_process_loss(self) -> dict[str, object]:
@@ -2055,7 +3242,7 @@ class NativeUIController:
             process_pid = self._macos_pid_or_error()
             # GLFW's standard application menu supplies Cmd+Q, not Cmd+W.
             # It dispatches the normal close request to this app's one window.
-            completed = subprocess.run(
+            completed = _native_run(
                 [
                     "osascript", "-e",
                     f'''tell application "System Events"
@@ -2071,7 +3258,7 @@ end tell''',
                 timeout=10,
             )
             if completed.returncode != 0:
-                raise NativeUISmokeError(completed.stderr.strip() or "macOS native close failed")
+                raise NativeUISmokeError(_subprocess_failure("macOS native close failed", completed))
         self._wait(
             lambda: process.poll() is not None and (
                 self.platform != "macos"
@@ -2244,6 +3431,12 @@ def serve_native_ui(
         }) + "\n")
         output_stream.flush()
 
+    def capture_milestone(milestone: str, *, required: bool = False) -> dict[str, object] | None:
+        capture = getattr(controller, "capture", None)
+        if not callable(capture):
+            return None
+        return capture(milestone, required=required)
+
     start_failed = False
     cleanup_done = False
     try:
@@ -2257,6 +3450,17 @@ def serve_native_ui(
             # worker in the middle of its graceful close path.
             start_failed = True
             try:
+                startup_failure_capture = capture_milestone("failure-start")
+                if startup_failure_capture is not None:
+                    error.add_note(
+                        "native-ui-failure-screenshot: "
+                        + json.dumps(startup_failure_capture, sort_keys=True, separators=(",", ":"))
+                    )
+            except BaseException as screenshot_error:
+                error.add_note(
+                    f"native-ui-failure-screenshot: {type(screenshot_error).__name__}: {screenshot_error}"
+                )
+            try:
                 controller.close_for_cleanup()
             except BaseException as cleanup_error:
                 error.add_note(
@@ -2266,6 +3470,7 @@ def serve_native_ui(
         output_stream.write(encoder.encode({"ok": True, "event": "ready", **controller.snapshot()}) + "\n")
         output_stream.flush()
         for line in input_stream:
+            operation: object | None = None
             try:
                 request = json.loads(line)
                 if not isinstance(request, dict):
@@ -2281,6 +3486,7 @@ def serve_native_ui(
                     "process_loss_recovery": "process-loss-recovery",
                     "close-window": "close-window",
                     "reopen": "window-reopen",
+                    "capture": "screenshot",
                     "close": "close-window",
                 }
                 if operation in stages:
@@ -2303,6 +3509,11 @@ def serve_native_ui(
                     result = controller.close()
                 elif operation == "reopen":
                     result = controller.reopen()
+                elif operation == "capture":
+                    milestone = request.get("milestone", "manual")
+                    if not isinstance(milestone, str):
+                        raise NativeUISmokeError("screenshot milestone must be text")
+                    result = capture_milestone(milestone, required=True) or {}
                 elif operation == "close":
                     # ``close`` is the terminal cleanup handshake, not the
                     # visible close-window assertion.  On macOS the normal
@@ -2320,23 +3531,51 @@ def serve_native_ui(
                     except BaseException as error:
                         cleanup_error = error
                     cleanup_done = True
+                    snapshot_error: BaseException | None = None
                     try:
                         result = controller.snapshot()
-                    except BaseException:
+                    except BaseException as error:
+                        snapshot_error = error
                         result = {}
-                    if cleanup_error is None:
+                    if cleanup_error is None and snapshot_error is None:
                         response = {"ok": True, **result}
                     else:
-                        response = {
-                            "ok": False,
-                            "error": str(cleanup_error),
-                            **result,
-                        }
+                        response = {"ok": False, **result}
+                        if cleanup_error is not None:
+                            response["error"] = str(cleanup_error)
+                        if snapshot_error is not None:
+                            response["snapshot_error"] = (
+                                f"{type(snapshot_error).__name__}: {snapshot_error}"
+                            )
                     output_stream.write(encoder.encode(response) + "\n")
                     output_stream.flush()
-                    return 0 if cleanup_error is None else 1
+                    return 0 if cleanup_error is None and snapshot_error is None else 1
                 else:
                     raise NativeUISmokeError(f"unsupported native UI operation {operation!r}")
+                milestone_by_operation = {
+                    "configure": "configured",
+                    "connect": "connected",
+                    "reconnect": "reconnected",
+                    "disconnect": "disconnected",
+                    "settings": "settings",
+                    "process_loss_recovery": "process-recovered",
+                    "close-window": "closed",
+                    "reopen": "reopened",
+                }
+                if operation in milestone_by_operation:
+                    try:
+                        screenshot = capture_milestone(milestone_by_operation[operation])
+                    except Exception as screenshot_error:
+                        # A diagnostic image is useful but must not replace a
+                        # successful VPN/UI operation. Explicit ``capture``
+                        # requests and startup remain required gates.
+                        result = {
+                            **result,
+                            "screenshot_error": str(screenshot_error),
+                        }
+                    else:
+                        if screenshot is not None:
+                            result = {**result, "screenshot": screenshot}
                 response = {"ok": True, **result}
             except Exception as error:
                 # Diagnostics must never replace the operation that failed.
@@ -2347,6 +3586,16 @@ def serve_native_ui(
                 # the complete child stderr stream remains available through
                 # the normal redacted run output.
                 response = {"ok": False, "error": str(error)}
+                if operation != "close":
+                    try:
+                        failure_screenshot = capture_milestone(
+                            f"failure-{operation or 'request'}"
+                        )
+                    except Exception as screenshot_error:
+                        response["failure_screenshot_error"] = str(screenshot_error)
+                    else:
+                        if failure_screenshot is not None:
+                            response["failure_screenshot"] = failure_screenshot
             output_stream.write(encoder.encode(response) + "\n")
             output_stream.flush()
     except Exception as error:
@@ -2382,17 +3631,49 @@ def _standalone_smoke(platform: str, binary: Path, profile: Path, timeout: float
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("windows", "macos"), required=True)
-    parser.add_argument("--ui", type=Path, required=True)
-    parser.add_argument("--profile", type=Path, required=True, help="fresh synthetic/owner test profile to enter through the UI")
+    parser.add_argument("--ui", type=Path)
+    parser.add_argument("--profile", type=Path, help="fresh synthetic/owner test profile to enter through the UI")
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="prove macOS full-lane capabilities without launching the product UI",
+    )
+    parser.add_argument(
+        "--screenshot-dir",
+        type=Path,
+        help="disposable directory for masked native-window screenshots",
+    )
     parser.add_argument(
         "--serve",
         action="store_true",
         help="keep the real window open and serve native actions over JSON lines",
     )
     args = parser.parse_args(argv)
-    if args.timeout <= 0 or not _ui_path_is_launchable(args.platform, args.ui) or not args.profile.is_file():
+    if args.preflight_only:
+        if args.platform != "macos" or args.timeout <= 0:
+            print("native-ui macOS capability preflight arguments are invalid", file=sys.stderr)
+            return 2
+        try:
+            preflight_macos_capabilities(args.timeout)
+        except BaseException as error:
+            print(
+                f"native-ui macOS capability preflight failed: {type(error).__name__}: {error}",
+                file=sys.stderr,
+            )
+            return 1
+        print("native-ui macOS capability preflight passed", flush=True)
+        return 0
+    if (
+        args.timeout <= 0
+        or args.ui is None
+        or args.profile is None
+        or not _ui_path_is_launchable(args.platform, args.ui)
+        or not args.profile.is_file()
+    ):
         raise SystemExit("native UI qualification requires a launchable UI and profile file")
+    if args.screenshot_dir is not None:
+        os.environ["DOBBYVPN_NATIVE_UI_SCREENSHOT_DIR"] = str(args.screenshot_dir)
     if args.platform == "windows":
         identity = _windows_interactive_identity()
         if args.serve:

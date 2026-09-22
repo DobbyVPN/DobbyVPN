@@ -275,7 +275,15 @@ jobs:
             --keep-artifact dobbyVPN-macos-amd64.pkg \
             --keep-artifact dobbyvpn-android-sign.apk \
             --keep-artifact dobbyvpn-android-unsign.apk \
+            --keep-artifact dobbyvpn-android-test-companion.apk \
             --keep-artifact dobbyvpn-android-provenance \
             --keep-artifact dobby-vpn-ui-test-windows \
             --keep-artifact dobby-vpn-ui-test-macos-arm64 \
-            --keep-artifact dobby-vpn-ui-test-macos-amd64
+            --keep-artifact dobby-vpn-ui-test-macos-amd64 \
+            --keep-artifact dobbyvpn-go-coverage \
+            --keep-artifact dobbyvpn-swift-coverage \
+            --keep-artifact dobbyvpn-ios-simulator-mini \
+            --keep-artifact dobbyvpn-qualification-linux \
+            --keep-artifact dobbyvpn-qualification-windows \
+            --keep-artifact dobbyvpn-qualification-macos \
+            --keep-artifact dobbyvpn-qualification-android

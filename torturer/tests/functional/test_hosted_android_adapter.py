@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 import os
 from pathlib import Path
 import re
 import shlex
+import struct
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import zlib
 
 from torturer_checks.android_instrumentation import ROUTING_RULE_CHAIN
 from torturer_checks.hosted.android import (
@@ -51,6 +54,31 @@ _GUI_PROFILE = (
     b"Port = 443\n"
     b"Password = 'synthetic-outline'\n\n"
 )
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+    )
+
+
+def _fake_screenshot() -> bytes:
+    width, height = 2, 2
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    row = b"\x00" + (b"\xff\x00\x00\xff" * width)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(row * height))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+_FAKE_SCREENSHOT = _fake_screenshot()
+_FAKE_SCREENSHOT_SHA256 = sha256(_FAKE_SCREENSHOT).hexdigest()
 
 
 def _observation(error_code: str | None = None, **overrides: object) -> bytes:
@@ -172,6 +200,41 @@ class FakeAndroidRunner:
             match = re.search(r"/files/([A-Za-z0-9._-]+)", tail[3])
             present = match is not None and match.group(1) in self.routing_phases
             return CommandResult(argv, 0, b"READY" if present else b"ABSENT", b"")
+        if tail[:3] == ("shell", "-T", "cat") and any(
+            path.endswith(".progress.json") for path in tail[3:]
+        ):
+            screenshot_path = (
+                "/data/user/0/com.dobby.vpn.test/cache/"
+                "dobbyvpn-rendered-screenshots/fake-surface.png"
+            )
+            progress = {
+                "operation": "configure",
+                "stage": "surface",
+                "state": "completed",
+                "sequence": 1,
+                "screenshot_path": screenshot_path,
+                "screenshot_label": "fake-surface.png",
+                "screenshot_bytes": len(_FAKE_SCREENSHOT),
+                "screenshot_sha256": _FAKE_SCREENSHOT_SHA256,
+                "screenshot_width": 2,
+                "screenshot_height": 2,
+                "screenshots": [{
+                    "path": screenshot_path,
+                    "label": "fake-surface.png",
+                    "bytes": len(_FAKE_SCREENSHOT),
+                    "sha256": _FAKE_SCREENSHOT_SHA256,
+                    "width": 2,
+                    "height": 2,
+                }],
+            }
+            return CommandResult(
+                argv, 0, (json.dumps(progress) + "\n").encode(), b""
+            )
+        if len(argv) >= 3 and argv[1] == "pull":
+            destination = Path(argv[-1])
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            destination.write_bytes(_FAKE_SCREENSHOT)
+            return CommandResult(argv, 0, b"1 file pulled\n", b"")
         if tail[:4] == ("shell", "am", "start", "-W"):
             if self.activity_start_result is not None:
                 result = self.activity_start_result
@@ -1513,16 +1576,24 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIn("trap 'on_signal 143' 15", script)
         self.assertIn("case \",$flags,\"", script)
         self.assertIn("while IFS= read -r line", script)
-        self.assertIn('wifi_status_output=$(cmd wifi status 2>&1)', script)
-        self.assertIn(
-            "wifi_state_output=$(printf '%s\\n' \"$wifi_status_output\" | sed -n '1p')",
-            script,
-        )
+        self.assertIn("capture_command wifi-status cmd wifi status", script)
+        self.assertIn("wifi_state_output=$(sed -n '1p' \"$wifi_status_file\")", script)
+        self.assertIn("capture_command id-u id -u", script)
+        self.assertIn("capture_command route ip -4 route show table all default", script)
+        self.assertIn("capture_command link-before ip -o link show dev", script)
+        self.assertIn("capture_command down", script)
+        self.assertIn("capture_command restore", script)
+        self.assertIn("capture_command link-down", script)
+        self.assertIn("capture_command route-down", script)
+        self.assertIn("capture_command restore-link", script)
+        self.assertIn("capture_command restore-routes", script)
+        self.assertIn("cat \"$capture_file\"", script)
+        self.assertNotIn("wifi_state_output=$(printf '%s\\n' \"$wifi_status_output\" | sed -n '1p')", script)
         self.assertIn("[ \"$wifi_state_output\" = \"Wifi is $1\" ]", script)
         self.assertIn('svc wifi disable', script)
         self.assertIn('svc wifi enable', script)
-        self.assertIn('if network_state_is absent "$down_link" && ! route_is_usable "$down_routes"; then', script)
-        self.assertIn('if network_state_is present "$restore_link" && route_is_usable "$restore_routes"; then', script)
+        self.assertIn('if network_state_is absent "$down_link_file" && ! route_is_usable_file "$down_routes_file"; then', script)
+        self.assertIn('if network_state_is present "$restore_link_file" && route_is_usable_file "$restore_routes_file"; then', script)
         self.assertIn('ip link set dev "$interface" down', script)
         self.assertIn('ip link set dev "$interface" up', script)
         self.assertEqual(transition_calls[0][-1], "wlan0")
@@ -2100,7 +2171,9 @@ class HostedAndroidAdapterTests(unittest.TestCase):
         self.assertIn('waitForOneOf(arrayOf("Disconnected", "Ready", "Error", "Failed"), 30_000)', source)
         self.assertNotIn('requireObject("Disconnected")', source)
         self.assertNotIn("dumpWindowHierarchy", source)
-        self.assertNotIn("takeScreenshot", source)
+        self.assertIn("takeScreenshot", source)
+        self.assertIn("dobbyvpn-rendered-screenshots", source)
+        self.assertIn("Connection configuration", source)
         self.assertNotIn("lastTapDiagnostic", source)
 
     def test_android_source_sha_is_optional_and_omitted_when_absent(self) -> None:

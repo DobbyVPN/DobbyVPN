@@ -4,12 +4,35 @@ import hashlib
 import json
 import plistlib
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
+import zlib
 
 from torturer_checks import local_vm, local_vm_android, local_vm_macos, local_vm_windows
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(payload))
+        + kind
+        + payload
+        + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+    )
+
+
+def _test_png() -> bytes:
+    width, height = 2, 2
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    row = b"\x00" + (b"\xff\x00\x00\xff" * width)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(row * height))
+        + _png_chunk(b"IEND", b"")
+    )
 
 
 class LocalVMPlatformTests(unittest.TestCase):
@@ -209,6 +232,42 @@ class LocalVMPlatformTests(unittest.TestCase):
 
             self.assertEqual([call[0] for call in calls], ["curl.exe"])
             self.assertFalse((root / "native-ui-staging").exists())
+
+    def test_windows_mesa_fixture_failure_keeps_stdout_and_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(
+                local_vm_windows.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    ["tar.exe"], 9, b"fixture stdout\n", b"fixture stderr\n",
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    local_vm.LocalVMError,
+                    "(?s)fixture stdout.*fixture stderr",
+                ):
+                    local_vm_windows._run_mesa_fixture_command(
+                        ["tar.exe"], cwd=root, timeout=10,
+                    )
+
+    def test_windows_mesa_fixture_success_forwards_stdout_and_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = subprocess.CompletedProcess(
+                ["tar.exe"], 0, b"fixture stdout\xff", b"fixture stderr\xfe",
+            )
+            with (
+                mock.patch.object(local_vm_windows.subprocess, "run", return_value=result),
+                mock.patch.object(local_vm_windows, "emit_streams") as emit,
+            ):
+                self.assertIs(
+                    local_vm_windows._run_mesa_fixture_command(
+                        ["tar.exe"], cwd=root, timeout=10,
+                    ),
+                    result,
+                )
+            emit.assert_called_once_with("native-ui-mesa", result.stdout, result.stderr)
 
     def test_windows_native_ui_uses_interactive_token_and_cleans_task(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -886,14 +945,14 @@ class LocalVMPlatformTests(unittest.TestCase):
             )
         )
 
-    def test_macos_screen_state_parser_retains_bounded_output_guard(self) -> None:
-        # The depth-limited probe returns a small Root property dictionary;
-        # retain the 64 KiB parser bound as defense against unexpected output.
+    def test_macos_screen_state_parser_accepts_complete_large_probe_output(self) -> None:
+        # The command runner already retains the complete bounded command
+        # stream; parser size caps would silently discard valid diagnostics.
         root_output = b"+-o Root\n" + b" " * (64 * 1024 - len(b"+-o Root\n"))
         self.assertTrue(
             local_vm_macos._screen_is_unlocked(root_output, finder_accessible=True)
         )
-        self.assertFalse(
+        self.assertTrue(
             local_vm_macos._screen_is_unlocked(
                 root_output + b" ", finder_accessible=True
             )
@@ -1215,10 +1274,26 @@ class LocalVMPlatformTests(unittest.TestCase):
 
             def fake_logged(command, **kwargs):
                 calls.append((command, kwargs))
-                output = (
-                    b"OK (1 test)\nINSTRUMENTATION_CODE: -1\n"
-                    if kwargs["label"] == "android-native-ui" else b""
-                )
+                label = kwargs["label"]
+                payload = _test_png()
+                if label == "android-native-ui":
+                    markers = []
+                    for frame in ("startup", "failure-state", "reopened"):
+                        markers.append(
+                            (
+                                f"DOBBY_UI_SCREENSHOT label={frame} "
+                                "path=/data/user/0/com.dobby.vpn.test/cache/"
+                                f"dobbyvpn-rendered-screenshots/{frame}.png "
+                                f"bytes={len(payload)} sha256={hashlib.sha256(payload).hexdigest()} "
+                                "width=2 height=2\n"
+                            ).encode()
+                        )
+                    output = b"".join(markers) + b"OK (1 test)\nINSTRUMENTATION_CODE: -1\n"
+                elif label.startswith("android-screenshot-"):
+                    Path(command[-1]).write_bytes(payload)
+                    output = b"1 file pulled\n"
+                else:
+                    output = b""
                 return subprocess.CompletedProcess(command, 0, output, b"")
 
             with (

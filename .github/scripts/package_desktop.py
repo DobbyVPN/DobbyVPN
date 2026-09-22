@@ -136,7 +136,7 @@ Description: DobbyVPN native desktop client
     postinst.write_text(
         """#!/bin/sh
 set -e
-if command -v systemctl >/dev/null 2>&1; then
+if command -v systemctl; then
     systemctl daemon-reload || true
     systemctl enable dobbyvpn.service || true
 fi

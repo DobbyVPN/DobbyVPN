@@ -48,7 +48,7 @@ def test_workflow_does_not_collect_android_diagnostic_files() -> None:
     assert "dobbyvpn-ui-failure.xml" not in source
 
 
-def test_android_failure_diagnostics_keep_only_fixed_result_vocabulary() -> None:
+def test_android_failure_diagnostics_use_fixed_vocabulary_and_redacted_frames() -> None:
     root = Path(__file__).resolve().parents[2]
     kotlin = (
         root
@@ -65,7 +65,18 @@ def test_android_failure_diagnostics_keep_only_fixed_result_vocabulary() -> None
         assert "dobbyvpn-ui-failure.png" not in source
         assert "dobbyvpn-ui-failure.xml" not in source
         assert "dumpWindowHierarchy" not in source
-        assert "takeScreenshot" not in source
+    assert "takeScreenshot" in kotlin
+    assert "takeScreenshot" in java
+    assert "DOBBY_UI_SCREENSHOT" in kotlin
+    assert "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED" in local
+    assert 'marker.put("screenshots"' in java
+    for label in (
+        '"Connection configuration"',
+        '"Connection logs"',
+        '"Connection details"',
+    ):
+        assert label in kotlin
+        assert label in java
     assert "fixedFailureCode(" in java
     assert "FALLBACK_ERROR_CODE" in java
     assert "failure.getMessage()" not in java
@@ -105,7 +116,7 @@ def test_hosted_driver_foregrounds_product_activity_before_vpn_consent() -> None
     assert helper < absent < validated < activity < prepare < launch < start
 
 
-def test_hosted_gui_driver_publishes_only_redacted_bounded_phase_markers() -> None:
+def test_hosted_gui_driver_publishes_redacted_phase_and_screenshot_markers() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (
         root
@@ -113,12 +124,21 @@ def test_hosted_gui_driver_publishes_only_redacted_bounded_phase_markers() -> No
     ).read_text(encoding="utf-8")
 
     marker = source.index("private void markProgress(")
-    assert '"operation"' in source[marker:]
-    assert '"stage"' in source[marker:]
-    assert '"state"' in source[marker:]
-    assert '"sequence"' in source[marker:]
-    assert "profile" not in source[marker:]
-    assert "endpoint" not in source[marker:]
+    marker_end = source.index("private RenderedScreenshot captureRenderedScreenshot(", marker)
+    marker_body = source[marker:marker_end]
+    assert '"operation"' in marker_body
+    assert '"stage"' in marker_body
+    assert '"state"' in marker_body
+    assert '"sequence"' in marker_body
+    assert '"screenshot_path"' in marker_body
+    assert '"screenshot_label"' in marker_body
+    assert '"screenshot_bytes"' in marker_body
+    assert '"screenshot_sha256"' in marker_body
+    assert '"screenshot_width"' in marker_body
+    assert '"screenshot_height"' in marker_body
+    assert '"screenshots"' in marker_body
+    assert '"profile"' not in marker_body
+    assert '"endpoint"' not in marker_body
     assert "waitForIdleBounded" in source
     for stage in (
         '"configuration-control"',
@@ -237,8 +257,13 @@ def test_real_ui_uses_coordinate_tap_and_native_invalid_input() -> None:
     assert "private fun tapAndWaitForVisible" in source
     assert "ANDROID_UI_TAP_FAILED" in source
     assert "ANDROID_UI_STATE_TIMEOUT" in source
-    assert "TestWatcher" not in source
-    assert "takeScreenshot" not in source
+    assert "TestWatcher" in source
+    assert "takeScreenshot" in source
+    assert 'captureScreenshot("startup")' in source
+    assert 'captureScreenshot("failure-state")' in source
+    assert 'captureScreenshot("reopened")' in source
+    assert 'captureScreenshot("failure")' in source
+    assert "DOBBY_UI_SCREENSHOT" in source
     assert "dumpWindowHierarchy" not in source
     assert "dobbyvpn-ui-failure" not in source
     assert "ClipboardManager" not in source

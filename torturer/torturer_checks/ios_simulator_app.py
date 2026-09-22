@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gzip
 import importlib.util
 import json
 import os
@@ -26,6 +27,7 @@ from torturer_checks.ios_simulator import (
     iphonesimulator_sdk_version_command,
     simctl_boot_command,
     simctl_bootstatus_command,
+    simctl_get_app_container_command,
     simctl_install_command,
     simctl_terminate_command,
     xcodebuild_ui_test_command,
@@ -299,7 +301,10 @@ class SubprocessCommandRunner:
 
 
 def _decode(payload: bytes) -> str:
-    return payload.decode("utf-8", errors="replace")
+    # Keep invalid bytes visible through a reversible display form. The
+    # original byte stream remains attached to failures by diagnostics.py;
+    # replacement decoding would silently collapse distinct diagnostics.
+    return payload.decode("utf-8", errors="backslashreplace")
 
 
 @dataclass(frozen=True)
@@ -342,6 +347,13 @@ def public_ios_simulator_app_contract(architecture: str) -> IOSSimulatorAppContr
 class IOSSimulatorAppEvidence:
     simulator: AvailableSimulator
     app: SimulatorApp
+    # XCTest keeps UI screenshots and failure attachments in this owned
+    # result bundle. It is an extra diagnostic output; command streams remain
+    # the authoritative process diagnostics.
+    result_bundle: Path | None = None
+    # The app's own complete gzip export is retained separately from the
+    # XCTest result bundle.  XCTest attachments never replace this stream.
+    log_exports: tuple[Path, ...] = ()
 
 
 def select_available_iphone(
@@ -527,6 +539,151 @@ def _add_note(failure: BaseException | None, label: str, error: BaseException) -
     return failure
 
 
+def _ios_diagnostics_directory(work_dir: Path) -> Path:
+    return work_dir / "diagnostics" / "ios-simulator"
+
+
+def _copy_complete_directory(source: Path, destination: Path, *, label: str) -> Path:
+    """Copy one owned directory without accepting a partial destination."""
+    if source.is_symlink() or not source.is_dir():
+        raise IOSSimulatorAppContractError(f"{label} is not a complete directory: {source}")
+    if destination.exists() or destination.is_symlink():
+        try:
+            if destination.is_symlink() or destination.is_file():
+                destination.unlink()
+            else:
+                shutil.rmtree(destination)
+        except OSError as error:
+            raise IOSSimulatorAppContractError(
+                f"could not replace retained {label}: {destination}"
+            ) from error
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, destination)
+    except OSError as error:
+        raise IOSSimulatorAppContractError(
+            f"could not retain complete {label}: {destination}"
+        ) from error
+    return destination
+
+
+def _validate_gzip_export(path: Path) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise IOSSimulatorAppContractError(f"iOS app log export is not a regular file: {path}")
+    try:
+        with gzip.open(path, "rb") as archive:
+            payload = archive.read()
+    except (OSError, EOFError) as error:
+        raise IOSSimulatorAppContractError(
+            f"iOS app log export gzip is unreadable: {path}"
+        ) from error
+    if not payload:
+        raise IOSSimulatorAppContractError(f"iOS app log export gzip is empty: {path}")
+
+
+def _retain_xctest_result_bundle(result_bundle: Path, work_dir: Path) -> Path:
+    destination = _ios_diagnostics_directory(work_dir) / result_bundle.name
+    return _copy_complete_directory(
+        result_bundle,
+        destination,
+        label="XCTest result bundle",
+    )
+
+
+def _collect_ios_app_log_exports(
+    runner: CommandRunner,
+    simulator: AvailableSimulator,
+    contract: IOSSimulatorAppContract,
+    work_dir: Path,
+    *,
+    budget: RunBudget,
+) -> tuple[Path, ...]:
+    """Retain every complete app-created gzip before Simulator uninstall."""
+    result = _require_success(
+        runner,
+        simctl_get_app_container_command(simulator.udid, contract.bundle_identifier),
+        "collect-app-container",
+        budget=budget,
+    )
+    container_text = result.stdout.strip()
+    if not container_text:
+        raise IOSSimulatorStageError(
+            "collect-app-container",
+            "simctl returned no app data-container path",
+        )
+    container = Path(container_text.splitlines()[-1].strip())
+    if container.is_symlink() or not container.is_dir():
+        raise IOSSimulatorStageError(
+            "collect-app-container",
+            f"app data-container path is unavailable: {container}",
+        )
+    candidates = sorted(
+        (
+            path for path in container.rglob("DobbyVPN_logs_*.jsonl.gz")
+            if not path.is_symlink() and path.is_file()
+        ),
+        key=lambda path: str(path),
+    )
+    if not candidates:
+        raise IOSSimulatorStageError(
+            "collect-app-log-export",
+            "Simulator app did not leave a DobbyVPN_logs_*.jsonl.gz export",
+        )
+    destination_dir = _ios_diagnostics_directory(work_dir)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    retained: list[Path] = []
+    for source in candidates:
+        _validate_gzip_export(source)
+        destination = destination_dir / source.name
+        try:
+            shutil.copy2(source, destination)
+        except OSError as error:
+            raise IOSSimulatorStageError(
+                "collect-app-log-export",
+                f"could not copy complete app log export: {destination}",
+            ) from error
+        try:
+            _validate_gzip_export(destination)
+        except IOSSimulatorAppContractError as error:
+            raise IOSSimulatorStageError(
+                "collect-app-log-export",
+                f"retained app log export failed validation: {destination}",
+            ) from error
+        retained.append(destination)
+    return tuple(retained)
+
+
+def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path, ...]:
+    """Copy retained iOS artifacts into a local guest manifest directory."""
+    source_dir = _ios_diagnostics_directory(work_dir)
+    if source_dir.is_symlink() or not source_dir.is_dir():
+        raise IOSSimulatorAppContractError(
+            f"retained iOS diagnostics are missing: {source_dir}"
+        )
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    retained: list[Path] = []
+    for source in sorted(source_dir.iterdir(), key=lambda path: path.name):
+        destination = destination_dir / source.name
+        if source.name.endswith(".xcresult"):
+            retained.append(_copy_complete_directory(source, destination, label="XCTest result bundle"))
+            continue
+        if source.name.startswith("DobbyVPN_logs_") and source.name.endswith(".jsonl.gz"):
+            _validate_gzip_export(source)
+            try:
+                shutil.copy2(source, destination)
+            except OSError as error:
+                raise IOSSimulatorAppContractError(
+                    f"could not retain iOS app log export in guest logs: {destination}"
+                ) from error
+            _validate_gzip_export(destination)
+            retained.append(destination)
+    if not retained:
+        raise IOSSimulatorAppContractError(
+            f"retained iOS diagnostics contain no complete artifacts: {source_dir}"
+        )
+    return tuple(retained)
+
+
 def _shutdown_simulator(
     runner: CommandRunner,
     simulator: AvailableSimulator,
@@ -682,8 +839,11 @@ def run_ios_simulator_app_contract(
     keyboard_preference_configured = False
     previous_keyboard_preference: str | None = None
     failure: BaseException | None = None
-    evidence: IOSSimulatorAppEvidence | None = None
     app_path = contract.app_path(work_dir)
+    result_bundle = work_dir / "xctest-results.xcresult"
+    xctest_started = False
+    retained_result_bundle: Path | None = None
+    retained_log_exports: tuple[Path, ...] = ()
 
     try:
         inventory = _require_success(
@@ -748,15 +908,31 @@ def run_ios_simulator_app_contract(
                 "verify-ui-test-project",
                 f"iOS XCTest project is unavailable: {project}",
             )
+        # xcodebuild refuses to overwrite an existing result bundle. This path
+        # is owned by this disposable run, so remove only that exact prior
+        # bundle before starting the next candidate attempt.
+        if result_bundle.exists():
+            try:
+                if result_bundle.is_dir():
+                    shutil.rmtree(result_bundle)
+                else:
+                    result_bundle.unlink()
+            except OSError as error:
+                raise IOSSimulatorStageError(
+                    "prepare-xctest-result-bundle",
+                    f"could not remove prior result bundle: {type(error).__name__}",
+                ) from error
         # Do not pre-launch with simctl. The XCTest target owns the first app
         # launch and its in-test terminate/reopen lifecycle; handing it an
         # already-running simctl process can block setUp before test output.
+        xctest_started = True
         _require_success(
             runner,
             xcodebuild_ui_test_command(
                 simulator.udid,
                 project,
                 work_dir / "ui-tests",
+                result_bundle=result_bundle,
             ),
             "xctest-ui",
             cwd=candidate_root,
@@ -764,15 +940,46 @@ def run_ios_simulator_app_contract(
             timeout_seconds=STAGE_TIMEOUT_SECONDS["xctest-ui"],
         )
 
-        evidence = IOSSimulatorAppEvidence(
-            simulator=simulator,
-            app=SimulatorApp(app_path=app_path,
-                             bundle_identifier=contract.bundle_identifier,
-                             architecture=contract.architecture),
-        )
     except BaseException as error:
         failure = error
     finally:
+        # XCTest attachments are extra artifacts, not a replacement for its
+        # complete stdout/stderr streams. Retain the result bundle and the
+        # app-created gzip while the app data container is still installed;
+        # collection failures remain explicit and secondary to a product
+        # assertion so cleanup can still run.
+        if xctest_started:
+            if result_bundle.exists():
+                try:
+                    retained_result_bundle = _retain_xctest_result_bundle(
+                        result_bundle, work_dir
+                    )
+                except BaseException as error:
+                    failure = _add_note(
+                        failure, "iOS XCTest result collection failed", error
+                    )
+            else:
+                failure = _add_note(
+                    failure,
+                    "iOS XCTest result collection failed",
+                    IOSSimulatorStageError(
+                        "collect-xctest-result",
+                        f"complete XCTest result bundle is missing: {result_bundle}",
+                    ),
+                )
+            if simulator is not None and app_installed:
+                try:
+                    retained_log_exports = _collect_ios_app_log_exports(
+                        runner,
+                        simulator,
+                        contract,
+                        work_dir,
+                        budget=budget,
+                    )
+                except BaseException as error:
+                    failure = _add_note(
+                        failure, "iOS app log export collection failed", error
+                    )
         if simulator is not None:
             if app_installed:
                 try:
@@ -795,10 +1002,19 @@ def run_ios_simulator_app_contract(
                 )
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
-    if evidence is None:
+    if simulator is None or retained_result_bundle is None or not retained_log_exports:
         raise IOSSimulatorAppContractError("iOS Simulator check produced no result")
     budget.assert_within_deadline()
-    return evidence
+    return IOSSimulatorAppEvidence(
+        simulator=simulator,
+        app=SimulatorApp(
+            app_path=app_path,
+            bundle_identifier=contract.bundle_identifier,
+            architecture=contract.architecture,
+        ),
+        result_bundle=retained_result_bundle,
+        log_exports=retained_log_exports,
+    )
 
 
 def prepare_ios_simulator_candidate(

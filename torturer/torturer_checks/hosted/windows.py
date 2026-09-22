@@ -1112,12 +1112,12 @@ $address = [string]$args[1]
 $ruleName = [string]$args[2]
 $adapter = Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop
 if ($adapter.Status -ne "Up") { throw "uplink is not up" }
-if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)) {
+if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
   throw "routing probe rule already exists"
 }
 New-NetFirewallRule -Name $ruleName -DisplayName $ruleName -Direction Outbound `
   -Action Block -Protocol TCP -RemoteAddress $address -RemotePort 443 `
-  -InterfaceAlias $adapter.Name -Profile Any -ErrorAction Stop | Out-Null
+  -InterfaceAlias $adapter.Name -Profile Any -ErrorAction Stop
 if ($null -eq (Get-NetFirewallRule -Name $ruleName -ErrorAction Stop)) {
   throw "routing probe rule missing"
 }
@@ -1130,9 +1130,9 @@ if ($null -eq (Get-NetFirewallRule -Name $ruleName -ErrorAction Stop)) {
         elif action == "remove":
             script = r'''$ErrorActionPreference = "Stop"
 $ruleName = [string]$args[2]
-Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue |
+Get-NetFirewallRule -Name $ruleName -ErrorAction Continue |
   Remove-NetFirewallRule -ErrorAction Stop
-if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)) {
+if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
   throw "routing probe rule remains"
 }
 '''
@@ -1275,14 +1275,14 @@ if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "repair sc
 $actionArguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $scriptPath.Replace('"', '""') + '" -InterfaceIndex ' + $index
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArguments
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force
 if ($null -eq (Get-ScheduledTask -TaskName $taskName -ErrorAction Stop)) { throw "repair task missing" }
 '''
         remove_repair = r'''$ErrorActionPreference = "Stop"
 $taskName = [string]$args[1]
-$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Continue
 if ($null -ne $task) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop }
-if ($null -ne (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+if ($null -ne (Get-ScheduledTask -TaskName $taskName -ErrorAction Continue)) {
   throw "repair task remains registered"
 }
 '''

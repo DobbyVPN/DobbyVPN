@@ -8,6 +8,11 @@ import android.content.Intent;
 import android.content.ContentResolver;
 import android.graphics.Rect;
 import android.content.pm.ApplicationInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -53,6 +58,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.security.MessageDigest;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -197,6 +203,9 @@ public final class GoUiHostedProfileTest {
     private String progressPostTapState = "";
     private long progressSequence;
     private boolean consentTimeoutDiagnosed;
+    private final JSONArray screenshotHistory = new JSONArray();
+    private final File screenshotDirectory = new File(
+            testContext.getCacheDir(), "dobbyvpn-rendered-screenshots");
 
     @Before
     public void configureBoundedSelectorPolling() {
@@ -206,6 +215,17 @@ public final class GoUiHostedProfileTest {
         // and make a bounded surface timeout run far beyond its command
         // budget.
         Configurator.getInstance().setWaitForSelectorTimeout(0);
+        if (screenshotDirectory.exists() && !deleteScreenshotTree(screenshotDirectory)) {
+            throw new IllegalStateException("ANDROID_UI_SCREENSHOT_DIRECTORY_CLEANUP_FAILED");
+        }
+        if (!screenshotDirectory.mkdirs() && !screenshotDirectory.isDirectory()) {
+            throw new IllegalStateException("ANDROID_UI_SCREENSHOT_DIRECTORY_FAILED");
+        }
+        File[] remainingScreenshots = screenshotDirectory.listFiles();
+        if (remainingScreenshots == null || remainingScreenshots.length != 0) {
+            throw new IllegalStateException("ANDROID_UI_SCREENSHOT_DIRECTORY_NOT_EMPTY");
+        }
+        while (screenshotHistory.length() > 0) screenshotHistory.remove(0);
     }
 
     @Test
@@ -458,12 +478,44 @@ public final class GoUiHostedProfileTest {
             }
         } catch (Throwable failure) {
             if (!consentTimeoutDiagnosed) {
-                markProgress(progressOperation, progressStage, "failed");
+                try {
+                    markProgress(progressOperation, progressStage, "failed");
+                } catch (Throwable screenshotFailure) {
+                    // Keep the product assertion/error primary while making
+                    // mandatory rendered-artifact collection failure
+                    // explicit and attached.
+                    failure.addSuppressed(screenshotFailure);
+                    observation.put(
+                            "screenshot_error_code",
+                            "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED");
+                    try {
+                        publishScreenshotFailureMarker();
+                    } catch (Throwable markerFailure) {
+                        failure.addSuppressed(markerFailure);
+                    }
+                }
             }
             observation.put("error_code", fixedFailureCode(failure));
         } finally {
-            try { commandFile.delete(); } catch (Throwable ignored) { }
-            try { profileFile.delete(); } catch (Throwable ignored) { }
+            String cleanupError = null;
+            try {
+                deleteIfPresent(commandFile);
+            } catch (Throwable error) {
+                cleanupError = "ANDROID_COMMAND_FILE_CLEANUP_FAILED";
+            }
+            try {
+                deleteIfPresent(profileFile);
+            } catch (Throwable error) {
+                cleanupError = cleanupError == null
+                        ? "ANDROID_PROFILE_FILE_CLEANUP_FAILED"
+                        : cleanupError + ",ANDROID_PROFILE_FILE_CLEANUP_FAILED";
+            }
+            if (cleanupError != null) {
+                observation.put("cleanup_error", cleanupError);
+                if (!observation.has("error_code")) {
+                    observation.put("error_code", "ANDROID_CONTROL_CLEANUP_FAILED");
+                }
+            }
             writeJson(outputFile, observation);
             progressFile = null;
             progressObservation = null;
@@ -1408,7 +1460,14 @@ public final class GoUiHostedProfileTest {
             }
             Thread.sleep(POLL_MILLIS);
         }
-        markConsentTimeoutDiagnostic(device);
+        try {
+            markConsentTimeoutDiagnostic(device);
+        } catch (Throwable diagnosticFailure) {
+            IllegalStateException timeoutFailure =
+                    new IllegalStateException("ANDROID_VPN_CONSENT_TIMEOUT");
+            timeoutFailure.addSuppressed(diagnosticFailure);
+            throw timeoutFailure;
+        }
         throw new IllegalStateException("ANDROID_VPN_CONSENT_TIMEOUT");
     }
 
@@ -1445,27 +1504,53 @@ public final class GoUiHostedProfileTest {
      * action and a pre-bridge rendered failure without retaining a hierarchy,
      * button text, profile, or raw system output.
      */
-    private void markConsentTimeoutDiagnostic(UiDevice device) {
+    private void markConsentTimeoutDiagnostic(UiDevice device) throws Exception {
         consentTimeoutDiagnosed = true;
         JSONObject marker = new JSONObject();
         progressStage = "consent-diagnosis";
         progressSequence++;
-        try {
-            JSONObject diagnosis = new JSONObject()
-                    .put("foreground", foregroundCategory())
-                    .put("button1", consentButton1State(device))
-                    .put("vpn_permission", vpnPermissionState())
-                    .put("launch_state", NativeVpnBridge.consentLaunchStateForTest())
-                    .put("post_tap_state", postTapState());
-            marker.put("operation", progressOperation)
-                    .put("stage", progressStage)
-                    .put("state", "observed")
-                    .put("sequence", progressSequence)
-                    .put("consent_diagnostic", diagnosis);
-            if (progressFile != null) writeJson(progressFile, marker);
-        } catch (Throwable ignored) {
-            // Diagnostics are best effort and must never replace the timeout.
+        JSONObject diagnosis = new JSONObject()
+                .put("foreground", foregroundCategory())
+                .put("button1", consentButton1State(device))
+                .put("vpn_permission", vpnPermissionState())
+                .put("launch_state", NativeVpnBridge.consentLaunchStateForTest())
+                .put("post_tap_state", postTapState());
+        marker.put("operation", progressOperation)
+                .put("stage", progressStage)
+                .put("state", "observed")
+                .put("sequence", progressSequence)
+                .put("consent_diagnostic", diagnosis);
+        RenderedScreenshot screenshot = captureRenderedScreenshot(
+                progressOperation, progressStage, "observed");
+        if (screenshot != null) {
+            marker.put("screenshot_path", screenshot.path)
+                    .put("screenshot_label", screenshot.label)
+                    .put("screenshot_bytes", screenshot.bytes)
+                    .put("screenshot_sha256", screenshot.sha256)
+                    .put("screenshot_width", screenshot.width)
+                    .put("screenshot_height", screenshot.height);
+            screenshotHistory.put(new JSONObject()
+                    .put("path", screenshot.path)
+                    .put("label", screenshot.label)
+                    .put("bytes", screenshot.bytes)
+                    .put("sha256", screenshot.sha256)
+                    .put("width", screenshot.width)
+                    .put("height", screenshot.height));
         }
+        marker.put("screenshots", new JSONArray(screenshotHistory.toString()));
+        if (progressFile != null) writeJson(progressFile, marker);
+    }
+
+    private void publishScreenshotFailureMarker() throws Exception {
+        if (progressFile == null) return;
+        JSONObject marker = new JSONObject()
+                .put("operation", progressOperation)
+                .put("stage", progressStage)
+                .put("state", "failed")
+                .put("sequence", progressSequence)
+                .put("screenshot_error_code", "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED")
+                .put("screenshots", new JSONArray(screenshotHistory.toString()));
+        writeJson(progressFile, marker);
     }
 
     private String postTapState() {
@@ -2133,38 +2218,217 @@ public final class GoUiHostedProfileTest {
         }
     }
 
-    /**
-     * Publish one redacted UI phase for the controller-side timeout
-     * diagnostic.  This is deliberately best effort: a diagnostic write must
-     * never replace the product/UI assertion that is currently running.
-     */
-    private void markProgress(String operation, String stage, String state) {
+    /** Publish one redacted UI phase and its required rendered artifact. */
+    private void markProgress(String operation, String stage, String state) throws Exception {
         progressOperation = operation;
         progressStage = stage;
         progressSequence++;
         if (progressObservation != null) {
-            try {
-                progressObservation.put("ui_operation", operation);
-                progressObservation.put("ui_phase", stage);
-                progressObservation.put("ui_phase_state", state);
-            } catch (Throwable ignored) {
-                // The observation's required fields are written by the
-                // command path; progress metadata is optional diagnostics.
-            }
+            progressObservation.put("ui_operation", operation);
+            progressObservation.put("ui_phase", stage);
+            progressObservation.put("ui_phase_state", state);
         }
         if (progressFile == null) return;
+        RenderedScreenshot screenshot = captureRenderedScreenshot(operation, stage, state);
+        JSONObject marker = new JSONObject()
+                .put("operation", operation)
+                .put("stage", stage)
+                .put("state", state)
+                .put("sequence", progressSequence);
+        if (!progressPostTapState.isEmpty()) {
+            marker.put("post_tap_state", progressPostTapState);
+        }
+        if (screenshot != null) {
+            marker.put("screenshot_path", screenshot.path)
+                    .put("screenshot_label", screenshot.label)
+                    .put("screenshot_bytes", screenshot.bytes)
+                    .put("screenshot_sha256", screenshot.sha256)
+                    .put("screenshot_width", screenshot.width)
+                    .put("screenshot_height", screenshot.height);
+        }
+        if (screenshot != null) {
+            screenshotHistory.put(new JSONObject()
+                    .put("path", screenshot.path)
+                    .put("label", screenshot.label)
+                    .put("bytes", screenshot.bytes)
+                    .put("sha256", screenshot.sha256)
+                    .put("width", screenshot.width)
+                    .put("height", screenshot.height));
+        }
+        marker.put("screenshots", new JSONArray(screenshotHistory.toString()));
+        writeJson(progressFile, marker);
+    }
+
+    /**
+     * Capture selected rendered milestones as required, redacted PNGs. The
+     * profile/editor and diagnostics regions are painted black before the
+     * frame leaves the instrumentation cache. A screenshot remains an extra
+     * artifact and never replaces the complete instrumentation streams or
+     * observation JSON.
+     */
+    private RenderedScreenshot captureRenderedScreenshot(
+            String operation, String stage, String state) throws Exception {
+        if (!("completed".equals(state) || "observed".equals(state) || "failed".equals(state))) {
+            return null;
+        }
+        if (!("failed".equals(state)
+                || "surface".equals(stage)
+                || stage.startsWith("post-tap-")
+                || stage.endsWith("-state")
+                || "consent-diagnosis".equals(stage))) {
+            return null;
+        }
+        Bitmap bitmap = null;
+        File output = null;
         try {
-            JSONObject marker = new JSONObject()
-                    .put("operation", operation)
-                    .put("stage", stage)
-                    .put("state", state)
-                    .put("sequence", progressSequence);
-            if (!progressPostTapState.isEmpty()) {
-                marker.put("post_tap_state", progressPostTapState);
+            ensureNativeInputDismissedForScreenshot();
+            List<Rect> masks = new ArrayList<>();
+            for (String label : new String[]{
+                    "Connection configuration", "Connection logs", "Connection details"}) {
+                masks.add(stableRenderedBounds(label));
             }
-            writeJson(progressFile, marker);
-        } catch (Throwable ignored) {
-            // Keep UI behavior and assertion failures authoritative.
+            bitmap = InstrumentationRegistry.getInstrumentation()
+                    .getUiAutomation().takeScreenshot();
+            if (bitmap == null || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) {
+                throw new IllegalStateException("ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY");
+            }
+            Canvas canvas = new Canvas(bitmap);
+            Paint paint = new Paint();
+            paint.setColor(Color.BLACK);
+            paint.setStyle(Paint.Style.FILL);
+            for (Rect mask : masks) {
+                Rect clipped = new Rect(0, 0, bitmap.getWidth(), bitmap.getHeight());
+                if (!clipped.intersect(mask) || clipped.isEmpty()) {
+                    throw new IllegalStateException(
+                            "ANDROID_UI_SCREENSHOT_MASK_OUTSIDE_FRAME");
+                }
+                canvas.drawRect(clipped, paint);
+            }
+            if (!screenshotDirectory.exists() && !screenshotDirectory.mkdirs()) {
+                throw new IOException("ANDROID_UI_SCREENSHOT_DIRECTORY_FAILED");
+            }
+            String safeOperation = operation.replaceAll("[^A-Za-z0-9_-]", "_");
+            String safeStage = stage.replaceAll("[^A-Za-z0-9_-]", "_");
+            output = new File(screenshotDirectory,
+                    String.format(Locale.ROOT, "%04d-%s-%s.png",
+                            progressSequence, safeOperation, safeStage));
+            if (output.exists()) {
+                throw new IOException("ANDROID_UI_SCREENSHOT_DUPLICATE_LABEL:" + output.getName());
+            }
+            try (FileOutputStream stream = new FileOutputStream(output, false)) {
+                if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                    throw new IOException("ANDROID_UI_SCREENSHOT_PNG_ENCODE_FAILED");
+                }
+            }
+            if (!output.isFile() || output.length() <= 8L) {
+                throw new IOException("ANDROID_UI_SCREENSHOT_PNG_INVALID");
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(output.getAbsolutePath(), options);
+            if (options.outWidth != bitmap.getWidth() || options.outHeight != bitmap.getHeight()) {
+                throw new IOException("ANDROID_UI_SCREENSHOT_DIMENSIONS_INVALID");
+            }
+            return new RenderedScreenshot(
+                    output.getAbsolutePath(), output.getName(), output.length(),
+                    sha256(output), options.outWidth, options.outHeight);
+        } catch (Exception failure) {
+            if (output != null && output.exists() && !output.delete()) {
+                failure.addSuppressed(new IOException(
+                        "ANDROID_UI_SCREENSHOT_CLEANUP_FAILED:" + output.getName()));
+            }
+            throw failure;
+        } catch (Error failure) {
+            if (output != null && output.exists() && !output.delete()) {
+                failure.addSuppressed(new IOException(
+                        "ANDROID_UI_SCREENSHOT_CLEANUP_FAILED:" + output.getName()));
+            }
+            throw failure;
+        } finally {
+            if (bitmap != null) bitmap.recycle();
+        }
+    }
+
+    private static final class RenderedScreenshot {
+        final String path;
+        final String label;
+        final long bytes;
+        final String sha256;
+        final int width;
+        final int height;
+
+        RenderedScreenshot(String path, String label, long bytes, String sha256,
+                           int width, int height) {
+            this.path = path;
+            this.label = label;
+            this.bytes = bytes;
+            this.sha256 = sha256;
+            this.width = width;
+            this.height = height;
+        }
+    }
+
+    private String sha256(File file) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count > 0) digest.update(buffer, 0, count);
+            }
+        }
+        byte[] value = digest.digest();
+        StringBuilder encoded = new StringBuilder(value.length * 2);
+        for (byte item : value) {
+            encoded.append(String.format(Locale.ROOT, "%02x", item & 0xff));
+        }
+        return encoded.toString();
+    }
+
+    private UiObject2 findRenderedObject(String label) {
+        UiDevice device = uiDevice();
+        UiObject2 object = device.findObject(By.text(label).pkg(context.getPackageName()));
+        if (object == null) {
+            object = device.findObject(By.desc(label).pkg(context.getPackageName()));
+        }
+        return object;
+    }
+
+    private Rect stableRenderedBounds(String label) throws Exception {
+        long deadline = System.currentTimeMillis() + 3_000L;
+        Rect previous = null;
+        int stableSamples = 0;
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 object = findRenderedObject(label);
+            Rect current = object == null ? null : object.getVisibleBounds();
+            if (current != null && !current.isEmpty()) {
+                if (current.equals(previous)) {
+                    stableSamples++;
+                    if (stableSamples >= UI_STABILITY_SAMPLES) {
+                        return new Rect(current);
+                    }
+                } else {
+                    previous = new Rect(current);
+                    stableSamples = 0;
+                }
+            }
+            Thread.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException("ANDROID_UI_SCREENSHOT_MASK_MISSING:" + label);
+    }
+
+    /** A required frame must prove the profile editor is no longer visible. */
+    private void ensureNativeInputDismissedForScreenshot() throws Exception {
+        UiDevice device = uiDevice();
+        if (device.findObject(By.clazz("android.widget.EditText")
+                .pkg(context.getPackageName())) == null) {
+            return;
+        }
+        hideNativeInput(3_000L);
+        if (device.findObject(By.clazz("android.widget.EditText")
+                .pkg(context.getPackageName())) != null) {
+            throw new IllegalStateException(
+                    "ANDROID_UI_SCREENSHOT_UNAVAILABLE_EDITOR_VISIBLE");
         }
     }
 
@@ -2172,6 +2436,17 @@ public final class GoUiHostedProfileTest {
         if (file.exists() && !file.delete()) {
             throw new IllegalStateException("ANDROID_CONTROL_STALE_FILE");
         }
+    }
+
+    private boolean deleteScreenshotTree(File file) {
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children == null) return false;
+            for (File child : children) {
+                if (!deleteScreenshotTree(child)) return false;
+            }
+        }
+        return !file.exists() || file.delete();
     }
 
 }

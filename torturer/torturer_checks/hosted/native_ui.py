@@ -24,7 +24,7 @@ import time
 from typing import Any
 
 from torturer_contract.functional.scenarios import ScenarioStep
-from torturer_checks.diagnostics import redact_text
+from torturer_checks.diagnostics import StreamingRedactor, redact_text
 
 from .cli import SubprocessRunner, _ensure_directory
 from .factory import adapter_for_platform
@@ -154,12 +154,15 @@ class _NativeUIProcess:
         # disposable raw-log root; the macOS app launcher writes complete
         # stdout/stderr streams there when LaunchServices detaches the app.
         self.raw_directory = raw_directory
-        self.process: subprocess.Popen[str] | None = None
-        self._responses: queue.Queue[str | None] = queue.Queue()
+        self.process: subprocess.Popen[bytes] | None = None
+        self._responses: queue.Queue[bytes | str | None] = queue.Queue()
         self._reader: threading.Thread | None = None
         self._stderr_reader: threading.Thread | None = None
+        self._stdout_done = threading.Event()
         self._stderr_done = threading.Event()
         self._lock = threading.Lock()
+        self._diagnostic_lock = threading.Lock()
+        self._diagnostic_started: set[str] = set()
         self._operation = "start"
         self._stage = "launching-driver"
         try:
@@ -182,6 +185,46 @@ class _NativeUIProcess:
             stage=stage,
         )
 
+    @staticmethod
+    def _write_pipe(stream: Any, payload: bytes) -> None:
+        """Write bytes to the binary production pipe and test doubles."""
+
+        try:
+            stream.write(payload)
+        except TypeError:
+            # A few focused tests use StringIO as a minimal stdin double. The
+            # real process is always started with text=False and takes the
+            # byte path above; retaining this fallback does not reintroduce a
+            # text-mode subprocess boundary.
+            stream.write(payload.decode("utf-8", errors="backslashreplace"))
+
+    def _diagnostic_chunk(
+        self,
+        name: str,
+        redactor: StreamingRedactor,
+        payload: bytes | str | None = None,
+        *,
+        finish: bool = False,
+    ) -> None:
+        """Forward one complete redacted stream with explicit boundaries."""
+
+        with self._diagnostic_lock:
+            if name not in self._diagnostic_started:
+                sys.stderr.write(f"[native-ui {name} begin]\n")
+                self._diagnostic_started.add(name)
+            if payload:
+                safe = redactor.feed(payload)
+                if safe:
+                    sys.stderr.write(safe)
+            if finish:
+                tail = redactor.finish()
+                if tail:
+                    sys.stderr.write(tail)
+                    if not tail.endswith("\n"):
+                        sys.stderr.write("\n")
+                sys.stderr.write(f"[native-ui {name} end]\n")
+            sys.stderr.flush()
+
     def start(self) -> None:
         if self.process is not None:
             return
@@ -201,11 +244,11 @@ class _NativeUIProcess:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             # JSON responses on stdout are the protocol. Native-driver stderr
-            # is drained separately and forwarded to the invoking process.
+            # is drained separately and both complete streams are forwarded to
+            # the invoking process after byte-safe redaction.
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            bufsize=1,
+            text=False,
+            bufsize=0,
             env=child_environment,
             start_new_session=(os.name != "nt"),
             creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
@@ -215,12 +258,17 @@ class _NativeUIProcess:
             process = self.process
             if process is None or process.stdout is None:
                 self._responses.put(None)
+                self._stdout_done.set()
                 return
+            redactor = StreamingRedactor(self._sensitive_values)
             try:
                 for line in process.stdout:
+                    self._diagnostic_chunk("stdout", redactor, line)
                     self._responses.put(line)
             finally:
+                self._diagnostic_chunk("stdout", redactor, finish=True)
                 self._responses.put(None)
+                self._stdout_done.set()
 
         self._reader = threading.Thread(target=read, name="dobbyvpn-native-ui-reader", daemon=True)
         self._reader.start()
@@ -228,13 +276,13 @@ class _NativeUIProcess:
         def read_stderr() -> None:
             process = self.process
             stderr = None if process is None else process.stderr
+            redactor = StreamingRedactor(self._sensitive_values)
             try:
                 if stderr is not None:
-                    sys.stderr.write("[native-ui stderr]\n")
                     for chunk in stderr:
-                        sys.stderr.write(redact_text(chunk, self._sensitive_values))
-                        sys.stderr.flush()
+                        self._diagnostic_chunk("stderr", redactor, chunk)
             finally:
+                self._diagnostic_chunk("stderr", redactor, finish=True)
                 self._stderr_done.set()
 
         self._stderr_reader = threading.Thread(
@@ -317,7 +365,11 @@ class _NativeUIProcess:
             self._operation = operation
             self._stage = "waiting-for-operation"
             try:
-                process.stdin.write(json.dumps({"op": operation}, separators=(",", ":")) + "\n")
+                self._write_pipe(
+                    process.stdin,
+                    json.dumps({"op": operation}, separators=(",", ":")).encode("utf-8")
+                    + b"\n",
+                )
                 process.stdin.flush()
             except (BrokenPipeError, OSError) as error:
                 raise self._error("native UI command pipe failed") from error
@@ -334,7 +386,7 @@ class _NativeUIProcess:
         try:
             if process.poll() is None and process.stdin is not None:
                 try:
-                    process.stdin.write('{"op":"close"}\n')
+                    self._write_pipe(process.stdin, b'{"op":"close"}\n')
                     process.stdin.flush()
                     response = self._response(min(self.timeout, 15.0))
                     if response.get("ok") is not True:
@@ -367,6 +419,7 @@ class _NativeUIProcess:
                 except BaseException as error:
                     errors.append(error)
         finally:
+            self._stdout_done.wait(timeout=max(1.0, min(self.timeout, 15.0)))
             self._stderr_done.wait(timeout=max(1.0, min(self.timeout, 15.0)))
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
@@ -621,6 +674,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run_journey(args)
     except Exception as error:
+        sensitive_values: tuple[bytes | str, ...] = ()
+        try:
+            sensitive_values = (args.profile.read_bytes(),)
+        except OSError as profile_error:
+            error.add_note(
+                "native_ui_failure_redaction_profile_error="
+                f"{type(profile_error).__name__}: {profile_error}"
+            )
+        rendered_error = redact_text(
+            f"{type(error).__name__}: {error}", sensitive_values
+        )
         if args.output is not None:
             operation = getattr(error, "operation", None)
             stage = getattr(error, "stage", None)
@@ -629,8 +693,11 @@ def main(argv: list[str] | None = None) -> int:
                 "action_driver": "native-window",
                 "platform": args.platform,
                 "complete": False,
-                "error": f"{type(error).__name__}: {error}",
-                "notes": list(getattr(error, "__notes__", ())),
+                "error": rendered_error,
+                "notes": [
+                    redact_text(note, sensitive_values)
+                    for note in getattr(error, "__notes__", ())
+                ],
             }
             if isinstance(operation, str) and operation:
                 failure["operation"] = operation
@@ -639,9 +706,17 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_text(json.dumps(failure, sort_keys=True) + "\n", encoding="utf-8")
-            except OSError:
-                pass
-        print(f"native-ui-journey failed: {type(error).__name__}: {error}", file=sys.stderr)
+            except OSError as output_error:
+                error.add_note(
+                    "native_ui_failure_result_write_error="
+                    f"{type(output_error).__name__}: {output_error}"
+                )
+        print(f"native-ui-journey failed: {rendered_error}", file=sys.stderr)
+        for note in getattr(error, "__notes__", ()):
+            print(
+                "native-ui-journey note: " + redact_text(note, sensitive_values),
+                file=sys.stderr,
+            )
         return 1
     result = {
         "suite": "full",

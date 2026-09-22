@@ -625,6 +625,22 @@ func TestConnectionViewShowsRecoveryAndFailureDetails(t *testing.T) {
 	}
 }
 
+func TestConnectionDetailsHasStableAccessibleMaskIdentity(t *testing.T) {
+	view := NewConnectionView(&fakeClient{})
+	t.Cleanup(view.Stop)
+
+	if got := view.Details.AccessibilityLabel(); got != "Connection details" {
+		t.Fatalf("details accessibility label = %q", got)
+	}
+	if got := view.Details.AccessibilityRole(); got != fyne.AccessibleRoleText {
+		t.Fatalf("details accessibility role = %q", got)
+	}
+	view.Details.SetText("private failure details")
+	if got := view.Details.AccessibilityLabel(); got != "Connection details" {
+		t.Fatalf("dynamic details changed accessibility mask identity to %q", got)
+	}
+}
+
 func TestConnectionViewRejectsEmptyConfiguration(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
@@ -898,7 +914,7 @@ func TestConnectionViewRendersWarningsInLogs(t *testing.T) {
 	}
 }
 
-func TestConnectionViewExportsOnlyAuthoritativeDiagnostics(t *testing.T) {
+func TestConnectionViewDoesNotExportSnapshotBeforeDiagnosticsLoad(t *testing.T) {
 	runtime := test.NewApp()
 	defer runtime.Quit()
 	exporter := &fakeLogExporter{}
@@ -912,18 +928,11 @@ func TestConnectionViewExportsOnlyAuthoritativeDiagnostics(t *testing.T) {
 		t.Fatal("export button has no callback")
 	}
 	view.Export.OnTapped()
-	got := exporter.captured()
-	want := []string{
-		"PROFILE_WARNING: profile ignored",
-		"RUNTIME_FAILED: bridge unavailable",
+	if got := exporter.captured(); len(got) != 0 {
+		t.Fatalf("snapshot fallback was exported before diagnostics loaded: %q", got)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("exported %d lines, want %d: %q", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("exported line %d = %q, want %q", i, got[i], want[i])
-		}
+	if !strings.Contains(view.LogStatus.Text, "LOCAL_LOG_EXPORT_UNAVAILABLE") {
+		t.Fatalf("missing explicit not-loaded export failure: %q", view.LogStatus.Text)
 	}
 }
 

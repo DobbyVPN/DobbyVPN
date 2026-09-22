@@ -22,6 +22,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
     func testGoFyneMiniJourney() throws {
         let input = element(named: "Connection configuration")
         XCTAssertTrue(input.waitForExistence(timeout: 30), "Fyne configuration input is not accessible")
+        attachScreenshot("startup")
 
         // Keep the Simulator lane as one rendered journey. Each XCTest method
         // starts a fresh Go/Fyne process; splitting these checks into five
@@ -39,6 +40,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
             element(withLabelPrefix: "Source commit:").waitForExistence(timeout: 10),
             "Settings did not expose the source commit link"
         )
+        attachScreenshot("settings")
 
         let back = element(named: "Back")
         XCTAssertTrue(back.waitForExistence(timeout: 10), "Fyne Back control is not accessible")
@@ -48,6 +50,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
             inputAfterSettings.waitForExistence(timeout: 30),
             "Go/Fyne UI did not return from Settings"
         )
+        attachScreenshot("connection")
         let connect = element(named: connectionActionLabel)
         XCTAssertTrue(connect.waitForExistence(timeout: 10), "Fyne connection action is not accessible")
         XCTAssertTrue(waitForEnabled(connect), "Fyne connection action is not enabled after startup")
@@ -79,6 +82,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
             tapConnectExpectingFailure(connect),
             "Connect did not produce a visible malformed-input failure state"
         )
+        attachScreenshot("failure")
         XCTAssertFalse(element(named: "Connected").exists, "Simulator UI must not claim a connected VPN")
 
         // The malformed inline fixture is deliberately not persisted. Restart
@@ -88,6 +92,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
         app.launch()
         let reopened = element(named: "Connection configuration")
         XCTAssertTrue(reopened.waitForExistence(timeout: 30), "Go/Fyne UI did not reopen after termination")
+        attachScreenshot("reopened")
         // A custom Fyne accessibility element may not expose its text value;
         // an optional `value` check alone cannot prove that the inline value
         // was not restored. Keep it as an extra signal when available, but
@@ -148,11 +153,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
             evaluatedWith: logs
         )
         wait(for: [cleared], timeout: 10)
+        attachScreenshot("cleared")
 
         let export = element(named: "Export logs")
         XCTAssertTrue(export.waitForExistence(timeout: 10), "production app did not expose log export")
         XCTAssertTrue(export.isEnabled, "iOS log export control is unexpectedly disabled")
         XCTAssertFalse(export.frame.isEmpty, "Fyne Export logs control has no tappable frame")
+        attachScreenshot("export")
         // Fyne's exported accessibility element can report an invalid
         // accessibility hit point after XCTest scrolls it into view. A
         // native element tap is preferred; the frame-anchored tap is a
@@ -161,6 +168,17 @@ final class GoFyneUIInteractionTests: XCTestCase {
         // UIKit prompt must expose real Share/Save/Close actions; Save then
         // exercises the supported native document-picker flow.
         dismissExportPrompt(returningTo: export)
+    }
+
+    /// Keep rendered UI milestones in the XCTest result bundle as additional
+    /// diagnostics. They never stand in for XCTest assertions or command
+    /// stdout/stderr, and `keepAlways` prevents a failure from discarding the
+    /// screenshots that explain the last successfully rendered state.
+    private func attachScreenshot(_ label: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "dobbyvpn-ui-\(label)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func waitForFailureState() -> Bool {

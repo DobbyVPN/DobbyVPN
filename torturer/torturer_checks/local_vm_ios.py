@@ -49,10 +49,24 @@ def run(
         candidate_root=run_dir / "source", work_dir=work, runner=runner,
         contract=contract, budget=budget,
     )
-    evidence = ios.run_ios_simulator_app_contract(
-        candidate_root=run_dir / "source", work_dir=work, runner=runner,
-        contract=contract, budget=budget,
-    )
+    try:
+        evidence = ios.run_ios_simulator_app_contract(
+            candidate_root=run_dir / "source", work_dir=work, runner=runner,
+            contract=contract, budget=budget,
+        )
+    except BaseException as error:
+        # The contract retains artifacts before uninstall even when XCTest's
+        # assertion is the primary failure. Copy them into the guest manifest
+        # tree before the supervisor removes the disposable work directory;
+        # a copy failure is explicit secondary diagnostic information.
+        try:
+            ios.retain_ios_diagnostics(work, logs / "ios-simulator")
+        except BaseException as collection_error:
+            error.add_note(
+                f"iOS Simulator local diagnostic collection failed: {collection_error}"
+            )
+        raise
+    ios.retain_ios_diagnostics(work, logs / "ios-simulator")
     _write_json(logs / "simulator.json", {
         "scope": "ios-simulator-mini", "suite": "mini", "passed": True,
         "udid": evidence.simulator.udid, "architecture": contract.architecture,

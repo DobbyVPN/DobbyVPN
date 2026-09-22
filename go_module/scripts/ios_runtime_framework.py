@@ -25,6 +25,24 @@ class IOSRuntimeFrameworkError(RuntimeError):
     """The supplied XCFramework is not safe and usable for the requested target."""
 
 
+def _emit_streams(label: str, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+    """Forward complete command streams without changing the parser input."""
+
+    for name, payload in (("stdout", stdout), ("stderr", stderr)):
+        if payload is None or payload == "" or payload == b"":
+            continue
+        text = (
+            payload.decode("utf-8", errors="backslashreplace")
+            if isinstance(payload, bytes)
+            else payload
+        )
+        sys.stderr.write(f"[{label} {name}]\n")
+        sys.stderr.write(text)
+        if not text.endswith("\n"):
+            sys.stderr.write("\n")
+    sys.stderr.flush()
+
+
 class _CommandResult(Protocol):
     returncode: int
     stdout: str
@@ -64,8 +82,10 @@ class _SubprocessCommandRunner:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as error:
+            _emit_streams("ios-runtime-framework", error.stdout, error.stderr)
             raise IOSRuntimeFrameworkError(
-                f"command timed out after {timeout:g}s: {' '.join(command)}"
+                f"command timed out after {timeout:g}s: {' '.join(command)}\n"
+                f"stdout:\n{error.stdout!r}\nstderr:\n{error.stderr!r}"
             ) from error
         except OSError as error:
             raise IOSRuntimeFrameworkError(
@@ -253,12 +273,12 @@ def _validate_runtime_binary(
             f"iOS runtime XCFramework binary architecture probe failed for "
             f"{binary}: {error}"
         ) from error
+    _emit_streams("ios-runtime-framework", result.stdout, result.stderr)
     if result.returncode:
-        detail = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
         raise IOSRuntimeFrameworkError(
             "iOS runtime XCFramework binary is not a readable Mach-O file "
-            f"({binary}, exit code {result.returncode})"
-            + (f":\n{detail}" if detail else "")
+            f"({binary}, exit code {result.returncode})\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     architectures = set(result.stdout.split())
     if required_architecture not in architectures:

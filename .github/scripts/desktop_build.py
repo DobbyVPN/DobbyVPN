@@ -154,6 +154,19 @@ def emit_process_diagnostic(prefix: str, output: str | bytes | None = None) -> N
         sys.stderr.flush()
 
 
+def emit_process_streams(label: str, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+    """Forward both complete child streams before a caller parses either one."""
+    for stream_name, payload in (("stdout", stdout), ("stderr", stderr)):
+        print(f"[{label} {stream_name} begin]", file=sys.stderr)
+        text = output_text(payload)
+        if text:
+            sys.stderr.write(text)
+            if not text.endswith("\n"):
+                sys.stderr.write("\n")
+        print(f"[{label} {stream_name} end]", file=sys.stderr)
+    sys.stderr.flush()
+
+
 def child_environment(
     command: list[str], env: dict[str, str] | None = None,
 ) -> dict[str, str]:
@@ -246,13 +259,18 @@ def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
         )
         emit_process_diagnostic("[!] Probe stderr:", result.stderr)
         return None
-    if result.stderr:
-        emit_process_diagnostic(f"[!] Probe diagnostics: {printable}", result.stderr)
+    emit_process_streams(f"probe {printable}", result.stdout, result.stderr)
     # Some version probes (notably ``java -version``) write their successful
     # version banner to stderr rather than stdout.  Keep the complete stderr
     # visible above, but use it as the probe value when stdout is empty so a
     # valid tool is not misclassified as unavailable.
-    return (result.stdout or result.stderr or "").strip()
+    # A successful probe can legally write a banner to stdout as whitespace
+    # and its value to stderr (``java -version`` and a few vendor tools do
+    # this). Test the rendered content, not truthiness of the raw stream, so
+    # the useful stream is never lost.
+    stdout = output_text(result.stdout)
+    stderr = output_text(result.stderr)
+    return (stdout.strip() or stderr.strip())
 
 
 def set_env(name: str, value: str) -> None:
@@ -1527,7 +1545,7 @@ def print_service_logs(handles: list[object]) -> None:
         if isinstance(output, str):
             output = output.encode("utf-8")
         print("--- service log ---")
-        rendered = output.decode("utf-8", errors="replace")
+        rendered = output.decode("utf-8", errors="backslashreplace")
         sys.stdout.write(rendered)
         if output and not output.endswith(b"\n"):
             sys.stdout.write("\n")

@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -46,6 +47,30 @@ class _FakeAdapter(installer_migration.InstallerAdapter):
 
 
 class InstallerMigrationTests(unittest.TestCase):
+    def test_command_runner_forwards_complete_success_streams(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["probe"], 0, stdout="stdout-without-newline", stderr="stderr-without-newline",
+        )
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(installer_migration.subprocess, "run", return_value=completed), \
+                mock.patch.object(installer_migration.sys, "stderr", new_callable=io.StringIO) as errors:
+            installer_migration.CommandRunner(Path(temporary)).run(["probe"], label="probe")
+        output = errors.getvalue()
+        self.assertIn("stdout-without-newline\n[installer probe stdout end]", output)
+        self.assertIn("stderr-without-newline\n[installer probe stderr end]", output)
+
+    def test_command_runner_forwards_timeout_streams(self) -> None:
+        timeout = subprocess.TimeoutExpired(
+            ["probe"], 1, output=b"partial-out", stderr=b"partial-err",
+        )
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(installer_migration.subprocess, "run", side_effect=timeout), \
+                mock.patch.object(installer_migration.sys, "stderr", new_callable=io.StringIO) as errors:
+            with self.assertRaises(installer_migration.MigrationError):
+                installer_migration.CommandRunner(Path(temporary)).run(["probe"], label="probe")
+        self.assertIn("partial-out", errors.getvalue())
+        self.assertIn("partial-err", errors.getvalue())
+
     def test_manifest_pins_published_v150_desktop_assets(self) -> None:
         assets = installer_migration.load_manifest()
         self.assertEqual(assets["windows"].sha256, "187e3c14c44746b8fbff328cfc24605359eb22ac2f224159703d9b0ea5316c79")
@@ -195,13 +220,9 @@ class InstallerMigrationTests(unittest.TestCase):
 
     def test_windows_arp_results_remain_arrays_for_zero_or_one_entry(self) -> None:
         source = SCRIPT_PATH.read_text(encoding="utf-8")
-        query = """$entries = @(
-  @(
-    Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue
-    Get-ItemProperty 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue
-  ) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
-)"""
-        self.assertEqual(source.count(query), 2)
+        self.assertEqual(source.count("function Get-DobbyArpEntries"), 2)
+        self.assertNotIn("-ErrorAction SilentlyContinue", source)
+        self.assertIn("@(Get-DobbyArpEntries) | Where-Object", source)
         self.assertIn("if ($entries.Count -ne 1)", source)
         self.assertIn("if ($entries.Count -ne 0)", source)
 

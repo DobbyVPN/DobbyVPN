@@ -19,6 +19,10 @@ def _executable(path: Path, body: str) -> None:
 
 class AndroidLocalBuildTests(unittest.TestCase):
     def test_local_build_assembles_the_app_once_without_release_evidence(self) -> None:
+        driver_source = DRIVER.read_text(encoding="utf-8")
+        self.assertNotIn("DOBBYVPN_BUILD_EVIDENCE_DIR", driver_source)
+        self.assertNotIn("stdout.original.log", driver_source)
+        self.assertNotIn("stderr.original.log", driver_source)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "source"
             fake_bin = Path(temporary) / "bin"

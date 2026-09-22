@@ -17,6 +17,41 @@ from torturer_checks.hosted import native_ui as hosted_native_ui
 class NativeUISmokeIdentityTests(unittest.TestCase):
     _MACOS_EXECUTABLE = "/tmp/Dobby UI/Dobby Vpn.app/Contents/MacOS/Dobby Vpn"
 
+    def test_native_run_emits_complete_success_streams_with_boundaries_and_redaction(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["probe"], 0, stdout="prefix-short-secret-suffix", stderr="diagnostic",
+        )
+        captured = io.StringIO()
+        with patch.object(smoke.subprocess, "run", return_value=result), \
+                patch.object(smoke.sys, "stderr", captured):
+            smoke._native_run(
+                ["probe"],
+                check=False,
+                capture_output=True,
+                stream_label="success-probe",
+                sensitive_values=("short-secret",),
+            )
+        output = captured.getvalue()
+        self.assertIn("[native subprocess success-probe stdout begin]", output)
+        self.assertIn("prefix-[REDACTED]-suffix\n", output)
+        self.assertIn("[native subprocess success-probe stdout end]", output)
+        self.assertIn("diagnostic\n", output)
+        self.assertNotIn("short-secret", output)
+
+    def test_native_run_emits_timeout_streams_before_reraising(self) -> None:
+        failure = subprocess.TimeoutExpired(
+            ["probe"], 1, output=b"partial-out", stderr=b"partial-err",
+        )
+        captured = io.StringIO()
+        with patch.object(smoke.subprocess, "run", side_effect=failure), \
+                patch.object(smoke.sys, "stderr", captured):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                smoke._native_run(["probe"], check=False, capture_output=True)
+        output = captured.getvalue()
+        self.assertIn("partial-out", output)
+        self.assertIn("partial-err", output)
+        self.assertIn("[native subprocess probe stdout end]", output)
+
     def test_windows_identity_reports_the_attached_console_session(self) -> None:
         result = subprocess.CompletedProcess(
             ["powershell"], 0, stdout="CONTOSO\\runner|session=2|userInteractive=True\n", stderr="",
@@ -97,6 +132,41 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertEqual(command[command.index("--pid") + 1], "4321")
         self.assertEqual(command[command.index("--name") + 1], smoke._NATIVE_ACTION_LABEL)
         self.assertNotIn("osascript", command)
+
+    def test_macos_obstruction_lookup_uses_the_exact_pid_helper(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["macos_ax.py"], 0,
+            stdout=(
+                '{"ok":true,"stage":"obstruction",'
+                '"target":{"owner_pid":4321,"window_id":17,"bounds":[0,0,20,20]},'
+                '"obstructions":[]}\n'
+            ),
+            stderr="",
+        )
+        with patch.object(smoke.subprocess, "run", return_value=result) as run:
+            self.assertEqual(smoke._macos_window_obstructions(4321, 2), [])
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--pid") + 1], "4321")
+        self.assertIn("--obstructions", command)
+
+    def test_png_masking_rewrites_metadata_free_nonblank_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = smoke.Path(directory) / "capture.png"
+            rgba = bytearray(
+                b"\xff\x00\x00\xff" + b"\x00\xff\x00\xff"
+                + b"\x00\x00\xff\xff" + b"\xff\xff\xff\xff"
+            )
+            smoke._write_png(path, 2, 2, rgba)
+            self.assertEqual(smoke._mask_png(path, (0, 0, 20, 20), [(0, 0, 10, 20)]), (2, 2))
+            width, height, masked = smoke._read_png(path)
+            self.assertEqual((width, height), (2, 2))
+            self.assertEqual(tuple(masked[:4]), (128, 128, 128, 255))
+            self.assertNotIn(b"tEXt", path.read_bytes())
+
+    def test_screenshot_milestone_rejects_path_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(smoke.NativeUIScreenshotError):
+                smoke._screenshot_path(smoke.Path(directory), "../private", 42)
 
     def test_macos_window_probe_uses_the_same_exact_pid_helper(self) -> None:
         result = subprocess.CompletedProcess(
@@ -340,7 +410,8 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             "_macos_has_element",
             side_effect=smoke.NativeUISmokeError("AX timeout"),
         ):
-            self.assertEqual(smoke._macos_allowlisted_state_labels(4321), ())
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "AX timeout"):
+                smoke._macos_allowlisted_state_labels(4321)
 
     def test_macos_ax_windows_no_value_is_retryable_startup_state(self) -> None:
         result = subprocess.CompletedProcess(
@@ -551,6 +622,33 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
             self.assertIn("/tmp/ui-logs/macos-app.stderr.log", command)
             self.assertEqual(command[-1], str(bundle))
 
+    def test_macos_reference_preflight_drains_large_stdout_and_stderr_concurrently(self) -> None:
+        real_popen = subprocess.Popen
+
+        def fake_popen(_command, **kwargs):
+            child = (
+                "import sys,time; "
+                "sys.stderr.write('diagnostic-stderr-' * 100000); sys.stderr.flush(); "
+                "print('{\"ready\":true,\"x\":1,\"y\":2,\"width\":20,\"height\":20}', flush=True); "
+                "time.sleep(0.05); "
+                "print('{\"clicked\":true}', flush=True); time.sleep(0.05)"
+            )
+            return real_popen(
+                [smoke.sys.executable, "-c", child],
+                stdout=kwargs["stdout"],
+                stderr=kwargs["stderr"],
+                bufsize=kwargs.get("bufsize", 0),
+            )
+
+        with (
+            patch.object(smoke.sys, "platform", "darwin"),
+            patch.object(smoke.subprocess, "Popen", side_effect=fake_popen),
+            patch.object(smoke, "_macos_capture_rect"),
+            patch.object(smoke, "_macos_window_obstructions", return_value=[]),
+            patch.object(smoke, "_macos_post_reference_click"),
+        ):
+            smoke._macos_reference_event_preflight(timeout=3)
+
     def test_macos_raw_binary_is_rejected_before_launch(self) -> None:
         controller = smoke.NativeUIController(
             "macos", smoke.Path("/tmp/Dobby Vpn"), smoke.Path("profile"), 1
@@ -739,6 +837,24 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertIsNone(diagnostics["matching_window_count"])
         self.assertEqual(diagnostics["window_enumeration"], "failed")
 
+    def test_windows_window_diagnostics_preserve_every_matching_window(self) -> None:
+        controller = smoke.NativeUIController(
+            "windows", smoke.Path("ui"), smoke.Path("profile"), 1
+        )
+        controller.process = Mock(pid=9468, poll=Mock(return_value=None))
+        matching = [
+            {"hwnd": index, "is_window": True, "is_visible": True}
+            for index in range(32)
+        ]
+        with (
+            patch.object(controller, "_windows_matching_windows", return_value=matching),
+            patch.object(smoke, "_windows_rect", side_effect=lambda hwnd: (hwnd, 0, hwnd + 10, 10)),
+        ):
+            diagnostics = controller._windows_window_diagnostics()
+        self.assertEqual(diagnostics["matching_window_count"], len(matching))
+        self.assertEqual(len(diagnostics["matching_windows"]), len(matching))
+        self.assertNotIn("matching_windows_truncated", diagnostics)
+
     def test_windows_filetime_conversion_uses_dotnet_datetime_epoch(self) -> None:
         self.assertEqual(
             smoke._windows_filetime_to_datetime_ticks(0),
@@ -837,6 +953,39 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
 
 
 class NativeUIControllerProtocolTests(unittest.TestCase):
+    def test_windows_capture_uses_owned_window_and_reports_masked_milestone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = smoke.Path(directory)
+            controller = smoke.NativeUIController(
+                "windows", root / "ui.exe", root / "profile", 10,
+                screenshot_dir=root / "screenshots",
+            )
+            process = Mock(pid=4321)
+            process.poll.return_value = None
+            controller.process = process
+            controller.hwnd = 99
+            with (
+                patch.object(controller, "_windows_validate_window"),
+                patch.object(smoke, "_windows_rect", return_value=(0, 0, 20, 20)),
+                patch.object(controller, "_screenshot_masks", return_value=[(0, 0, 10, 20)]),
+                patch.object(smoke, "_windows_window_obstructions", return_value=[]) as obstructions,
+                patch.object(
+                smoke, "_windows_capture_rect",
+                side_effect=lambda rect, path, masks: smoke._write_png(
+                    path, 2, 2,
+                    b"\xff\x00\x00\xff" + b"\x00\xff\x00\xff"
+                    + b"\x00\x00\xff\xff" + b"\xff\xff\xff\xff",
+                ),
+                ),
+            ):
+                result = controller.capture("connected")
+            self.assertEqual(result["screenshot_width"], 2)
+            self.assertEqual(result["masked_regions"], 1)
+            self.assertEqual(result["obstructions"], [])
+            obstructions.assert_called_once_with(99, 4321)
+            screenshot = smoke.Path(str(result["screenshot_path"]))
+            self.assertTrue(screenshot.is_file())
+
     def test_native_ui_smoke_timeout_leaves_response_diagnostic_reserve(self) -> None:
         self.assertEqual(hosted_native_ui._smoke_timeout(120), 90)
         self.assertLess(hosted_native_ui._smoke_timeout(120), 120)
@@ -1008,6 +1157,32 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         ):
             self.assertEqual(controller._macos_action_state(4321), "Connecting")
         has_element.assert_not_called()
+
+    def test_macos_connect_control_does_not_swallow_ax_failures(self) -> None:
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 10
+        )
+        controller.macos_pid = 4321
+        with (
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(
+                smoke,
+                "_macos_has_element",
+                side_effect=smoke.NativeUISmokeError("AX permission failure"),
+            ),
+        ):
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "AX permission failure"):
+                controller._connect_control_visible()
+
+        with (
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(
+                smoke,
+                "_macos_has_element",
+                side_effect=smoke.NativeUIElementNotFound("not found"),
+            ),
+        ):
+            self.assertFalse(controller._connect_control_visible())
 
     def test_macos_wait_status_connected_runs_bounded_ax_title_helper(self) -> None:
         controller = smoke.NativeUIController(
@@ -1287,6 +1462,34 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertIn("did not exit", response["error"])
 
+    def test_serve_terminal_close_reports_snapshot_failure_after_cleanup(self) -> None:
+        class SnapshotFailureController:
+            def __init__(self):
+                self.snapshots = 0
+
+            def start(self):
+                pass
+
+            def snapshot(self):
+                self.snapshots += 1
+                if self.snapshots == 1:
+                    return {"status": "Disconnected"}
+                raise smoke.NativeUISmokeError("post-cleanup AX snapshot failed")
+
+            def close_for_cleanup(self):
+                pass
+
+        output = io.StringIO()
+        with patch.object(smoke, "_controller_for", return_value=SnapshotFailureController()):
+            result = smoke.serve_native_ui(
+                "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1,
+                io.StringIO('{"op":"close"}\n'), output,
+            )
+        self.assertEqual(result, 1)
+        response = json.loads(output.getvalue().splitlines()[-1])
+        self.assertFalse(response["ok"])
+        self.assertIn("post-cleanup AX snapshot failed", response["snapshot_error"])
+
 
 class NativeUIClipboardCleanupTests(unittest.TestCase):
     def test_windows_paste_restores_previous_text_without_exposing_profile(self) -> None:
@@ -1306,7 +1509,6 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
             with patch.object(smoke.shutil, "which", return_value="powershell"), \
                     patch.object(smoke.subprocess, "run", side_effect=run):
                 restore = smoke._windows_paste(profile)
-                restore()
                 restore()
 
         self.assertEqual(len(calls), 3)
@@ -1328,9 +1530,10 @@ class NativeUIClipboardCleanupTests(unittest.TestCase):
             profile = smoke.Path(directory) / "profile.conf"
             profile.write_text("vpn-profile-secret", encoding="utf-8")
             with patch.object(smoke.shutil, "which", return_value="powershell"), \
-                    patch.object(smoke.subprocess, "run", side_effect=run):
+                patch.object(smoke.subprocess, "run", side_effect=run):
                 restore = smoke._windows_paste(profile)
-                restore()
+                with self.assertRaisesRegex(smoke.NativeUISmokeError, "clipboard was cleared"):
+                    restore()
 
         self.assertEqual(len(calls), 4)
         self.assertEqual(calls[-1][1]["input"], "")

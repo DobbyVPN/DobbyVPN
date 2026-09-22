@@ -59,11 +59,24 @@ def read_dynamic_symbols(readelf: Path, library: Path, abi: str) -> str:
     except (OSError, subprocess.SubprocessError) as error:
         raise NativePayloadError(f"llvm-readelf failed for {abi}: {error}") from error
     if result.returncode != 0:
-        diagnostic = output_text(result.stdout or result.stderr).strip()
+        diagnostic = "\n".join(
+            value for value in (
+                output_text(result.stdout).strip(),
+                output_text(result.stderr).strip(),
+            ) if value
+        )
         raise NativePayloadError(
             f"llvm-readelf failed for {abi} with exit code {result.returncode}: {diagnostic}"
         )
-    return result.stdout
+    # llvm-readelf normally writes symbols to stdout, but tool wrappers and
+    # platform shims have emitted a successful symbol table on stderr. Keep
+    # both streams available to the parser and never discard the non-empty
+    # one merely because stdout exists as a blank value.
+    stdout = output_text(result.stdout)
+    stderr = output_text(result.stderr)
+    if stdout and stderr:
+        return stdout + stderr
+    return stdout or stderr
 
 
 def bridge_symbol_sets(symbols: str) -> tuple[set[str], set[str]]:

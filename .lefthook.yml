@@ -3,7 +3,7 @@ pre-commit:
   commands:
     go-lint-unix:
       glob: "go_module/**/*.go"
-      run: cd go_module && golangci-lint run --new-from-rev=HEAD~1 $(go list ./... | grep -v '_exports$')
+      run: cd go_module && golangci-lint run --new-from-rev=HEAD~1 $(go list ./... | tee /dev/stderr | grep -v '_exports$')
       stage_fixed: true
       only:
         - os: linux

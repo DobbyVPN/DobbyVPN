@@ -40,6 +40,32 @@ class MigrationError(RuntimeError):
     """A package migration precondition or transition failed."""
 
 
+def _render_stream(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="backslashreplace")
+    return str(value)
+
+
+def _stream_bytes(value: object) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    return str(value).encode("utf-8", errors="surrogatepass")
+
+
+def _emit_command_streams(label: str, stdout: object, stderr: object) -> None:
+    """Forward complete command streams while retaining current-run files."""
+
+    for name, value in (("stdout", stdout), ("stderr", stderr)):
+        rendered = _render_stream(value)
+        print(f"[installer {label} {name} begin]", file=sys.stderr)
+        print(rendered, end="" if rendered.endswith("\n") else "\n", file=sys.stderr)
+        print(f"[installer {label} {name} end]", file=sys.stderr)
+
+
 @dataclass(frozen=True)
 class RollbackAsset:
     platform: str
@@ -167,17 +193,34 @@ class CommandRunner:
                 list(command),
                 check=False,
                 capture_output=True,
-                text=True,
+                text=False,
                 env=dict(environment) if environment is not None else None,
                 timeout=300,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
+        except subprocess.TimeoutExpired as error:
+            stdout = _stream_bytes(getattr(error, "stdout", None))
+            stderr = _stream_bytes(getattr(error, "stderr", None))
+            _emit_command_streams(
+                label, stdout, stderr,
+            )
+            stdout_path.write_bytes(stdout)
+            stderr_path.write_bytes(stderr)
             raise _error(f"{label} failed to execute: {error}") from error
-        stdout_path.write_text(completed.stdout, encoding="utf-8", errors="replace")
-        stderr_path.write_text(completed.stderr, encoding="utf-8", errors="replace")
+        except OSError as error:
+            raise _error(f"{label} failed to execute: {error}") from error
+        _emit_command_streams(label, completed.stdout, completed.stderr)
+        stdout = _stream_bytes(completed.stdout)
+        stderr = _stream_bytes(completed.stderr)
+        stdout_path.write_bytes(stdout)
+        stderr_path.write_bytes(stderr)
         if completed.returncode not in accepted_codes:
             raise _error(f"{label} exited with code {completed.returncode}")
-        return completed
+        return subprocess.CompletedProcess(
+            completed.args,
+            completed.returncode,
+            _render_stream(stdout),
+            _render_stream(stderr),
+        )
 
 
 class InstallerAdapter:
@@ -226,11 +269,25 @@ class WindowsInstaller(InstallerAdapter):
     def verify_installed(self, expected_version: str, *, label: str) -> None:
         script = r'''
 $ErrorActionPreference = "Stop"
+function Get-DobbyArpEntries {
+  foreach ($path in @(
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+  )) {
+    try {
+      Get-ItemProperty -Path $path -ErrorAction Stop
+    } catch {
+      $detail = $_ | Out-String
+      if ($detail -match 'Cannot find path|does not exist|cannot find') {
+        [Console]::Error.WriteLine($detail)
+        continue
+      }
+      throw
+    }
+  }
+}
 $entries = @(
-  @(
-    Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-    Get-ItemProperty 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-  ) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
+  @(Get-DobbyArpEntries) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
 )
 if ($entries.Count -ne 1) { throw "expected one DobbyVPN ARP entry" }
 if ([string]$entries[0].DisplayVersion -ne $env:DOBBYVPN_EXPECTED_VERSION) { throw "unexpected installed version" }
@@ -247,15 +304,40 @@ if ($service.Status -ne 'Running') { throw "DobbyVPN Server is not running" }
     def verify_uninstalled(self, *, label: str) -> None:
         script = r'''
 $ErrorActionPreference = "Stop"
+function Get-DobbyArpEntries {
+  foreach ($path in @(
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+  )) {
+    try {
+      Get-ItemProperty -Path $path -ErrorAction Stop
+    } catch {
+      $detail = $_ | Out-String
+      if ($detail -match 'Cannot find path|does not exist|cannot find') {
+        [Console]::Error.WriteLine($detail)
+        continue
+      }
+      throw
+    }
+  }
+}
 $entries = @(
-  @(
-    Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-    Get-ItemProperty 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue
-  ) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
+  @(Get-DobbyArpEntries) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
 )
 if ($entries.Count -ne 0) { throw "DobbyVPN remains registered after uninstall" }
 if (Test-Path (Join-Path ${env:ProgramFiles} 'DobbyVPN')) { throw "DobbyVPN install directory remains" }
-if (Get-Service -Name 'DobbyVPN Server' -ErrorAction SilentlyContinue) { throw "DobbyVPN Server remains registered" }
+$service = $null
+try {
+  $service = Get-Service -Name 'DobbyVPN Server' -ErrorAction Stop
+} catch {
+  $detail = $_ | Out-String
+  if ($detail -match 'Cannot find any service|cannot find|does not exist') {
+    [Console]::Error.WriteLine($detail)
+  } else {
+    throw
+  }
+}
+if ($null -ne $service) { throw "DobbyVPN Server remains registered" }
 '''
         self.runner.run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], label=label)
 
@@ -293,7 +375,15 @@ class MacOSInstaller(InstallerAdapter):
     def verify_installed(self, expected_version: str, *, label: str) -> None:
         script = r'''
 set -eu
-version="$(pkgutil --pkg-info com.dobby.pkg | awk '/^version:/{print $2}')"
+package_info="$(mktemp -t dobbyvpn-pkg-info.XXXXXX)"
+trap 'rm -f "$package_info"' EXIT
+set +e
+pkgutil --pkg-info com.dobby.pkg >"$package_info" 2>&1
+package_status=$?
+set -e
+cat "$package_info"
+test "$package_status" -eq 0
+version="$(awk '/^version:/{print $2}' "$package_info")"
 test "$version" = "$EXPECTED_VERSION"
 test -x "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver"
 test -x "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
@@ -301,14 +391,19 @@ test -f "/Library/LaunchDaemons/com.dobby.vpnservice.plist"
 if [ "$EXPECTED_VERSION" = "1.5.1" ]; then
   test -x "/usr/local/libexec/dobbyvpn-uninstall"
 fi
-launchctl print system/com.dobby.vpnservice >/dev/null
+launchctl print system/com.dobby.vpnservice
 '''
         self.runner.run(["/bin/sh", "-c", script], label=label, environment={**os.environ, "EXPECTED_VERSION": expected_version})
 
     def verify_uninstalled(self, *, label: str) -> None:
         script = r'''
 set -eu
-if pkgutil --pkg-info com.dobby.pkg >/dev/null 2>&1; then
+set +e
+package_output="$(pkgutil --pkg-info com.dobby.pkg 2>&1)"
+package_status=$?
+set -e
+printf '%s\n' "$package_output"
+if [ "$package_status" -eq 0 ]; then
   echo "DobbyVPN package receipt remains" >&2
   exit 1
 fi
@@ -316,7 +411,12 @@ test ! -e "/Applications/Dobby VPN.app"
 test ! -e "/Library/LaunchDaemons/com.dobby.vpnservice.plist"
 test ! -e "/var/run/dobbyvpn/control.sock"
 test ! -e "/usr/local/libexec/dobbyvpn-uninstall"
-if launchctl print system/com.dobby.vpnservice >/dev/null 2>&1; then
+set +e
+launchd_output="$(launchctl print system/com.dobby.vpnservice 2>&1)"
+launchd_status=$?
+set -e
+printf '%s\n' "$launchd_output"
+if [ "$launchd_status" -eq 0 ]; then
   echo "DobbyVPN launchd service remains" >&2
   exit 1
 fi

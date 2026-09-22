@@ -138,6 +138,17 @@ structured result, complete redacted `streams/`, and collection status are the
 one local run governed by the owner and workflow retention policies described
 by the testing documentation. No older stream copy is retained elsewhere.
 
+Every GUI lane retains required milestone and failure screenshots in that same
+current run: headless Go/Fyne frames for desktop mini, exact native windows for
+desktop full, rendered emulator frames for Android mini, and XCTest captures
+for iOS Simulator mini. When a rendered frame can contain private profile or
+diagnostic content, configuration, log, and detail regions are masked before
+transfer. Complete PNG structure, CRCs, dimensions, byte length, and SHA-256
+are validated. A required capture, masking, transfer, or validation failure
+fails the lane while preserving any earlier product failure as primary.
+Screenshots supplement complete streams and functional assertions; they never
+replace either.
+
 Local candidates are disposable and cleaned up after every run. Rerun the
 same command to repeat a test; a failed cleanup is reported separately.
 

@@ -29,16 +29,15 @@ PRG="$0"
 while [ -h "$PRG" ] ; do
     ls=`ls -ld "$PRG"`
     link=`expr "$ls" : '.*-> \(.*\)$'`
-    if expr "$link" : '/.*' > /dev/null; then
-        PRG="$link"
-    else
-        PRG=`dirname "$PRG"`"/$link"
-    fi
+    case "$link" in
+        /*) PRG="$link" ;;
+        *) PRG=`dirname "$PRG"`"/$link" ;;
+    esac
 done
 SAVED="`pwd`"
-cd "`dirname \"$PRG\"`/" >/dev/null
+cd "`dirname \"$PRG\"`/"
 APP_HOME="`pwd -P`"
-cd "$SAVED" >/dev/null
+cd "$SAVED"
 
 APP_NAME="Gradle"
 APP_BASE_NAME=`basename "$0"`

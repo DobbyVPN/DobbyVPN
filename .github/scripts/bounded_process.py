@@ -16,7 +16,9 @@ def output_text(output: str | bytes | None) -> str:
     if output is None:
         return ""
     if isinstance(output, bytes):
-        return output.decode("utf-8", errors="replace")
+        # Preserve every invalid byte reversibly in diagnostics.  Replacement
+        # characters lose which original bytes were emitted by the tool.
+        return output.decode("utf-8", errors="backslashreplace")
     return output
 
 
@@ -80,6 +82,16 @@ def process_group_options() -> dict[str, int | bool]:
 
 
 def _run_windows_taskkill(pid: int, timeout_seconds: float) -> None:
+    def emit_streams(stdout: object, stderr: object) -> None:
+        for name, payload in (("stdout", stdout), ("stderr", stderr)):
+            rendered = output_text(payload if isinstance(payload, (str, bytes)) else None)
+            sys.stderr.write(f"[taskkill {pid} {name} begin]\n")
+            sys.stderr.write(rendered)
+            if rendered and not rendered.endswith("\n"):
+                sys.stderr.write("\n")
+            sys.stderr.write(f"[taskkill {pid} {name} end]\n")
+        sys.stderr.flush()
+
     try:
         result = subprocess.run(
             ["taskkill", "/T", "/F", "/PID", str(pid)],
@@ -91,10 +103,12 @@ def _run_windows_taskkill(pid: int, timeout_seconds: float) -> None:
         )
     except (OSError, subprocess.SubprocessError) as error:
         stdout, stderr = exception_output(error)
+        emit_streams(stdout, stderr)
         raise ProcessCleanupError(
             f"taskkill failed: {error} stdout={output_text(stdout).strip()} "
             f"stderr={output_text(stderr).strip()}"
         ) from error
+    emit_streams(result.stdout, result.stderr)
     if result.returncode != 0:
         raise ProcessCleanupError(
             f"taskkill exited with code {result.returncode} "

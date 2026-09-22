@@ -18,6 +18,7 @@ The run directory is the only state boundary:
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ from pathlib import Path
 import platform as host_platform
 import re
 import socket
+import signal
 import stat
 import subprocess
 import sys
@@ -234,6 +236,240 @@ def _command_log(logs: Path, label: str, stream: str) -> Path:
     return logs / f"{label}.{stream}.log"
 
 
+def _next_command_logs(logs: Path, label: str) -> tuple[Path, Path]:
+    """Allocate one retained stdout/stderr pair for this invocation.
+
+    Most labels are intentionally stable because operators recognize them in a
+    run directory. Repeated labels must still be lossless, so the first pair
+    keeps the historical name and later invocations receive a sequence suffix.
+    A stale one-sided file also consumes its sequence to avoid overwriting a
+    stream left by an interrupted worker.
+    """
+
+    sequence = 1
+    while True:
+        suffix = "" if sequence == 1 else f".{sequence}"
+        stdout_path = logs / f"{label}{suffix}.stdout.log"
+        stderr_path = logs / f"{label}{suffix}.stderr.log"
+        if not stdout_path.exists() and not stderr_path.exists():
+            return stdout_path, stderr_path
+        sequence += 1
+
+
+def _decode_diagnostic_stream(value: bytes) -> str:
+    """Render arbitrary command bytes without dropping invalid UTF-8."""
+
+    return value.decode("utf-8", errors="backslashreplace")
+
+
+def _diagnostic_bytes(value: object) -> bytes:
+    """Normalize subprocess output for retained logs and exception notes."""
+
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="surrogatepass")
+    return b""
+
+
+def _add_command_stream_notes(
+    error: BaseException,
+    label: str,
+    stdout: bytes | str | None,
+    stderr: bytes | str | None,
+) -> None:
+    """Attach complete command streams without replacing the primary error."""
+
+    output = _diagnostic_bytes(stdout)
+    failure = _diagnostic_bytes(stderr)
+    error.add_note(f"{label}_stdout:\n{_decode_diagnostic_stream(output)}")
+    error.add_note(f"{label}_stderr:\n{_decode_diagnostic_stream(failure)}")
+
+
+def _write_probe_streams(
+    stdout_path: Path,
+    stderr_path: Path,
+    stdout: bytes | str | None,
+    stderr: bytes | str | None,
+) -> None:
+    """Write the complete output of a small direct probe to its run logs."""
+
+    stdout_path.write_bytes(_diagnostic_bytes(stdout))
+    stderr_path.write_bytes(_diagnostic_bytes(stderr))
+
+
+def _forward_probe_streams(
+    label: str,
+    stdout: bytes | str | None,
+    stderr: bytes | str | None,
+) -> None:
+    """Forward a probe that has no current-run log directory."""
+
+    for name, value in (("stdout", stdout), ("stderr", stderr)):
+        rendered = _decode_diagnostic_stream(_diagnostic_bytes(value))
+        sys.stderr.write(f"[{label} {name} begin]\n")
+        sys.stderr.write(rendered)
+        if rendered and not rendered.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.write(f"[{label} {name} end]\n")
+    sys.stderr.flush()
+
+
+def _run_probe_logged(
+    command: list[str],
+    *,
+    cwd: Path,
+    logs: Path | None,
+    label: str,
+    timeout: float,
+    environment: dict[str, str] | None = None,
+    check: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a short direct probe while retaining both streams completely.
+
+    The normal command runner streams to files as the process runs.  These
+    probes are intentionally synchronous because their output is consumed as
+    one small value, but they still need the same no-loss diagnostic contract.
+    Production callers always provide the current run's ``logs`` directory;
+    the ``None`` path keeps focused helper callers backwards-compatible.
+    """
+
+    if logs is None:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(cwd),
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            _forward_probe_streams(
+                label,
+                getattr(error, "stdout", None) or getattr(error, "output", None),
+                getattr(error, "stderr", None),
+            )
+            failure = LocalVMError(f"{label}: command timed out")
+            _add_command_stream_notes(
+                failure,
+                label,
+                getattr(error, "stdout", None) or getattr(error, "output", None),
+                getattr(error, "stderr", None),
+            )
+            raise failure from error
+        except OSError as error:
+            raise LocalVMError(f"{label}: command could not start: {error}") from error
+        _forward_probe_streams(label, result.stdout, result.stderr)
+    else:
+        logs.mkdir(parents=True, exist_ok=True)
+        if not _IDENTITY.fullmatch(label):
+            raise LocalVMError("command label is invalid")
+        stdout_path, stderr_path = _next_command_logs(logs, label)
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(cwd),
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            stdout = getattr(error, "stdout", None) or getattr(error, "output", None)
+            stderr = getattr(error, "stderr", None)
+            try:
+                _write_probe_streams(stdout_path, stderr_path, stdout, stderr)
+            except OSError as log_error:
+                failure = LocalVMError(f"{label}: command timed out")
+                _add_command_stream_notes(failure, label, stdout, stderr)
+                failure.add_note(f"{label}_log_write: {type(log_error).__name__}: {log_error}")
+                raise failure from error
+            failure = LocalVMError(f"{label}: command timed out")
+            _add_command_stream_notes(failure, label, stdout, stderr)
+            raise failure from error
+        except OSError as error:
+            try:
+                _write_probe_streams(stdout_path, stderr_path, b"", b"")
+            except OSError as log_error:
+                error.add_note(f"{label}_log_write: {type(log_error).__name__}: {log_error}")
+            raise LocalVMError(f"{label}: command could not start: {error}") from error
+        try:
+            _write_probe_streams(stdout_path, stderr_path, result.stdout, result.stderr)
+        except OSError as error:
+            failure = LocalVMError(f"{label}: command output could not be retained")
+            failure.add_note(f"{label}_log_write: {type(error).__name__}: {error}")
+            _add_command_stream_notes(failure, label, result.stdout, result.stderr)
+            raise failure from error
+
+    if check and result.returncode != 0:
+        failure = LocalVMError(f"{label}: command exited {result.returncode}")
+        _add_command_stream_notes(failure, label, result.stdout, result.stderr)
+        raise failure
+    return result
+
+
+def _terminate_logged_process(
+    process: subprocess.Popen[bytes],
+    label: str,
+    *,
+    cwd: Path | None = None,
+    logs: Path | None = None,
+) -> None:
+    """Stop a timed-out command group and retain cleanup failures."""
+
+    failures: list[str] = []
+    if os.name == "nt":
+        try:
+            result = _run_probe_logged(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                cwd=cwd or Path.cwd(),
+                logs=logs,
+                label=f"{label}-taskkill",
+                timeout=5,
+            )
+        except Exception as error:
+            failures.append(f"taskkill failed: {type(error).__name__}: {error}")
+            failures.extend(getattr(error, "__notes__", ()))
+        else:
+            if result.returncode != 0:
+                failures.append(
+                    "taskkill exited "
+                    f"{result.returncode}: stdout={_decode_diagnostic_stream(result.stdout)} "
+                    f"stderr={_decode_diagnostic_stream(result.stderr)}"
+                )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            failures.append(f"SIGTERM failed: {type(error).__name__}: {error}")
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as error:
+                failures.append(f"SIGKILL failed: {type(error).__name__}: {error}")
+            try:
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                failures.append(f"process did not exit after SIGKILL: {type(error).__name__}: {error}")
+        except OSError as error:
+            failures.append(f"wait after SIGTERM failed: {type(error).__name__}: {error}")
+    if failures:
+        raise LocalVMError(f"{label}: process cleanup failed: {'; '.join(failures)}")
+
+
 def _run_logged(
     command: list[str],
     *,
@@ -248,36 +484,92 @@ def _run_logged(
     if not command or any(not isinstance(item, str) or not item for item in command):
         raise LocalVMError(f"{label}: invalid command")
     logs.mkdir(parents=True, exist_ok=True)
-    stdout_path = _command_log(logs, label, "stdout")
-    stderr_path = _command_log(logs, label, "stderr")
+    if not _IDENTITY.fullmatch(label):
+        raise LocalVMError("command label is invalid")
+    stdout_path, stderr_path = _next_command_logs(logs, label)
+    process: subprocess.Popen[bytes] | None = None
+    timeout_error: subprocess.TimeoutExpired | None = None
+    cleanup_error: BaseException | None = None
+    launch_error: BaseException | None = None
+    returncode: int | None = None
     try:
-        # Stream directly to disk so a supervisor timeout still retains the
-        # bytes emitted before termination.  The small CompletedProcess below
-        # is reconstructed from those same files for callers that need to
-        # parse a probe response (PID, route, or launchd record).
+        # Stream directly to disk so output is not bounded by an in-memory
+        # capture buffer and a timeout still retains bytes emitted before
+        # termination. Reconstruct CompletedProcess from those same files.
         with stdout_path.open("wb") as stdout_stream, stderr_path.open("wb") as stderr_stream:
-            run_kwargs: dict[str, Any] = {
+            popen_kwargs: dict[str, Any] = {
                 "cwd": str(cwd),
                 "env": environment,
                 "stdout": stdout_stream,
                 "stderr": stderr_stream,
-                "timeout": timeout,
-                "check": False,
             }
             if input_data is None:
-                run_kwargs["stdin"] = subprocess.DEVNULL
+                popen_kwargs["stdin"] = subprocess.DEVNULL
             else:
-                run_kwargs["input"] = input_data
-            completed = subprocess.run(command, **run_kwargs)
-    except subprocess.TimeoutExpired as error:
-        raise LocalVMError(f"{label}: command timed out") from error
-    stdout = stdout_path.read_bytes()
-    stderr = stderr_path.read_bytes()
+                popen_kwargs["stdin"] = subprocess.PIPE
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            else:
+                popen_kwargs["start_new_session"] = True
+            try:
+                process = subprocess.Popen(command, **popen_kwargs)
+                try:
+                    process.communicate(input=input_data, timeout=timeout)
+                except subprocess.TimeoutExpired as error:
+                    timeout_error = error
+                    try:
+                        _terminate_logged_process(
+                            process,
+                            label,
+                            cwd=Path(cwd),
+                            logs=logs,
+                        )
+                    except BaseException as error:
+                        cleanup_error = error
+                    # Ensure the leader is reaped even if group cleanup
+                    # reported a secondary failure.
+                    try:
+                        process.wait(timeout=1)
+                    except (OSError, subprocess.TimeoutExpired) as error:
+                        if cleanup_error is None:
+                            cleanup_error = error
+                returncode = process.returncode
+            except BaseException as error:
+                launch_error = error
+    except OSError as error:
+        launch_error = error
+
+    try:
+        stdout = stdout_path.read_bytes()
+    except OSError as error:
+        raise LocalVMError(f"{label}: stdout log could not be read: {error}") from error
+    try:
+        stderr = stderr_path.read_bytes()
+    except OSError as error:
+        raise LocalVMError(f"{label}: stderr log could not be read: {error}") from error
+
+    if launch_error is not None and timeout_error is None:
+        if isinstance(launch_error, LocalVMError):
+            raise launch_error
+        raise LocalVMError(f"{label}: command could not start: {launch_error}") from launch_error
+    if timeout_error is not None:
+        failure = LocalVMError(f"{label}: command timed out")
+        failure.add_note(f"{label}_stdout:\n{_decode_diagnostic_stream(stdout)}")
+        failure.add_note(f"{label}_stderr:\n{_decode_diagnostic_stream(stderr)}")
+        if cleanup_error is not None:
+            failure.add_note(f"{label}_cleanup: {type(cleanup_error).__name__}: {cleanup_error}")
+        raise failure from timeout_error
+
+    if returncode is None:
+        returncode = -1
     completed = subprocess.CompletedProcess(
-        completed.args, completed.returncode, stdout, stderr
+        command, returncode, stdout, stderr
     )
     if check and completed.returncode != 0:
-        raise LocalVMError(f"{label}: command exited {completed.returncode}")
+        failure = LocalVMError(f"{label}: command exited {completed.returncode}")
+        failure.add_note(f"{label}_stdout:\n{_decode_diagnostic_stream(stdout)}")
+        failure.add_note(f"{label}_stderr:\n{_decode_diagnostic_stream(stderr)}")
+        raise failure
     return completed
 
 
@@ -434,7 +726,13 @@ def _release_artifact_map(run_dir: Path, manifest: dict[str, Any], platform: str
     return observed
 
 
-def _validate_release_inputs(run_dir: Path, source: Path, manifest_path: Path) -> tuple[dict[str, Any], dict[tuple[str, str], Path]]:
+def _validate_release_inputs(
+    run_dir: Path,
+    source: Path,
+    manifest_path: Path,
+    *,
+    logs: Path | None = None,
+) -> tuple[dict[str, Any], dict[tuple[str, str], Path]]:
     if manifest_path.is_symlink():
         raise LocalVMError("Release manifest must be a regular file")
     manifest_path = _inside(manifest_path, run_dir)
@@ -451,15 +749,41 @@ def _validate_release_inputs(run_dir: Path, source: Path, manifest_path: Path) -
     git_dir = source / ".git"
     if git_dir.exists():
         try:
-            result = subprocess.run(
+            result = _run_probe_logged(
                 ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                check=False, timeout=30,
+                cwd=source,
+                logs=logs if logs is not None else run_dir / "logs",
+                label="release-source-revision",
+                timeout=30,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise LocalVMError("could not verify staged source revision") from error
-        if result.returncode or result.stdout.decode("utf-8", errors="replace").strip() != manifest["source_sha"]:
-            raise LocalVMError("staged source revision does not match Release manifest")
+        except LocalVMError as error:
+            failure = LocalVMError("could not verify staged source revision")
+            for note in getattr(error, "__notes__", ()):
+                failure.add_note(note)
+            raise failure from error
+        observed = (
+            result.stdout.decode("utf-8", errors="replace").strip()
+            if isinstance(result.stdout, bytes)
+            else str(result.stdout).strip()
+        )
+        if result.returncode:
+            failure = LocalVMError("could not verify staged source revision")
+            _add_command_stream_notes(
+                failure,
+                "release-source-revision",
+                result.stdout,
+                result.stderr,
+            )
+            raise failure
+        if observed != manifest["source_sha"]:
+            failure = LocalVMError("staged source revision does not match Release manifest")
+            _add_command_stream_notes(
+                failure,
+                "release-source-revision",
+                result.stdout,
+                result.stderr,
+            )
+            raise failure
     return manifest, _release_artifact_map(run_dir, manifest, str(manifest.get("platform")))
 
 
@@ -510,19 +834,51 @@ def _discover_network_interface(
     return match.group(1)
 
 
-def _wait_linux_service(pid: int, service: Path, control_socket: Path, timeout: float) -> None:
+def _wait_linux_service(
+    pid: int,
+    service: Path,
+    control_socket: Path,
+    timeout: float,
+    *,
+    logs: Path | None = None,
+) -> None:
     deadline = time.monotonic() + min(timeout, 30)
+    last_probe_error: OSError | None = None
     while time.monotonic() < deadline:
-        if _pid_matches(pid, str(service.resolve())) and control_socket.is_socket():
+        pid_kwargs: dict[str, object] = {}
+        if logs is not None:
+            pid_kwargs.update(logs=logs, cwd=service.parent)
+        if _pid_matches(pid, str(service.resolve()), **pid_kwargs) and control_socket.is_socket():
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
                     probe.settimeout(min(0.2, max(0.01, deadline - time.monotonic())))
                     probe.connect(str(control_socket))
                 return
-            except OSError:
-                pass
+            except OSError as error:
+                # A service socket can exist a little before it starts
+                # accepting connections.  Retain those expected probe races,
+                # but fail immediately for a real local socket failure.
+                if error.errno not in {
+                    errno.ECONNREFUSED,
+                    errno.ENOENT,
+                    errno.ENOTSOCK,
+                    errno.EAGAIN,
+                    errno.EWOULDBLOCK,
+                    errno.ETIMEDOUT,
+                }:
+                    raise LocalVMError(
+                        "Linux service readiness probe failed: "
+                        f"{type(error).__name__}: {error}"
+                    ) from error
+                last_probe_error = error
         time.sleep(min(0.1, max(0.01, deadline - time.monotonic())))
-    raise LocalVMError("Linux service did not become ready")
+    detail = "Linux service did not become ready"
+    if last_probe_error is not None:
+        detail += (
+            "; last expected socket probe: "
+            f"{type(last_probe_error).__name__}: {last_probe_error}"
+        )
+    raise LocalVMError(detail)
 
 
 def _start_linux(
@@ -564,7 +920,7 @@ def _start_linux(
         raise LocalVMError("Linux service start returned no service PID")
     pid = int(values[-1])
     (run_dir / "service.pid").write_text(f"{pid}\n", encoding="ascii")
-    _wait_linux_service(pid, service, network, timeout)
+    _wait_linux_service(pid, service, network, timeout, logs=logs)
     return {
         "pid": pid,
         "binary": str(service.resolve()),
@@ -814,7 +1170,12 @@ def _prepare_release_candidate(
     run_dir: Path, platform: str, manifest_path: Path, logs: Path, timeout: float,
 ) -> dict[str, Any]:
     source = _required_input(run_dir, "source", directory=True)
-    manifest, artifacts = _validate_release_inputs(run_dir, source, manifest_path)
+    manifest, artifacts = _validate_release_inputs(
+        run_dir,
+        source,
+        manifest_path,
+        logs=logs,
+    )
     if platform == "windows":
         descriptor, _ = _install_windows_release(run_dir, manifest, artifacts, logs, timeout)
     elif platform == "macos":
@@ -1046,6 +1407,33 @@ def run(args: argparse.Namespace) -> int:
     }
     _write_json(run_dir / "platform.json", state)
     try:
+        if args.platform == "macos" and args.suite == "full":
+            # Full macOS is the only lane that spends time building/installing
+            # a desktop candidate. Fail early when this worker is not attached
+            # to the Aqua console or lacks any native capability required by
+            # the eventual exact-window run. The native command boundary
+            # repeats the same product-independent gate after the mini phase.
+            from .local_vm_macos import (
+                preflight_interactive_desktop,
+                preflight_native_ui_capabilities,
+            )
+
+            state["status"] = "desktop-preflight"
+            _write_json(run_dir / "platform.json", state)
+            preflight_interactive_desktop(
+                run_dir=run_dir,
+                logs=logs,
+                timeout=min(args.timeout, 30.0),
+            )
+            preflight_native_ui_capabilities(
+                source / ".github" / "scripts" / "native_ui_smoke.py",
+                run_dir=run_dir,
+                logs=logs,
+                timeout=min(args.timeout, 30.0),
+            )
+            state["macos_desktop_preflight"] = "passed"
+            state["status"] = "preparing"
+            _write_json(run_dir / "platform.json", state)
         if args.platform == "ios-simulator":
             runtime = _start_ios(
                 run_dir, logs, args.timeout, args.architecture,
@@ -1282,22 +1670,46 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
 
-def _pid_matches(pid: int, binary: str | None) -> bool:
+def _pid_matches(
+    pid: int,
+    binary: str | None,
+    *,
+    logs: Path | None = None,
+    cwd: Path | None = None,
+) -> bool:
     if pid <= 0 or not binary or os.name == "nt":
         return False
     if not _pid_alive(pid):
         return False
     # A capability-bearing service may be non-dumpable even to its own UID.
     # Use the VM's existing sudo privilege for this specific procfs lookup.
-    observed = subprocess.run(
-        ["sudo", "-n", "readlink", "-f", f"/proc/{pid}/exe"],
-        capture_output=True, text=True, timeout=5, check=False,
+    command = ["sudo", "-n", "readlink", "-f", f"/proc/{pid}/exe"]
+    observed = _run_probe_logged(
+        command,
+        cwd=cwd or Path.cwd(),
+        logs=logs,
+        label="service-pid-executable",
+        timeout=5,
     )
     if observed.returncode:
         if not _pid_alive(pid):
             return False
-        raise LocalVMError("cannot inspect service executable; noninteractive sudo readlink is required")
-    return observed.stdout.strip() == str(Path(binary).resolve())
+        failure = LocalVMError(
+            "cannot inspect service executable; noninteractive sudo readlink is required\n"
+        )
+        _add_command_stream_notes(
+            failure,
+            "service-pid-executable",
+            observed.stdout,
+            observed.stderr,
+        )
+        raise failure
+    observed_stdout = (
+        observed.stdout.decode("utf-8", errors="replace")
+        if isinstance(observed.stdout, bytes)
+        else str(observed.stdout)
+    )
+    return observed_stdout.strip() == str(Path(binary).resolve())
 
 
 def _pid_alive(pid: int) -> bool:
@@ -1307,50 +1719,116 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _checked_process_group(pid: int, binary: str | None) -> str | None:
-    if not _pid_matches(pid, binary):
+def _checked_process_group(
+    pid: int,
+    binary: str | None,
+    *,
+    logs: Path | None = None,
+    cwd: Path | None = None,
+) -> str | None:
+    pid_kwargs: dict[str, object] = {}
+    if logs is not None:
+        pid_kwargs.update(logs=logs, cwd=cwd or Path.cwd())
+    if not _pid_matches(pid, binary, **pid_kwargs):
         return None
-    observed = subprocess.run(
-        ["sudo", "-n", "ps", "-o", "pgid=", "-p", str(pid)],
-        capture_output=True, text=True, timeout=5, check=False,
+    command = ["sudo", "-n", "ps", "-o", "pgid=", "-p", str(pid)]
+    observed = _run_probe_logged(
+        command,
+        cwd=cwd or Path.cwd(),
+        logs=logs,
+        label="service-pid-group",
+        timeout=5,
     )
     if observed.returncode:
         if not _pid_alive(pid):
             return None
-        raise LocalVMError("cannot inspect service process group; noninteractive sudo ps is required")
-    process_group = observed.stdout.strip()
+        failure = LocalVMError(
+            "cannot inspect service process group; noninteractive sudo ps is required"
+        )
+        _add_command_stream_notes(
+            failure,
+            "service-pid-group",
+            observed.stdout,
+            observed.stderr,
+        )
+        raise failure
+    process_group = (
+        observed.stdout.decode("utf-8", errors="replace").strip()
+        if isinstance(observed.stdout, bytes)
+        else str(observed.stdout).strip()
+    )
     if _PID.fullmatch(process_group) is None:
         raise LocalVMError("service process group is invalid")
     return process_group
 
 
-def _signal_process_group(process_group: str, signal_name: str) -> bool:
-    result = subprocess.run(
-        ["sudo", "-n", "kill", signal_name, "--", f"-{process_group}"],
-        capture_output=True, text=True, timeout=5, check=False,
+def _signal_process_group(
+    process_group: str,
+    signal_name: str,
+    *,
+    logs: Path | None = None,
+    cwd: Path | None = None,
+) -> bool:
+    command = ["sudo", "-n", "kill", signal_name, "--", f"-{process_group}"]
+    result = _run_probe_logged(
+        command,
+        cwd=cwd or Path.cwd(),
+        logs=logs,
+        label="service-pid-signal",
+        timeout=5,
     )
-    return result.returncode == 0
+    if result.returncode != 0:
+        failure = LocalVMError(
+            f"could not signal service process group {process_group} with {signal_name} "
+            f"(exit={result.returncode})"
+        )
+        _add_command_stream_notes(
+            failure,
+            "service-pid-signal",
+            result.stdout,
+            result.stderr,
+        )
+        raise failure
+    return True
 
 
-def _stop_pid(pid: int, binary: str | None, timeout: float) -> bool:
+def _stop_pid(
+    pid: int,
+    binary: str | None,
+    timeout: float,
+    *,
+    logs: Path | None = None,
+    cwd: Path | None = None,
+) -> bool:
     if not _pid_alive(pid):
         return True
-    process_group = _checked_process_group(pid, binary)
+    group_kwargs: dict[str, object] = {}
+    if logs is not None:
+        group_kwargs.update(logs=logs, cwd=cwd or Path.cwd())
+    process_group = _checked_process_group(pid, binary, **group_kwargs)
     if process_group is None:
         return False
-    if not _signal_process_group(process_group, "-TERM") and _pid_alive(pid):
+    if not _signal_process_group(
+        process_group,
+        "-TERM",
+        **group_kwargs,
+    ) and _pid_alive(pid):
         raise LocalVMError("could not terminate service process group")
     deadline = time.monotonic() + min(timeout, 3)
     while time.monotonic() < deadline:
-        if not _pid_matches(pid, binary):
+        if not _pid_matches(pid, binary, **group_kwargs):
             return True
         time.sleep(0.05)
-    if _pid_matches(pid, binary):
-        if not _signal_process_group(process_group, "-KILL") and _pid_alive(pid):
+    if _pid_matches(pid, binary, **group_kwargs):
+        if not _signal_process_group(
+            process_group,
+            "-KILL",
+            **group_kwargs,
+        ) and _pid_alive(pid):
             raise LocalVMError("could not kill service process group")
     deadline = time.monotonic() + min(timeout, 5)
     while time.monotonic() < deadline:
-        if not _pid_matches(pid, binary):
+        if not _pid_matches(pid, binary, **group_kwargs):
             return True
         time.sleep(0.05)
     return False
@@ -1493,7 +1971,13 @@ def cleanup(args: argparse.Namespace) -> int:
         service_stopped = True
         if isinstance(pid, int):
             try:
-                if not _stop_pid(pid, runtime.get("binary"), args.timeout):
+                if not _stop_pid(
+                    pid,
+                    runtime.get("binary"),
+                    args.timeout,
+                    logs=logs,
+                    cwd=run_dir,
+                ):
                     errors.append("cleanup-service: recorded PID no longer names the candidate binary")
                     service_stopped = False
             except Exception as error:

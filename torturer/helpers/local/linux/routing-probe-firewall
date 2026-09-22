@@ -29,10 +29,13 @@ esac
 [ "${#uplink}" -le 32 ] || exit 2
 
 remove_table() {
-    if nft list table inet "$table" >/dev/null 2>&1; then
+    if nft list table inet "$table"; then
         nft delete table inet "$table"
     fi
-    ! nft list table inet "$table" >/dev/null 2>&1
+    if nft list table inet "$table"; then
+        echo "routing probe table remains: $table" >&2
+        return 1
+    fi
 }
 
 case "$1" in
@@ -45,7 +48,7 @@ case "$1" in
         nft add table inet "$table"
         nft add chain inet "$table" output '{ type filter hook output priority 0; policy accept; }'
         nft add rule inet "$table" output oifname "$uplink" ip daddr "$address" tcp dport 443 reject
-        nft list table inet "$table" >/dev/null
+        nft list table inet "$table"
         trap - EXIT INT TERM
         ;;
     remove)
@@ -54,7 +57,7 @@ case "$1" in
         ;;
     status)
         [ "$#" -eq 1 ] || exit 2
-        nft list table inet "$table" 2>/dev/null
+        nft list table inet "$table"
         ;;
     *)
         echo "unknown operation: $1" >&2

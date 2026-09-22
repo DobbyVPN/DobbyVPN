@@ -26,6 +26,11 @@ from torturer_checks.android_instrumentation import (
     parse_instrumentation_result,
 )
 from torturer_checks.diagnostics import add_exception_notes, register_sensitive_values
+from torturer_checks.screenshot_artifacts import (
+    ScreenshotIntegrityError,
+    assert_marker_matches,
+    png_metadata,
+)
 from torturer_contract.functional.android_observation import (
     AndroidObservationError,
     AndroidProfileObservation,
@@ -130,6 +135,15 @@ _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
         }
     ),
 }
+_ANDROID_SCREENSHOT_PATH = re.compile(
+    r"^/data/user/0/com\.dobby\.vpn\.test/cache/"
+    r"dobbyvpn-rendered-screenshots/([A-Za-z0-9_-]+\.png)$"
+)
+_ANDROID_REQUIRED_RENDERED_STAGES = frozenset({"surface"})
+
+
+class AndroidScreenshotCollectionError(ScenarioExecutionError):
+    """A required rendered milestone could not be retained safely."""
 
 
 def _instrumentation_succeeded(result: CommandResult) -> bool:
@@ -700,7 +714,15 @@ class AndroidHostedAdapter:
         progress_name: str | None = None,
     ) -> CommandResult:
         controls = self._active_controls
-        observe_live = bool(controls or self._progress_sink)
+        # A rendered GUI invocation must keep the instrumentation boundary
+        # live even when the caller did not install a human-facing progress
+        # sink: required milestone screenshots are collected from the
+        # cumulative progress manifest while the worker runs.
+        observe_live = bool(
+            controls
+            or self._progress_sink
+            or (self.ui_mode == "gui-auto" and progress_name is not None)
+        )
         if not preserve_active:
             # A preceding real-renderer invocation can leave Fyne's
             # NativeActivity process alive after Android has torn down the
@@ -781,6 +803,18 @@ class AndroidHostedAdapter:
         )
         observation_checked = False
         last_ui_progress: tuple[object, ...] | None = None
+        screenshot_failure: BaseException | None = None
+        required_screenshot_seen = False
+        seen_screenshot_paths: set[str] = set()
+        screenshot_history_tuples: dict[
+            str, tuple[str, int, str, int, int]
+        ] = {}
+        progress_tuples: dict[int, tuple[str, str, str]] = {}
+        required_milestones: dict[
+            tuple[str, str, str], tuple[str, int, str, int, int]
+        ] = {}
+        failed_milestone_seen = False
+        highest_progress_sequence = -1
 
         def poll_ui_progress() -> None:
             """Forward only the driver's redacted phase marker.
@@ -791,7 +825,8 @@ class AndroidHostedAdapter:
             record cannot leak arbitrary data into the runner's live output.
             """
 
-            nonlocal last_ui_progress
+            nonlocal last_ui_progress, required_screenshot_seen
+            nonlocal failed_milestone_seen, highest_progress_sequence
             if progress_name is None:
                 return
             remaining = deadline - time.monotonic()
@@ -805,8 +840,9 @@ class AndroidHostedAdapter:
                     allow_nonzero=True,
                 )
             except ScenarioExecutionError:
-                # The marker is intentionally best-effort diagnostics.  A
-                # missing file must never replace the instrumentation result.
+                # A transient marker read is retried while the worker runs;
+                # the final required-milestone check below makes permanent
+                # absence an explicit collection failure.
                 return
             if result.returncode != 0:
                 return
@@ -831,6 +867,19 @@ class AndroidHostedAdapter:
                 or sequence < 0
             ):
                 return
+            progress_tuple = (operation, stage, state)
+            prior_progress = progress_tuples.get(sequence)
+            if prior_progress is not None and prior_progress != progress_tuple:
+                raise AndroidScreenshotCollectionError(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate progress "
+                    f"sequence {sequence} conflicts with its earlier marker"
+                )
+            progress_tuples[sequence] = progress_tuple
+            if sequence < highest_progress_sequence:
+                raise AndroidScreenshotCollectionError(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: progress sequence moved backwards"
+                )
+            highest_progress_sequence = max(highest_progress_sequence, sequence)
             consent_diagnostic = value.get("consent_diagnostic")
             diagnostic_values: dict[str, str] | None = None
             if consent_diagnostic is not None:
@@ -847,6 +896,163 @@ class AndroidHostedAdapter:
                         return
                     candidate[key] = item
                 diagnostic_values = candidate
+            screenshot_path = value.get("screenshot_path")
+            screenshot_label = value.get("screenshot_label")
+            screenshot_bytes = value.get("screenshot_bytes")
+            screenshot_sha256 = value.get("screenshot_sha256")
+            screenshot_width = value.get("screenshot_width")
+            screenshot_height = value.get("screenshot_height")
+            required_screenshot = (
+                self.ui_mode == "gui-auto"
+                and progress_name is not None
+                and state in {"completed", "observed", "failed"}
+                and (
+                    state == "failed"
+                    or stage in _ANDROID_REQUIRED_RENDERED_STAGES
+                    or stage.startswith("post-tap-")
+                    or stage.endswith("-state")
+                    or stage == "consent-diagnosis"
+                )
+            )
+            current_metadata = (
+                screenshot_path,
+                screenshot_label,
+                screenshot_bytes,
+                screenshot_sha256,
+                screenshot_width,
+                screenshot_height,
+            )
+            has_current_metadata = any(item is not None for item in current_metadata)
+            if has_current_metadata and not all(
+                item is not None for item in current_metadata
+            ):
+                raise AndroidScreenshotCollectionError(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot marker "
+                    f"{operation}/{stage} has partial metadata"
+                )
+            if required_screenshot and not all(item is not None for item in current_metadata):
+                raise AndroidScreenshotCollectionError(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: required milestone "
+                    f"{operation}/{stage} has no complete screenshot metadata"
+                )
+            raw_screenshots = value.get("screenshots")
+            if raw_screenshots is None:
+                raw_screenshots = []
+                if any(item is not None for item in current_metadata):
+                    raw_screenshots.append({
+                        "path": screenshot_path,
+                        "label": screenshot_label,
+                        "bytes": screenshot_bytes,
+                        "sha256": screenshot_sha256,
+                        "width": screenshot_width,
+                        "height": screenshot_height,
+                    })
+            if not isinstance(raw_screenshots, list):
+                raise AndroidScreenshotCollectionError(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot history is invalid"
+                )
+            pulled_screenshots: list[Path] = []
+            current_seen = False
+            batch_paths: set[str] = set()
+            for raw_screenshot in raw_screenshots:
+                if not isinstance(raw_screenshot, Mapping):
+                    raise AndroidScreenshotCollectionError(
+                        "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot history entry is invalid"
+                    )
+                screenshot_path = raw_screenshot.get("path")
+                screenshot_label = raw_screenshot.get("label")
+                screenshot_bytes = raw_screenshot.get("bytes")
+                screenshot_sha256 = raw_screenshot.get("sha256")
+                screenshot_width = raw_screenshot.get("width")
+                screenshot_height = raw_screenshot.get("height")
+                if (
+                    not isinstance(screenshot_path, str)
+                    or not isinstance(screenshot_label, str)
+                    or not isinstance(screenshot_bytes, int)
+                    or isinstance(screenshot_bytes, bool)
+                    or screenshot_bytes <= 8
+                    or not isinstance(screenshot_sha256, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", screenshot_sha256) is None
+                    or not isinstance(screenshot_width, int)
+                    or isinstance(screenshot_width, bool)
+                    or screenshot_width <= 0
+                    or not isinstance(screenshot_height, int)
+                    or isinstance(screenshot_height, bool)
+                    or screenshot_height <= 0
+                ):
+                    raise AndroidScreenshotCollectionError(
+                        "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot metadata is invalid"
+                    )
+                screenshot_match = _ANDROID_SCREENSHOT_PATH.fullmatch(screenshot_path)
+                if screenshot_match is None or screenshot_label != screenshot_match.group(1):
+                    raise AndroidScreenshotCollectionError(
+                        "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot path/label is invalid"
+                    )
+                if screenshot_path in batch_paths:
+                    raise AndroidScreenshotCollectionError(
+                        "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate screenshot "
+                        f"history entry for {screenshot_path}"
+                    )
+                batch_paths.add(screenshot_path)
+                history_tuple = (
+                    screenshot_label,
+                    screenshot_bytes,
+                    screenshot_sha256,
+                    screenshot_width,
+                    screenshot_height,
+                )
+                prior_history = screenshot_history_tuples.get(screenshot_path)
+                if prior_history is not None and prior_history != history_tuple:
+                    raise AndroidScreenshotCollectionError(
+                        "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate screenshot "
+                        f"history metadata conflicts for {screenshot_path}"
+                    )
+                screenshot_history_tuples[screenshot_path] = history_tuple
+                if screenshot_path == value.get("screenshot_path"):
+                    current_seen = True
+                if screenshot_path not in seen_screenshot_paths:
+                    screenshot = self._pull_rendered_screenshot(
+                        screenshot_path,
+                        screenshot_label,
+                        deadline,
+                        expected_bytes=screenshot_bytes,
+                        expected_sha256=screenshot_sha256,
+                        expected_width=screenshot_width,
+                        expected_height=screenshot_height,
+                    )
+                    seen_screenshot_paths.add(screenshot_path)
+                    pulled_screenshots.append(screenshot)
+            if has_current_metadata:
+                current_path = value["screenshot_path"]
+                current_tuple = (
+                    value["screenshot_label"],
+                    value["screenshot_bytes"],
+                    value["screenshot_sha256"],
+                    value["screenshot_width"],
+                    value["screenshot_height"],
+                )
+                if (
+                    current_path not in batch_paths
+                    or screenshot_history_tuples.get(current_path) != current_tuple
+                ):
+                    raise AndroidScreenshotCollectionError(
+                        "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: current marker "
+                        f"{operation}/{stage} disagrees with screenshot history"
+                    )
+            if required_screenshot:
+                if not current_seen:
+                    raise AndroidScreenshotCollectionError(
+                        "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: required milestone "
+                        f"{operation}/{stage} is absent from cumulative screenshot history"
+                    )
+                required_screenshot_seen = True
+                required_milestones[(operation, stage, state)] = current_tuple
+                if state == "failed":
+                    failed_milestone_seen = True
+            elif state == "failed":
+                # Every explicit failure marker is a required diagnostic,
+                # regardless of which operation/stage produced it.
+                failed_milestone_seen = True
             marker = (
                 operation,
                 stage,
@@ -858,6 +1064,15 @@ class AndroidHostedAdapter:
                 )
                 if diagnostic_values is not None
                 else None,
+                tuple(
+                    sorted(
+                        (
+                            path,
+                            *screenshot_history_tuples[path],
+                        )
+                        for path in screenshot_history_tuples
+                    )
+                ),
             )
             if marker == last_ui_progress:
                 return
@@ -883,10 +1098,27 @@ class AndroidHostedAdapter:
                     progress_sequence=sequence,
                     consent_diagnostic=diagnostic_values,
                 )
+            for screenshot in pulled_screenshots:
+                self._emit_progress(
+                    "native-state",
+                    kind="ui-screenshot",
+                    platform="android",
+                    operation=operation,
+                    phase=stage,
+                    state=state,
+                    progress_sequence=sequence,
+                    screenshot_path=str(screenshot),
+                )
 
         def check_worker() -> None:
-            nonlocal observation_checked
-            poll_ui_progress()
+            nonlocal observation_checked, screenshot_failure
+            if screenshot_failure is None:
+                try:
+                    poll_ui_progress()
+                except AndroidScreenshotCollectionError as error:
+                    # Keep polling/draining so a later product assertion can
+                    # remain primary; attach this collection failure below.
+                    screenshot_failure = error
             if worker.is_alive():
                 return
             worker_error = holder.get("error")
@@ -967,6 +1199,16 @@ class AndroidHostedAdapter:
             else:
                 worker.join()
 
+        # A short successful instrumentation run can finish before the first
+        # polling tick. Read the final cumulative manifest once after the
+        # worker has joined so required rendered milestones are not lost just
+        # because the producer was fast.
+        if screenshot_failure is None:
+            try:
+                poll_ui_progress()
+            except AndroidScreenshotCollectionError as error:
+                screenshot_failure = error
+
         worker_error = holder.get("error")
         worker_result = holder.get("result")
         worker_failure: BaseException | None = None
@@ -988,6 +1230,44 @@ class AndroidHostedAdapter:
                     f"android_instrumentation_worker_error={type(worker_failure).__name__}"
                 )
 
+        if self.ui_mode == "gui-auto" and progress_name is not None:
+            surface_seen = any(
+                stage in _ANDROID_REQUIRED_RENDERED_STAGES
+                and state in {"completed", "observed"}
+                for _operation, stage, state in required_milestones
+            )
+            if worker_failure is None and not surface_seen:
+                missing_surface = AndroidScreenshotCollectionError(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: hosted GUI run "
+                    "did not publish the required surface milestone"
+                )
+                screenshot_failure = screenshot_failure or missing_surface
+            if worker_failure is not None and not failed_milestone_seen:
+                missing_failure = AndroidScreenshotCollectionError(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: failed hosted GUI "
+                    "run did not publish a failure milestone"
+                )
+                screenshot_failure = screenshot_failure or missing_failure
+
+        if (
+            self.ui_mode == "gui-auto"
+            and progress_name is not None
+            and not required_screenshot_seen
+        ):
+            missing = AndroidScreenshotCollectionError(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: no required rendered milestone was retained"
+            )
+            screenshot_failure = screenshot_failure or missing
+        if screenshot_failure is not None:
+            if primary_error is None:
+                primary_error = screenshot_failure
+            elif screenshot_failure is not primary_error:
+                add_exception_notes(
+                    primary_error,
+                    "Android rendered screenshot collection also failed",
+                    screenshot_failure,
+                )
+
         if primary_error is not None:
             self._emit_progress(
                 "native-state",
@@ -1005,6 +1285,79 @@ class AndroidHostedAdapter:
             state="completed" if result.returncode == 0 else "failed",
         )
         return result
+
+    def _pull_rendered_screenshot(
+        self,
+        remote: str,
+        label: str,
+        deadline: float,
+        *,
+        expected_bytes: int,
+        expected_sha256: str,
+        expected_width: int,
+        expected_height: int,
+    ) -> Path:
+        """Pull one already-redacted frame and validate its full PNG."""
+
+        raw_directory = getattr(self.runner, "raw_directory", None)
+        if not isinstance(raw_directory, Path):
+            raise AndroidScreenshotCollectionError(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: hosted raw directory is unavailable"
+            )
+        match = _ANDROID_SCREENSHOT_PATH.fullmatch(remote)
+        if match is None or match.group(1) != label:
+            raise AndroidScreenshotCollectionError(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot path/label mismatch"
+            )
+        directory = raw_directory / "screenshots" / "android"
+        try:
+            _ensure_directory(directory)
+        except BaseException as error:
+            raise AndroidScreenshotCollectionError(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot directory unavailable"
+            ) from error
+        destination = directory / label
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AndroidScreenshotCollectionError(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot pull deadline expired"
+            )
+        try:
+            result = self._adb(
+                ("pull", remote, str(destination)),
+                min(2.0, remaining),
+                "ANDROID_SCREENSHOT_PULL_FAILED",
+                allow_nonzero=True,
+            )
+        except BaseException as error:
+            raise AndroidScreenshotCollectionError(
+                f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: pull failed for {label}"
+            ) from error
+        if result.returncode != 0:
+            raise AndroidScreenshotCollectionError(
+                f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: pull returned {result.returncode} for {label}"
+            )
+        try:
+            metadata = png_metadata(destination)
+            assert_marker_matches(
+                metadata,
+                bytes_count=expected_bytes,
+                sha256_value=expected_sha256,
+                width=expected_width,
+                height=expected_height,
+            )
+        except (ScreenshotIntegrityError, OSError) as error:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise AndroidScreenshotCollectionError(
+                    f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: invalid {label}; "
+                    f"cleanup also failed: {cleanup_error}"
+                ) from error
+            raise AndroidScreenshotCollectionError(
+                f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: invalid {label}: {error}"
+            ) from error
+        return destination
 
     def _raise_observation_error_if_present(
         self, output_name: str, deadline: float
@@ -1028,6 +1381,18 @@ class AndroidHostedAdapter:
         if not isinstance(value, Mapping):
             return
         error_code = value.get("error_code")
+        screenshot_error_code = value.get("screenshot_error_code")
+        if screenshot_error_code == "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED":
+            secondary = ScenarioExecutionError(screenshot_error_code)
+            if isinstance(error_code, str) and error_code:
+                primary = ScenarioExecutionError(error_code)
+                add_exception_notes(
+                    primary,
+                    "Android rendered screenshot collection also failed",
+                    secondary,
+                )
+                raise primary
+            raise secondary
         if isinstance(error_code, str) and error_code:
             raise ScenarioExecutionError(error_code)
 
@@ -1700,9 +2065,54 @@ interface=$4
 restore_needed=0
 restore_status=0
 restore_detail=
+capture_root="/data/local/tmp/dobbyvpn-uplink.$$"
+capture_sequence=0
+capture_file=
+capture_rc=0
+
+# Keep the complete combined stream of every probe in a private temporary
+# file, then copy that file to the adb stream before parsing it.  Command
+# substitution strips trailing newlines and the old implementation also
+# reduced Wi-Fi status to its first line before forwarding a failure.  The
+# parser may still read a first line or a state flag, but diagnostics always
+# receive the exact command stream.
+if ! (umask 077 && mkdir "$capture_root"); then
+    printf '%s\n' "DobbyVPN uplink capture setup failed: $capture_root" >&2
+    exit 18
+fi
+
+capture_command() {
+    capture_label=$1
+    shift
+    capture_sequence=$((capture_sequence + 1))
+    capture_file="$capture_root/$capture_sequence-$capture_label"
+    "$@" >"$capture_file" 2>&1
+    capture_rc=$?
+    printf '%s\n' "DobbyVPN uplink capture=$capture_label rc=$capture_rc"
+    cat "$capture_file"
+    printf '%s\n' "DobbyVPN uplink capture-end=$capture_label"
+    return 0
+}
+
+cleanup_captures() {
+    cleanup_output=$(rm -rf "$capture_root" 2>&1)
+    cleanup_rc=$?
+    if [ "$cleanup_rc" -ne 0 ]; then
+        printf '%s\n' "DobbyVPN uplink secondary code=ANDROID_UPLINK_CAPTURE_CLEANUP_FAILED rc=$cleanup_rc output=$cleanup_output" >&2
+    fi
+    return "$cleanup_rc"
+}
 
 link_is_up() {
     flags=$(printf '%s\n' "$1" | sed -n 's/^[0-9][0-9]*:[^:]*: <\([^>]*\)>.*/\1/p')
+    case ",$flags," in
+        *,UP,*) return 0 ;;
+    esac
+    return 1
+}
+
+link_is_up_file() {
+    flags=$(sed -n 's/^[0-9][0-9]*:[^:]*: <\([^>]*\)>.*/\1/p' "$1")
     case ",$flags," in
         *,UP,*) return 0 ;;
     esac
@@ -1729,26 +2139,48 @@ route_is_usable() {
     done <<EOF
 $1
 EOF
+[ "$selected" -eq 1 ] && [ "$usable" -eq 1 ]
+}
+
+route_is_usable_file() {
+    selected=0
+    usable=0
+    while IFS= read -r line; do
+        case "$line" in
+            default*)
+                case " $line " in
+                    *" dev $interface "*)
+                        selected=1
+                        case " $line " in
+                            *" linkdown "*) ;;
+                            *) usable=1 ;;
+                        esac
+                        ;;
+                esac
+                ;;
+        esac
+    done <"$1"
     [ "$selected" -eq 1 ] && [ "$usable" -eq 1 ]
 }
 
 wifi_state_is() {
-    wifi_status_output=$(cmd wifi status 2>&1)
-    wifi_state_rc=$?
-    wifi_state_output=$(printf '%s\n' "$wifi_status_output" | sed -n '1p')
+    capture_command wifi-status cmd wifi status
+    wifi_status_file=$capture_file
+    wifi_state_rc=$capture_rc
+    wifi_state_output=$(sed -n '1p' "$wifi_status_file")
     [ "$wifi_state_rc" -eq 0 ] && [ "$wifi_state_output" = "Wifi is $1" ]
 }
 
 network_state_is() {
     state=$1
-    link=$2
+    link_file=$2
     if [ "$state" = present ]; then
-        link_is_up "$link" || return 1
+        link_is_up_file "$link_file" || return 1
         [ "$transition_kind" != wifi ] || wifi_state_is enabled
     elif [ "$transition_kind" = wifi ]; then
         wifi_state_is disabled
     else
-        ! link_is_up "$link"
+        ! link_is_up_file "$link_file"
     fi
 }
 
@@ -1756,12 +2188,14 @@ restore_uplink() {
     [ "$restore_needed" -eq 1 ] || return 0
     if [ "$transition_kind" = wifi ]; then
         restore_command="svc wifi enable"
-        restore_output=$(svc wifi enable 2>&1)
+        capture_command restore svc wifi enable
     else
         restore_command="ip link set up"
-        restore_output=$(ip link set dev "$interface" up 2>&1)
+        capture_command restore ip link set dev "$interface" up
     fi
-    restore_rc=$?
+    restore_file=$capture_file
+    restore_rc=$capture_rc
+    restore_output=$(cat "$restore_file")
     if [ "$restore_rc" -ne 0 ]; then
         restore_status=1
         restore_detail="$restore_command rc=$restore_rc output=$restore_output"
@@ -1769,16 +2203,20 @@ restore_uplink() {
     fi
     restore_ready=0
     while [ "$(date +%s)" -lt "$overall_deadline" ]; do
-        restore_link=$(ip -o link show dev "$interface" 2>&1)
-        restore_link_rc=$?
-        restore_routes=$(ip -4 route show table all default 2>&1)
-        restore_routes_rc=$?
+        capture_command restore-link ip -o link show dev "$interface"
+        restore_link_file=$capture_file
+        restore_link_rc=$capture_rc
+        restore_link=$(cat "$restore_link_file")
+        capture_command restore-routes ip -4 route show table all default
+        restore_routes_file=$capture_file
+        restore_routes_rc=$capture_rc
+        restore_routes=$(cat "$restore_routes_file")
         if [ "$restore_link_rc" -ne 0 ] || [ "$restore_routes_rc" -ne 0 ]; then
             restore_status=1
             restore_detail="restore link rc=$restore_link_rc output=$restore_link; restore routes rc=$restore_routes_rc output=$restore_routes"
             return 0
         fi
-        if network_state_is present "$restore_link" && route_is_usable "$restore_routes"; then
+        if network_state_is present "$restore_link_file" && route_is_usable_file "$restore_routes_file"; then
             restore_ready=$((restore_ready + 1))
         else
             restore_ready=0
@@ -1805,6 +2243,11 @@ finish() {
         printf '%s\n' "DobbyVPN uplink secondary code=ANDROID_UPLINK_RESTORE_FAILED detail=$restore_detail" >&2
         [ "$exit_status" -eq 0 ] && exit_status=1
     fi
+    cleanup_captures
+    cleanup_status=$?
+    if [ "$cleanup_status" -ne 0 ] && [ "$exit_status" -eq 0 ]; then
+        exit_status=1
+    fi
     exit "$exit_status"
 }
 on_exit() {
@@ -1819,26 +2262,32 @@ trap 'on_signal 130' 2
 trap 'on_signal 131' 3
 trap 'on_signal 143' 15
 
-uid_output=$(id -u 2>&1)
-uid_rc=$?
+capture_command id-u id -u
+uid_file=$capture_file
+uid_rc=$capture_rc
+uid_output=$(cat "$uid_file")
 if [ "$uid_rc" -ne 0 ] || [ "$uid_output" != "0" ]; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_ROOT_REQUIRED detail=id -u rc=$uid_rc output=$uid_output" >&2
     exit 10
 fi
 
-route_output=$(ip -4 route show table all default 2>&1)
-route_rc=$?
+capture_command route ip -4 route show table all default
+route_file=$capture_file
+route_rc=$capture_rc
+route_output=$(cat "$route_file")
 if [ "$route_rc" -ne 0 ]; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_ROUTE_PROBE_FAILED detail=ip route rc=$route_rc output=$route_output" >&2
     exit 11
 fi
-before_link=$(ip -o link show dev "$interface" 2>&1)
-before_link_rc=$?
+capture_command link-before ip -o link show dev "$interface"
+before_link_file=$capture_file
+before_link_rc=$capture_rc
+before_link=$(cat "$before_link_file")
 if [ "$before_link_rc" -ne 0 ]; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_LINK_PROBE_FAILED detail=link rc=$before_link_rc output=$before_link" >&2
     exit 13
 fi
-if ! network_state_is present "$before_link" || ! route_is_usable "$route_output"; then
+if ! network_state_is present "$before_link_file" || ! route_is_usable_file "$route_file"; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PRECONDITION detail=link=$before_link; routes=$route_output" >&2
     exit 14
 fi
@@ -1848,12 +2297,14 @@ printf '%s\n' "DobbyVPN uplink interface=$interface state=present"
 restore_needed=1
 if [ "$transition_kind" = wifi ]; then
     down_command="svc wifi disable"
-    down_output=$(svc wifi disable 2>&1)
+    capture_command down svc wifi disable
 else
     down_command="ip link set down"
-    down_output=$(ip link set dev "$interface" down 2>&1)
+    capture_command down ip link set dev "$interface" down
 fi
-down_rc=$?
+down_file=$capture_file
+down_rc=$capture_rc
+down_output=$(cat "$down_file")
 if [ "$down_rc" -ne 0 ]; then
     printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_DOWN_FAILED detail=$down_command rc=$down_rc output=$down_output" >&2
     exit 15
@@ -1861,15 +2312,19 @@ fi
 
 absence=0
 while [ "$(date +%s)" -lt "$down_deadline" ]; do
-    down_link=$(ip -o link show dev "$interface" 2>&1)
-    down_link_rc=$?
-    down_routes=$(ip -4 route show table all default 2>&1)
-    down_routes_rc=$?
+    capture_command link-down ip -o link show dev "$interface"
+    down_link_file=$capture_file
+    down_link_rc=$capture_rc
+    down_link=$(cat "$down_link_file")
+    capture_command route-down ip -4 route show table all default
+    down_routes_file=$capture_file
+    down_routes_rc=$capture_rc
+    down_routes=$(cat "$down_routes_file")
     if [ "$down_link_rc" -ne 0 ] || [ "$down_routes_rc" -ne 0 ]; then
         printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PROBE_FAILED detail=link rc=$down_link_rc output=$down_link; routes rc=$down_routes_rc output=$down_routes" >&2
         exit 16
     fi
-    if network_state_is absent "$down_link" && ! route_is_usable "$down_routes"; then
+    if network_state_is absent "$down_link_file" && ! route_is_usable_file "$down_routes_file"; then
         absence=$((absence + 1))
     else
         absence=0

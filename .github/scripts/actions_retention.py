@@ -33,6 +33,28 @@ class Deletion:
     identifier: str
 
 
+@dataclass(frozen=True)
+class DeletionResult:
+    deletion: Deletion
+    outcome: str
+    stdout: str
+    stderr: str
+    error: str | None = None
+
+
+def _emit_streams(label: str, stdout: str, stderr: str) -> None:
+    def emit(destination: Any, stream_name: str, payload: str) -> None:
+        destination.write(f"[{label} {stream_name} begin]\n")
+        destination.write(payload)
+        if payload and not payload.endswith("\n"):
+            destination.write("\n")
+        destination.write(f"[{label} {stream_name} end]\n")
+        destination.flush()
+
+    emit(sys.stdout, "stdout", stdout)
+    emit(sys.stderr, "stderr", stderr)
+
+
 def _id(value: Any) -> str:
     return str(value)
 
@@ -89,6 +111,7 @@ def _gh_json(repository: str, endpoint: str) -> Any:
         errors="backslashreplace",
         check=False,
     )
+    _emit_streams("actions-retention list", result.stdout, result.stderr)
     if result.returncode:
         raise RetentionError(
             f"GitHub API listing failed (exit {result.returncode})\n"
@@ -116,6 +139,7 @@ def _gh_single_json(repository: str, endpoint: str) -> Any:
         errors="backslashreplace",
         check=False,
     )
+    _emit_streams("actions-retention list", result.stdout, result.stderr)
     if result.returncode:
         raise RetentionError(
             f"GitHub API listing failed (exit {result.returncode})\n"
@@ -195,7 +219,7 @@ def _completed_runs(repository: str) -> list[dict[str, Any]]:
     return list(runs.values())
 
 
-def _delete(repository: str, deletion: Deletion, *, verbose: bool = False) -> None:
+def _delete(repository: str, deletion: Deletion) -> DeletionResult:
     if deletion.kind == "run":
         endpoint = f"repos/{repository}/actions/runs/{deletion.identifier}"
     elif deletion.kind == "cache":
@@ -204,25 +228,48 @@ def _delete(repository: str, deletion: Deletion, *, verbose: bool = False) -> No
         endpoint = f"repos/{repository}/actions/artifacts/{deletion.identifier}"
     else:  # pragma: no cover - protected by constructors above
         raise RetentionError(f"unknown deletion kind: {deletion.kind}")
-    result = subprocess.run(
-        ["gh", "api", "--method", "DELETE", endpoint],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="backslashreplace",
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["gh", "api", "--method", "DELETE", endpoint],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="backslashreplace",
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return DeletionResult(
+            deletion,
+            "failed",
+            str(getattr(error, "stdout", "") or ""),
+            str(getattr(error, "stderr", "") or ""),
+            f"GitHub deletion could not complete for {deletion.kind} {deletion.identifier}: "
+            f"{type(error).__name__}: {error}",
+        )
     if result.returncode:
         combined = f"{result.stdout}\n{result.stderr}".lower()
         if "404" in combined or "not found" in combined or "already deleted" in combined:
-            if verbose:
-                print(f"retention: {deletion.kind} {deletion.identifier} was already deleted")
-            return
-        raise RetentionError(
+            return DeletionResult(deletion, "already-deleted", result.stdout, result.stderr)
+        return DeletionResult(
+            deletion,
+            "failed",
+            result.stdout,
+            result.stderr,
             f"GitHub deletion failed for {deletion.kind} {deletion.identifier} "
-            f"(exit {result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            f"(exit {result.returncode})",
         )
+    return DeletionResult(deletion, "deleted", result.stdout, result.stderr)
+
+
+def _print_deletion_result(result: DeletionResult) -> None:
+    deletion = result.deletion
+    print(f"retention: {result.outcome} {deletion.kind} {deletion.identifier}")
+    _emit_streams(
+        f"retention {deletion.kind} {deletion.identifier}",
+        result.stdout,
+        result.stderr,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -233,11 +280,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delete-intermediate-artifacts", action="store_true")
     parser.add_argument("--keep-artifact", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument(
-        "--verbose-deletions",
-        action="store_true",
-        help="print each successful deletion (normally only the final summary is printed)",
-    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -269,30 +311,32 @@ def main(argv: list[str] | None = None) -> int:
             )
         failures: list[str] = []
         attempted = len(deletions)
-        if args.verbose_deletions:
-            action = "would delete" if args.dry_run else "deleting"
+        if args.dry_run:
+            action = "would delete"
             for deletion in deletions:
-                print(f"retention: {action} {deletion.kind} {deletion.identifier}")
+                _print_deletion_result(DeletionResult(deletion, action, "", ""))
         if not args.dry_run:
+            completed: dict[Deletion, DeletionResult] = {}
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 futures = {
-                    executor.submit(
-                        _delete,
-                        args.repository,
-                        deletion,
-                        verbose=args.verbose_deletions,
-                    ): deletion
+                    executor.submit(_delete, args.repository, deletion): deletion
                     for deletion in deletions
                 }
                 for future in as_completed(futures):
                     deletion = futures[future]
                     try:
-                        future.result()
+                        completed[deletion] = future.result()
                     except Exception as error:
                         failures.append(
                             f"{deletion.kind} {deletion.identifier}: "
                             f"{type(error).__name__}: {error}"
                         )
+            for deletion in deletions:
+                result = completed.get(deletion)
+                if result is not None:
+                    _print_deletion_result(result)
+                    if result.error is not None:
+                        failures.append(result.error)
         if failures:
             raise RetentionError(";\n".join(failures))
         action = "would delete" if args.dry_run else "processed"

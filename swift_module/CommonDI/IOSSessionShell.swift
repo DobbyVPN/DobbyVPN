@@ -2,6 +2,10 @@ import Foundation
 
 /// Containing-app side of the iOS session bridge. Go in the provider owns state.
 public final class IOSSessionShell: NSObject {
+    internal enum ProviderPayloadError: Error, Equatable {
+        case invalidUTF8(hex: String)
+    }
+
     private let secrets = SharedKeychainSecretStore.shared
     private let manager: VpnManagerImpl
     private let logs = IOSAppCompositionRoot.logsRepository
@@ -116,8 +120,20 @@ public final class IOSSessionShell: NSObject {
                 manager.sendProviderMessage(bytes),
                 expectedRequestID: requestID
             )
-            guard let response = String(data: providerResponse.payload, encoding: .utf8) else {
-                throw IOSProviderMessageError.malformed
+            // The provider envelope preserves exact bytes, but Go's C bridge
+            // accepts UTF-8 text. Never feed replacement characters to Go:
+            // malformed protocol data is a transport failure, and the full
+            // byte sequence is retained reversibly in the native diagnostic.
+            let response: String
+            do {
+                response = try Self.decodeProviderPayload(providerResponse.payload)
+            } catch let error as ProviderPayloadError {
+                if case let .invalidUTF8(hex) = error {
+                    logs.writeLog(
+                        log: "iOS session provider response contained invalid UTF-8 bytes_hex=\(hex)"
+                    )
+                }
+                return (failure("INTERNAL", message: "iOS session provider response was not valid UTF-8"), false)
             }
             return (response, providerResponse.kind == .go)
         } catch {
@@ -128,6 +144,13 @@ public final class IOSSessionShell: NSObject {
 
     private func requestID(for operation: IOSProviderOperation) -> String {
         "ios-\(operation.rawValue)-\(UUID().uuidString)"
+    }
+
+    internal static func decodeProviderPayload(_ payload: Data) throws -> String {
+        guard let response = String(data: payload, encoding: .utf8) else {
+            throw ProviderPayloadError.invalidUTF8(hex: payload.map { String(format: "%02x", $0) }.joined())
+        }
+        return response
     }
 
     private func failure(_ code: String, message: String) -> String {

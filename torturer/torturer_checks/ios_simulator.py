@@ -58,6 +58,15 @@ def simctl_terminate_command(device_udid: str, bundle_identifier: str) -> list[s
     return ["xcrun", "simctl", "terminate", _validate_udid(device_udid), bundle_identifier]
 
 
+def simctl_get_app_container_command(device_udid: str, bundle_identifier: str) -> list[str]:
+    """Resolve the host path of an installed app's data container."""
+    _validate_bundle_identifier(bundle_identifier)
+    return [
+        "xcrun", "simctl", "get_app_container", _validate_udid(device_udid),
+        bundle_identifier, "data",
+    ]
+
+
 def iphonesimulator_sdk_version_command() -> list[str]:
     """Resolve the active iPhone Simulator SDK version without a shell."""
     return ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]
@@ -67,14 +76,22 @@ def xcodebuild_ui_test_command(
     device_udid: str,
     project: str | Path,
     derived_data: str | Path,
+    result_bundle: str | Path | None = None,
 ) -> list[str]:
-    """Run the unsigned XCTest UI target against the already-installed app."""
+    """Run XCTest and export its diagnostics/attachments to one owned bundle."""
     app_project = Path(project)
     if app_project.suffix != ".xcodeproj":
         raise IOSSimulatorContractError("iOS UI test project must end in .xcodeproj")
     data_path = Path(derived_data)
     if not str(data_path):
         raise IOSSimulatorContractError("iOS UI test derived-data path is required")
+    result_path = (
+        Path(result_bundle)
+        if result_bundle is not None
+        else data_path.parent / "xctest-results.xcresult"
+    )
+    if result_path.suffix != ".xcresult":
+        raise IOSSimulatorContractError("iOS UI test result bundle must end in .xcresult")
     udid = _validate_udid(device_udid)
     return [
         "xcodebuild",
@@ -84,6 +101,7 @@ def xcodebuild_ui_test_command(
         "-sdk", "iphonesimulator",
         "-destination", f"platform=iOS Simulator,id={udid}",
         "-derivedDataPath", str(data_path),
+        "-resultBundlePath", str(result_path),
         "-parallel-testing-enabled", "NO",
         "-only-testing:iosAppUITests/GoFyneUIInteractionTests",
         # Simulator XCTest runners need an installable code signature, but

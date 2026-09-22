@@ -55,7 +55,17 @@ jobs:
           echo "$gopath/bin" >> "$GITHUB_PATH"
           for tool in gomobile gobind; do
             test -x "$gopath/bin/$tool"
-            go version -m "$gopath/bin/$tool" | grep -F "$mobile_version" >/dev/null
+            metadata_stdout="$RUNNER_TEMP/$tool-version.stdout"
+            metadata_stderr="$RUNNER_TEMP/$tool-version.stderr"
+            set +e
+            go version -m "$gopath/bin/$tool" >"$metadata_stdout" 2>"$metadata_stderr"
+            metadata_status=$?
+            set -e
+            cat "$metadata_stdout"
+            cat "$metadata_stderr" >&2
+            test "$metadata_status" -eq 0
+            tool_metadata="$(cat "$metadata_stdout")"
+            [[ "$tool_metadata" == *"$mobile_version"* ]]
           done
 
       - name: Verify pinned Go mobile runtime dependency

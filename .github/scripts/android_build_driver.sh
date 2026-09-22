@@ -64,19 +64,6 @@ dependency_helper="$source_root/.github/scripts/android_dependency_provenance.py
 source_verifier="$source_root/.github/scripts/verify_android_apk_source.py"
 reproducibility_verifier="$source_root/.github/scripts/verify_android_reproducibility.py"
 
-evidence_dir=${DOBBYVPN_BUILD_EVIDENCE_DIR:-}
-stdout_original=''
-stderr_original=''
-start_evidence_capture() {
-  [[ -n "$evidence_dir" ]] || return 0
-  mkdir -p -- "$evidence_dir"
-  stdout_original="$evidence_dir/stdout.original.log"
-  stderr_original="$evidence_dir/stderr.original.log"
-  : > "$stdout_original"
-  : > "$stderr_original"
-  exec > >(tee -- "$stdout_original") 2> >(tee -- "$stderr_original" >&2)
-}
-
 # Keep Java's stderr in both the normal diagnostic stream and the command
 # substitution used to read its version.
 tee_stderr() {
@@ -89,8 +76,8 @@ gradle_bin=${GRADLE_BIN:-"$source_root/android_module/gradlew"}
 validate_source_checkout() {
   local root=$1
   local expected_commit=${2:-}
-  local observed_commit
-  observed_commit=$("$git_bin" -C "$root" rev-parse --verify HEAD^{commit})
+  local observed_commit untracked
+  observed_commit=$("$git_bin" -C "$root" rev-parse --verify HEAD^{commit} | tee_stderr)
   [[ "$observed_commit" =~ ^[0-9a-f]{40}$ ]] || {
     echo "source checkout did not yield a canonical Git commit: $root" >&2
     exit 2
@@ -99,21 +86,20 @@ validate_source_checkout() {
     echo "source checkout commit changed: expected $expected_commit got $observed_commit" >&2
     exit 2
   fi
-  "$git_bin" -C "$root" diff --quiet --no-ext-diff HEAD -- || {
+  "$git_bin" -C "$root" diff --exit-code --no-ext-diff HEAD -- || {
     echo "source checkout has tracked worktree modifications: $root" >&2
     exit 2
   }
-  "$git_bin" -C "$root" diff --cached --quiet --no-ext-diff HEAD -- || {
+  "$git_bin" -C "$root" diff --cached --exit-code --no-ext-diff HEAD -- || {
     echo "source checkout has staged modifications: $root" >&2
     exit 2
   }
-  [[ -z $("$git_bin" -C "$root" ls-files --others --exclude-standard) ]] || {
+  untracked=$("$git_bin" -C "$root" ls-files --others --exclude-standard | tee_stderr)
+  [[ -z "$untracked" ]] || {
     echo "source checkout has unexpected untracked files: $root" >&2
     exit 2
   }
 }
-
-start_evidence_capture
 
 if [[ "$local_build" == 1 ]]; then
   # Local builds are disposable, not release provenance claims.
@@ -121,8 +107,8 @@ if [[ "$local_build" == 1 ]]; then
   source_commit_link=''
 else
   validate_source_checkout "$source_root" "$source_sha"
-  source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
-  source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
+  source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit} | tee_stderr)
+  source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree} | tee_stderr)
   source_commit_link="https://github.com/$source_repository/tree/$source_commit"
 fi
 [[ -f "$dependency_helper" && -f "$dependency_spec" && -f "$source_verifier" && -f "$reproducibility_verifier" ]] || {
@@ -144,6 +130,7 @@ if [[ -n "$gradle_archive" ]]; then
 fi
 [[ -x "$gradle_bin" ]] || { echo "Gradle entry point is not executable: $gradle_bin" >&2; exit 2; }
 
+cat "$source_root/android_module/gradle.properties" >&2
 version_name=$(sed -n 's/^versionName=//p' "$source_root/android_module/gradle.properties")
 version_code=$(sed -n 's/^versionCode=//p' "$source_root/android_module/gradle.properties")
 [[ "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$version_code" =~ ^[1-9][0-9]*$ ]] || {
@@ -160,21 +147,24 @@ go_path=${GOPATH:-}
 unset GOROOT
 export GOPATH="$go_path" GOFLAGS='-trimpath -buildvcs=false' GOTOOLCHAIN='local'
 expected_go_version="go$(tr -d '[:space:]' < "$source_root/.go-version")"
-[[ "$($go_bin env GOVERSION)" == "$expected_go_version" ]] || { echo 'Go version does not match .go-version' >&2; exit 2; }
-go_root="$($go_bin env GOROOT)"
-[[ -d "$go_root" && "$($go_bin env GOPATH)" == "$GOPATH" ]] || {
+go_version=$("$go_bin" env GOVERSION | tee_stderr)
+[[ "$go_version" == "$expected_go_version" ]] || { echo 'Go version does not match .go-version' >&2; exit 2; }
+go_root=$("$go_bin" env GOROOT | tee_stderr)
+selected_go_path=$("$go_bin" env GOPATH | tee_stderr)
+[[ -d "$go_root" && "$selected_go_path" == "$GOPATH" ]] || {
   echo 'Go environment does not match the selected tool inputs' >&2
   exit 2
 }
 
-mobile_pin=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-mobile-version)
+mobile_pin=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-mobile-version | tee_stderr)
 mobile_module=${mobile_pin%@*}
 mobile_version=${mobile_pin#*@}
 [[ "$mobile_module" == 'golang.org/x/mobile' && "$mobile_version" == 'v0.0.0-20260520154334-0e4426e1883d' ]] || {
   echo 'dependency specification yielded an unexpected x/mobile pin' >&2
   exit 2
 }
-[[ "$(cd "$source_root/go_module" && "$go_bin" list -m -f '{{.Version}}' golang.org/x/mobile)" == "$mobile_version" ]] || {
+observed_mobile_version=$(cd "$source_root/go_module" && "$go_bin" list -m -f '{{.Version}}' golang.org/x/mobile | tee_stderr)
+[[ "$observed_mobile_version" == "$mobile_version" ]] || {
   echo 'Go module graph is not pinned to the approved x/mobile revision' >&2
   exit 2
 }
@@ -187,7 +177,9 @@ mobile_version=${mobile_pin#*@}
   echo 'Android NDK 27.3.13750724 is required' >&2
   exit 2
 }
-grep -F 'Pkg.Revision = 27.3.13750724' "$ANDROID_NDK_HOME/source.properties" >/dev/null || {
+ndk_properties="$(cat "$ANDROID_NDK_HOME/source.properties")"
+printf '%s\n' "$ndk_properties"
+[[ "$ndk_properties" == *'Pkg.Revision = 27.3.13750724'* ]] || {
   echo 'Android NDK revision is not 27.3.13750724' >&2
   exit 2
 }
@@ -225,17 +217,17 @@ done <<< "$java_version_output"
 [[ "$java_version" == 17.* ]] || { echo "Java runtime must have major version 17; observed $java_version" >&2; exit 2; }
 
 verify_source_integrity_after_build() {
-  observed_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit})
-  observed_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree})
+  observed_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit} | tee_stderr)
+  observed_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree} | tee_stderr)
   [[ "$observed_commit" == "$source_commit" && "$observed_tree" == "$source_tree" ]] || {
     echo 'source Git tree identity changed during the Android build' >&2
     exit 2
   }
-  "$git_bin" -C "$source_root" diff --quiet --no-ext-diff HEAD -- || {
+  "$git_bin" -C "$source_root" diff --exit-code --no-ext-diff HEAD -- || {
     echo 'Android build modified tracked source files' >&2
     exit 2
   }
-  "$git_bin" -C "$source_root" diff --cached --quiet --no-ext-diff HEAD -- || {
+  "$git_bin" -C "$source_root" diff --cached --exit-code --no-ext-diff HEAD -- || {
     echo 'Android build staged source modifications' >&2
     exit 2
   }
@@ -305,7 +297,15 @@ python3 "$source_verifier" "${source_verifier_args[@]}"
 # renderer/service build with no unresolved native bridge dependency.
 readelf_bin=${ANDROID_READELF:-}
 if [[ -z "$readelf_bin" ]]; then
-  ndk_toolchain=$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print -quit)
+  mapfile -t ndk_toolchains < <(
+    find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print
+  )
+  printf '%s\n' "${ndk_toolchains[@]}" >&2
+  [[ "${#ndk_toolchains[@]}" -eq 1 ]] || {
+    echo 'Android NDK must contain exactly one host toolchain' >&2
+    exit 2
+  }
+  ndk_toolchain=${ndk_toolchains[0]}
   readelf_bin="$ndk_toolchain/bin/llvm-readelf"
 fi
 [[ -x "$readelf_bin" ]] || { echo "Android NDK llvm-readelf is required: $readelf_bin" >&2; exit 2; }

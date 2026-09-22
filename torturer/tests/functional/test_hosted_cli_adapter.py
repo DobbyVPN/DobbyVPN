@@ -1639,7 +1639,7 @@ class HostedCLIAdapterTests(unittest.TestCase):
 
     def test_linux_process_stat_probe_rechecks_a_vanished_proc_record(self) -> None:
         failed_read = _LINUX_PROCESS_STAT_SCRIPT.index(
-            'if ! record=$(cat "$path" 2>/dev/null); then'
+            'if ! record=$(cat "$path"); then'
         )
         vanished = _LINUX_PROCESS_STAT_SCRIPT.index(
             'if [ ! -e "$path" ]; then', failed_read

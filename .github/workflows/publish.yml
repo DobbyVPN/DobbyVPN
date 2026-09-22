@@ -41,31 +41,52 @@ jobs:
           RELEASE_RUN_ID: ${{ inputs.release_run_id }}
         run: |
           set -euo pipefail
+          capture_gh() {
+            local label=$1 status
+            shift
+            CAPTURED_GH_STDOUT="$RUNNER_TEMP/$label.stdout"
+            local stderr_file="$RUNNER_TEMP/$label.stderr"
+            set +e
+            gh "$@" >"$CAPTURED_GH_STDOUT" 2>"$stderr_file"
+            status=$?
+            set -e
+            printf '[gh %s stdout begin]\n' "$label" >&2
+            cat "$CAPTURED_GH_STDOUT" >&2
+            printf '[gh %s stdout end]\n' "$label" >&2
+            printf '[gh %s stderr begin]\n' "$label" >&2
+            cat "$stderr_file" >&2
+            printf '[gh %s stderr end]\n' "$label" >&2
+            return "$status"
+          }
           [[ "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]]
           test "$GITHUB_REF" = refs/heads/main
-          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID")"
-          release_workflow_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml" --jq .id)"
-          test "$(jq -r .workflow_id <<<"$run")" = "$release_workflow_id"
-          test "$(jq -r .head_branch <<<"$run")" = main
-          test "$(jq -r .event <<<"$run")" = workflow_dispatch
-          test "$(jq -r .status <<<"$run")" = completed
-          test "$(jq -r .conclusion <<<"$run")" = success
-          completed_runs="$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/runs?status=completed&per_page=100" \
-            --jq '.workflow_runs[] | .id')"
+          capture_gh release-run api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID"
+          run_file=$CAPTURED_GH_STDOUT
+          capture_gh release-workflow api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml"
+          release_workflow_file=$CAPTURED_GH_STDOUT
+          release_workflow_id="$(jq -r .id "$release_workflow_file")"
+          test "$(jq -r .workflow_id "$run_file")" = "$release_workflow_id"
+          test "$(jq -r .head_branch "$run_file")" = main
+          test "$(jq -r .event "$run_file")" = workflow_dispatch
+          test "$(jq -r .status "$run_file")" = completed
+          test "$(jq -r .conclusion "$run_file")" = success
+          capture_gh completed-runs api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs?status=completed&per_page=100"
+          completed_runs="$(jq -sr '.[] | .workflow_runs[] | .id' "$CAPTURED_GH_STDOUT")"
           latest_completed_run="${completed_runs%%$'\n'*}"
           test "$latest_completed_run" = "$RELEASE_RUN_ID"
-          if [[ "$(jq -r .run_attempt <<<"$run")" != "1" ]]; then
+          if [[ "$(jq -r .run_attempt "$run_file")" != "1" ]]; then
             echo "Release run $RELEASE_RUN_ID was retried; dispatch and qualify a fresh Release run before publishing." >&2
             exit 1
           fi
-          source_sha="$(jq -r .head_sha <<<"$run")"
-          release_run_number="$(jq -r .run_number <<<"$run")"
+          source_sha="$(jq -r .head_sha "$run_file")"
+          release_run_number="$(jq -r .run_number "$run_file")"
           [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
 
-          artifact_names="$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.expired == false) | .name' | sort -u)"
+          capture_gh release-artifacts api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100"
+          artifact_names="$(jq -sr '.[] | .artifacts[] | select(.expired == false) | .name' \
+            "$CAPTURED_GH_STDOUT" | sort -u)"
           for name in \
             DobbyVPN.ipa \
             dobbyVPN-linux.deb \
@@ -98,26 +119,45 @@ jobs:
           SOURCE_SHA: ${{ steps.run.outputs.source_sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          capture_gh() {
+            local label=$1 status
+            shift
+            CAPTURED_GH_STDOUT="$RUNNER_TEMP/$label.stdout"
+            local stderr_file="$RUNNER_TEMP/$label.stderr"
+            set +e
+            gh "$@" >"$CAPTURED_GH_STDOUT" 2>"$stderr_file"
+            status=$?
+            set -e
+            printf '[gh %s stdout begin]\n' "$label" >&2
+            cat "$CAPTURED_GH_STDOUT" >&2
+            printf '[gh %s stdout end]\n' "$label" >&2
+            printf '[gh %s stderr begin]\n' "$label" >&2
+            cat "$stderr_file" >&2
+            printf '[gh %s stderr end]\n' "$label" >&2
+            return "$status"
+          }
+          test "$(git rev-parse HEAD | tee /dev/stderr)" = "$SOURCE_SHA"
           python3 .github/scripts/version_metadata.py --version-file VERSION --github-output "$GITHUB_OUTPUT"
-          version_name="$(python3 .github/scripts/version_metadata.py --version-file VERSION --field version_name)"
+          version_name="$(python3 .github/scripts/version_metadata.py \
+            --version-file VERSION --field version_name | tee /dev/stderr)"
           tag="v$version_name"
           tag_ref="refs/tags/$tag"
-          tag_record="$(gh api --paginate \
-            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" | \
-            jq -sc --arg ref "$tag_ref" '
+          capture_gh matching-tag-refs api --paginate \
+            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag"
+          tag_record="$(jq -sc --arg ref "$tag_ref" '
               [.[][] | select(.ref == $ref)] |
               if length == 0 then empty
               elif length == 1 then .[0]
               else error("duplicate exact tag refs")
-              end')"
+              end' "$CAPTURED_GH_STDOUT")"
           if [[ -n "$tag_record" ]]; then
             object_type="$(jq -r .object.type <<<"$tag_record")"
             object_sha="$(jq -r .object.sha <<<"$tag_record")"
             while [[ "$object_type" == tag ]]; do
-              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
-              object_type="$(jq -r .object.type <<<"$tag_object")"
-              object_sha="$(jq -r .object.sha <<<"$tag_object")"
+              capture_gh "tag-object-$object_sha" api \
+                "repos/$GITHUB_REPOSITORY/git/tags/$object_sha"
+              object_type="$(jq -r .object.type "$CAPTURED_GH_STDOUT")"
+              object_sha="$(jq -r .object.sha "$CAPTURED_GH_STDOUT")"
             done
             test "$object_type" = commit
             if [[ "$object_sha" != "$SOURCE_SHA" ]]; then
@@ -340,9 +380,18 @@ jobs:
           python3 .github/scripts/verify_android_apk_source.py \
             --apk "$signed" --apk "$unsigned" \
             --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
+          signer_stdout="$RUNNER_TEMP/publish-apksigner.stdout"
+          signer_stderr="$RUNNER_TEMP/publish-apksigner.stderr"
+          set +e
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" \
+            >"$signer_stdout" 2>"$signer_stderr"
+          signer_status=$?
+          set -e
+          cat "$signer_stdout"
+          cat "$signer_stderr" >&2
+          test "$signer_status" -eq 0
           mapfile -t signer_digests < <(
-            "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" |
-              sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p'
+            sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' "$signer_stdout"
           )
           test "${#signer_digests[@]}" -eq 1
           test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
@@ -374,7 +423,12 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$RELEASE_VERSION"
-          if gh release view "$tag" >/dev/null 2>&1; then
+          set +e
+          release_view="$(gh release view "$tag" 2>&1)"
+          release_view_status=$?
+          set -e
+          printf '%s\n' "$release_view"
+          if [ "$release_view_status" -eq 0 ]; then
             echo "GitHub Release $tag already exists; checking it against the selected Release run."
             mkdir "$RUNNER_TEMP/existing-release"
             gh release download "$tag" --dir "$RUNNER_TEMP/existing-release"
@@ -391,7 +445,12 @@ jobs:
               --asset version.txt
             exit 0
           fi
-          if git show-ref --verify --quiet "refs/tags/$tag"; then
+          set +e
+          tag_record="$(git show-ref --verify "refs/tags/$tag" 2>&1)"
+          tag_status=$?
+          set -e
+          printf '%s\n' "$tag_record"
+          if [ "$tag_status" -eq 0 ]; then
             test "$(git rev-list -n1 "$tag^{commit}")" = "$RELEASE_SOURCE_SHA"
           else
             git config user.name github-actions[bot]

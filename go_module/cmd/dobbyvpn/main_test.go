@@ -212,7 +212,7 @@ func TestFreshCurrentLogLeavesLegacyLogUntouched(t *testing.T) {
 	}
 }
 
-func TestClearLocalLogFileRemovesHistoryAndWritesBoundaryMarker(t *testing.T) {
+func TestClearLocalLogFilePreservesHistoryAndWritesBoundaryMarker(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Chmod(home, 0o700); err != nil {
 		t.Fatal(err)
@@ -231,8 +231,9 @@ func TestClearLocalLogFileRemovesHistoryAndWritesBoundaryMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != localLogClearMarker {
-		t.Fatalf("cleared log = %q, want marker %q", data, localLogClearMarker)
+	want := "old diagnostic\n" + localLogClearMarker
+	if string(data) != want {
+		t.Fatalf("cleared log = %q, want preserved history plus marker %q", data, want)
 	}
 }
 
@@ -305,8 +306,9 @@ func TestLogsClearDoesNotRequireControlService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != localLogClearMarker {
-		t.Fatalf("logs clear wrote %q, want marker %q", data, localLogClearMarker)
+	want := "old application diagnostic\n" + localLogClearMarker
+	if string(data) != want {
+		t.Fatalf("logs clear wrote %q, want preserved history plus marker %q", data, want)
 	}
 }
 

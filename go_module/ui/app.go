@@ -166,7 +166,7 @@ type ConnectionView struct {
 	Input     *AccessibleEntry
 	Connect   *AccessibleButton
 	Status    *widget.Label
-	Details   *widget.Label
+	Details   *AccessibleLabel
 	Logs      *AccessibleEntry
 	Export    *widget.Button
 	ClearLogs *widget.Button
@@ -253,7 +253,7 @@ func newConnectionView(client SessionClient, exporter LogExporter, diagnostics D
 
 	view.Connect = NewAccessibleButton(nativeActionLabel, "Connect")
 	view.Status = widget.NewLabel(statusDisconnected)
-	view.Details = widget.NewLabel("")
+	view.Details = newAccessibleLabel("Connection details")
 	view.Details.Wrapping = fyne.TextWrapWord
 	view.Logs = NewAccessibleEntry(true, "Connection logs")
 	view.Logs.SetMinRowsVisible(6)
@@ -401,6 +401,40 @@ func (b *AccessibleButton) AccessibilityLabel() string { return b.label }
 func (e *AccessibleEntry) AccessibilityLabel() string { return e.label }
 func (e *AccessibleEntry) AccessibilityRole() fyne.AccessibleRole {
 	return fyne.AccessibleRoleText
+}
+
+// AccessibleLabel gives dynamic diagnostic text a stable, non-sensitive
+// accessibility identity.  Native screenshot collectors use this identity
+// to mask the complete widget bounds; exposing the changing details text as
+// the label would make both the selector and the mask unstable.
+type AccessibleLabel struct {
+	*widget.Label
+	label string
+}
+
+func newAccessibleLabel(label string) *AccessibleLabel {
+	view := &AccessibleLabel{
+		// Keep one line in the layout even while there is no diagnostic. The
+		// native screenshot mask must have a stable, non-empty full widget
+		// bounds before the first failure text is rendered.
+		Label: &widget.Label{Text: " "},
+		label: label,
+	}
+	view.Label.ExtendBaseWidget(view)
+	return view
+}
+
+func (l *AccessibleLabel) AccessibilityLabel() string { return l.label }
+
+func (l *AccessibleLabel) AccessibilityRole() fyne.AccessibleRole {
+	return fyne.AccessibleRoleText
+}
+
+func (l *AccessibleLabel) SetText(text string) {
+	if text == "" {
+		text = " "
+	}
+	l.Label.SetText(text)
 }
 
 // SetText clears any private staged source before applying a normal programmatic
@@ -744,19 +778,37 @@ func (v *ConnectionView) toggleWithPresentation(synchronous bool) {
 func (v *ConnectionView) exportLogs() {
 	v.mu.Lock()
 	exporter := v.exporter
-	snapshot := v.snapshot
 	lines := append([]string(nil), v.exportLines...)
 	loaded := v.diagnosticsLoaded
+	diagnosticError := v.diagnosticError
 	ctx := v.ctx
 	v.mu.Unlock()
 	if exporter == nil {
+		return
+	}
+	// A recovered prefix/tail is useful for the visible UI, but it is not a
+	// complete support export. Do not hand a platform share/save adapter a
+	// partial history while the DiagnosticStore is reporting a read failure.
+	if diagnosticError != "" {
+		v.setDiagnosticError(fmt.Errorf(
+			"LOCAL_LOG_EXPORT_UNAVAILABLE: complete diagnostics could not be exported: %s",
+			diagnosticError,
+		))
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if !loaded {
-		lines = snapshotLogLines(snapshot)
+		// A session snapshot is intentionally not a diagnostic export. It can
+		// contain only the current warning/failure prefix while the retained
+		// store is still loading, so exporting it would silently discard the
+		// rest of the history. Let the user retry after the serial store read
+		// completes instead of manufacturing a partial archive.
+		v.setDiagnosticError(fmt.Errorf(
+			"LOCAL_LOG_EXPORT_UNAVAILABLE: complete diagnostics are still loading",
+		))
+		return
 	}
 	if err := exporter.Export(ctx, lines); err != nil {
 		v.setDiagnosticError(err)

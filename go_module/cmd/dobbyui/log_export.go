@@ -5,6 +5,7 @@ package main
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -73,9 +74,13 @@ func writeGzip(destination io.Writer, payload string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(archive, payload); err != nil {
-		_ = archive.Close()
-		return err
+	_, writeErr := io.WriteString(archive, payload)
+	closeErr := archive.Close()
+	if writeErr != nil && closeErr != nil {
+		return errors.Join(writeErr, closeErr)
 	}
-	return archive.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }

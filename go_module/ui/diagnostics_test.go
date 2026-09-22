@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,50 @@ func TestFileDiagnosticStoreMergesAndBoundsHistory(t *testing.T) {
 	}
 }
 
+func TestFileDiagnosticStoreReadsRecordsLargerThanFormerScannerLimit(t *testing.T) {
+	root := t.TempDir()
+	primary := filepath.Join(root, "app_logs.txt")
+	largeMessage := strings.Repeat("large-diagnostic ", 350000)
+	contents := diagnosticEvent(t, "2026-09-19T10:00:00.000Z", "go", "status.snapshot", largeMessage)
+	contents += diagnosticEvent(t, "2026-09-19T10:00:01.000Z", "go", "status.snapshot", "complete-after-large-record")
+	writeDiagnosticFile(t, primary, contents)
+
+	history, err := newFileDiagnosticStore(primary).Read(context.Background())
+	if err != nil {
+		t.Fatalf("read oversized diagnostic history: %v", err)
+	}
+	if len(history.ExportLines) != 2 {
+		t.Fatalf("export line count = %d, want 2", len(history.ExportLines))
+	}
+	if !strings.Contains(history.ExportLines[0], largeMessage) {
+		t.Fatal("oversized diagnostic record was not retained completely")
+	}
+	if !strings.Contains(history.ExportLines[1], "complete-after-large-record") {
+		t.Fatal("record after oversized diagnostic was lost")
+	}
+}
+
+func TestFileDiagnosticStoreExportPreservesBlankCRLFAndUnterminatedLines(t *testing.T) {
+	root := t.TempDir()
+	primary := filepath.Join(root, "app_logs.txt")
+	// The UI may ignore the blank line, but the dedicated export must retain
+	// its position and the CR byte. The final record intentionally has no LF.
+	raw := "first\r\n\n  \r\nlast-without-newline"
+	writeDiagnosticFile(t, primary, raw)
+
+	history, err := newFileDiagnosticStore(primary).Read(context.Background())
+	if err != nil {
+		t.Fatalf("read raw diagnostic history: %v", err)
+	}
+	want := []string{"first\r", "", "  \r", "last-without-newline"}
+	if !reflect.DeepEqual(history.ExportLines, want) {
+		t.Fatalf("export lines = %#v, want %#v", history.ExportLines, want)
+	}
+	if len(history.UILines) != 2 {
+		t.Fatalf("UI lines = %#v, want only nonblank records", history.UILines)
+	}
+}
+
 func TestFileDiagnosticStoreClearKeepsProducerAndHidesOlderRecords(t *testing.T) {
 	root := t.TempDir()
 	primary := filepath.Join(root, "app_logs.txt")
@@ -94,14 +139,21 @@ func TestFileDiagnosticStoreClearKeepsProducerAndHidesOlderRecords(t *testing.T)
 	if len(history.UILines) != 1 || !strings.Contains(history.UILines[0], "producer-after-clear") {
 		t.Fatalf("visible history after clear = %q, want only newer producer event", history.UILines)
 	}
-	if strings.Contains(raw, "before-clear") || strings.Contains(raw, "producer-before-clear") {
-		t.Fatalf("clear retained an older record: %s", raw)
+	if !strings.Contains(raw, "before-clear") || !strings.Contains(raw, "producer-before-clear") {
+		t.Fatalf("complete export lost pre-clear records: %s", raw)
 	}
 	if !strings.Contains(raw, "Earlier diagnostic events were cleared from this view") {
 		t.Fatalf("clear marker missing from retained export: %s", raw)
 	}
 	if !strings.Contains(raw, "producer-after-clear") {
 		t.Fatalf("new producer record missing after clear: %s", raw)
+	}
+	primaryRaw, err := os.ReadFile(primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(primaryRaw), "before-clear") || !strings.Contains(string(primaryRaw), "Earlier diagnostic events were cleared from this view") {
+		t.Fatalf("clear rewrote or lost primary history: %q", primaryRaw)
 	}
 	producerRaw, err := os.ReadFile(service)
 	if err != nil {
@@ -127,6 +179,9 @@ func TestFileDiagnosticStoreClearHidesLegacyProducerLines(t *testing.T) {
 	}
 	if len(history.UILines) != 0 {
 		t.Fatalf("legacy producer history remained visible after clear: %q", history.UILines)
+	}
+	if !strings.Contains(strings.Join(history.ExportLines, "\n"), "legacy native line") {
+		t.Fatal("complete export lost legacy producer history")
 	}
 	contents, err := os.ReadFile(producer)
 	if err != nil {
@@ -154,11 +209,14 @@ func TestFileDiagnosticStoreClearOrdersMixedRFC3339PrecisionChronologically(t *t
 		t.Fatalf("read mixed-precision history: %v", err)
 	}
 	raw := strings.Join(history.ExportLines, "\n")
-	if strings.Contains(raw, "before-same-second") {
-		t.Fatalf("pre-clear whole-second record leaked after fractional marker: %s", raw)
+	if !strings.Contains(raw, "before-same-second") {
+		t.Fatalf("complete export lost pre-clear whole-second record: %s", raw)
 	}
 	if !strings.Contains(raw, "after-same-second") {
 		t.Fatalf("post-clear mixed-precision record is missing: %s", raw)
+	}
+	if len(history.UILines) != 1 || !strings.Contains(history.UILines[0], "after-same-second") {
+		t.Fatalf("visible mixed-precision history = %q, want post-clear record only", history.UILines)
 	}
 }
 
@@ -333,6 +391,26 @@ func TestConnectionViewPreservesHistoryWhenClearFails(t *testing.T) {
 	}
 	if !strings.Contains(view.LogStatus.Text, "LOCAL_LOG_STORAGE_UNAVAILABLE") {
 		t.Fatalf("failed clear status = %q", view.LogStatus.Text)
+	}
+}
+
+func TestConnectionViewDoesNotExportRecoveredPartialHistory(t *testing.T) {
+	store := &fakeDiagnosticStore{
+		history: DiagnosticHistory{UILines: []string{"recovered"}, ExportLines: []string{"partial"}},
+		readErr: errors.New("producer read interrupted"),
+	}
+	exporter := &fakeLogExporter{}
+	view := NewConnectionViewWithLogExporterAndDiagnostics(nil, exporter, store)
+	view.refreshDiagnostics(context.Background())
+	view.Export.OnTapped()
+	if got := exporter.captured(); len(got) != 0 {
+		t.Fatalf("partial history was exported after read failure: %q", got)
+	}
+	if !strings.Contains(view.LogStatus.Text, "LOCAL_LOG_EXPORT_UNAVAILABLE") {
+		t.Fatalf("partial export did not report an explicit failure: %q", view.LogStatus.Text)
+	}
+	if !strings.Contains(view.LogStatus.Text, "LOCAL_LOG_STORAGE_UNAVAILABLE") {
+		t.Fatalf("partial read status = %q", view.LogStatus.Text)
 	}
 }
 

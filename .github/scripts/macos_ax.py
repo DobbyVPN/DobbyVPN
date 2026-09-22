@@ -327,6 +327,139 @@ def _cg_window_count(frameworks: Frameworks, pid: int, options: int = 1) -> int 
         frameworks.release(windows)
 
 
+def _cf_dictionary_value(frameworks: Frameworks, dictionary: ctypes.c_void_p, name: str) -> ctypes.c_void_p | None:
+    key = frameworks.string(name)
+    try:
+        return frameworks.core.CFDictionaryGetValue(dictionary, key)
+    finally:
+        frameworks.release(key)
+
+
+def _cf_number(frameworks: Frameworks, value: ctypes.c_void_p | None, *, integer: bool) -> int | float | None:
+    if not value:
+        return None
+    if integer:
+        output = ctypes.c_int32()
+        return int(output.value) if frameworks.core.CFNumberGetValue(value, 3, ctypes.byref(output)) else None
+    output = ctypes.c_double()
+    # kCFNumberFloat64Type. CoreGraphics uses NSNumber/CFNumber values and
+    # accepts this conversion for both integer and floating-point bounds.
+    return float(output.value) if frameworks.core.CFNumberGetValue(value, 6, ctypes.byref(output)) else None
+
+
+def _cg_window_records(frameworks: Frameworks) -> list[dict[str, object]]:
+    """Read bounded on-screen window identities and bounds from CoreGraphics."""
+
+    windows = frameworks.cg.CGWindowListCopyWindowInfo(1, 0)
+    if not windows:
+        return []
+    records: list[dict[str, object]] = []
+    try:
+        count = frameworks.core.CFArrayGetCount(windows)
+        if count < 0 or count > _MAX_NODES:
+            raise AXLookupError("obstruction", "CoreGraphics returned an invalid window count")
+        for index in range(count):
+            _check_deadline()
+            entry = frameworks.core.CFArrayGetValueAtIndex(windows, index)
+            if not entry:
+                continue
+            owner_pid_value = _cf_number(
+                frameworks, _cf_dictionary_value(frameworks, entry, "kCGWindowOwnerPID"), integer=True
+            )
+            window_number_value = _cf_number(
+                frameworks, _cf_dictionary_value(frameworks, entry, "kCGWindowNumber"), integer=True
+            )
+            layer_value = _cf_number(
+                frameworks, _cf_dictionary_value(frameworks, entry, "kCGWindowLayer"), integer=True
+            )
+            bounds = _cf_dictionary_value(frameworks, entry, "kCGWindowBounds")
+            if (
+                owner_pid_value is None
+                or window_number_value is None
+                or window_number_value <= 0
+                or layer_value is None
+                or not bounds
+            ):
+                continue
+            coordinates: list[float] = []
+            for key in ("X", "Y", "Width", "Height"):
+                value = _cf_number(frameworks, _cf_dictionary_value(frameworks, bounds, key), integer=False)
+                if value is None:
+                    coordinates = []
+                    break
+                coordinates.append(value)
+            if len(coordinates) != 4 or coordinates[2] <= 0 or coordinates[3] <= 0:
+                continue
+            left, top, width, height = coordinates
+            owner_name_value = _cf_dictionary_value(frameworks, entry, "kCGWindowOwnerName")
+            owner_name = frameworks.text(owner_name_value) if owner_name_value else None
+            records.append({
+                "owner_pid": int(owner_pid_value),
+                "window_id": int(window_number_value),
+                "layer": int(layer_value),
+                "bounds": [int(round(left)), int(round(top)), int(round(left + width)), int(round(top + height))],
+                "owner_name": owner_name,
+            })
+    finally:
+        frameworks.release(windows)
+    return records
+
+
+def _rectangles_intersect(first: list[int], second: list[int]) -> bool:
+    return (
+        first[2] > second[0] and second[2] > first[0]
+        and first[3] > second[1] and second[3] > first[1]
+    )
+
+
+def _window_obstruction_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
+    """Report frontmost on-screen windows covering the exact PID's window."""
+
+    records = _cg_window_records(frameworks)
+    target_indexes = [
+        index for index, record in enumerate(records)
+        if record.get("owner_pid") == pid and isinstance(record.get("bounds"), list)
+    ]
+    if not target_indexes:
+        raise AXLookupError(
+            "obstruction-target",
+            f"CoreGraphics exposed no on-screen window for PID {pid}",
+            transient=True,
+        )
+    target_index = max(
+        target_indexes,
+        key=lambda index: (
+            records[index]["bounds"][2] - records[index]["bounds"][0]
+        ) * (
+            records[index]["bounds"][3] - records[index]["bounds"][1]
+        ),
+    )
+    target = records[target_index]
+    target_bounds = target["bounds"]
+    obstructions: list[dict[str, object]] = []
+    seen: set[tuple[int, tuple[int, ...]]] = set()
+    # CGWindowListCopyWindowInfo is front-to-back. Only records before the
+    # target can cover it; the exact product PID is never considered an
+    # obstruction even when Fyne exposes multiple top-level surfaces.
+    for record in records[:target_index]:
+        if record.get("owner_pid") == pid:
+            continue
+        bounds = record.get("bounds")
+        if not isinstance(bounds, list) or not _rectangles_intersect(target_bounds, bounds):
+            continue
+        key = (int(record.get("owner_pid", 0)), tuple(int(value) for value in bounds))
+        if key in seen:
+            continue
+        seen.add(key)
+        obstructions.append(record)
+    return {
+        "ok": True,
+        "stage": "obstruction",
+        "target": target,
+        "obstructions": obstructions,
+    }
+
+
 def _cg_window_diagnostics(frameworks: Frameworks, pid: int) -> dict[str, int | None]:
     """Return all-window and on-screen counts without becoming an interaction path."""
 
@@ -559,6 +692,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--window", action="store_true")
     parser.add_argument("--window-title", action="store_true")
     parser.add_argument("--raise-window", action="store_true")
+    parser.add_argument("--obstructions", action="store_true")
     parser.add_argument("--deadline", type=float, default=4.0)
     return parser
 
@@ -568,9 +702,15 @@ def main() -> int:
     args = _parser().parse_args()
     if args.pid <= 0:
         raise SystemExit("pid must be positive")
-    selected = int(args.window) + int(args.window_title) + int(args.raise_window) + int(args.name is not None)
+    selected = (
+        int(args.window) + int(args.window_title) + int(args.raise_window)
+        + int(args.obstructions) + int(args.name is not None)
+    )
     if selected != 1:
-        raise SystemExit("choose exactly one of --window, --window-title, --raise-window, or --name")
+        raise SystemExit(
+            "choose exactly one of --window, --window-title, --raise-window, "
+            "--obstructions, or --name"
+        )
     if args.deadline <= 0 or not math.isfinite(args.deadline):
         raise SystemExit("deadline must be positive and finite")
     _DEADLINE = time.monotonic() + args.deadline
@@ -583,6 +723,8 @@ def main() -> int:
             payload = _window_title_probe(frameworks, args.pid)
         elif args.raise_window:
             payload = _raise_window(frameworks, args.pid)
+        elif args.obstructions:
+            payload = _window_obstruction_probe(frameworks, args.pid)
         else:
             payload = _find_control(frameworks, args.pid, args.name, args.prefix)
         payload["elapsed_ms"] = int((time.monotonic() - started) * 1000)

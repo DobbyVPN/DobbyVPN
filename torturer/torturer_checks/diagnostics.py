@@ -9,6 +9,7 @@ are raised before a caller can otherwise forward the streams.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 import re
 import sys
 from typing import TextIO
@@ -24,44 +25,214 @@ def output_text(value: bytes | str | None) -> str:
     return value
 
 
+_PRIVATE_FIELD = (
+    rb"password|passphrase|secret|token|private[_-]?key|credential|"
+    rb"access[_-]?key|username|server|address|url"
+)
+
 # Only infer individual values from fields that conventionally contain
-# credentials.  Registering a whole profile/document remains supported, but
+# credentials. Registering a whole profile/document remains supported, but
 # treating every quoted word as private would redact useful protocol/UI
-# diagnostics (for example a public host or a status string).
+# diagnostics (for example a public host or a status string). This parser is
+# deliberately permissive about quoting and value length: a real credential
+# can be one or two bytes in a fixture or a development profile.
 _PRIVATE_ASSIGNMENT = re.compile(
-    r"(?im)^[ \t]*[\"']?[\w.-]*(?:password|passphrase|secret|token|"
-    r"private[_-]?key|credential|access[_-]?key|username|server|address|url)"
-    r"[\w.-]*[\"']?[ \t]*[:=][ \t]*"
-    r"[\"']([^'\"\r\n]{4,})[\"']"
+    rb"(?im)(?:^|[,{ \t])['\"]?[\w.-]*(?:"
+    + _PRIVATE_FIELD
+    + rb")[\w.-]*['\"]?[ \t]*[:=][ \t]*['\"]?"
+    rb"([^'\"\r\n,}\]]+)"
+)
+
+_PRIVATE_ASSIGNMENT_PREFIX = re.compile(
+    rb"(?im)(?:^|[,{ \t])['\"]?[\w.-]*(?:"
+    + _PRIVATE_FIELD
+    + rb")[\w.-]*['\"]?[ \t]*[:=][ \t]*['\"]?$"
 )
 
 
-def _sensitive_texts(values: Iterable[bytes | str] | None) -> tuple[str, ...]:
+@dataclass(frozen=True)
+class _SensitivePatterns:
+    """Byte patterns and contextual short values registered for a stream."""
+
+    # Values at least four bytes long are safe to match globally. A complete
+    # profile/document is also normally in this set, so its exact bytes are
+    # redacted even when it contains newlines or malformed UTF-8.
+    global_values: tuple[bytes, ...]
+    # Short values are intentionally not global substitutions: ``ok`` may be
+    # an ordinary status word. They are replaced only in a sensitive-field
+    # assignment or when the complete rendered value is that secret.
+    contextual_values: tuple[bytes, ...]
+
+
+def _pattern_bytes(value: bytes | str) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    return value.encode("utf-8", errors="backslashreplace")
+
+
+def _sensitive_patterns(values: Iterable[bytes | str] | None) -> _SensitivePatterns:
     if values is None:
-        return ()
-    candidates: set[str] = set()
+        return _SensitivePatterns((), ())
+    global_values: set[bytes] = set()
+    contextual_values: set[bytes] = set()
     for value in values:
         if value is None:
             continue
-        rendered = output_text(value)
-        if rendered:
-            candidates.add(rendered)
-            candidates.update(
-                match.group(1) for match in _PRIVATE_ASSIGNMENT.finditer(rendered)
-            )
-    # Never replace short syntax words (or an empty value).  A complete
-    # profile/document is still safe to register and catches the common case
-    # where a command prints the source document verbatim.
-    return tuple(sorted((value for value in candidates if len(value) >= 4), key=len, reverse=True))
+        raw = _pattern_bytes(value)
+        if not raw:
+            continue
+        # Long registered values are exact profile/private values and can be
+        # replaced anywhere. Short values need surrounding sensitive context.
+        (global_values if len(raw) >= 4 else contextual_values).add(raw)
+        for match in _PRIVATE_ASSIGNMENT.finditer(raw):
+            field_value = match.group(1).strip()
+            if field_value:
+                (global_values if len(field_value) >= 4 else contextual_values).add(
+                    field_value
+                )
+    return _SensitivePatterns(
+        tuple(sorted(global_values, key=len, reverse=True)),
+        tuple(sorted(contextual_values, key=len, reverse=True)),
+    )
+
+
+def _sensitive_texts(values: Iterable[bytes | str] | None) -> tuple[str, ...]:
+    """Return registered patterns for compatibility with older callers.
+
+    Redaction itself uses byte patterns so malformed and split UTF-8 remains
+    reversible. This helper is kept private and is only useful to diagnostics
+    tests or local debugging.
+    """
+
+    patterns = _sensitive_patterns(values)
+    return tuple(
+        value.decode("utf-8", errors="backslashreplace")
+        for value in (*patterns.global_values, *patterns.contextual_values)
+    )
 
 
 def redact_text(value: bytes | str | None, sensitive_values: Iterable[bytes | str] | None = None) -> str:
     """Redact exact registered private values while retaining all context."""
 
-    rendered = output_text(value)
-    for secret in _sensitive_texts(sensitive_values):
-        rendered = rendered.replace(secret, "[REDACTED]")
-    return rendered
+    redactor = StreamingRedactor(sensitive_values)
+    return redactor.feed(value) + redactor.finish()
+
+
+class StreamingRedactor:
+    """Redact registered values without leaking a value split across chunks."""
+
+    def __init__(self, sensitive_values: Iterable[bytes | str] | None = None) -> None:
+        self._patterns = _sensitive_patterns(sensitive_values)
+        self._max_secret_length = max(
+            (len(secret) for secret in self._patterns.global_values),
+            default=0,
+        )
+        self._pending = b""
+
+    @staticmethod
+    def _decode(value: bytes) -> str:
+        # Decode only complete, already-safe byte spans. backslashreplace
+        # preserves malformed provider/child bytes instead of introducing a
+        # lossy U+FFFD character.
+        return value.decode("utf-8", errors="backslashreplace")
+
+    def _global_redact(self, value: bytes) -> bytes:
+        for secret in self._patterns.global_values:
+            value = value.replace(secret, b"[REDACTED]")
+        return value
+
+    @staticmethod
+    def _after_assignment(value: bytes, start: int, end: int) -> bool:
+        """Return whether a value occurrence is a complete assignment value."""
+
+        line_start = value.rfind(b"\n", 0, start) + 1
+        prefix = value[line_start:start]
+        if _PRIVATE_ASSIGNMENT_PREFIX.fullmatch(prefix) is None:
+            return False
+        suffix = value[end:]
+        if suffix.startswith((b"'", b'\"')):
+            suffix = suffix[1:]
+        return not suffix or suffix[:1] in b" \t\r\n,;}]#"
+
+    def _contextual_redact(self, value: bytes) -> bytes:
+        for secret in self._patterns.contextual_values:
+            if not secret:
+                continue
+            offset = 0
+            while True:
+                start = value.find(secret, offset)
+                if start < 0:
+                    break
+                end = start + len(secret)
+                line_start = value.rfind(b"\n", 0, start) + 1
+                line_end = value.find(b"\n", end)
+                if line_end < 0:
+                    line_end = len(value)
+                line = value[line_start:line_end]
+                stripped = line.strip(b" \t\r")
+                value_only = stripped == secret
+                if value_only or self._after_assignment(value, start, end):
+                    value = value[:start] + b"[REDACTED]" + value[end:]
+                    offset = start + len(b"[REDACTED]")
+                else:
+                    offset = end
+        return value
+
+    def _redact_complete(self, value: bytes) -> bytes:
+        return self._contextual_redact(self._global_redact(value))
+
+    def feed(self, value: bytes | str | None) -> str:
+        """Return safe complete lines while retaining possible secret tails.
+
+        The pending buffer is bytes, not independently decoded chunks. A
+        multi-byte UTF-8 sequence split over reads therefore remains intact,
+        and a malformed byte is rendered reversibly only when it is safe to
+        forward.
+        """
+
+        if value is None:
+            return ""
+        rendered = value if isinstance(value, bytes) else value.encode(
+            "utf-8", errors="backslashreplace"
+        )
+        if not rendered:
+            return ""
+        candidate = self._pending + rendered
+        safe_end = len(candidate)
+        for secret in self._patterns.global_values:
+            # A suffix which is a strict prefix of a secret may become the
+            # beginning of a private value in the next read. Retain it until
+            # the next chunk, while leaving all other content streamable.
+            maximum = min(len(secret) - 1, len(candidate))
+            for length in range(maximum, 0, -1):
+                if candidate.endswith(secret[:length]):
+                    safe_end = min(safe_end, len(candidate) - length)
+                    break
+            start = candidate.find(secret)
+            while start >= 0:
+                end = start + len(secret)
+                if start < safe_end < end:
+                    # The complete profile/private value crosses the line
+                    # boundary we would otherwise forward. Keep its complete
+                    # raw span so replacement can happen atomically.
+                    safe_end = start
+                start = candidate.find(secret, start + 1)
+        safe = candidate[:safe_end]
+        possible_secret_tail = candidate[safe_end:]
+        last_newline = safe.rfind(b"\n")
+        if last_newline < 0:
+            self._pending = candidate
+            return ""
+        complete = safe[: last_newline + 1]
+        self._pending = safe[last_newline + 1 :] + possible_secret_tail
+        return self._decode(self._redact_complete(complete))
+
+    def finish(self) -> str:
+        """Flush the final tail after the producer has closed its stream."""
+
+        value = self._decode(self._redact_complete(self._pending))
+        self._pending = b""
+        return value
 
 
 def emit_streams(
@@ -144,5 +315,6 @@ __all__ = [
     "emit_streams",
     "output_text",
     "redact_text",
+    "StreamingRedactor",
     "register_sensitive_values",
 ]

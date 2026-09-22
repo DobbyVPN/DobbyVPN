@@ -150,6 +150,14 @@ On macOS, the local full lane reads the authoritative
 worker, verifies `launchctl print gui/<uid>`, requires
 WindowServer to report an unlocked screen, and starts the native smoke command
 through the bounded `sudo -n launchctl asuser <uid> sudo -n -u <user>` handoff.
+That Aqua gate runs once before candidate preparation and is repeated immediately
+before the native command. The native smoke process also drives a disposable
+AppKit reference button to verify CoreGraphics event-post delivery, performs a
+direct nonblank `screencapture` check for Screen Recording permission, and
+rejects an on-screen window obstructing the reference control. No TCC database,
+Metal setting, acceleration setting, or Swift helper is changed.
+The maintained rationale and failure-diagnosis rules for these gates are in
+[macOS native UI qualification](docs/MACOS_UI_QUALIFICATION.md).
 The preflight also requires a bounded System Events accessibility check against
 Finder; an absent WindowServer lock key is accepted only with that active
 console/Finder evidence, while conflicting or malformed values fail closed.
@@ -174,6 +182,13 @@ native journey and independent VPN observations.
 The macOS close/reopen check uses the app's standard Cmd+Q menu action and
 requires both the app and its launcher to exit normally. Cmd+W is not supplied
 by its default GLFW menu. Forced termination belongs only to test cleanup.
+Required native milestones and failures emit unique PNG screenshots below the
+disposable run log directory. Captures are restricted to
+the exact validated process window, mask configuration/log/detail regions, and
+are removed with the run. Failure to capture, mask, transfer, or validate a
+required screenshot fails the lane without replacing an earlier product
+failure. Screenshots are additional diagnostics, not a separate evidence
+archive.
 
 The Go job emits one repository-wide coverage profile with
 `go test -coverpkg=./...` and writes its `go tool cover -func` report to the

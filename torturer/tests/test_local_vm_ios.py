@@ -38,7 +38,8 @@ class LocalSimulatorTests(unittest.TestCase):
         with patch.object(local_vm_ios.platform, "machine", return_value="x86_64"), \
                 patch.object(local_vm_ios.ios.SubprocessCommandRunner, "run", autospec=True, side_effect=execute), \
                 patch.object(local_vm_ios.ios, "prepare_ios_simulator_candidate", autospec=True) as prepare, \
-                patch.object(local_vm_ios.ios, "run_ios_simulator_app_contract", autospec=True, side_effect=lifecycle) as run_contract:
+                patch.object(local_vm_ios.ios, "run_ios_simulator_app_contract", autospec=True, side_effect=lifecycle) as run_contract, \
+                patch.object(local_vm_ios.ios, "retain_ios_diagnostics", autospec=True) as retain:
             runtime = local_vm_ios.run(self.root, self.logs, 300, None)
         self.assertEqual(prepare.call_args.kwargs["contract"].architecture, "amd64")
         self.assertNotIn("mode", prepare.call_args.kwargs)
@@ -46,6 +47,7 @@ class LocalSimulatorTests(unittest.TestCase):
         self.assertNotIn("existing_app", run_contract.call_args.kwargs)
         self.assertFalse(runtime["installed"])
         self.assertIn(["xcrun", "simctl", "uninstall", "device-1", "vpn.dobby.app"], commands)
+        retain.assert_called_once_with(self.root / "work" / "ios", self.logs / "ios-simulator")
         self.assertTrue((self.logs / "simulator.json").exists())
 
     def test_simulator_never_uses_vpn_candidate_builder_or_profile(self):

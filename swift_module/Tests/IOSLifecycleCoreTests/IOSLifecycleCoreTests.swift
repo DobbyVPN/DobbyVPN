@@ -157,4 +157,22 @@ final class IOSLifecycleCoreTests: XCTestCase {
         XCTAssertNoThrow(try response.encoded())
         XCTAssertThrowsError(try IOSProviderResponse(requestID: "", payload: Data()))
     }
+
+    func testMalformedProviderPayloadIsRejectedWithoutReplacementText() {
+        let payload = Data([0x7b, 0xff, 0x00, 0x80, 0x7d])
+        XCTAssertThrowsError(try IOSSessionShell.decodeProviderPayload(payload)) { error in
+            XCTAssertEqual(
+                error as? IOSSessionShell.ProviderPayloadError,
+                .invalidUTF8(hex: "7bff00807d")
+            )
+        }
+        XCTAssertNil(String(data: payload, encoding: .utf8))
+    }
+
+    func testDiagnosticExportEscapesMalformedBytesReversibly() {
+        XCTAssertEqual(
+            reversibleDiagnosticText(Data([0x6f, 0xff, 0x00, 0x6b])),
+            "[invalid-utf8-hex:6fff006b]"
+        )
+    }
 }

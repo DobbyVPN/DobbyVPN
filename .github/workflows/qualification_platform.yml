@@ -98,6 +98,7 @@ jobs:
           {
             echo "RESULT_DIR=$RUNNER_TEMP/dobbyvpn-release-result"
             echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-release-run"
+            echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-release-diagnostics"
             echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-result/functional-result.json"
           } >> "$GITHUB_ENV"
 
@@ -172,15 +173,30 @@ jobs:
               printf 'Android AVD home: %s\n' "$ANDROID_AVD_HOME"
               avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
               test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
-              "$emulator_bin" -list-avds | grep -Fxq dobbyvpn-release
+              avd_list_stdout="$RUN_DIR/android-avds.stdout.log"
+              avd_list_stderr="$RUN_DIR/android-avds.stderr.log"
+              if ! "$emulator_bin" -list-avds >"$avd_list_stdout" 2>"$avd_list_stderr"; then
+                cat "$avd_list_stdout" >&2
+                cat "$avd_list_stderr" >&2
+                exit 1
+              fi
+              cat "$avd_list_stdout" >&2
+              cat "$avd_list_stderr" >&2
+              avd_found=false
+              while IFS= read -r avd_name; do
+                if [ "$avd_name" = dobbyvpn-release ]; then avd_found=true; fi
+              done < "$avd_list_stdout"
+              test "$avd_found" = true
               sudo -n chown "$(id -un)" /dev/kvm
               "$emulator_bin" -accel-check
-              "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot > /dev/null 2>&1 &
+              "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot \
+                > "$RUN_DIR/android-emulator.stdout.log" \
+                2> "$RUN_DIR/android-emulator.stderr.log" &
               if ! timeout 120s adb wait-for-device; then
                 echo "Android emulator did not become visible to ADB" >&2
                 exit 1
               fi
-              booted=false; for _ in $(seq 1 120); do [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && booted=true && break; sleep 1; done
+              booted=false; for _ in $(seq 1 120); do [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && booted=true && break; sleep 1; done
               test "$booted" = true
               adb root
               timeout 120s adb wait-for-device
@@ -190,8 +206,23 @@ jobs:
               test -f "$signed"; test -f "$companion"
               apksigner_bin="$sdk_root/build-tools/36.0.0/apksigner"
               test -x "$apksigner_bin"
-              signed_cert="$("$apksigner_bin" verify --print-certs "$signed" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
-              companion_cert="$("$apksigner_bin" verify --print-certs "$companion" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+              signed_cert_stdout="$RUN_DIR/apksigner-signed.stdout.log"
+              signed_cert_stderr="$RUN_DIR/apksigner-signed.stderr.log"
+              companion_cert_stdout="$RUN_DIR/apksigner-companion.stdout.log"
+              companion_cert_stderr="$RUN_DIR/apksigner-companion.stderr.log"
+              if ! "$apksigner_bin" verify --print-certs "$signed" >"$signed_cert_stdout" 2>"$signed_cert_stderr"; then
+                cat "$signed_cert_stdout" >&2
+                cat "$signed_cert_stderr" >&2
+                exit 1
+              fi
+              if ! "$apksigner_bin" verify --print-certs "$companion" >"$companion_cert_stdout" 2>"$companion_cert_stderr"; then
+                cat "$companion_cert_stdout" >&2
+                cat "$companion_cert_stderr" >&2
+                exit 1
+              fi
+              cat "$signed_cert_stdout" "$signed_cert_stderr" "$companion_cert_stdout" "$companion_cert_stderr" >&2
+              signed_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$signed_cert_stdout")"
+              companion_cert="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$companion_cert_stdout")"
               cert_digest_re='^([0-9A-Fa-f]{64}|[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31})$'
               [[ "$signed_cert" =~ $cert_digest_re ]]
               test "$signed_cert" = "$companion_cert"
@@ -243,7 +274,6 @@ jobs:
           # traffic, Connect, and Disconnect checks.
           ui_stdout="$RUN_DIR/android-native-ui.stdout.log"
           ui_stderr="$RUN_DIR/android-native-ui.stderr.log"
-          trap 'rm -f "$ui_stdout" "$ui_stderr"' EXIT
           ui_status=0
           ui_timed_out=false
           timeout --foreground 300s "$ADB" shell am instrument -w -r \
@@ -264,9 +294,11 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
             python3 -m torturer_checks.android_instrumentation \
             "${parser_args[@]}" || parser_status=$?
+          printf '%s\n' '[android-native-ui stdout]' >&2
+          cat "$ui_stdout" >&2
+          printf '%s\n' '[android-native-ui stderr]' >&2
+          cat "$ui_stderr" >&2
           if [ "$parser_status" -ne 0 ]; then
-            cat "$ui_stdout" >&2 || true
-            cat "$ui_stderr" >&2 || true
             exit 1
           fi
 
@@ -307,20 +339,27 @@ jobs:
             launcher_pid=$!
             for _ in $(seq 1 30); do
               [ -s "$SERVICE_PID_FILE" ] && break
-              if ! kill -0 "$launcher_pid" 2>/dev/null; then
-                wait "$launcher_pid" || true
+              if ! kill -0 "$launcher_pid"; then
+                if ! wait "$launcher_pid"; then
+                  printf 'Windows service launcher exited nonzero before publishing its PID\n' >&2
+                fi
                 break
               fi
               sleep 1
             done
+            cat "$SERVICE_START_LOG" >&2
             if [ ! -s "$SERVICE_PID_FILE" ]; then
-              cat "$SERVICE_START_LOG" >&2 || true
               exit 1
             fi
             service_pid="$(tr -d '\r\n' < "$SERVICE_PID_FILE")"
             [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
-            kill "$launcher_pid" 2>/dev/null || true
-            wait "$launcher_pid" 2>/dev/null || true
+            if kill "$launcher_pid"; then
+              if ! wait "$launcher_pid"; then
+                printf 'Windows service launcher exited nonzero after publishing its PID\n' >&2
+              fi
+            elif ! wait "$launcher_pid"; then
+              printf 'Windows service launcher had already exited nonzero\n' >&2
+            fi
           elif [ "$PLATFORM" = macos ]; then
             launchd_stdout="$RUN_DIR/macos-launchd-print.stdout.log"
             launchd_stderr="$RUN_DIR/macos-launchd-print.stderr.log"
@@ -329,6 +368,8 @@ jobs:
               cat "$launchd_stderr" >&2
               exit 1
             fi
+            cat "$launchd_stdout" >&2
+            cat "$launchd_stderr" >&2
             service_pid="$(python3 - "$launchd_stdout" <<'PY'
           import re
           import sys
@@ -427,10 +468,21 @@ jobs:
           set -euo pipefail
           adb_bin="${ADB:-adb}"
           "$adb_bin" shell \
-            'while iptables -D OUTPUT -j DOBBYVPN_TORTURER 2>/dev/null; do :; done
-             iptables -F DOBBYVPN_TORTURER 2>/dev/null || true
-             iptables -X DOBBYVPN_TORTURER 2>/dev/null || true
+            'inventory="$(iptables -S)" || exit $?
+             printf "%s\n" "$inventory"
+             while case "$inventory" in *"-A OUTPUT -j DOBBYVPN_TORTURER"*) true;; *) false;; esac; do
+               iptables -D OUTPUT -j DOBBYVPN_TORTURER || exit $?
+               inventory="$(iptables -S)" || exit $?
+               printf "%s\n" "$inventory"
+             done
+             case "$inventory" in
+               *"-N DOBBYVPN_TORTURER"*)
+                 iptables -F DOBBYVPN_TORTURER || exit $?
+                 iptables -X DOBBYVPN_TORTURER || exit $?
+                 ;;
+             esac
              inventory="$(iptables -S)" || exit $?
+             printf "%s\n" "$inventory"
              case "$inventory" in
                *DOBBYVPN_TORTURER*)
                  echo "Android qualification routing chain remains: DOBBYVPN_TORTURER" >&2
@@ -438,12 +490,44 @@ jobs:
                  ;;
              esac'
 
+      - name: Collect complete redacted qualification diagnostics
+        if: always() && env.RUN_DIR != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/collect_diagnostics.py \
+            --profile "$GITHUB_WORKSPACE/render/profile.toml" \
+            --source "$RESULT_DIR" \
+            --source "$RUN_DIR" \
+            --output "$ARTIFACT_DIR"
+
       - name: Remove shared profile from runner
         if: always()
         shell: bash
         run: rm -f "$GITHUB_WORKSPACE/render/profile.toml"
 
+      - name: Inventory complete qualification diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$ARTIFACT_DIR"
+          find "$ARTIFACT_DIR" -type f -print
+
+      - name: Retain complete qualification diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-qualification-${{ inputs.platform }}
+          path: ${{ env.ARTIFACT_DIR }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+
       - name: Remove disposable qualification scratch
         if: always()
         shell: bash
-        run: rm -rf "$RUN_DIR"
+        run: |
+          rm -rf "$RUN_DIR"
+          rm -rf "$RESULT_DIR"
+          rm -rf "$ARTIFACT_DIR"
