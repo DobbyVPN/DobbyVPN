@@ -578,7 +578,7 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         self.assertIsNone(controller.process)
         self.assertIsNone(controller.macos_process_identity)
 
-    def test_macos_close_stops_app_when_open_launcher_already_exited(self) -> None:
+    def test_macos_close_uses_cmd_q_and_waits_for_exact_app_identity(self) -> None:
         identity = smoke._MacOSProcessIdentity(
             4321, 501, self._MACOS_EXECUTABLE, "Mon Sep 20 12:34:56 2026"
         )
@@ -589,11 +589,70 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
         controller.process = process
         controller.macos_pid = identity.pid
         controller.macos_process_identity = identity
-        with patch.object(smoke, "_terminate_macos_process_tree") as terminate:
-            controller.close()
-        terminate.assert_called_once_with(identity, 3)
+        app_alive = True
+
+        def is_alive(_identity):
+            return app_alive
+
+        def wait_for_close(predicate, message, _timeout=None):
+            nonlocal app_alive
+            self.assertEqual(message, "macos UI did not close")
+            self.assertFalse(predicate())
+            app_alive = False
+            self.assertTrue(predicate())
+
+        completed = subprocess.CompletedProcess(
+            ["osascript", "-e", ""], 0, stdout="", stderr=""
+        )
+        with (
+            patch.object(smoke, "_macos_identity_is_alive", side_effect=is_alive),
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(smoke.subprocess, "run", return_value=completed) as run,
+            patch.object(controller, "_wait", side_effect=wait_for_close),
+            patch.object(smoke, "_terminate_macos_process_tree") as terminate,
+            patch.object(controller, "snapshot", return_value={"status": "Disconnected"}),
+        ):
+            self.assertEqual(controller.close(), {"status": "Disconnected"})
+        command = run.call_args.args[0]
+        self.assertEqual(command[:2], ["osascript", "-e"])
+        self.assertIn('keystroke "q" using command down', command[2])
+        terminate.assert_not_called()
         self.assertIsNone(controller.process)
         self.assertIsNone(controller.macos_process_identity)
+
+    def test_macos_close_timeout_does_not_force_terminate_app(self) -> None:
+        identity = smoke._MacOSProcessIdentity(
+            4321, 501, self._MACOS_EXECUTABLE, "Mon Sep 20 12:34:56 2026"
+        )
+        process = Mock(pid=9001, poll=Mock(return_value=0), returncode=0)
+        controller = smoke.NativeUIController(
+            "macos", smoke.Path("ui.app"), smoke.Path("profile"), 3
+        )
+        controller.process = process
+        controller.macos_pid = identity.pid
+        controller.macos_process_identity = identity
+        completed = subprocess.CompletedProcess(
+            ["osascript", "-e", ""], 0, stdout="", stderr=""
+        )
+        with (
+            patch.object(smoke, "_macos_identity_is_alive", return_value=True),
+            patch.object(controller, "_macos_pid_or_error", return_value=4321),
+            patch.object(smoke.subprocess, "run", return_value=completed) as run,
+            patch.object(
+                controller,
+                "_wait",
+                side_effect=smoke.NativeUIWaitTimeout("still alive"),
+            ),
+            patch.object(smoke, "_terminate_macos_process_tree") as terminate,
+        ):
+            with self.assertRaisesRegex(smoke.NativeUIWaitTimeout, "still alive"):
+                controller.close()
+        self.assertIn('keystroke "q" using command down', run.call_args.args[0][2])
+        terminate.assert_not_called()
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+        self.assertIs(controller.process, process)
+        self.assertIs(controller.macos_process_identity, identity)
 
     def test_macos_cleanup_escalates_verified_app_identity_to_kill(self) -> None:
         identity = smoke._MacOSProcessIdentity(

@@ -171,6 +171,9 @@ The native driver retains the submitted profile until the physical Connect
 action is acknowledged, then restores the previous clipboard. Failed or
 abandoned attempts also restore it. Qualification still requires the complete
 native journey and independent VPN observations.
+The macOS close/reopen check uses the app's standard Cmd+Q menu action and
+requires both the app and its launcher to exit normally. Cmd+W is not supplied
+by its default GLFW menu. Forced termination belongs only to test cleanup.
 
 The Go job emits one repository-wide coverage profile with
 `go test -coverpkg=./...` and writes its `go tool cover -func` report to the

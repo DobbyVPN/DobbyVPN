@@ -2043,22 +2043,25 @@ class NativeUIController:
         process = self.process
         if process is None:
             if self.platform == "macos" and self.macos_process_identity is not None:
-                _terminate_macos_process_tree(self.macos_process_identity, self.timeout)
+                if _macos_identity_is_alive(self.macos_process_identity):
+                    raise NativeUISmokeError("macOS UI is still alive without its launcher")
                 self.macos_pid = None
                 self.macos_process_identity = None
                 self.macos_expected_executable = None
             return self.snapshot()
         if self.platform == "windows":
             self._windows_key(0x12, 0x73)  # Alt+F4
-        elif process.poll() is None:
+        elif self.macos_process_identity is not None and _macos_identity_is_alive(self.macos_process_identity):
             process_pid = self._macos_pid_or_error()
+            # GLFW's standard application menu supplies Cmd+Q, not Cmd+W.
+            # It dispatches the normal close request to this app's one window.
             completed = subprocess.run(
                 [
                     "osascript", "-e",
                     f'''tell application "System Events"
     tell (first process whose unix id is {process_pid})
         set frontmost to true
-        keystroke "w" using command down
+        keystroke "q" using command down
     end tell
 end tell''',
                 ],
@@ -2069,11 +2072,16 @@ end tell''',
             )
             if completed.returncode != 0:
                 raise NativeUISmokeError(completed.stderr.strip() or "macOS native close failed")
-        self._wait(lambda: process.poll() is not None, f"{self.platform} UI did not close")
+        self._wait(
+            lambda: process.poll() is not None and (
+                self.platform != "macos"
+                or self.macos_process_identity is None
+                or not _macos_identity_is_alive(self.macos_process_identity)
+            ),
+            f"{self.platform} UI did not close",
+        )
         if process.returncode not in (0, 1):
             raise NativeUISmokeError(f"{self.platform} UI exited with code {process.returncode}")
-        if self.platform == "macos" and self.macos_process_identity is not None:
-            _terminate_macos_process_tree(self.macos_process_identity, self.timeout)
         self.process = None
         self.hwnd = 0
         self.macos_pid = None
@@ -2298,7 +2306,7 @@ def serve_native_ui(
                 elif operation == "close":
                     # ``close`` is the terminal cleanup handshake, not the
                     # visible close-window assertion.  On macOS the normal
-                    # close path sends Cmd-W through AppleScript and then
+                    # close path sends Cmd-Q through AppleScript and then
                     # waits for a product process that may be stuck in a
                     # native/network call for the full smoke timeout.  If we
                     # did that here, the parent could kill this child before
