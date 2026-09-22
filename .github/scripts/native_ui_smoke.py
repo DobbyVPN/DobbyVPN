@@ -613,75 +613,68 @@ def _macos_post_reference_click(x: int, y: int) -> None:
         time.sleep(0.05)
 
 
-_MACOS_REFERENCE_EVENT_SCRIPT = r'''ObjC.import('Cocoa');
-ObjC.import('Foundation');
-const app = $.NSApplication.sharedApplication;
-app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
-const stdoutHandle = $.NSFileHandle.fileHandleWithStandardOutput;
-function writeProtocol(payload) {
-    const text = $.NSString.alloc.initWithUTF8String(JSON.stringify(payload) + '\n');
-    stdoutHandle.writeData(text.dataUsingEncoding($.NSUTF8StringEncoding));
-}
-const screen = $.NSScreen.mainScreen;
-if (!screen) throw new Error('no main screen');
-const screenFrame = screen.frame;
-const windowFrame = $.NSMakeRect(120, 120, 420, 220);
-// macOS 15's JXA Objective-C bridge exposes multi-argument selectors using
-// camel-case names. Keep the older underscore spelling as a fallback so a
-// supported older macOS host is not mistaken for a missing Aqua session.
-let window;
-if (typeof $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer === 'function') {
-    window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-        windowFrame,
-        $.NSWindowStyleMaskTitled,
-        $.NSBackingStoreBuffered,
-        false
-    );
-} else if (typeof $.NSWindow.alloc.initWithContentRect_styleMask_backing_defer === 'function') {
-    window = $.NSWindow.alloc.initWithContentRect_styleMask_backing_defer(
-        windowFrame,
-        $.NSWindowStyleMaskTitled,
-        $.NSBackingStoreBuffered,
-        false
-    );
-} else {
-    throw new Error('NSWindow content-rect initializer is unavailable in the JXA bridge');
-}
-const buttonFrame = $.NSMakeRect(95, 75, 230, 56);
-const button = $.NSButton.alloc.initWithFrame(buttonFrame);
-button.setTitle('DobbyVPN native event probe');
-button.setButtonType($.NSButtonTypePushOnPushOff);
-window.contentView.addSubview(button);
-window.makeKeyAndOrderFront(null);
-app.activateIgnoringOtherApps(true);
-const centerX = windowFrame.origin.x + buttonFrame.origin.x + buttonFrame.size.width / 2;
-const centerY = screenFrame.size.height - (windowFrame.origin.y + buttonFrame.origin.y + buttonFrame.size.height / 2);
-writeProtocol({ready:true,x:Math.round(centerX),y:Math.round(centerY),width:420,height:220});
-const deadline = Date.now() + 5000;
-while (Date.now() < deadline) {
-    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.05));
-    if (button.state == 1) {
-        writeProtocol({clicked:true});
-        window.orderOut(null);
-        app.terminate(null);
-        break;
+_MACOS_REFERENCE_EVENT_HELPER_SOURCE = Path(__file__).with_name(
+    "macos_reference_event_probe.m"
+)
+
+
+def _macos_build_reference_event_helper(temporary: Path) -> Path:
+    """Build a disposable bundled AppKit probe with a real active window."""
+
+    source = _MACOS_REFERENCE_EVENT_HELPER_SOURCE
+    if not source.is_file() or source.is_symlink():
+        raise NativeUISmokeError("macOS AppKit reference helper source is unavailable")
+    compiler = shutil.which("clang") or "/usr/bin/clang"
+    bundle = temporary / "DobbyVPN Native Event Probe.app"
+    executable = bundle / "Contents" / "MacOS" / "DobbyVPN Native Event Probe"
+    executable.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = {
+        "CFBundleExecutable": "DobbyVPN Native Event Probe",
+        "CFBundleIdentifier": "com.dobbyvpn.native-event-probe",
+        "CFBundleName": "DobbyVPN Native Event Probe",
+        "CFBundlePackageType": "APPL",
+        "LSMinimumSystemVersion": "12.0",
     }
-}
-if (button.state != 1) {
-    window.orderOut(null);
-    app.terminate(null);
-    throw new Error('reference AppKit control did not receive the CoreGraphics click');
-}
-'''
+    with (bundle / "Contents" / "Info.plist").open("wb") as stream:
+        plistlib.dump(info, stream, sort_keys=True)
+    try:
+        result = _native_run(
+            [
+                compiler,
+                "-x", "objective-c", "-fobjc-arc", "-framework", "Cocoa",
+                "-o", str(executable), str(source),
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            stream_label="macOS AppKit reference helper compile",
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(
+            f"macOS AppKit reference helper could not compile: {error}"
+        ) from error
+    if result.returncode != 0:
+        raise NativeUISmokeError(
+            _subprocess_failure("macOS AppKit reference helper compilation failed", result)
+        )
+    try:
+        executable.chmod(0o700)
+    except OSError as error:
+        raise NativeUISmokeError(
+            f"macOS AppKit reference helper could not become executable: {error}"
+        ) from error
+    return executable
 
 
 def _macos_reference_event_preflight(timeout: float = 12.0) -> None:
     """Prove AX, HID event posting, Screen Recording, and unobstructed Aqua.
 
-    The reference window is owned by a disposable ``osascript`` process.  It
-    is intentionally independent of the product, so a product AX tree cannot
-    make this gate pass accidentally.  No TCC database is edited and the
-    process is always terminated by this function's finally block.
+    The reference window is owned by a disposable, product-independent AppKit
+    helper bundle, so a product AX tree cannot make this gate pass accidentally
+    and the helper is a real activatable GUI application.  No TCC database is
+    edited and the process is always terminated by this function's finally
+    block.
     """
 
     if sys.platform != "darwin":
@@ -690,15 +683,30 @@ def _macos_reference_event_preflight(timeout: float = 12.0) -> None:
         return
     if timeout <= 0:
         raise NativeUISmokeError("macOS reference event preflight timeout is invalid")
+    reference_temporary = tempfile.TemporaryDirectory(
+        prefix="dobbyvpn-macos-reference-helper-"
+    )
     try:
+        executable = _macos_build_reference_event_helper(Path(reference_temporary.name))
         process = subprocess.Popen(
-            ["osascript", "-l", "JavaScript", "-e", _MACOS_REFERENCE_EVENT_SCRIPT],
+            [str(executable)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError(f"macOS AppKit reference control could not start: {error}") from error
+    except BaseException as error:
+        try:
+            reference_temporary.cleanup()
+        except BaseException as cleanup_error:
+            raise NativeUISmokeError(
+                "macOS AppKit reference helper cleanup failed after start error: "
+                f"{cleanup_error}; original error: {error}"
+            ) from error
+        if isinstance(error, NativeUISmokeError):
+            raise
+        raise NativeUISmokeError(
+            f"macOS AppKit reference control could not start: {error}"
+        ) from error
     ready_line: str | None = None
     consumed_stdout: list[str] = []
     consumed_stderr: list[str] = []
@@ -873,6 +881,10 @@ def _macos_reference_event_preflight(timeout: float = 12.0) -> None:
                     stream.close()
                 except BaseException as error:
                     remember_cleanup_error(f"reference {name} close", error)
+        try:
+            reference_temporary.cleanup()
+        except BaseException as error:
+            remember_cleanup_error("reference helper temporary directory cleanup", error)
     _emit_native_streams(
         "macOS AppKit reference control",
         "".join(consumed_stdout),

@@ -642,9 +642,13 @@ class NativeUISmokeIdentityTests(unittest.TestCase):
 
         with (
             patch.object(smoke.sys, "platform", "darwin"),
+            patch.object(
+                smoke,
+                "_macos_build_reference_event_helper",
+                return_value=smoke.Path("/tmp/reference-probe"),
+            ),
             patch.object(smoke.subprocess, "Popen", side_effect=fake_popen),
             patch.object(smoke, "_macos_capture_rect"),
-            patch.object(smoke, "_macos_window_obstructions", return_value=[]),
             patch.object(smoke, "_macos_post_reference_click"),
         ):
             smoke._macos_reference_event_preflight(timeout=3)
