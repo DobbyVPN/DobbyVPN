@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import mimetypes
+import os
 from pathlib import Path
 import re
 import struct
@@ -174,6 +175,32 @@ def _forward_text_payload(relative: Path, payload: bytes) -> None:
     stream.flush()
 
 
+def _source_files(source: Path) -> list[Path]:
+    """Enumerate every regular file and fail visibly on unreadable folders."""
+
+    pending = [source]
+    files: list[Path] = []
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    if entry.is_symlink():
+                        raise CollectionError(
+                            f"diagnostics source contains a symlink: {path}"
+                        )
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(path)
+                    elif entry.is_file(follow_symlinks=False):
+                        files.append(path)
+        except OSError as error:
+            raise CollectionError(
+                f"diagnostics source directory could not be read: {directory}"
+            ) from error
+    return sorted(files)
+
+
 def collect(profile: Path, sources: list[Path], output: Path) -> list[dict[str, object]]:
     if not profile.is_file() or profile.is_symlink():
         raise CollectionError("profile is unavailable")
@@ -191,18 +218,19 @@ def collect(profile: Path, sources: list[Path], output: Path) -> list[dict[str, 
         source_resolved = source.resolve()
         if output_resolved == source_resolved or output_resolved.is_relative_to(source_resolved):
             raise CollectionError("diagnostics output must not be inside a source directory")
-        for path in sorted(source.rglob("*")):
-            if path.is_symlink():
-                raise CollectionError(f"diagnostics source contains a symlink: {path}")
-            if not path.is_file():
-                continue
+        for path in _source_files(source):
             relative = Path(source.name) / path.relative_to(source)
             destination = output / relative
             if destination in seen_destinations:
                 raise CollectionError(f"diagnostics sources overlap at {relative}")
             seen_destinations.add(destination)
             destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            payload = path.read_bytes()
+            try:
+                payload = path.read_bytes()
+            except OSError as error:
+                raise CollectionError(
+                    f"diagnostics source file could not be read: {relative}"
+                ) from error
             source_bytes = len(payload)
             source_sha256 = _sha256(payload)
             width = height = None
@@ -243,6 +271,8 @@ def collect(profile: Path, sources: list[Path], output: Path) -> list[dict[str, 
             print(json.dumps(record, sort_keys=True))
             if kind == "text":
                 _forward_text_payload(relative, stored)
+    if not records:
+        raise CollectionError("diagnostics sources contain no readable files")
     manifest = {"schema": 2, "files": records}
     manifest_path = output / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

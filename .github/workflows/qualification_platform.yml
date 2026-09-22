@@ -101,12 +101,18 @@ jobs:
             echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-release-diagnostics"
             echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-result/functional-result.json"
           } >> "$GITHUB_ENV"
+          if [ "$PLATFORM" = linux ]; then
+            echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
+          fi
 
       - name: Check package and prepare qualification directories
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RESULT_DIR" "$RUN_DIR"
+          if [ "$PLATFORM" = linux ]; then
+            mkdir -p "$CONTROL_DIR"
+          fi
           case "$PLATFORM" in linux|windows|macos|android) ;; *) exit 1 ;; esac
           [[ "$DOBBYVPN_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$DOBBYVPN_COMMIT_SHA"
@@ -139,7 +145,7 @@ jobs:
               mapfile -t service_matches < <(find /opt/dobbyvpn -xdev -type f -name ubuntu_grpcvpnserver -perm -0100)
               test "${#cli_matches[@]}" -eq 1; test "${#service_matches[@]}" -eq 1
               printf 'CLI=%s\nSERVICE=%s\nSERVICE_SOCKET=%s\nSERVICE_LIBRARY_PATH=%s\n' \
-                "${cli_matches[0]}" "${service_matches[0]}" "$RUN_DIR/control.sock" /opt/dobbyvpn/lib/runtime >> "$GITHUB_ENV"
+                "${cli_matches[0]}" "${service_matches[0]}" "$CONTROL_DIR/control.sock" /opt/dobbyvpn/lib/runtime >> "$GITHUB_ENV"
               ;;
             windows)
               package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
@@ -329,9 +335,76 @@ jobs:
           cat "$ui_stdout" >&2
           printf '%s\n' '[android-native-ui stderr]' >&2
           cat "$ui_stderr" >&2
+          printf 'ANDROID_UI_TEST_PARSER_STATUS=%s\n' "$parser_status" >> "$GITHUB_ENV"
           if [ "$parser_status" -ne 0 ]; then
             exit 1
           fi
+
+      - name: Retain Android Go/Fyne UI screenshots
+        if: always() && inputs.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ui_stdout="$RUN_DIR/android-native-ui.stdout.log"
+          if [ ! -s "$ui_stdout" ]; then
+            printf 'Android UI screenshot collection failed: complete instrumentation stdout is unavailable: %s\n' "$ui_stdout" >&2
+            exit 1
+          fi
+          destination="$RUN_DIR/screenshots/android-native-ui"
+          mkdir -p "$destination"
+          screenshot_count=0
+          collection_status=0
+          while IFS= read -r line; do
+            if [[ ! "$line" =~ ^INSTRUMENTATION_STATUS:\ stream=DOBBY_UI_SCREENSHOT\ label=([A-Za-z0-9_-]+)\ path=(/data/user/0/com\.dobby\.vpn/cache/dobbyvpn-rendered-screenshots/[A-Za-z0-9_-]+\.png)\ bytes=([0-9]+)\ sha256=([0-9a-f]{64})\ width=([1-9][0-9]*)\ height=([1-9][0-9]*)$ ]]; then
+              printf 'Android UI screenshot marker is malformed; the complete original marker remains in %s: %s\n' "$ui_stdout" "$line" >&2
+              collection_status=1
+              continue
+            fi
+            label="${BASH_REMATCH[1]}"
+            remote="${BASH_REMATCH[2]}"
+            expected_bytes="${BASH_REMATCH[3]}"
+            expected_sha="${BASH_REMATCH[4]}"
+            target="$destination/$label.png"
+            partial="$target.partial"
+            screenshot_count=$((screenshot_count + 1))
+            if [ -e "$target" ] || [ -e "$partial" ]; then
+              printf 'Android UI screenshot label was emitted more than once: %s\n' "$label" >&2
+              collection_status=1
+              continue
+            fi
+            if ! "$ADB" pull "$remote" "$partial"; then
+              collection_status=1
+              continue
+            fi
+            actual_bytes="$(wc -c < "$partial" | tr -d '[:space:]')"
+            actual_sha="$(sha256sum "$partial")"
+            actual_sha="${actual_sha%% *}"
+            if [ "$actual_bytes" != "$expected_bytes" ] || [ "$actual_sha" != "$expected_sha" ]; then
+              printf 'Android UI screenshot transfer mismatch: label=%s expected_bytes=%s actual_bytes=%s expected_sha256=%s actual_sha256=%s; downloaded bytes remain at %s\n' \
+                "$label" "$expected_bytes" "$actual_bytes" "$expected_sha" "$actual_sha" "$partial" >&2
+              collection_status=1
+              continue
+            fi
+            mv "$partial" "$target"
+            printf 'Android UI screenshot retained and matched its complete instrumentation marker: label=%s bytes=%s sha256=%s path=%s\n' \
+              "$label" "$actual_bytes" "$actual_sha" "$target"
+          done < <(grep -a '^INSTRUMENTATION_STATUS: stream=DOBBY_UI_SCREENSHOT ' "$ui_stdout")
+          if [ "$screenshot_count" -eq 0 ]; then
+            printf 'Android UI screenshot collection failed: instrumentation emitted no screenshot markers; complete output remains in %s\n' "$ui_stdout" >&2
+            collection_status=1
+          fi
+          if [ "${ANDROID_UI_TEST_PARSER_STATUS:-}" = 0 ]; then
+            for label in startup failure-state reopened; do
+              if [ ! -f "$destination/$label.png" ]; then
+                printf 'Android UI screenshot collection failed: successful UI run is missing required screenshot label=%s\n' "$label" >&2
+                collection_status=1
+              fi
+            done
+          elif [ ! -f "$destination/failure.png" ]; then
+            printf 'Android UI screenshot collection failed: failed UI run is missing its failure screenshot\n' >&2
+            collection_status=1
+          fi
+          exit "$collection_status"
 
       - name: Start installed service
         if: inputs.platform != 'android'
@@ -455,25 +528,57 @@ jobs:
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
               --raw-log-dir "$RUN_DIR"
           else
-            ui_args=()
-            extra=()
+            release_args=(
+              --platform "$PLATFORM"
+              --suite mini
+              --cli "$CLI"
+              --profile "$GITHUB_WORKSPACE/render/profile.toml"
+              --source-sha "$DOBBYVPN_COMMIT_SHA"
+              --platform-version "$PLATFORM_VERSION"
+              --lane-timeout-seconds "$lane_timeout"
+              --output "$RESULT_PATH"
+              --raw-log-dir "$RUN_DIR"
+              --service-pid "$SERVICE_PID"
+              --service-binary "$SERVICE_BINARY"
+              --service-socket "$SERVICE_SOCKET"
+            )
             if [ "$PLATFORM" = windows ] || [ "$PLATFORM" = macos ]; then
-              ui_args=(--ui-test "$UI_TEST")
+              release_args+=(--ui-test "$UI_TEST")
             fi
             if [ "$PLATFORM" = linux ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
-              extra+=(--service-library-path "$SERVICE_LIBRARY_PATH")
+              release_args+=(--service-library-path "$SERVICE_LIBRARY_PATH")
             fi
             if [ "$PLATFORM" = macos ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
               export DOBBY_LOG_PATH="$RUN_DIR/service.log"
               export DOBBY_LOG_ROOT="$RUN_DIR"
             fi
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run \
-              --platform "$PLATFORM" --suite mini --cli "$CLI" "${ui_args[@]}" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
-              --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
-              --raw-log-dir "$RUN_DIR" "${extra[@]}" \
-              --service-pid "$SERVICE_PID" --service-binary "$SERVICE_BINARY" --service-socket "$SERVICE_SOCKET"
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run "${release_args[@]}"
+          fi
+
+      - name: Stop Linux qualification service
+        if: always() && inputs.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${SERVICE_PID:-}" ]; then
+            if sudo -n kill -0 "$SERVICE_PID"; then
+              sudo -n kill -TERM "$SERVICE_PID"
+              sleep 2
+              if sudo -n kill -0 "$SERVICE_PID"; then
+                sudo -n kill -KILL "$SERVICE_PID"
+                sleep 1
+              fi
+            else
+              printf 'Linux qualification service was already stopped before cleanup: pid=%s\n' "$SERVICE_PID"
+            fi
+          fi
+          if [ -n "${SERVICE_SOCKET:-}" ]; then
+            sudo -n rm -f "$SERVICE_SOCKET"
+          fi
+          if [ -n "${CONTROL_DIR:-}" ] && [ -d "$CONTROL_DIR" ]; then
+            sudo -n rmdir "$CONTROL_DIR"
           fi
 
       - name: Remove Android standalone probe staging
