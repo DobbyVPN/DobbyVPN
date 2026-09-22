@@ -1453,9 +1453,10 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(controller.close_calls, 0)
         self.assertEqual(controller.cleanup_calls, 1)
-        self.assertEqual(events, ["start", "snapshot", "cleanup", "snapshot"])
+        self.assertEqual(events, ["start", "snapshot", "cleanup"])
         response = json.loads(output.getvalue().splitlines()[-1])
         self.assertTrue(response["ok"])
+        self.assertEqual(response["status"], "Closed")
 
     def test_serve_terminal_close_serializes_cleanup_failure_and_exits(self) -> None:
         class FailingCleanupController:
@@ -1485,8 +1486,8 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
         self.assertFalse(response["ok"])
         self.assertIn("did not exit", response["error"])
 
-    def test_serve_terminal_close_reports_snapshot_failure_after_cleanup(self) -> None:
-        class SnapshotFailureController:
+    def test_serve_terminal_close_does_not_snapshot_after_cleanup(self) -> None:
+        class CleanupController:
             def __init__(self):
                 self.snapshots = 0
 
@@ -1495,23 +1496,23 @@ class NativeUIControllerProtocolTests(unittest.TestCase):
 
             def snapshot(self):
                 self.snapshots += 1
-                if self.snapshots == 1:
-                    return {"status": "Disconnected"}
-                raise smoke.NativeUISmokeError("post-cleanup AX snapshot failed")
+                return {"status": "Disconnected"}
 
             def close_for_cleanup(self):
                 pass
 
+        controller = CleanupController()
         output = io.StringIO()
-        with patch.object(smoke, "_controller_for", return_value=SnapshotFailureController()):
+        with patch.object(smoke, "_controller_for", return_value=controller):
             result = smoke.serve_native_ui(
                 "macos", smoke.Path("ui.app"), smoke.Path("profile"), 1,
                 io.StringIO('{"op":"close"}\n'), output,
             )
-        self.assertEqual(result, 1)
+        self.assertEqual(result, 0)
+        self.assertEqual(controller.snapshots, 1)
         response = json.loads(output.getvalue().splitlines()[-1])
-        self.assertFalse(response["ok"])
-        self.assertIn("post-cleanup AX snapshot failed", response["snapshot_error"])
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["status"], "Closed")
 
 
 class NativeUIClipboardCleanupTests(unittest.TestCase):

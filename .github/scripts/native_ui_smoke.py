@@ -3566,25 +3566,21 @@ def serve_native_ui(
                     except BaseException as error:
                         cleanup_error = error
                     cleanup_done = True
-                    snapshot_error: BaseException | None = None
-                    try:
-                        result = controller.snapshot()
-                    except BaseException as error:
-                        snapshot_error = error
-                        result = {}
-                    if cleanup_error is None and snapshot_error is None:
-                        response = {"ok": True, **result}
+                    # ``close_for_cleanup`` deliberately clears the controller
+                    # process and window identity.  A post-cleanup AX snapshot
+                    # therefore cannot describe a closed window and turns a
+                    # successful teardown into a false failure (Windows), or
+                    # can race the disappearing app (macOS).  The visible
+                    # close-window operation owns the close assertion and its
+                    # milestone capture; this terminal handshake only reports
+                    # whether exact cleanup completed.
+                    if cleanup_error is None:
+                        response = {"ok": True, "status": "Closed"}
                     else:
-                        response = {"ok": False, **result}
-                        if cleanup_error is not None:
-                            response["error"] = str(cleanup_error)
-                        if snapshot_error is not None:
-                            response["snapshot_error"] = (
-                                f"{type(snapshot_error).__name__}: {snapshot_error}"
-                            )
+                        response = {"ok": False, "error": str(cleanup_error)}
                     output_stream.write(encoder.encode(response) + "\n")
                     output_stream.flush()
-                    return 0 if cleanup_error is None and snapshot_error is None else 1
+                    return 0 if cleanup_error is None else 1
                 else:
                     raise NativeUISmokeError(f"unsupported native UI operation {operation!r}")
                 milestone_by_operation = {
