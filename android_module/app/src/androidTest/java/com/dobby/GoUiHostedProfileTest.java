@@ -38,6 +38,7 @@ import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry;
 import androidx.test.runner.lifecycle.Stage;
 import androidx.test.uiautomator.By;
 import androidx.test.uiautomator.Configurator;
+import androidx.test.uiautomator.StaleObjectException;
 import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
 
@@ -2424,21 +2425,39 @@ public final class GoUiHostedProfileTest {
         long deadline = System.currentTimeMillis() + 3_000L;
         Rect previous = null;
         int stableSamples = 0;
+        boolean staleNodeObserved = false;
         while (System.currentTimeMillis() < deadline) {
-            UiObject2 object = findRenderedObject(label);
-            Rect current = object == null ? null : object.getVisibleBounds();
-            if (current != null && !current.isEmpty()) {
-                if (current.equals(previous)) {
-                    stableSamples++;
-                    if (stableSamples >= UI_STABILITY_SAMPLES) {
-                        return new Rect(current);
+            try {
+                UiObject2 object = findRenderedObject(label);
+                Rect current = object == null ? null : object.getVisibleBounds();
+                if (current != null && !current.isEmpty()) {
+                    if (current.equals(previous)) {
+                        stableSamples++;
+                        if (stableSamples >= UI_STABILITY_SAMPLES) {
+                            return new Rect(current);
+                        }
+                    } else {
+                        previous = new Rect(current);
+                        stableSamples = 0;
                     }
                 } else {
-                    previous = new Rect(current);
+                    previous = null;
                     stableSamples = 0;
                 }
+            } catch (StaleObjectException stale) {
+                // Android may replace an accessibility node between lookup
+                // and bounds access while the rendered Fyne status changes.
+                // Retry within the bounded stability window; if the node
+                // never settles, fail closed rather than capture an
+                // unredacted screenshot.
+                staleNodeObserved = true;
+                previous = null;
+                stableSamples = 0;
             }
             Thread.sleep(POLL_MILLIS);
+        }
+        if (staleNodeObserved) {
+            throw new IllegalStateException("ANDROID_UI_SCREENSHOT_MASK_STALE:" + label);
         }
         throw new IllegalStateException("ANDROID_UI_SCREENSHOT_MASK_MISSING:" + label);
     }
