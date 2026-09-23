@@ -723,7 +723,7 @@ def _collect_ios_app_log_exports(
     *,
     budget: RunBudget,
 ) -> tuple[Path, ...]:
-    """Retain every complete app-created gzip before Simulator uninstall."""
+    """Retain the native app log and every complete app-created gzip."""
     result = _require_success(
         runner,
         simctl_get_app_container_command(simulator.udid, contract.bundle_identifier),
@@ -741,18 +741,6 @@ def _collect_ios_app_log_exports(
         raise IOSSimulatorStageError(
             "collect-app-container",
             f"app data-container path is unavailable: {container}",
-        )
-    candidates = sorted(
-        (
-            path for path in container.rglob("DobbyVPN_logs_*.jsonl.gz")
-            if not path.is_symlink() and path.is_file()
-        ),
-        key=lambda path: str(path),
-    )
-    if not candidates:
-        raise IOSSimulatorStageError(
-            "collect-app-log-export",
-            "Simulator app did not leave a DobbyVPN_logs_*.jsonl.gz export",
         )
     destination_dir = _ios_diagnostics_directory(work_dir)
     destination_dir.mkdir(parents=True, exist_ok=True)
@@ -772,6 +760,22 @@ def _collect_ios_app_log_exports(
             f"could not copy complete native app log: {native_log_copy}",
         ) from error
     native_log_copy.chmod(0o600)
+
+    # A failed app may not reach the UI action that exports its structured
+    # gzip log. Preserve the native runtime log first so that absence of that
+    # optional export cannot discard the diagnostics most useful for a crash.
+    candidates = sorted(
+        (
+            path for path in container.rglob("DobbyVPN_logs_*.jsonl.gz")
+            if not path.is_symlink() and path.is_file()
+        ),
+        key=lambda path: str(path),
+    )
+    if not candidates:
+        raise IOSSimulatorStageError(
+            "collect-app-log-export",
+            "Simulator app did not leave a DobbyVPN_logs_*.jsonl.gz export",
+        )
 
     retained: list[Path] = []
     for source in candidates:
