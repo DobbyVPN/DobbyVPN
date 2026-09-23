@@ -408,12 +408,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
             // Keep the app first because iOS 26 hosts the app-owned export
             // prompt in the product process.
             ("DobbyVPN", app),
-            // UIDocumentPickerViewController may be hosted by the app or by
-            // one of the Files/FileProvider system owners. On iOS 26 the
-            // picker is hosted in this app-owned UI scene extension; it is
-            // not discoverable through the DocumentsApp bundle or the app's
-            // own accessibility tree.
-            ("DocumentManagerUICore", XCUIApplication(bundleIdentifier: "com.apple.DocumentManagerUICore.Service")),
+            // iOS 26 gives the document-manager scene a runtime-specific
+            // service bundle identifier. The stable Files application
+            // exposes its actual picker controls through accessibility.
             ("Files", XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")),
             ("FileProviderUI", XCUIApplication(bundleIdentifier: "com.apple.fileproviderui")),
             ("SpringBoard", XCUIApplication(bundleIdentifier: "com.apple.springboard")),
@@ -474,6 +471,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
         in owners: [(String, XCUIApplication)],
         until deadline: Date
     ) -> Bool {
+        var returnedFromSaveLocation = false
         while Date() < deadline {
             for owner in owners {
                 // iOS 26's DocumentManagerUICore scene can expose the native
@@ -500,6 +498,29 @@ final class GoFyneUIInteractionTests: XCTestCase {
                     message: "native document picker remained visible after tapping Cancel"
                 )
             }
+
+            // On iPhone SE Simulator, the save picker can open at “On My
+            // iPhone” rather than its Browse root. That real picker page has
+            // Save and a Browse back button, but no Cancel. Navigate back one
+            // level in Files, then use the picker’s actual Cancel control;
+            // never substitute a coordinate tap or skip picker dismissal.
+            if !returnedFromSaveLocation,
+               let files = owners.first(where: { $0.0 == "Files" })?.1 {
+                let navigationBar = files.navigationBars.firstMatch
+                let save = documentPickerControl(files, named: "Save")
+                let browse = files.buttons.matching(
+                    NSPredicate(format: "identifier == %@ AND label ==[c] %@", "BackButton", "Browse")
+                ).firstMatch
+                if navigationBar.exists,
+                   save.exists,
+                   browse.waitForExistence(timeout: 0.2),
+                   browse.isHittable {
+                    browse.tap()
+                    returnedFromSaveLocation = true
+                    continue
+                }
+            }
+
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
         return false
