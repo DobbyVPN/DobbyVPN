@@ -474,23 +474,35 @@ final class GoFyneUIInteractionTests: XCTestCase {
         var returnedFromSaveLocation = false
         while Date() < deadline {
             for owner in owners {
-                // iOS 26's DocumentManagerUICore scene can expose the native
-                // picker actions as non-Button accessibility elements across
-                // the remote scene boundary. Resolve the semantic controls
-                // by label, identifier, or value in the complete native subtree;
-                // this remains a real UIKit control lookup, not a test-only
-                // replacement or a synthetic tap target.
-                let cancel = documentPickerControl(owner.1, named: "Cancel")
-                guard cancel.waitForExistence(timeout: 0.2) else { continue }
+                // iOS 26 can host DocumentManagerUICore as a nested remote
+                // scene under the app instead of activating Files. The picker
+                // root and toolbar controls are present in the full
+                // accessibility subtree, but may not appear in typed queries
+                // such as XCUIApplication.navigationBars.
+                let picker = documentPickerControl(owner.1, named: "Browse View (Picker)")
+                guard picker.waitForExistence(timeout: 0.2) else { continue }
 
-                // A navigation bar plus Cancel/Save is the stable native
-                // UIDocumentPicker surface across current Simulator hosts;
-                // it avoids retaining raw hierarchy or log evidence.
-                let navigationBar = owner.1.navigationBars.firstMatch
-                guard navigationBar.waitForExistence(timeout: 0.2) else { continue }
-                let save = documentPickerControl(owner.1, named: "Save")
-                guard save.waitForExistence(timeout: 0.2) else { continue }
-                guard !cancel.frame.isEmpty, !save.frame.isEmpty else { continue }
+                // On iPhone SE Simulator, Save can open at “On My iPhone”.
+                // That page has a real Browse back button and Save, but no
+                // usable Cancel control. Return to the picker root, then
+                // dismiss it with its actual Cancel action.
+                let save = documentPickerControl(picker, named: "Save")
+                let browse = picker.descendants(matching: .any).matching(
+                    NSPredicate(format: "identifier == %@ AND label ==[c] %@", "BackButton", "Browse")
+                ).firstMatch
+                if !returnedFromSaveLocation,
+                   save.waitForExistence(timeout: 0.2),
+                   browse.waitForExistence(timeout: 0.2),
+                   browse.isHittable {
+                    browse.tap()
+                    returnedFromSaveLocation = true
+                    break
+                }
+
+                let cancel = documentPickerControl(owner.1, named: "Cancel")
+                guard cancel.waitForExistence(timeout: 0.2),
+                      !cancel.frame.isEmpty,
+                      cancel.isHittable else { continue }
                 cancel.tap()
                 return waitForDocumentPickerReturn(
                     after: cancel,
@@ -499,34 +511,12 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 )
             }
 
-            // On iPhone SE Simulator, the save picker can open at “On My
-            // iPhone” rather than its Browse root. That real picker page has
-            // Save and a Browse back button, but no Cancel. Navigate back one
-            // level in Files, then use the picker’s actual Cancel control;
-            // never substitute a coordinate tap or skip picker dismissal.
-            if !returnedFromSaveLocation,
-               let files = owners.first(where: { $0.0 == "Files" })?.1 {
-                let navigationBar = files.navigationBars.firstMatch
-                let save = documentPickerControl(files, named: "Save")
-                let browse = files.buttons.matching(
-                    NSPredicate(format: "identifier == %@ AND label ==[c] %@", "BackButton", "Browse")
-                ).firstMatch
-                if navigationBar.exists,
-                   save.exists,
-                   browse.waitForExistence(timeout: 0.2),
-                   browse.isHittable {
-                    browse.tap()
-                    returnedFromSaveLocation = true
-                    continue
-                }
-            }
-
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
         return false
     }
 
-    private func documentPickerControl(_ owner: XCUIApplication, named name: String) -> XCUIElement {
+    private func documentPickerControl(_ owner: XCUIElement, named name: String) -> XCUIElement {
         let semanticLabel = NSPredicate(
             // DocumentManagerUICore crosses an accessibility-process boundary
             // on iOS 26. Its toolbar actions are exposed as generic elements
