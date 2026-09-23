@@ -501,7 +501,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
 
                 // iOS 26's embedded save picker can expose its dismissal as
                 // a Close (X) action instead of the older Cancel label.
-                let dismiss = documentPickerDismissControl(picker)
+                let pickerDismiss = documentPickerDismissControl(picker)
+                // On iPhone SE / iOS 26.2, the remote Browse View subtree
+                // contains Browse and Save, while its Cancel action is
+                // surfaced by the owning app outside that subtree.
+                let dismiss = pickerDismiss.exists
+                    ? pickerDismiss
+                    : documentPickerDismissControl(owner.1)
                 guard dismiss.waitForExistence(timeout: 0.2),
                       !dismiss.frame.isEmpty,
                       dismiss.isHittable else { continue }
