@@ -212,8 +212,9 @@ still requires the Apple distribution certificate and provisioning profiles.
 The Simulator check runs the packaged app's XCTest UI target. The single
 comprehensive journey locates the real Go/Fyne controls through accessibility,
 checks Settings/Back and release metadata, exercises native keyboard typing,
-editing and clearing, checks empty and malformed input outcomes, verifies that
-an unaccepted inline value is not restored after reopen, clears diagnostics,
+editing and clearing, checks local empty-input validation and submits a
+visibly non-empty value, verifies that the value is not restored after reopen,
+clears diagnostics,
 and opens the app-owned export prompt, follows Save into the native document
 picker, then cancels back to Fyne. The Share action remains the production
 `UIActivityViewController` path for a user-selected export. Complete app-owned

@@ -1,4 +1,6 @@
 import XCTest
+import UIKit
+import Vision
 
 /// UI-only proof for the installed Go/Fyne Simulator bundle.
 ///
@@ -9,6 +11,8 @@ import XCTest
 final class GoFyneUIInteractionTests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "vpn.dobby.app")
     private let connectionActionLabel = "VPN connection action"
+    private var checkedSoftwareKeyboardQuickPathIntroduction = false
+    private var attachedSoftwareKeyboardScreenshot = false
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -55,33 +59,45 @@ final class GoFyneUIInteractionTests: XCTestCase {
         XCTAssertTrue(connect.waitForExistence(timeout: 10), "Fyne connection action is not accessible")
         XCTAssertTrue(waitForEnabled(connect), "Fyne connection action is not enabled after startup")
 
-        // Exercise real keyboard taps, editing, clearing, and a malformed
-        // connect without depending on a renderer-specific accessibility value.
+        // Exercise real keyboard taps, editing, clearing, and a Connect
+        // attempt with non-empty text. The Entry's accessibility value is
+        // renderer-dependent, so verify the fixed non-secret fixture in the
+        // rendered field with OCR. Simulator provider errors do not prove a
+        // Go parser or VPN result.
         // A frame-anchored coordinate sends a real screen tap through Fyne's
         // GL view. Resolve each current software-keyboard key from the
         // accessibility tree, then tap its frame center so XCTest dispatches
         // the same key event a user would produce.
         editConfiguration(inputAfterSettings, text: "bad")
+        assertRenderedConfiguration("bad", in: inputAfterSettings)
 
         // Exercise keyboard editing before clearing the value. The exact
-        // accessibility value is renderer-dependent, so the subsequent
-        // malformed-configuration result is the portable proof that the
-        // edited value reached the production Connect callback.
+        // accessibility value is renderer-dependent; rendered-field checks
+        // prove the actual software-key taps changed the input.
         editConfiguration(inputAfterSettings, deleteCount: 1)
         editConfiguration(inputAfterSettings, text: "x")
         editConfiguration(inputAfterSettings, deleteCount: 3)
         editConfiguration(inputAfterSettings, text: "bad")
+        assertRenderedConfiguration("bad", in: inputAfterSettings)
+        attachScreenshot("configuration-input")
 
         dismissSoftwareKeyboard()
         XCTAssertFalse(connect.frame.isEmpty, "Fyne Connect control has no tappable frame after keyboard dismissal")
         XCTAssertTrue(
             tapConnectExpectingFailure(connect),
-            "Connect did not produce a visible malformed-input failure state"
+            "Connect did not produce a visible error state for non-empty input"
         )
         attachScreenshot("failure")
+        let nonemptyConnectFailureText = recognizedText(in: app.screenshot().image)
+            .map(\.text)
+            .joined(separator: " ")
+        XCTAssertFalse(
+            nonemptyConnectFailureText.localizedCaseInsensitiveContains("connection configuration is required"),
+            "Connect treated the visibly non-empty input as empty"
+        )
         XCTAssertFalse(element(named: "Connected").exists, "Simulator UI must not claim a connected VPN")
 
-        // The malformed inline fixture is deliberately not persisted. Restart
+        // The non-empty inline fixture is deliberately not persisted. Restart
         // immediately after the failed action so the error state never needs
         // to refocus Fyne's native input responder.
         app.terminate()
@@ -129,9 +145,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
 
         // Prove non-persistence through the rendered product behavior, not
         // through an accessibility value that this custom Entry may omit. Do
-        // not refocus the input after the first error: a restored malformed
-        // value would produce the malformed-input error, while a correctly
-        // empty reopened input produces the required-configuration error.
+        // not refocus the input after the first error: a restored value would
+        // repeat the prior non-empty provider failure, while an empty reopened
+        // input produces the required-configuration error.
         XCTAssertTrue(
             tapConnectExpectingFailure(reopenedConnect),
             "reopened empty configuration did not produce a visible error"
@@ -150,6 +166,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
         XCTAssertTrue(
             reopenedDetails.waitForExistence(timeout: 5),
             "reopened empty-input error did not expose accessible connection details"
+        )
+        let emptyFailureText = recognizedText(in: app.screenshot().image)
+            .map(\.text)
+            .joined(separator: " ")
+        XCTAssertTrue(
+            emptyFailureText.localizedCaseInsensitiveContains("connection configuration is required"),
+            "reopened empty configuration did not render the required-configuration error"
         )
         XCTAssertFalse(element(named: "Connected").exists, "reopened empty configuration must not claim a connected VPN")
 
@@ -305,6 +328,12 @@ final class GoFyneUIInteractionTests: XCTestCase {
             }
         }
 
+        dismissSoftwareKeyboardQuickPathIntroductionIfPresent()
+        if !attachedSoftwareKeyboardScreenshot {
+            attachScreenshot("software-keyboard")
+            attachedSoftwareKeyboardScreenshot = true
+        }
+
         for index in 0..<totalKeys {
             let isDelete = index < deletes
             let label = isDelete ? nil : keyLabels[index - deletes]
@@ -387,6 +416,107 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 "software keyboard key did not become tappable for "
                     + (isDelete ? "delete" : label ?? "unknown")
             )
+        }
+    }
+
+    private func dismissSoftwareKeyboardQuickPathIntroductionIfPresent() {
+        guard !checkedSoftwareKeyboardQuickPathIntroduction else { return }
+        checkedSoftwareKeyboardQuickPathIntroduction = true
+
+        // A fresh iOS Simulator can place the first-use QuickPath tutorial
+        // over the software keyboard. It may be owned by SpringBoard or by
+        // the keyboard window and may be absent from XCTest's accessibility
+        // tree, so try the native button first and then locate its rendered
+        // label in a screenshot.
+        let owners = [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")]
+        let continueLabel = NSPredicate(
+            format: "label == %@ OR identifier == %@",
+            "Continue",
+            "Continue"
+        )
+
+        for owner in owners {
+            let button = owner.buttons.matching(continueLabel).firstMatch
+            guard button.waitForExistence(timeout: 0.25) else { continue }
+            button.tap()
+            XCTAssertTrue(
+                app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                "software keyboard did not remain available after dismissing its QuickPath introduction"
+            )
+            return
+        }
+
+        let screenshot = app.screenshot().image
+        let visibleText = recognizedText(in: screenshot)
+        if let button = visibleText.first(where: {
+            $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare("Continue") == .orderedSame
+        }) {
+            // Vision rectangles use a bottom-left origin; XCTest screen
+            // coordinates use a top-left origin.
+            let screenX = button.box.midX * screenshot.size.width
+            let screenY = (1 - button.box.midY) * screenshot.size.height
+            let frame = app.frame
+            let normalizedX = (screenX - frame.minX) / frame.width
+            let normalizedY = (screenY - frame.minY) / frame.height
+            guard (0...1).contains(normalizedX), (0...1).contains(normalizedY) else {
+                XCTFail("QuickPath Continue button was outside the app's tappable screen")
+                return
+            }
+            app.coordinate(withNormalizedOffset: CGVector(dx: normalizedX, dy: normalizedY)).tap()
+            XCTAssertTrue(
+                app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                "software keyboard did not remain available after dismissing its QuickPath introduction"
+            )
+            let remainingText = recognizedText(in: app.screenshot().image)
+            XCTAssertFalse(
+                remainingText.contains {
+                    $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .localizedCaseInsensitiveCompare("Continue") == .orderedSame
+                },
+                "QuickPath Continue panel remained visible after tapping its rendered button"
+            )
+            return
+        }
+
+        let introductionIsVisible = visibleText.contains {
+            $0.text.localizedCaseInsensitiveContains("Speed up your typing")
+        }
+        XCTAssertFalse(
+            introductionIsVisible,
+            "iOS keyboard QuickPath panel is visible but its Continue button could not be located"
+        )
+    }
+
+    private func assertRenderedConfiguration(_ expected: String, in input: XCUIElement) {
+        if let value = input.value as? String, value == expected {
+            return
+        }
+        let visible = recognizedText(in: app.screenshot().image).contains {
+            $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare(expected) == .orderedSame
+        }
+        let accessibilityValue = input.value as? String ?? "<unavailable>"
+        XCTAssertTrue(
+            visible,
+            "real software-key taps did not render \(expected.debugDescription); accessibility value was \(accessibilityValue.debugDescription)"
+        )
+    }
+
+    private func recognizedText(in image: UIImage) -> [(text: String, box: CGRect)] {
+        guard let cgImage = image.cgImage else { return [] }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        do {
+            try VNImageRequestHandler(cgImage: cgImage).perform([request])
+        } catch {
+            XCTFail("Vision could not inspect the rendered UI screenshot: \(error)")
+            return []
+        }
+        return (request.results ?? []).compactMap { observation in
+            guard let candidate = observation.topCandidates(1).first else { return nil }
+            return (candidate.string, observation.boundingBox)
         }
     }
 

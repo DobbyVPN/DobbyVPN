@@ -10,9 +10,10 @@ one comprehensive UI mini contract. The
 tests locate the real Fyne controls through the Simulator accessibility tree,
 verify Settings/Back and release metadata, exercise real keyboard input and
 editing/clearing by focusing the freshly rendered Fyne input once per edit and
-tapping the published software-keyboard key frames, check empty and malformed
-configuration outcomes, exercise reopen/persistence behavior, and exercise
-the production Clear logs plus the supported native log-export flow: the
+tapping the published software-keyboard key frames, check local empty-input
+validation, submit a visibly non-empty value, exercise reopen/persistence
+behavior, and use the production Clear logs plus the supported native
+log-export flow: the
 app-owned UIKit `Export logs` prompt exposes explicit Share, Save, and Close
 actions, then Save is canceled in the native document picker. The simulator
 does not require the follow-on `UIActivityViewController` surface, which can be

@@ -38,6 +38,15 @@ runs the same scenarios through its non-GUI binding matrix for every discovered
 profile. The iOS Simulator mini lane is the separate comprehensive rendered UI
 contract described in the coverage table.
 
+The iOS Simulator UI journey types and edits a non-empty value, then submits
+it to the production Connect action. The current Simulator run surfaces
+`PLATFORM_FAILED: configuration mailbox write returned failure`; this verifies
+only that the rendered UI handles the provider-side failure without claiming a
+connection. It does not establish that Go parsed that value or that VPN traffic
+works. Empty input is validated locally and has a separate required-input
+assertion. Do not describe the non-empty submission as malformed-config parser
+qualification.
+
 | Scenario | Behavior |
 |---|---|
 | `functional.configure` | Accept and configure the profile. |
