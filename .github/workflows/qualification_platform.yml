@@ -626,6 +626,22 @@ jobs:
                  ;;
              esac'
 
+      - name: Make system-service log readable for redacted diagnostics
+        if: always() && env.RUN_DIR != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$PLATFORM" != linux ] && [ "$PLATFORM" != macos ]; then
+            exit 0
+          fi
+          service_log="$RUN_DIR/service.log"
+          if [ ! -f "$service_log" ]; then
+            printf 'System-service log is unavailable before diagnostics collection: %s\n' "$service_log" >&2
+            exit 0
+          fi
+          sudo chown "$(id -u):$(id -g)" "$service_log"
+          test -r "$service_log"
+
       - name: Collect complete redacted qualification diagnostics
         if: always() && env.RUN_DIR != ''
         shell: bash
