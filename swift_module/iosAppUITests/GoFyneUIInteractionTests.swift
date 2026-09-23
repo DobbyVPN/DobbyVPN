@@ -499,15 +499,17 @@ final class GoFyneUIInteractionTests: XCTestCase {
                     break
                 }
 
-                let cancel = documentPickerControl(owner.1, named: "Cancel")
-                guard cancel.waitForExistence(timeout: 0.2),
-                      !cancel.frame.isEmpty,
-                      cancel.isHittable else { continue }
-                cancel.tap()
+                // iOS 26's embedded save picker can expose its dismissal as
+                // a Close (X) action instead of the older Cancel label.
+                let dismiss = documentPickerDismissControl(picker)
+                guard dismiss.waitForExistence(timeout: 0.2),
+                      !dismiss.frame.isEmpty,
+                      dismiss.isHittable else { continue }
+                dismiss.tap()
                 return waitForDocumentPickerReturn(
-                    after: cancel,
+                    after: dismiss,
                     owner: owner.1,
-                    message: "native document picker remained visible after tapping Cancel"
+                    message: "native document picker remained visible after dismissal"
                 )
             }
 
@@ -533,6 +535,16 @@ final class GoFyneUIInteractionTests: XCTestCase {
             name
         )
         return owner.descendants(matching: .any).matching(semanticLabel).firstMatch
+    }
+
+    private func documentPickerDismissControl(_ picker: XCUIElement) -> XCUIElement {
+        let semanticLabel = NSPredicate(
+            format: "label ==[c] 'Cancel' OR identifier ==[c] 'Cancel' OR value ==[c] 'Cancel' " +
+                "OR label CONTAINS[c] 'Cancel' OR identifier CONTAINS[c] 'Cancel' OR value CONTAINS[c] 'Cancel' " +
+                "OR label ==[c] 'Close' OR identifier ==[c] 'Close' OR value ==[c] 'Close' " +
+                "OR label CONTAINS[c] 'Close' OR identifier CONTAINS[c] 'Close' OR value CONTAINS[c] 'Close'"
+        )
+        return picker.descendants(matching: .any).matching(semanticLabel).firstMatch
     }
 
     private func waitForDocumentPickerReturn(
