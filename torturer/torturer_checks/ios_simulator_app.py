@@ -7,6 +7,7 @@ import gzip
 import importlib.util
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shutil
@@ -73,7 +74,7 @@ _APP_PRODUCT = "Dobby-Vpn.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
 _DEFAULT_ARCHITECTURE = "arm64"
 _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
-_SIMULATOR_PREFERENCE_DOMAIN = "com.apple.iphonesimulator"
+_SIMULATOR_PREFERENCES_FILE = "com.apple.iphonesimulator.plist"
 _HARDWARE_KEYBOARD_PREFERENCE = "ConnectHardwareKeyboard"
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
@@ -97,7 +98,8 @@ STAGE_TIMEOUT_SECONDS = {
     "list-devices": 30,
     "read-sdk-version": 30,
     "read-hardware-keyboard": 10,
-    "write-hardware-keyboard": 10,
+    "open-simulator": 30,
+    "toggle-hardware-keyboard": 10,
     "restore-hardware-keyboard": 15,
     "boot": 120,
     # An erased iOS 26 Simulator can spend several minutes in its normal
@@ -146,6 +148,13 @@ class IOSSimulatorStageError(IOSSimulatorAppContractError):
         else:
             message = f"iOS Simulator stage '{stage}' failed: {normalized}"
         super().__init__(message)
+
+
+@dataclass
+class SimulatorHardwareKeyboardState:
+    simulator_udid: str
+    was_connected: bool
+    changed: bool = False
 
 
 class RunBudget:
@@ -909,79 +918,148 @@ def _terminate_app(
         raise failure
 
 
-def _disable_simulator_hardware_keyboard(
-    runner: CommandRunner, *, budget: RunBudget
-) -> str | None:
-    """Expose the software keyboard that XCTest taps for real Fyne input."""
-    read_timeout = _stage_timeout(budget, "read-hardware-keyboard")
+def _read_simulator_hardware_keyboard(simulator_udid: str) -> bool:
+    """Read the effective per-device Simulator keyboard setting.
+
+    Simulator keeps this override under DevicePreferences/<UDID>. Its
+    top-level ConnectHardwareKeyboard default does not override an existing
+    per-device value.
+    """
+    preferences_path = (
+        Path.home() / "Library" / "Preferences" / _SIMULATOR_PREFERENCES_FILE
+    )
     try:
-        read = runner.run(
-            [
-                "/usr/bin/defaults", "read", _SIMULATOR_PREFERENCE_DOMAIN,
-                _HARDWARE_KEYBOARD_PREFERENCE,
-            ],
-            timeout_seconds=read_timeout,
-        )
-    except BaseException as error:
-        if isinstance(error, (KeyboardInterrupt, SystemExit)):
-            raise
-        raise _stage_error(
-            "read-hardware-keyboard", error, timeout_seconds=read_timeout
-        ) from error
-    if read.returncode == 0:
-        previous = read.stdout.strip()
-    elif "does not exist" in read.stderr:
-        previous = None
-    else:
-        failure = IOSSimulatorStageError(
-            "read-hardware-keyboard",
-            f"exit code {read.returncode}",
-            timeout_seconds=read_timeout,
-        )
-        emit_streams("ios-read-hardware-keyboard", read.stdout, read.stderr)
-        add_stream_notes(failure, "command", read.stdout, read.stderr)
-        raise failure
-    if previous not in {None, "0", "1"}:
+        with preferences_path.open("rb") as preferences_file:
+            preferences = plistlib.load(preferences_file)
+    except FileNotFoundError:
+        return True
+    except (OSError, plistlib.InvalidFileException, ValueError) as error:
         raise IOSSimulatorStageError(
             "read-hardware-keyboard",
-            "preference has an unsupported value",
-            timeout_seconds=read_timeout,
+            f"could not read Simulator preferences: {type(error).__name__}: {error}",
+            timeout_seconds=STAGE_TIMEOUT_SECONDS["read-hardware-keyboard"],
+        ) from error
+
+    if not isinstance(preferences, dict):
+        raise IOSSimulatorStageError(
+            "read-hardware-keyboard", "Simulator preferences are not a dictionary"
         )
+    device_preferences = preferences.get("DevicePreferences", {})
+    if not isinstance(device_preferences, dict):
+        raise IOSSimulatorStageError(
+            "read-hardware-keyboard", "per-device Simulator preferences are not a dictionary"
+        )
+    device = device_preferences.get(simulator_udid, {})
+    if not isinstance(device, dict):
+        raise IOSSimulatorStageError(
+            "read-hardware-keyboard", "selected Simulator preferences are not a dictionary"
+        )
+    value = device.get(_HARDWARE_KEYBOARD_PREFERENCE, True)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    raise IOSSimulatorStageError(
+        "read-hardware-keyboard", "per-device preference has an unsupported value"
+    )
+
+
+def _toggle_simulator_hardware_keyboard(
+    runner: CommandRunner,
+    simulator_udid: str,
+    *,
+    stage: str,
+    budget: RunBudget,
+    cleanup: bool = False,
+) -> None:
+    open_timeout = (
+        budget.cleanup_timeout()
+        if cleanup
+        else _stage_timeout(budget, "open-simulator")
+    )
     _require_success(
         runner,
         [
-            "/usr/bin/defaults", "write", _SIMULATOR_PREFERENCE_DOMAIN,
-            _HARDWARE_KEYBOARD_PREFERENCE, "-bool", "false",
+            "/usr/bin/open", "-a", "Simulator", "--args",
+            "-CurrentDeviceUDID", simulator_udid,
         ],
-        "write-hardware-keyboard",
+        "open-simulator",
         budget=budget,
-        timeout_seconds=STAGE_TIMEOUT_SECONDS["write-hardware-keyboard"],
+        timeout_seconds=open_timeout,
+        bounded_timeout=cleanup,
     )
-    return previous
+    keyboard_timeout = (
+        budget.cleanup_timeout()
+        if cleanup
+        else _stage_timeout(budget, stage)
+    )
+    _require_success(
+        runner,
+        [
+            "/usr/bin/osascript", "-e",
+            'tell application id "com.apple.iphonesimulator" to activate',
+            "-e",
+            'tell application "System Events" to tell process "Simulator" '
+            'to keystroke "k" using {command down, shift down}',
+        ],
+        stage,
+        budget=budget,
+        timeout_seconds=keyboard_timeout,
+        bounded_timeout=cleanup,
+    )
+
+
+def _disable_simulator_hardware_keyboard(
+    runner: CommandRunner,
+    state: SimulatorHardwareKeyboardState,
+    *,
+    budget: RunBudget,
+) -> None:
+    if not state.was_connected:
+        return
+    # Mark the state before posting the shortcut: if the automation command
+    # times out after delivering its key event, cleanup still checks and
+    # restores the effective setting.
+    state.changed = True
+    _toggle_simulator_hardware_keyboard(
+        runner,
+        state.simulator_udid,
+        stage="toggle-hardware-keyboard",
+        budget=budget,
+    )
+    if _read_simulator_hardware_keyboard(state.simulator_udid):
+        raise IOSSimulatorStageError(
+            "toggle-hardware-keyboard",
+            "Simulator still reports its hardware keyboard connected",
+            timeout_seconds=STAGE_TIMEOUT_SECONDS["toggle-hardware-keyboard"],
+        )
 
 
 def _restore_simulator_hardware_keyboard(
-    runner: CommandRunner, previous: str | None, *, budget: RunBudget
+    runner: CommandRunner,
+    state: SimulatorHardwareKeyboardState,
+    *,
+    budget: RunBudget,
 ) -> None:
-    if previous is None:
-        command = [
-            "/usr/bin/defaults", "delete", _SIMULATOR_PREFERENCE_DOMAIN,
-            _HARDWARE_KEYBOARD_PREFERENCE,
-        ]
-    else:
-        command = [
-            "/usr/bin/defaults", "write", _SIMULATOR_PREFERENCE_DOMAIN,
-            _HARDWARE_KEYBOARD_PREFERENCE, "-bool",
-            "true" if previous == "1" else "false",
-        ]
-    _require_success(
+    if not state.changed:
+        return
+    if _read_simulator_hardware_keyboard(state.simulator_udid) == state.was_connected:
+        state.changed = False
+        return
+    _toggle_simulator_hardware_keyboard(
         runner,
-        command,
-        "restore-hardware-keyboard",
+        state.simulator_udid,
+        stage="restore-hardware-keyboard",
         budget=budget,
-        timeout_seconds=budget.cleanup_timeout(),
-        bounded_timeout=True,
+        cleanup=True,
     )
+    if _read_simulator_hardware_keyboard(state.simulator_udid) != state.was_connected:
+        raise IOSSimulatorStageError(
+            "restore-hardware-keyboard",
+            "Simulator did not restore the prior hardware keyboard setting",
+            timeout_seconds=budget.cleanup_timeout(),
+        )
+    state.changed = False
 
 
 def run_ios_simulator_app_contract(
@@ -1003,8 +1081,7 @@ def run_ios_simulator_app_contract(
     simulator: AvailableSimulator | None = None
     app_installed = False
     boot_started = False
-    keyboard_preference_configured = False
-    previous_keyboard_preference: str | None = None
+    keyboard_state: SimulatorHardwareKeyboardState | None = None
     failure: BaseException | None = None
     app_path = contract.app_path(work_dir)
     result_bundle = work_dir / "xctest-results.xcresult"
@@ -1026,10 +1103,10 @@ def run_ios_simulator_app_contract(
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise
             raise _stage_error("select-device", error) from error
-        previous_keyboard_preference = _disable_simulator_hardware_keyboard(
-            runner, budget=budget
+        keyboard_state = SimulatorHardwareKeyboardState(
+            simulator_udid=simulator.udid,
+            was_connected=_read_simulator_hardware_keyboard(simulator.udid),
         )
-        keyboard_preference_configured = True
         boot_started = True
         boot_timeout = _stage_timeout(budget, "boot")
         try:
@@ -1055,6 +1132,9 @@ def run_ios_simulator_app_contract(
             simctl_bootstatus_command(simulator.udid),
             "bootstatus",
             budget=budget,
+        )
+        _disable_simulator_hardware_keyboard(
+            runner, keyboard_state, budget=budget
         )
 
         if not app_path.is_dir():
@@ -1154,20 +1234,20 @@ def run_ios_simulator_app_contract(
                     _terminate_app(runner, simulator, contract, budget=budget)
                 except BaseException as error:
                     failure = _add_note(failure, "Simulator app cleanup also failed", error)
+            if keyboard_state is not None:
+                try:
+                    _restore_simulator_hardware_keyboard(
+                        runner, keyboard_state, budget=budget
+                    )
+                except BaseException as error:
+                    failure = _add_note(
+                        failure, "Simulator keyboard preference cleanup also failed", error
+                    )
             if boot_started:
                 try:
                     _shutdown_simulator(runner, simulator, budget=budget)
                 except BaseException as error:
                     failure = _add_note(failure, "Simulator shutdown also failed", error)
-        if keyboard_preference_configured:
-            try:
-                _restore_simulator_hardware_keyboard(
-                    runner, previous_keyboard_preference, budget=budget
-                )
-            except BaseException as error:
-                failure = _add_note(
-                    failure, "Simulator keyboard preference cleanup also failed", error
-                )
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
     if simulator is None or retained_result_bundle is None or not retained_log_exports:
