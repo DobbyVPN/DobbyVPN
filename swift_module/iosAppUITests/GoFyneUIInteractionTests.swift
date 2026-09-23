@@ -67,13 +67,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
         // accessibility value is renderer-dependent, so the subsequent
         // malformed-configuration result is the portable proof that the
         // edited value reached the production Connect callback.
-        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, deleteCount: 1)
-        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, text: "x")
-        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, deleteCount: 3)
-        dismissSoftwareKeyboard()
         editConfiguration(inputAfterSettings, text: "bad")
 
         dismissSoftwareKeyboard()
@@ -253,13 +249,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
         let totalKeys = deletes + keyLabels.count
         XCTAssertGreaterThan(totalKeys, 0, "configuration edit must contain a key event")
 
-        // Focus the freshly rendered input once for this edit operation. Each
-        // key event can invalidate the prior keyboard subtree, so reacquire
-        // the current keyboard/key objects with bounded waits. A Simulator
-        // can leave a stale keyboard accessibility object behind after a
-        // real key tap; after a short bounded retry window, refocus the
-        // rendered input and resolve the live keyboard again. No fixed sleep
-        // or XCTest text injection is used.
+        // Reuse a live software keyboard across adjacent edit operations.
+        // Each key event can invalidate the prior keyboard subtree, so
+        // reacquire the current keyboard/key objects with bounded waits. A
+        // Simulator can leave a stale keyboard accessibility object behind
+        // after a real key tap; after a short bounded retry window, refocus
+        // the rendered input and resolve the live keyboard again. No fixed
+        // sleep or XCTest text injection is used.
         let editDeadline = Date().addingTimeInterval(90)
         var focusInput = input
         func focusCurrentInput(until deadline: Date) -> Bool {
@@ -298,9 +294,15 @@ final class GoFyneUIInteractionTests: XCTestCase {
             _ = XCTWaiter.wait(for: [gone], timeout: timeout)
         }
 
-        guard focusCurrentInput(until: min(Date().addingTimeInterval(15), editDeadline)) else {
-            XCTFail("Fyne configuration input did not become focusable")
-            return
+        // Preserve one native keyboard session across adjacent edit steps.
+        // Tapping the already-focused Fyne entry between edits can open the
+        // iOS text-edit menu; that menu leaves the keyboard rendered but
+        // changes the accessibility tree XCTest uses to locate its keys.
+        if !app.keyboards.firstMatch.exists {
+            guard focusCurrentInput(until: min(Date().addingTimeInterval(15), editDeadline)) else {
+                XCTFail("Fyne configuration input did not become focusable")
+                return
+            }
         }
 
         for index in 0..<totalKeys {
@@ -493,8 +495,10 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 if !returnedFromSaveLocation,
                    save.waitForExistence(timeout: 0.2),
                    browse.waitForExistence(timeout: 0.2),
-                   browse.isHittable {
-                    browse.tap()
+                   !browse.frame.isEmpty {
+                    guard returnToDocumentPickerRoot(using: browse, owner: owner.1) else {
+                        return false
+                    }
                     returnedFromSaveLocation = true
                     break
                 }
@@ -522,6 +526,51 @@ final class GoFyneUIInteractionTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
         return false
+    }
+
+    private func returnToDocumentPickerRoot(using browse: XCUIElement, owner: XCUIApplication) -> Bool {
+        func tapBrowse() {
+            if browse.isHittable {
+                browse.tap()
+            } else {
+                // The iOS 26 remote picker exposes the visible Browse button
+                // with a valid frame but may mark its native action point as
+                // non-hittable. A center-frame coordinate is still a real
+                // Simulator tap on that same UIKit control.
+                browse.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
+        }
+
+        func pickerReturnedToRoot(until deadline: Date) -> Bool {
+            while Date() < deadline {
+                let picker = documentPickerControl(owner, named: "Browse View (Picker)")
+                let saveLocationBack = picker.descendants(matching: .any).matching(
+                    NSPredicate(format: "identifier == %@ AND label ==[c] %@", "BackButton", "Browse")
+                ).firstMatch
+                if picker.exists && !saveLocationBack.exists {
+                    return true
+                }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            return false
+        }
+
+        tapBrowse()
+        guard !pickerReturnedToRoot(until: Date().addingTimeInterval(3)) else {
+            return true
+        }
+
+        // A native accessibility tap can return without navigating for this
+        // remote scene. Re-query the still-visible control before retrying at
+        // its frame center, then require the Save-location Back button to
+        // leave the accessibility tree.
+        let picker = documentPickerControl(owner, named: "Browse View (Picker)")
+        let currentBrowse = picker.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == %@ AND label ==[c] %@", "BackButton", "Browse")
+        ).firstMatch
+        guard picker.exists, currentBrowse.exists, !currentBrowse.frame.isEmpty else { return false }
+        currentBrowse.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        return pickerReturnedToRoot(until: Date().addingTimeInterval(3))
     }
 
     private func documentPickerControl(_ owner: XCUIElement, named name: String) -> XCUIElement {
