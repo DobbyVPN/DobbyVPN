@@ -60,6 +60,15 @@ class NativeUIJourneyError(RuntimeError):
         self.stage = stage
 
 
+def _exception_details(error: BaseException) -> str:
+    details = [f"{type(error).__name__}: {error}"]
+    details.extend(
+        f"note: {note}"
+        for note in getattr(error, "__notes__", ())
+    )
+    return "\n".join(details)
+
+
 _REQUIRED_TRUE_CHECKS = frozenset({
     "configure_native",
     "connect_native",
@@ -621,15 +630,15 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         try:
             ui.close()
         except BaseException as error:
-            cleanup_errors.append(f"native-ui: {type(error).__name__}: {error}")
+            cleanup_errors.append(f"native-ui: {_exception_details(error)}")
         try:
             base.reset(timeout_seconds=min(args.timeout, 30.0))
         except BaseException as error:
-            cleanup_errors.append(f"base-reset: {type(error).__name__}: {error}")
+            cleanup_errors.append(f"base-reset: {_exception_details(error)}")
         try:
             base.finalize(timeout_seconds=min(args.timeout, 30.0))
         except BaseException as error:
-            cleanup_errors.append(f"base-finalize: {type(error).__name__}: {error}")
+            cleanup_errors.append(f"base-finalize: {_exception_details(error)}")
         if cleanup_errors and primary is not None:
             for value in cleanup_errors:
                 primary.add_note(value)
