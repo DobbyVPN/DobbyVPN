@@ -505,17 +505,20 @@ final class GoFyneUIInteractionTests: XCTestCase {
 
                 // iOS 26's embedded save picker can expose its dismissal as
                 // a Close (X) action instead of the older Cancel label.
-                let pickerDismiss = documentPickerDismissControl(picker)
-                // On iPhone SE / iOS 26.2, the remote Browse View subtree
-                // contains Browse and Save, while its Cancel action is
-                // surfaced by the owning app outside that subtree.
-                let dismiss = pickerDismiss.exists
-                    ? pickerDismiss
-                    : documentPickerDismissControl(owner.1)
+                // iOS 26 can change accessibility ownership while the remote
+                // picker returns from Save to Browse. Prefer a fresh owner-root
+                // query instead of reusing a nested picker control proxy.
+                let ownerDismiss = documentPickerDismissControl(owner.1)
+                let dismiss = ownerDismiss.exists
+                    ? ownerDismiss
+                    : documentPickerDismissControl(picker)
                 guard dismiss.waitForExistence(timeout: 0.2),
-                      !dismiss.frame.isEmpty,
-                      dismiss.isHittable else { continue }
-                dismiss.tap()
+                      !dismiss.frame.isEmpty else { continue }
+                // The label lookup identifies the actual native control;
+                // iOS 26 can mark this real remote-scene control non-hittable
+                // even while its frame is visible. Use a physical touch at
+                // that live frame center, as for the Browse back control.
+                dismiss.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
                 return waitForDocumentPickerReturn(
                     after: dismiss,
                     owner: owner.1,
