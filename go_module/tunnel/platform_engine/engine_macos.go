@@ -16,6 +16,11 @@ import (
 
 var LastIface string
 
+const (
+	macOSTunReleaseTimeout = 5 * time.Second
+	macOSTunReleasePoll    = 50 * time.Millisecond
+)
+
 func startPlatformEngine(cfg interface{}) error {
 	c := cfg.(EngineConfig)
 	proxyAddr := c.ProxyAddr
@@ -89,9 +94,34 @@ func startPlatformEngine(cfg interface{}) error {
 }
 
 func stopPlatformEngine(stopDevice func()) error {
+	deviceName := LastIface
 	stopDevice()
-	LastIface = ""
-	return nil
+	if deviceName == "" {
+		return nil
+	}
+
+	deadline := time.Now().Add(macOSTunReleaseTimeout)
+	for {
+		interfaces, err := net.Interfaces()
+		if err != nil {
+			return fmt.Errorf("list interfaces while releasing macOS TUN %s: %w", deviceName, err)
+		}
+		found := false
+		for _, iface := range interfaces {
+			if iface.Name == deviceName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			LastIface = ""
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("macOS TUN %s remained after tun2socks stopped", deviceName)
+		}
+		time.Sleep(macOSTunReleasePoll)
+	}
 }
 
 func platformInterfaceName() string { return LastIface }

@@ -2937,9 +2937,13 @@ class NativeUIController:
 
         def visible() -> bool:
             nonlocal last_window_not_ready
-            if self.process is not None and self.process.poll() is not None:
+            if (
+                self.process is not None
+                and self.process.poll() not in (None, 0)
+            ):
                 raise NativeUISmokeError(
-                    f"Dobby VPN exited with code {self.process.returncode} before creating a window"
+                    "macOS LaunchServices opener failed with code "
+                    f"{self.process.returncode} before window discovery"
                 )
             if self.macos_pid is None:
                 if self.macos_expected_executable is None:
@@ -2990,9 +2994,14 @@ class NativeUIController:
             )
         except NativeUIWaitTimeout as error:
             failure: NativeUISmokeError = error
+            if self.process is not None and self.process.poll() == 0:
+                failure = NativeUISmokeError(
+                    "LaunchServices reported a successful open, but Dobby VPN "
+                    f"did not expose its native window: {error}"
+                )
             if last_window_not_ready is not None:
                 failure = NativeUISmokeError(
-                    f"{error}: {last_window_not_ready}"
+                    f"{failure}: {last_window_not_ready}"
                 )
             if self.macos_process_identity is not None:
                 diagnostic = _macos_startup_diagnostic(self.macos_process_identity.pid)

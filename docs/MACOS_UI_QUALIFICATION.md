@@ -34,6 +34,11 @@ window, ambiguous identity, or malformed response fails the lane.
 - Keep the submitted profile on the clipboard until the physical Connect
   action is acknowledged, then restore the previous clipboard. A posted paste
   shortcut alone is not proof that Fyne consumed the value.
+- On launch, `open -W -n` is only the LaunchServices opener, not the app
+  process. A zero exit means the launch request was accepted; keep discovering
+  the exact app process and native window until the existing deadline. Do not
+  classify that zero exit as app termination or clean up a process whose
+  identity has not yet been captured. A nonzero opener exit is a launch error.
 - Use the standard Cmd+Q menu action for graceful close. GLFW supplies that
   command but does not supply a default Cmd+W close shortcut. Require both the
   exact app process and its `open` launcher to exit normally before reopen.
@@ -46,6 +51,16 @@ The bounded AX helper examines only a newest-first root suffix, selects the
 current root by its relationship to the exact window, collapses only exact
 same-frame duplicates, and rejects distinct-frame ambiguity. The helper uses
 public AX APIs with per-element deadlines and bounded depth/node counts.
+
+## Tunnel teardown timing
+
+macOS may keep the app-owned `utun` interface visible briefly after
+`tun2socks` stops. AUTO profile selection can start the next candidate during
+that interval, when reusing the interface name still fails with “resource
+busy.” After stopping the device, the platform engine therefore waits for its
+own interface to disappear (50 ms polling, bounded by 5 seconds) before
+allowing the next candidate. Interface-list errors and a timeout remain
+connection failures; they are not treated as successful cleanup.
 
 ## Diagnostics and cleanup
 
