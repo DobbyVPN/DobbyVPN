@@ -875,9 +875,27 @@ public final class GoUiHostedProfileTest {
 
     private UiObject2 findUiObject(String label) {
         UiDevice device = uiDevice();
-        UiObject2 value = device.findObject(By.text(label).pkg(context.getPackageName()));
+        UiObject2 value = findVisibleUiObject(
+                device.findObjects(By.text(label).pkg(context.getPackageName())));
         if (value != null) return value;
-        return device.findObject(By.desc(label).pkg(context.getPackageName()));
+        return findVisibleUiObject(
+                device.findObjects(By.desc(label).pkg(context.getPackageName())));
+    }
+
+    private UiObject2 findVisibleUiObject(List<UiObject2> candidates) {
+        for (UiObject2 candidate : candidates) {
+            try {
+                // Accessibility can retain nodes from a hidden Fyne screen
+                // while another screen is already rendered. A state assertion
+                // must describe the visible UI, not any matching node still
+                // present in the package's accessibility tree.
+                if (!candidate.getVisibleBounds().isEmpty()) return candidate;
+            } catch (StaleObjectException ignored) {
+                // The rendered tree can be replaced between lookup and bounds
+                // access. Callers poll again within their existing deadline.
+            }
+        }
+        return null;
     }
 
     private UiObject2 waitForUiControl(String label, long timeout) throws Exception {
@@ -1011,10 +1029,10 @@ public final class GoUiHostedProfileTest {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
             for (String category : categories) {
-                if (device.findObject(By.textContains(category)
-                        .pkg(context.getPackageName())) != null
-                        || device.findObject(By.descContains(category)
-                                .pkg(context.getPackageName())) != null) {
+                if (findVisibleUiObject(device.findObjects(By.textContains(category)
+                        .pkg(context.getPackageName()))) != null
+                        || findVisibleUiObject(device.findObjects(By.descContains(category)
+                                .pkg(context.getPackageName()))) != null) {
                     return category;
                 }
             }
