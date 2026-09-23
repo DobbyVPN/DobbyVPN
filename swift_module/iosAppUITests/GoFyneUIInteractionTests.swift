@@ -456,7 +456,10 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 // document picker returns to the same Fyne window without
                 // accepting or exporting a file.
                 save.tap()
-                let pickerDeadline = Date().addingTimeInterval(20)
+                // Hosted iOS 26 arm64 took about 24 seconds just to expose
+                // the nested Save-location Browse control. Allow the
+                // navigation back to the picker root and its dismissal too.
+                let pickerDeadline = Date().addingTimeInterval(60)
                 let pickerCompleted = waitForDocumentPickerAndCancel(in: owners, until: pickerDeadline)
                 XCTAssertTrue(
                     pickerCompleted,
