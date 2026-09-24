@@ -359,12 +359,6 @@ final class GoFyneUIInteractionTests: XCTestCase {
             }
         }
 
-        dismissSoftwareKeyboardQuickPathIntroductionIfPresent()
-        if !attachedSoftwareKeyboardScreenshot {
-            attachScreenshot("software-keyboard")
-            attachedSoftwareKeyboardScreenshot = true
-        }
-
         for index in 0..<totalKeys {
             let isDelete = index < deletes
             let label = isDelete ? nil : keyLabels[index - deletes]
@@ -385,6 +379,19 @@ final class GoFyneUIInteractionTests: XCTestCase {
                     // The keyboard really disappeared; refocus the current
                     // rendered input before trying to resolve it again.
                     needsFocus = true
+                    continue
+                }
+
+                // First-use keyboard UI is asynchronous. Wait until the
+                // rendered keyboard exists before checking for Apple's
+                // QuickPath introduction, then reacquire its elements after
+                // any system-window tap.
+                if !checkedSoftwareKeyboardQuickPathIntroduction {
+                    dismissSoftwareKeyboardQuickPathIntroductionIfPresent()
+                    if !attachedSoftwareKeyboardScreenshot {
+                        attachScreenshot("software-keyboard")
+                        attachedSoftwareKeyboardScreenshot = true
+                    }
                     continue
                 }
 
@@ -452,71 +459,93 @@ final class GoFyneUIInteractionTests: XCTestCase {
 
     private func dismissSoftwareKeyboardQuickPathIntroductionIfPresent() {
         guard !checkedSoftwareKeyboardQuickPathIntroduction else { return }
-        checkedSoftwareKeyboardQuickPathIntroduction = true
 
-        // A fresh iOS Simulator can place the first-use QuickPath tutorial
-        // over the software keyboard. It may be owned by SpringBoard or by
-        // the keyboard window and may be absent from XCTest's accessibility
-        // tree, so try the native button first and then locate its rendered
-        // label in a screenshot.
-        let owners = [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")]
-        let continueLabel = NSPredicate(
-            format: "label == %@ OR identifier == %@",
-            "Continue",
-            "Continue"
-        )
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let settleDeadline = Date().addingTimeInterval(2)
+        var continueButton: CGRect?
+        var screenshot: UIImage?
 
-        for owner in owners {
-            let button = owner.buttons.matching(continueLabel).firstMatch
-            guard button.waitForExistence(timeout: 0.25) else { continue }
-            button.tap()
-            XCTAssertTrue(
-                app.keyboards.firstMatch.waitForExistence(timeout: 5),
-                "software keyboard did not remain available after dismissing its QuickPath introduction"
-            )
-            return
-        }
-
-        let screenshot = app.screenshot().image
-        let visibleText = recognizedText(in: screenshot)
-        if let button = visibleText.first(where: {
-            $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                .localizedCaseInsensitiveCompare("Continue") == .orderedSame
-        }) {
-            // Vision rectangles use a bottom-left origin; XCTest screen
-            // coordinates use a top-left origin.
-            let screenX = button.box.midX * screenshot.size.width
-            let screenY = (1 - button.box.midY) * screenshot.size.height
-            let frame = app.frame
-            let normalizedX = (screenX - frame.minX) / frame.width
-            let normalizedY = (screenY - frame.minY) / frame.height
-            guard (0...1).contains(normalizedX), (0...1).contains(normalizedY) else {
-                XCTFail("QuickPath Continue button was outside the app's tappable screen")
+        // The keyboard and its first-use tutorial arrive asynchronously. Do
+        // not remember an early empty screenshot as proof that no tutorial
+        // will appear; inspect the rendered screen briefly after keys exist.
+        while Date() < settleDeadline {
+            let currentScreenshot = app.screenshot().image
+            let visibleText = recognizedText(in: currentScreenshot)
+            if let renderedContinue = visibleText.first(where: {
+                $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .localizedCaseInsensitiveCompare("Continue") == .orderedSame
+            }) {
+                continueButton = renderedContinue.box
+                screenshot = currentScreenshot
+                break
+            }
+            if visibleText.contains(where: {
+                $0.text.localizedCaseInsensitiveContains("Speed up your typing")
+            }) {
+                attachScreenshot("quickpath-introduction")
+                XCTFail("iOS QuickPath introduction was visible but its Continue button was not recognized")
                 return
             }
-            app.coordinate(withNormalizedOffset: CGVector(dx: normalizedX, dy: normalizedY)).tap()
-            XCTAssertTrue(
-                app.keyboards.firstMatch.waitForExistence(timeout: 5),
-                "software keyboard did not remain available after dismissing its QuickPath introduction"
-            )
-            let remainingText = recognizedText(in: app.screenshot().image)
-            XCTAssertFalse(
-                remainingText.contains {
-                    $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .localizedCaseInsensitiveCompare("Continue") == .orderedSame
-                },
-                "QuickPath Continue panel remained visible after tapping its rendered button"
-            )
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        guard let continueButton, let screenshot else {
+            checkedSoftwareKeyboardQuickPathIntroduction = true
             return
         }
 
-        let introductionIsVisible = visibleText.contains {
-            $0.text.localizedCaseInsensitiveContains("Speed up your typing")
+        attachScreenshot("quickpath-introduction")
+
+        // Vision uses a bottom-left origin. Convert the visible button point
+        // to a screen-relative point and post an actual tap through SpringBoard
+        // because the tutorial belongs to iOS, not to the Go/Fyne app.
+        let screenX = continueButton.midX * screenshot.size.width
+        let screenY = (1 - continueButton.midY) * screenshot.size.height
+        let frame = springboard.frame
+        guard frame.width > 0, frame.height > 0 else {
+            XCTFail("SpringBoard did not expose the screen frame for QuickPath dismissal")
+            return
         }
-        XCTAssertFalse(
-            introductionIsVisible,
-            "iOS keyboard QuickPath panel is visible but its Continue button could not be located"
-        )
+        let normalizedX = (screenX - frame.minX) / frame.width
+        let normalizedY = (screenY - frame.minY) / frame.height
+        guard (0...1).contains(normalizedX), (0...1).contains(normalizedY) else {
+            XCTFail("QuickPath Continue button was outside the Simulator screen")
+            return
+        }
+
+        func quickPathIntroductionIsGone() -> Bool {
+            let text = recognizedText(in: app.screenshot().image).map(\.text)
+            return !text.contains {
+                $0.localizedCaseInsensitiveContains("Speed up your typing")
+                    || $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .localizedCaseInsensitiveCompare("Continue") == .orderedSame
+            }
+        }
+
+        springboard.coordinate(withNormalizedOffset: CGVector(dx: normalizedX, dy: normalizedY)).tap()
+        let dismissalDeadline = Date().addingTimeInterval(2)
+        while Date() < dismissalDeadline {
+            if quickPathIntroductionIsGone() {
+                checkedSoftwareKeyboardQuickPathIntroduction = true
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        // A SpringBoard-origin tap can be ignored by some simulator builds.
+        // Retry the same verified screen point via the app's global frame.
+        app.coordinate(withNormalizedOffset: CGVector(dx: normalizedX, dy: normalizedY)).tap()
+        let retryDeadline = Date().addingTimeInterval(2)
+        while Date() < retryDeadline {
+            if quickPathIntroductionIsGone() {
+                checkedSoftwareKeyboardQuickPathIntroduction = true
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        attachScreenshot("quickpath-dismissal-failed")
+        XCTFail("QuickPath Continue panel remained visible after real screen taps")
     }
 
     private func assertRenderedConfiguration(_ expected: String, in input: XCUIElement) {
