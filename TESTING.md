@@ -1,5 +1,8 @@
 # Testing DobbyVPN
 
+This page gives checks for the current implementation. Revise its UI coverage
+as the native UI replacement lands.
+
 Run checks relevant to the change. Tests are disposable: emit complete
 redacted output before cleanup, retain only one completed local run total, and
 clean up resources and scratch files on success or failure. Trusted GitHub

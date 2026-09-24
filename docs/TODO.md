@@ -1,5 +1,8 @@
 # Deferred product qualification
 
+This is the current Go/Fyne qualification backlog. Reassess it when planning
+the native UI replacement.
+
 These checks are intentionally outside the 1.5.1 Go/Fyne migration acceptance
 set. They remain product test work rather than accepted skips inside a passing
 mini suite. Desktop full is already defined as mini plus the native-window

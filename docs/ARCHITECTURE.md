@@ -1,5 +1,8 @@
 # DobbyVPN architecture
 
+This page describes the Go/Fyne implementation currently in the repository.
+The agreed native UI replacement has not been implemented yet.
+
 DobbyVPN keeps product behavior and the shared UI in Go, and uses small
 platform shells only where an operating system requires VPN APIs. Desktop,
 Android, and iOS release packages render the UI with Fyne. Desktop packages

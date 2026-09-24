@@ -7,11 +7,33 @@ Do not import test or owner-infrastructure packages into production code.
 
 ## Architecture
 
-Use one shared UI where sharing is valuable, one Go runtime for product
-behavior, and thin OS-specific shells at the VPN API boundaries. Go owns
-configuration, protocol selection, session/generation state, and runtime
-policy. Platform shells own native VPN permissions, services, and transport.
-See `docs/ARCHITECTURE.md` for the interfaces and lifecycle.
+The current implementation uses a shared Go/Fyne UI. The agreed replacement
+uses native UI frontends: SwiftUI on macOS/iOS, Kotlin with Jetpack Compose on
+Android, and C# with WinUI 3 on Windows. Linux remains CLI/service only. Do
+not introduce Kotlin Multiplatform or remove Outline, Xray, or TrustTunnel.
+
+Keep configuration, protocol selection, probing, recovery, session/generation
+state, runtime policy, protocol engines, and cleanup in the shared Go backend.
+Native code owns UI, VPN permissions, services, and the required OS VPN APIs;
+it does not duplicate Go policy. Desktop UI frontends use the privileged Go
+backend through JSON on a Unix domain socket on macOS/Linux and a named pipe
+with local access control and remote-client rejection on Windows. Desktop
+control has `Snapshot`, `Configure`, `Start`, and `Stop`; visible frontends poll
+`Snapshot`. Keep session ID, sequence, and generation fencing. The CLI uses
+the backend directly, not a subprocess per UI action.
+
+The Go backend owns and preserves an accepted configuration URL and returns it
+to authorized UI frontends in `Snapshot`. Carry over existing desktop saved
+URLs before removing the UI-owned store. Native frontends read fixed local
+diagnostic files directly; product logs are not sanitized. Development and
+qualification output is still redacted under the diagnostic rule below.
+Replace and remove the Fyne/gRPC UI and control stack, its workarounds, tests,
+builds, and packaging as a coherent cut, then qualify the completed source.
+Preserve current VPN behavior unless a behavior change is separately decided.
+
+`docs/ARCHITECTURE.md` describes the interfaces and lifecycle implemented in
+the current source; update it as the replacement lands. The existing Windows
+gRPC `Watch` stream needs authorization while that endpoint remains in use.
 
 ## Tests and builds
 

@@ -1,5 +1,8 @@
 # UI behavior
 
+This page describes the current Go/Fyne UI and its tests. The agreed native UI
+replacement has not been implemented yet.
+
 The shared Go/Fyne UI renders the state owned by one Go session manager in each
 service process. Desktop, Android, and iOS release packages launch this native
 UI directly; desktop carries no JVM launcher, and no platform carries a KMP or

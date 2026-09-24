@@ -4,6 +4,10 @@ Yet another VPN client. Currently wraps around OutlineSDK, TrustTunnel & XRay.
 
 ## Architecture
 
+This section describes the implementation currently in the repository. Its
+native UI replacement is planned but has not been implemented. The agreed
+development direction is in [AGENTS.md](AGENTS.md).
+
 The architecture driver is one shared UI layer where sharing is valuable, one
 Go product/runtime layer for behavior, and only thin OS-specific shells where
 VPN APIs require them. Go owns configuration acquisition, parsing, selection,
@@ -13,10 +17,7 @@ NetworkExtension lifetime, secure storage, and the C/JNI bridge. They do not
 own UI state or protocol policy. Linux is intentionally qualified through the
 CLI/service path; desktop GUI qualification is reserved for Windows and macOS.
 
-The migration is reversible: the pre-migration product is retained at the
-`go-ui-baseline-1.5.0` tag and the `migration/go-ui-1.5.1-complete` branch.
-Those references are rollback points, not compatibility code in the release
-tree.
+The pre-migration product is retained at the `go-ui-baseline-1.5.0` tag.
 
 The product Go toolchain is pinned to Go 1.26.8 in `.go-version`. Desktop
 packages are native Go/Fyne executables with no desktop JVM launcher or
