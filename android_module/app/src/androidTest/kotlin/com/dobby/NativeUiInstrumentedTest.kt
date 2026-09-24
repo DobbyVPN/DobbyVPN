@@ -11,19 +11,22 @@ import android.graphics.Rect
 import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
-import org.junit.Before
-import org.junit.Rule
-import org.junit.Test
-import org.junit.runner.RunWith
-import org.junit.rules.TestWatcher
-import org.junit.runner.Description
+import com.dobby.ui.MainActivity
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
+import org.junit.runner.RunWith
 
 /** Rendered Compose smoke against the signed release APK and Android's native input path. */
 @RunWith(AndroidJUnit4::class)
@@ -99,7 +102,6 @@ class NativeUiInstrumentedTest {
     fun releaseUiTypesAndShowsConnectFailureThenReopens() {
         device.pressHome()
         launch()
-        device.wait(androidx.test.uiautomator.Until.hasObject(By.pkg(packageName)), 10_000)
 
         waitForOneOf(arrayOf("Disconnected"), 30_000)
         requireObject(connectionActionLabel)
@@ -137,7 +139,25 @@ class NativeUiInstrumentedTest {
             // Match a launcher-icon reopen while preserving the current task.
             ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             ?: throw IllegalStateException("ANDROID_LAUNCH_ACTIVITY_MISSING")
-        instrumentation.targetContext.startActivity(launch)
+        try {
+            instrumentation.runOnMainSync {
+                instrumentation.targetContext.startActivity(launch)
+            }
+        } catch (error: RuntimeException) {
+            throw IllegalStateException("ANDROID_LAUNCH_ACTIVITY_FAILED", error)
+        }
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            val resumed = booleanArrayOf(false)
+            instrumentation.runOnMainSync {
+                resumed[0] = ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(Stage.RESUMED)
+                    .any { it is MainActivity && it.packageName == packageName }
+            }
+            if (resumed[0]) return
+            Thread.sleep(100)
+        }
+        throw AssertionError("ANDROID_LAUNCH_ACTIVITY_RESUME_TIMEOUT")
     }
 
     private fun backgroundActivity() {
