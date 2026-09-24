@@ -457,11 +457,12 @@ final class GoFyneUIInteractionTests: XCTestCase {
                     continue
                 }
 
-                // The accessibility action point for Fyne's keyboard keys is
-                // unreliable on no-Metal Simulators. A frame-centered tap
-                // dispatches the real key event without asking XCTest to
-                // scroll or activate the virtual key action.
-                key.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                // Activate the actual software-key accessibility element.
+                // A coordinate tap anchored to the Go app generated a touch
+                // at the key's screen position but left the field empty; use
+                // XCTest's key action so the system-owned keyboard handles it.
+                // This remains a real key tap, not XCTest text injection.
+                key.tap()
                 tapped = true
             }
 
