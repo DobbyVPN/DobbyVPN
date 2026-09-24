@@ -14,6 +14,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import com.dobby.ui.MainActivity
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -135,19 +136,43 @@ class NativeUiInstrumentedTest {
         val output = device.executeShellCommand(
             "am start -W -n $packageName/com.dobby.ui.MainActivity",
         )
-        println(output)
         check(output.contains("Status: ok") && output.contains("Complete")) {
             "ANDROID_LAUNCH_ACTIVITY_FAILED"
         }
         val deadline = System.currentTimeMillis() + 10_000
         while (System.currentTimeMillis() < deadline) {
-            if (device.currentPackageName == packageName) {
+            if (device.currentPackageName == packageName && targetActivityHasWindowFocus()) {
                 device.waitForIdle()
                 return
             }
             Thread.sleep(100)
         }
-        throw AssertionError("ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT")
+        val failure = AssertionError(
+            "ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT launch_output=$output",
+        )
+        try {
+            failure.addSuppressed(
+                AssertionError(
+                    "ANDROID_UI_LOGCAT_BEGIN\n${device.executeShellCommand("logcat -d")}\n" +
+                        "ANDROID_UI_LOGCAT_END",
+                ),
+            )
+        } catch (collectionError: Throwable) {
+            failure.addSuppressed(
+                AssertionError("ANDROID_UI_LOGCAT_COLLECTION_FAILED", collectionError),
+            )
+        }
+        throw failure
+    }
+
+    private fun targetActivityHasWindowFocus(): Boolean {
+        val focused = booleanArrayOf(false)
+        instrumentation.runOnMainSync {
+            val activity = MainActivity.current
+            focused[0] = activity != null && !activity.isFinishing &&
+                !activity.isDestroyed && activity.hasWindowFocus()
+        }
+        return focused[0]
     }
 
     private fun backgroundActivity() {
