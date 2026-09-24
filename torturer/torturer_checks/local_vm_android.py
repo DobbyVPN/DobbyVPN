@@ -30,6 +30,7 @@ from .screenshot_artifacts import (
 _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
 COMPANION_PACKAGE = "com.dobby.vpn.test"
+_MAIN_ACTIVITY = "com.dobby.ui.MainActivity"
 PROBE_ROOT_GLOB = "/data/local/tmp/dobbyvpn-probe-*"
 _SCREENSHOT_ROOT = "/data/user/0/com.dobby.vpn/cache/dobbyvpn-rendered-screenshots/"
 _SCREENSHOT_MARKER = re.compile(
@@ -241,6 +242,18 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         validate_complete_throwable_report(reporter_test.stdout)
     except ValueError as error:
         raise _error(f"Android complete throwable reporter output invalid: {error}") from error
+    app_start = _adb_call(
+        adb_value,
+        serial,
+        ["shell", "am", "start", "-W", "-n", f"{APP_PACKAGE}/{_MAIN_ACTIVITY}"],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-native-ui-app-start",
+        timeout=min(timeout, 30),
+        environment=environment,
+    )
+    if b"Status: ok" not in app_start.stdout or b"Complete" not in app_start.stdout:
+        raise _error("Android native UI app did not start in the foreground")
     result = _adb_call(
         adb_value,
         serial,

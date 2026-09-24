@@ -98,8 +98,7 @@ class NativeUiInstrumentedTest {
 
     @Test
     fun releaseUiTypesAndShowsConnectFailureThenReopens() {
-        device.pressHome()
-        launch()
+        waitForTargetForeground(10_000)
 
         waitForOneOf(arrayOf("Disconnected"), 30_000)
         requireObject(connectionActionLabel)
@@ -153,6 +152,15 @@ class NativeUiInstrumentedTest {
             Thread.sleep(100)
         }
         throw AssertionError("ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT")
+    }
+
+    private fun waitForTargetForeground(timeoutMillis: Long) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (device.currentPackageName == packageName) return
+            Thread.sleep(100)
+        }
+        throw AssertionError("ANDROID_UI_APP_NOT_FOREGROUND")
     }
 
     private fun backgroundActivity() {
