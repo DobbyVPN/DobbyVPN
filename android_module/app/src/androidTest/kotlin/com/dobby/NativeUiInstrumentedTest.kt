@@ -11,8 +11,6 @@ import android.graphics.Rect
 import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
-import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
@@ -140,24 +138,21 @@ class NativeUiInstrumentedTest {
             ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             ?: throw IllegalStateException("ANDROID_LAUNCH_ACTIVITY_MISSING")
         try {
-            instrumentation.runOnMainSync {
-                instrumentation.targetContext.startActivity(launch)
+            check(instrumentation.startActivitySync(launch) is MainActivity) {
+                "ANDROID_LAUNCH_ACTIVITY_INVALID"
             }
         } catch (error: RuntimeException) {
             throw IllegalStateException("ANDROID_LAUNCH_ACTIVITY_FAILED", error)
         }
         val deadline = System.currentTimeMillis() + 10_000
         while (System.currentTimeMillis() < deadline) {
-            val resumed = booleanArrayOf(false)
-            instrumentation.runOnMainSync {
-                resumed[0] = ActivityLifecycleMonitorRegistry.getInstance()
-                    .getActivitiesInStage(Stage.RESUMED)
-                    .any { it is MainActivity && it.packageName == packageName }
+            if (device.currentPackageName == packageName) {
+                device.waitForIdle()
+                return
             }
-            if (resumed[0]) return
             Thread.sleep(100)
         }
-        throw AssertionError("ANDROID_LAUNCH_ACTIVITY_RESUME_TIMEOUT")
+        throw AssertionError("ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT")
     }
 
     private fun backgroundActivity() {
