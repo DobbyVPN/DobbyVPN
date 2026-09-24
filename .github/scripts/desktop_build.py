@@ -886,6 +886,19 @@ def service_target_path_for_arch(target_platform: str, architecture: str) -> Pat
     return SERVICES_DIR / f"{target_platform}-{architecture}" / SERVICE_NAMES[target_platform]
 
 
+def stage_windows_runtime(target: Path) -> None:
+    """Place the Windows DLLs beside the backend executable that loads them."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for name in ("dobby_bridge.dll", "wintun.dll"):
+        source = SERVICES_DIR / name
+        if source.is_symlink() or not source.is_file():
+            fail(f"required Windows backend runtime is unavailable: {source}")
+        destination = target.parent / name
+        if source.resolve() != destination.resolve():
+            shutil.copyfile(source, destination)
+        log(f"Staged {name} beside Windows backend: {destination}")
+
+
 def build_cli(target_platform: str, arch: str | None = None) -> Path:
     """Build the native operator CLI without invoking the JVM launcher."""
     target_arch = arch or default_service_arch(target_platform)
@@ -1059,6 +1072,8 @@ def build_service(
         target = service_target_path_for_arch(target_platform, target_arch)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(output, target)
+    if target_platform == "windows":
+        stage_windows_runtime(target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
     if output_path is None and target_platform == "macos" and target_arch == "amd64":
