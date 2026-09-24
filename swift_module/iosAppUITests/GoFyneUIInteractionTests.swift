@@ -134,12 +134,18 @@ final class GoFyneUIInteractionTests: XCTestCase {
             element(named: "Connection logs").waitForExistence(timeout: 10),
             "Go/Fyne diagnostics view did not reopen"
         )
-        // Clear logs is hidden until the deferred native DiagnosticStore is
-        // injected. Its rendered presence is the stable product-owned
-        // readiness point for the mobile-start callback; a merely visible
-        // Connect button is not sufficient because the window is shown first.
+        // Keep Clear logs in the accessibility tree while the deferred mobile
+        // DiagnosticStore resolves, but disable it until the store is ready.
+        // Check readiness through the action state rather than adding a
+        // dynamically shown control after the window's first accessibility
+        // snapshot.
+        let reopenedClearLogs = element(named: "Clear logs")
         XCTAssertTrue(
-            element(named: "Clear logs").waitForExistence(timeout: 30),
+            reopenedClearLogs.waitForExistence(timeout: 10),
+            "Go/Fyne Clear logs control did not remain accessible after relaunch"
+        )
+        XCTAssertTrue(
+            waitForEnabled(reopenedClearLogs, timeout: 30),
             "Go/Fyne native diagnostic store did not become ready after relaunch"
         )
 

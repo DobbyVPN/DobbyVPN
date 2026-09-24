@@ -352,6 +352,24 @@ func (s *fakeDiagnosticStore) Clear(context.Context) error {
 	return nil
 }
 
+func TestClearLogsControlRemainsVisibleUntilDiagnosticStoreIsReady(t *testing.T) {
+	view := NewConnectionViewWithDiagnostics(nil, nil)
+	if !view.ClearLogs.Visible() {
+		t.Fatal("Clear logs must remain visible while the diagnostic store is unresolved")
+	}
+	if !view.ClearLogs.Disabled() {
+		t.Fatal("Clear logs must stay disabled until a diagnostic store is injected")
+	}
+
+	view.SetDiagnosticStore(&fakeDiagnosticStore{})
+	if !view.ClearLogs.Visible() {
+		t.Fatal("injecting the diagnostic store hid Clear logs")
+	}
+	if view.ClearLogs.Disabled() {
+		t.Fatal("Clear logs remained disabled after the diagnostic store was injected")
+	}
+}
+
 func TestConnectionViewUsesRetainedHistoryForDisplayAndExport(t *testing.T) {
 	store := &fakeDiagnosticStore{history: DiagnosticHistory{
 		UILines:     []string{"[INFO] retained history"},

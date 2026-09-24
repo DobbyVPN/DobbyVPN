@@ -265,10 +265,12 @@ func newConnectionView(client SessionClient, exporter LogExporter, diagnostics D
 	}
 	view.ClearLogs = widget.NewButton("Clear logs", nil)
 	if diagnostics == nil {
-		// Mobile shells do not guess an app-group/private-filesystem path. Keep
-		// the optional control out of the accessibility tree until a native
-		// DiagnosticStore is injected, rather than exposing a dead button.
-		view.ClearLogs.Hide()
+		// Mobile shells resolve their app-owned store after the first window is
+		// shown. Keep this control in the native accessibility tree from the
+		// first render, but disable it until that adapter is ready; adding it
+		// later with Hide/Show can leave a visible control undiscoverable after
+		// an iOS app relaunch.
+		view.ClearLogs.Disable()
 	}
 	view.LogStatus = widget.NewLabel("")
 	view.LogStatus.Wrapping = fyne.TextWrapWord
@@ -319,9 +321,8 @@ func (v *ConnectionView) SetDiagnosticStore(store DiagnosticStore) {
 	v.mu.Unlock()
 	onUI(func() {
 		if store == nil {
-			v.ClearLogs.Hide()
+			v.ClearLogs.Disable()
 		} else {
-			v.ClearLogs.Show()
 			v.ClearLogs.Enable()
 		}
 	})
