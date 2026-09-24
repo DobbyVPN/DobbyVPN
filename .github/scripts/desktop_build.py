@@ -900,8 +900,8 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
         env=env,
     )
     verify_macos_deployment_target(target_platform, output)
-    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
     target = service_target_path_for_arch(target_platform, target_arch).with_name(CLI_NAMES[target_platform])
+    target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
@@ -1056,8 +1056,8 @@ def build_service(
     if output_path is not None:
         target = output
     else:
-        SERVICES_DIR.mkdir(parents=True, exist_ok=True)
         target = service_target_path_for_arch(target_platform, target_arch)
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
