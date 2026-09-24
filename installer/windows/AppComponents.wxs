@@ -2,7 +2,7 @@
   <Fragment>
     <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNExecutable" Guid="5a8e6ab1-0ea6-45a5-9a93-316fdde30dc7">
-			<File Source="dobbyVPN-windows\bin\Dobby Vpn.exe" KeyPath="yes">
+			<File Source="dobbyVPN-windows\bin\DobbyVPN.exe" KeyPath="yes">
 				<Shortcut 
 					Id="DobbyVPNStartMenuShortcut" 
 					Directory="ProgramMenuFolder" 
@@ -22,14 +22,14 @@
 			<File Source="dobbyVPN-windows\bin\dobby-cli.exe" KeyPath="yes" />
 		</Component>
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="1ef0c193-dccb-41a5-ae7e-b1f0c214924d">
-			<File Source="dobbyVPN-windows\bin\windows_grpcvpnserver.exe" KeyPath="yes" />
+			<File Source="dobbyVPN-windows\bin\dobbyvpn-backend.exe" KeyPath="yes" />
 			<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
 
 			<ServiceInstall 
 					Id="svc.Install"
-					Name="DobbyVPN Server"
-					DisplayName="DobbyVPN Server"
-					Description="DobbyVPN grpc vpn server, that manages all tunnels connections."
+					Name="DobbyVPN Go backend"
+					DisplayName="DobbyVPN Go backend"
+					Description="Shared Go backend for DobbyVPN connections."
 					Type="ownProcess"
 					Start="auto"
 					ErrorControl="normal"
@@ -39,31 +39,34 @@
 			</ServiceInstall>
 			<ServiceControl
 					Id="svc.Control"
-					Name="DobbyVPN Server"
+					Name="DobbyVPN Go backend"
 					Start="install"
 					Stop="both"
 					Remove="uninstall"
 					Wait="yes" />
 			<ServiceConfig 
 					Id="svc.Config"
-					ServiceName="DobbyVPN Server"
+					ServiceName="DobbyVPN Go backend"
 					OnInstall="yes"
 					ServiceSid="unrestricted" />
-			<!-- The service runs as SYSTEM, but the control token must also be
-			     readable by the desktop user who performed the installation. -->
+			<!-- Permit only the interactive installer account to use the local pipe. -->
 			<RegistryValue
 					Root="HKLM"
-					Key="SYSTEM\CurrentControlSet\Services\DobbyVPN Server"
+				Key="SYSTEM\CurrentControlSet\Services\DobbyVPN Go backend"
 					Name="Environment"
 					Type="multiString">
-				<MultiStringValue Value="DOBBYVPN_CONTROL_TOKEN_USER=[LogonUser]" />
-				<MultiStringValue Value="DOBBYVPN_CONTROL_TOKEN_VERSION=1" />
+				<MultiStringValue Value="DOBBYVPN_CONTROL_PIPE_USER=[USERNAME]" />
 			</RegistryValue>
 		</Component>
 		
-		<!-- build.bat admits the import-derived service runtime closure; this glob
-		     keeps the checksum-pinned bridge beside the installed service binary. -->
-		<Files Directory="DobbyVPNFolderBin" Include="dobbyVPN-windows\bin\**.dll" />
+		<!-- The unpackaged WinUI app loads its self-contained runtime files beside the EXE. -->
+		<Files Directory="DobbyVPNFolderBin" Include="dobbyVPN-windows\bin\**">
+			<Exclude Files="dobbyVPN-windows\bin\DobbyVPN.exe" />
+			<Exclude Files="dobbyVPN-windows\bin\dobby-cli.exe" />
+			<Exclude Files="dobbyVPN-windows\bin\dobbyvpn-backend.exe" />
+			<Exclude Files="dobbyVPN-windows\bin\dobby_bridge.dll" />
+			<Exclude Files="dobbyVPN-windows\bin\wintun.dll" />
+		</Files>
 		<Files Directory="DobbyVPNFolderApp" Include="dobbyVPN-windows\app\**" />
 		<Files Directory="DobbyVPNFolderLib" Include="dobbyVPN-windows\lib\**" />
 		<Files Directory="DobbyVPNFolderConf" Include="dobbyVPN-windows\conf\**" />

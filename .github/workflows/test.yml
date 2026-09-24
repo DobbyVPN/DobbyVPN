@@ -35,8 +35,7 @@ jobs:
       - name: Run Go test suite
         working-directory: go_module
         run: |
-          # Fyne's ci driver is software-backed, so the shared UI and its
-          # transport client are tested without opening a host window.
+          # The Go backend protocol and session behavior are exercised in package tests.
           mkdir -p "$RUNNER_TEMP/dobbyvpn-go-coverage"
           go test -v -tags=ci -covermode=atomic -coverpkg=./... \
             -coverprofile="$RUNNER_TEMP/dobbyvpn-go-coverage/coverage.out" ./...
@@ -49,10 +48,9 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Race-check headless UI, lifecycle and routing
+      - name: Race-check session lifecycle and routing
         working-directory: go_module
         run: |
-          go test -v -tags=ci -race ./cmd/dobbyui-test
           go test -v -race ./routing/... ./sessionapi/... ./tunnel/...
 
       - name: Retain complete Go coverage
@@ -66,7 +64,7 @@ jobs:
           retention-days: 1
 
   android:
-    name: Android native shell and Go/Fyne tests
+    name: Android native Compose UI and Go tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -103,19 +101,13 @@ jobs:
             build-tools;36.0.0
             ndk;27.3.13750724
 
-      - name: Download Go modules for the native Go/Fyne library
+      - name: Download Go modules for the Android backend
         working-directory: go_module
         run: go mod download
 
       - name: Run Android shell tests and build both Go ABIs
         working-directory: android_module
         run: ./gradlew :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease --info --stacktrace
-
-  ios_libraries:
-    name: iOS native dependencies
-    uses: ./.github/workflows/ios_libs_generate.yml
-    with:
-      source_sha: ${{ github.sha }}
 
   swift:
     name: iOS production lifecycle policy tests
@@ -177,8 +169,7 @@ jobs:
           retention-days: 1
 
   ios_simulator_mini:
-    name: iOS Simulator Go/Fyne mini suite
-    needs: ios_libraries
+    name: iOS Simulator SwiftUI mini suite
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -189,32 +180,14 @@ jobs:
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
-      - name: Download iOS native dependencies
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          pattern: DobbyVPNRuntime.xcframework
-          path: swift_module/DobbyVPNRuntime.xcframework
-          merge-multiple: true
-
-      - name: Set up pinned Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: .go-version
-          cache: false
-
-      - name: Download Go modules
-        working-directory: go_module
-        run: go mod download
-
-      - name: Build and launch the Go/Fyne app on Simulator
+      - name: Build and launch the native SwiftUI app on Simulator
         env:
           PYTHONPATH: torturer
         run: |
           set -euo pipefail
           python3 torturer/tests/ios_simulator/run_app_contract.py \
             --candidate-root "$GITHUB_WORKSPACE" \
-            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
-            --runtime-framework "$GITHUB_WORKSPACE/swift_module/DobbyVPNRuntime.xcframework"
+            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract"
 
       - name: Retain complete iOS Simulator mini diagnostics
         if: always()

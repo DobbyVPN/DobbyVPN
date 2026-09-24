@@ -5,8 +5,8 @@ go 1.26.8
 replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260919065324-bc54923e3c85
 
 require (
-	fyne.io/fyne/v2 v2.8.1
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/jackpal/gateway v1.1.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
@@ -18,8 +18,6 @@ require (
 	golang.getoutline.org/sdk/x v0.1.0
 	golang.org/x/sys v0.47.0
 	golang.zx2c4.com/wireguard/windows v0.5.3
-	google.golang.org/grpc v1.83.2
-	google.golang.org/protobuf v1.36.11
 	trusttunnel-go v0.0.0-00010101000000-000000000000
 )
 
@@ -70,59 +68,18 @@ require (
 )
 
 require (
-	fyne.io/systray v1.12.3-0.20260810170012-af4e8e793ec4 // indirect
-	fyne.io/tools v1.7.2 // indirect
-	github.com/FyshOS/fancyfs v0.0.1 // indirect
-	github.com/akavel/rsrc v0.10.2 // indirect
-	github.com/anthonynsimon/bild v0.14.0 // indirect
 	github.com/apernet/quic-go v0.59.1-0.20260217092621-db4786c77a22 // indirect
-	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
-	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
-	github.com/fogleman/gg v1.3.0 // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/fyne-io/gl-js v0.2.1-0.20260315212741-029c47fd27e8 // indirect
-	github.com/fyne-io/glfw-js v0.4.0 // indirect
-	github.com/fyne-io/image v0.1.1 // indirect
-	github.com/fyne-io/oksvg v0.2.0 // indirect
-	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276 // indirect
-	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.1.0.20260707082822-2a407d02d01a // indirect
-	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/go-text/render v0.2.1 // indirect
-	github.com/go-text/typesetting v0.3.4 // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
-	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/hack-pad/go-indexeddb v0.3.2 // indirect
-	github.com/hack-pad/safejs v0.1.0 // indirect
-	github.com/jackmordaunt/icns/v2 v2.2.7 // indirect
-	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade // indirect
-	github.com/josephspurrier/goversioninfo v1.7.0 // indirect
-	github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
-	github.com/lucor/goinfo v0.9.0 // indirect
-	github.com/mattn/go-runewidth v0.0.24 // indirect
-	github.com/mcuadros/go-version v0.0.0-20190830083331-035f6764e8d2 // indirect
-	github.com/natefinch/atomic v1.0.1 // indirect
-	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
-	github.com/nicksnyder/go-i18n/v2 v2.5.1 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/rymdport/portal v0.4.2 // indirect
-	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
-	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/urfave/cli/v2 v2.27.7 // indirect
-	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
-	github.com/yuin/goldmark v1.8.2 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
-	golang.org/x/image v0.45.0 // indirect
 	golang.org/x/mobile v0.0.0-20260520154334-0e4426e1883d // indirect
-	golang.org/x/tools/go/vcs v0.1.0-deprecated // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
+	google.golang.org/grpc v1.83.2 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )
 
 tool golang.org/x/mobile/cmd/gobind
-
-tool fyne.io/tools/cmd/fyne

@@ -4,6 +4,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 val repoRoot = rootProject.projectDir.parentFile
@@ -99,15 +100,6 @@ android {
         }
     }
 
-    // Fyne 2.8.1 supplies a generic notification receiver as generated Java.
-    // DobbyVPN does not schedule Fyne notifications; its only notification is
-    // the native VPN foreground notification owned by DobbyVpnService. The
-    // generated receiver has no Android 13 runtime-permission branch, so its
-    // NotificationPermission warning is not actionable in this app.
-    lint {
-        disable += "NotificationPermission"
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -115,9 +107,10 @@ android {
     kotlinOptions { jvmTarget = "17" }
 
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/go-libs"))
-    sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/fyne-java"))
-
-    buildFeatures { buildConfig = true }
+    buildFeatures {
+        buildConfig = true
+        compose = true
+    }
 }
 
 val downloadGoModules by tasks.registering(Exec::class) {
@@ -130,26 +123,7 @@ val downloadGoModules by tasks.registering(Exec::class) {
     environment("GOFLAGS", "-trimpath -buildvcs=false")
 }
 
-val copyFyneJava by tasks.registering(Copy::class) {
-    val goCache = providers.environmentVariable("GOMODCACHE").orElse(
-        providers.provider { File(System.getProperty("user.home"), "go/pkg/mod").absolutePath }
-    )
-    val fyneRoot = File(goCache.get()).resolve("fyne.io/fyne/v2@v2.8.1/internal/driver/mobile/app")
-    val generatedFyneJava = layout.buildDirectory.dir("generated/fyne-java/org/golang/app")
-    dependsOn(downloadGoModules)
-    from(fyneRoot) { include("GoNativeActivity.java", "FyneNotificationReceiver.java") }
-    into(generatedFyneJava)
-    rename { it }
-    doFirst {
-        check(fyneRoot.isDirectory) { "pinned Fyne Java sources are unavailable: $fyneRoot" }
-        // Go module cache files are read-only by design. Gradle preserves that
-        // mode while copying, so clear the generated output before the release
-        // APK and test-companion builds invoke this task again.
-        generatedFyneJava.get().asFile.deleteRecursively()
-    }
-}
-
-val buildGoUI by tasks.registering {
+val buildGoBackend by tasks.registering {
     val ndkHome = nonBlankEnvironment("ANDROID_NDK_HOME")
         .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
         .orElse(androidSdkRoot.map { File(it, "ndk/27.3.13750724").absolutePath })
@@ -165,10 +139,10 @@ val buildGoUI by tasks.registering {
     val goBuildRoot = layout.buildDirectory.dir("generated/go-build")
     inputs.files(fileTree(goModule) { include("**/*.go", "go.mod", "go.sum") })
     outputs.files(outputFiles)
-    dependsOn(validateGoToolchain, copyFyneJava)
+    dependsOn(validateGoToolchain, downloadGoModules)
     doLast {
         check(ndkHome.get().isNotBlank()) {
-            "ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) is required to build the Go Android UI"
+            "ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) is required to build the shared Go Android backend"
         }
         val ndk = File(ndkHome.get())
         val toolchain = ndk.resolve("toolchains/llvm/prebuilt")
@@ -193,7 +167,7 @@ val buildGoUI by tasks.registering {
             check(compiler.isFile) { "Android NDK compiler is unavailable: $compiler" }
             val command = listOf(
                 goBinary.get(), "build", "-buildmode=c-shared", "-tags=android,accessibility,static",
-                "-trimpath", "-ldflags=-buildid= -s -w", "-o", output.absolutePath, "./cmd/dobbyui"
+                "-trimpath", "-ldflags=-buildid= -s -w", "-o", output.absolutePath, "./cmd/dobbyandroid"
             )
             // Gradle's Exec task is intentionally one process per ABI. Running
             // the same Go command sequentially keeps generated c-shared
@@ -232,7 +206,7 @@ val buildGoUI by tasks.registering {
     }
 }
 
-tasks.named("preBuild") { dependsOn(buildGoUI) }
+tasks.named("preBuild") { dependsOn(buildGoBackend) }
 
 // F-Droid's Gradle output discovery looks below the selected Gradle root
 // (android_module/build), while AGP normally writes this app to app/build.
@@ -249,6 +223,12 @@ tasks.matching { it.name == "assembleRelease" }.configureEach {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation(platform("androidx.compose:compose-bom:2025.12.00"))
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")

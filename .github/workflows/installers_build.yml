@@ -53,29 +53,29 @@ jobs:
             exit 1
           fi
 
-      - name: Download Windows gRPC vpn service
+      - name: Download Windows Go backend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: windows_grpcvpnserver.exe
+          name: dobbyvpn-backend-windows-amd64
           path: installer/windows/
 
-      - name: Download macOS arm64 gRPC vpn service
+      - name: Download macOS arm64 Go backend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: macos_grpcvpnserver-arm64
+          name: dobbyvpn-backend-macos-arm64
           path: installer/macos/services/arm64
 
-      - name: Download macOS amd64 gRPC vpn service
+      - name: Download macOS amd64 Go backend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: macos_grpcvpnserver-amd64
+          name: dobbyvpn-backend-macos-amd64
           path: installer/macos/services/amd64
 
       - name: Add permissions to macOS service executables
         working-directory: installer/macos/
         run: |
-          chmod +x services/arm64/macos_grpcvpnserver
-          chmod +x services/amd64/macos_grpcvpnserver
+          chmod +x services/arm64/dobbyvpn-backend
+          chmod +x services/amd64/dobbyvpn-backend
 
       - name: Download Windows built application
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -171,7 +171,7 @@ jobs:
             [void]$installed.Add(($fileName -split '\|')[-1])
           }
           foreach ($required in @(
-            "windows_grpcvpnserver.exe",
+            "dobbyvpn-backend.exe",
             "dobby_bridge.dll",
             "wintun.dll"
           )) {

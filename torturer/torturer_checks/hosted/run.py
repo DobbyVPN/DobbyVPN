@@ -427,7 +427,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("linux", "windows", "macos", "android"), required=True)
     parser.add_argument("--cli", type=Path)
-    parser.add_argument("--ui-test", type=Path)
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--source-sha", default=None, help="Optional checkout identity checked before hosted execution")
     parser.add_argument(
@@ -454,6 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-binary", type=Path)
     parser.add_argument("--service-socket", type=Path)
+    parser.add_argument("--service-pipe")
     parser.add_argument("--service-library-path", type=Path)
     parser.add_argument("--network-interface")
     parser.add_argument("--routing-firewall-helper", type=Path)
@@ -490,7 +490,6 @@ def main(argv: list[str] | None = None) -> int:
         adapter = adapter_for_platform(
             args.platform,
             cli=args.cli,
-            ui_test=args.ui_test,
             profile=args.profile,
             runner=runner,
             adb=args.adb,
@@ -498,6 +497,7 @@ def main(argv: list[str] | None = None) -> int:
             service_pid=args.service_pid,
             service_binary=args.service_binary,
             service_socket=args.service_socket,
+            service_pipe=args.service_pipe,
             service_library_path=args.service_library_path,
             network_interface=args.network_interface,
             routing_firewall_helper=args.routing_firewall_helper,

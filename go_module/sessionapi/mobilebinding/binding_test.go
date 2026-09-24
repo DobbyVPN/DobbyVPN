@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,32 @@ func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
 			t.Fatalf("configure response did not use stable complete DTO keys: %s", configured)
 		}
 	}
+}
+
+func TestCallJSONReturnsAcceptedURLInSharedSnapshot(t *testing.T) {
+	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Loader: acceptedURLLoader{}}))
+	initial := binding.Snapshot("")
+	sessionID := jsonSessionID(t, initial)
+	sequence := int64Field(t, initial, "sequence")
+	configured := binding.CallJSON(context.Background(), "Configure", json.RawMessage(
+		`{"session_id":"`+sessionID+`","expected_sequence":`+strconv.FormatInt(sequence, 10)+`,"source":"https://configs.invalid/current"}`,
+	))
+	if !strings.Contains(configured, `"source_kind":"URL"`) {
+		t.Fatalf("Configure response = %s", configured)
+	}
+	snapshot := binding.CallJSON(context.Background(), "Snapshot", json.RawMessage(`{"session_id":"`+sessionID+`"}`))
+	if !strings.Contains(snapshot, `"source_url":"https://configs.invalid/current"`) {
+		t.Fatalf("Snapshot did not return the accepted source URL: %s", snapshot)
+	}
+}
+
+type acceptedURLLoader struct{}
+
+func (acceptedURLLoader) Load(_ context.Context, source []byte) (sessionapi.LoadedConfig, error) {
+	if !strings.HasPrefix(string(source), "https://") {
+		return sessionapi.LoadedConfig{Raw: append([]byte(nil), source...), Kind: sessionapi.ConfigSourceInline}, nil
+	}
+	return sessionapi.LoadedConfig{Raw: []byte(syntheticConfig), Kind: sessionapi.ConfigSourceURL, SourceURL: string(source)}, nil
 }
 
 func TestSnapshotDTOAlwaysRoundTripsRecoveringFlag(t *testing.T) {

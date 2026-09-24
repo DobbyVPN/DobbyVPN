@@ -1,116 +1,45 @@
 # Installer build scripts
 
-This directory contains the scripts and configuration used to build Windows
-and macOS installers.
+This directory contains the Windows MSI and macOS PKG build scripts.
 
-## Folder Structure
+## Supported packages
 
-```
-installer/
-├── windows/
-│   ├── .gitignore 
-│   ├── AppComponents.wxs 
-│   ├── build.bat 
-│   ├── Folders.wxs 
-│   ├── Package.wxs 
-│   └── README.md
-│
-├── macos/
-│   ├── .gitignore
-│   ├── build.sh
-│   ├── postinstall.sh
-│   ├── uninstall.sh
-│   ├── README.md
-│   └── vpnservice.plist
-│
-└── README.md
-```
+| Platform | Package | Architecture |
+| --- | --- | --- |
+| Windows | MSI | amd64 |
+| macOS 12 or newer | PKG | amd64 and arm64 |
 
-## Supported Platforms
+## Windows
 
-| Platform | Output Format | Architecture | Status |
-| --- | --- | --- | --- |
-| Windows | `.msi` | amd64 | Supported |
-| macOS 12+ | `.pkg` | amd64 | Supported |
-| macOS 12+ | `.pkg` | aarch64 | Supported |
+The Windows installer consumes the application archive and the Go backend
+runtime closure: dobbyvpn-backend.exe, dobby_bridge.dll, and wintun.dll. The
+installer places the native WinUI frontend and operator CLI in the app folder
+and installs the Go backend as the DobbyVPN Go backend Windows Service.
 
-## Windows Installer
+Build from installer/windows on a Windows host with WiX 5 installed:
 
-### Requirements
+    build.bat
 
-* Installer tool (WiX)
+The version and source identity are supplied through APP_MAJOR_VERSION,
+APP_MINOR_VERSION, APP_MAINTENANCE_VERSION, GITHUB_SHA, and GITHUB_REPOSITORY.
 
-### Build
+## macOS
 
-```powershell
-cd windows/
-./build.bat
-```
+The macOS installer consumes one backend for each supported architecture and
+the matching SwiftUI app archive. The Intel package also includes the pinned
+TrustTunnel helper. Build on macOS with Xcode command line tools:
 
-### Environment variables
+    sh build.sh
 
-* APP_MAJOR_VERSION
-* APP_MINOR_VERSION
-* APP_MAINTENANCE_VERSION
-* GITHUB_SHA
-* GITHUB_REPOSITORY
+The package installs the SwiftUI app, Go backend and CLI, and a launchd daemon.
+The fixed JSON control socket is under /var/run/dobbyvpn. The supported
+uninstall path is /usr/local/libexec/dobbyvpn-uninstall; run it with sudo to
+stop and remove the service, plist, socket, app bundle, and package receipt.
 
-### Output
-```
-installer/
-└── windows/
-    └── bin/
-        └── amd64/
-            └── dobbyVPN-windows-amd64.msi
-```
+## Release migration checks
 
-## MacOS Installer
-
-### Environment variables
-
-* APP_MAJOR_VERSION
-* APP_MINOR_VERSION
-* APP_MAINTENANCE_VERSION
-
-### Build
-
-```bash
-cd macos/
-sh build.sh
-```
-
-The builder requires separate `services/arm64/macos_grpcvpnserver` and
-`services/amd64/macos_grpcvpnserver` inputs. It checks their Mach-O
-architectures before packaging.
-
-### Output
-
-```
-installer/
-├── macos/
-│   ├── bin/
-│   │   ├── amd64/
-│   │   │   └── dobbyVPN-macos-amd64.pkg
-│   │   └── aarch64/
-│   │       └── dobbyVPN-macos-aarch64.pkg
-```
-
-## Notes
-
-Each installer installs the application and its gRPC VPN service. Windows uses
-the MSI uninstaller, which removes the service with the package. macOS installs
-one fixed product-owned uninstaller at
-`/usr/local/libexec/dobbyvpn-uninstall`; run it with `sudo` to stop and remove
-the launchd service, plist, control socket, app bundle, and package receipt.
-
-Release migration qualification downloads the published v1.5.0 package only
-after checking the pinned entries in
-`.github/scripts/installer_rollback_manifest.json`. It then proves fresh
-install, upgrade, explicit uninstall-and-reinstall rollback, and final
-uninstall for the exact v1.5.1 package on Windows and both macOS architectures.
-The downloaded
-rollback package is temporary and is removed when the check exits.
-
-The macOS packages target macOS 12.0 or newer on both Intel and Apple-silicon
-hosts. Release migration qualification also exercises the package's native
-uninstall path; it does not require the old manual service-removal procedure.
+Release qualifies fresh install, upgrade, rollback, and uninstall for the
+exact packages built in that Release run. The previous package used for upgrade
+or rollback is selected and verified through
+.github/scripts/installer_rollback_manifest.json. Migration checks run on
+Windows and both macOS architectures.

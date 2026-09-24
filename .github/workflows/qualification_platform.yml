@@ -64,27 +64,6 @@ jobs:
           pattern: dobbyvpn-android-*.apk
           path: release-packages
           merge-multiple: true
-      - name: Download Windows headless UI companion
-        if: inputs.platform == 'windows'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          name: dobby-vpn-ui-test-windows
-          path: release-ui
-      - name: Download macOS arm64 headless UI companion
-        if: inputs.platform == 'macos'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          name: dobby-vpn-ui-test-macos-arm64
-          path: release-ui
-
-      - name: Restore macOS UI companion executable mode
-        if: inputs.platform == 'macos'
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test"
-          test -x "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test"
-
       - name: Download shared Render VPN profile
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
@@ -119,8 +98,8 @@ jobs:
           test -s "$GITHUB_WORKSPACE/render/profile.toml"
           case "$PLATFORM" in
             linux) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb" ;;
-            windows) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"; test -f "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test.exe" ;;
-            macos) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg"; test -f "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test" ;;
+            windows) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi" ;;
+            macos) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg" ;;
             android) test "$(find "$GITHUB_WORKSPACE/release-packages" -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f | wc -l)" -eq 1; test "$(find "$GITHUB_WORKSPACE/release-packages" -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f | wc -l)" -eq 1 ;;
             *) exit 1 ;;
           esac
@@ -142,7 +121,7 @@ jobs:
             linux)
               sudo -n dpkg -i "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb"
               mapfile -t cli_matches < <(find /opt/dobbyvpn -xdev -type f -name dobby-cli -perm -0100)
-              mapfile -t service_matches < <(find /opt/dobbyvpn -xdev -type f -name ubuntu_grpcvpnserver -perm -0100)
+              mapfile -t service_matches < <(find /opt/dobbyvpn -xdev -type f -name dobbyvpn-backend -perm -0100)
               test "${#cli_matches[@]}" -eq 1; test "${#service_matches[@]}" -eq 1
               printf 'CLI=%s\nSERVICE=%s\nSERVICE_SOCKET=%s\nSERVICE_LIBRARY_PATH=%s\n' \
                 "${cli_matches[0]}" "${service_matches[0]}" "$CONTROL_DIR/control.sock" /opt/dobbyvpn/lib/runtime >> "$GITHUB_ENV"
@@ -151,10 +130,10 @@ jobs:
               package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
               PACKAGE_WIN="$(cygpath -w "$package")"
               export PACKAGE_WIN
-              installed_paths="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $p=Start-Process msiexec.exe -ArgumentList @("/i", "`"$env:PACKAGE_WIN`"", "/qn", "/norestart") -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "msiexec failed" }; $root="$env:ProgramFiles\DobbyVPN"; $cli=Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File; $service=Get-ChildItem $root -Filter "windows_grpcvpnserver.exe" -Recurse -File; $ui=Join-Path $root "bin\Dobby Vpn.exe"; if ($cli.Count -ne 1 -or $service.Count -ne 1 -or -not (Test-Path $ui)) { throw "installed closure is ambiguous" }; Write-Output ("$($cli[0].FullName)|$($service[0].FullName)|$ui")')"
+              installed_paths="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $p=Start-Process msiexec.exe -ArgumentList @("/i", "`"$env:PACKAGE_WIN`"", "/qn", "/norestart") -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "msiexec failed" }; $root="$env:ProgramFiles\DobbyVPN"; $cli=Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File; $service=Get-ChildItem $root -Filter "dobbyvpn-backend.exe" -Recurse -File; $ui=Join-Path $root "bin\DobbyVPN.exe"; if ($cli.Count -ne 1 -or $service.Count -ne 1 -or -not (Test-Path $ui)) { throw "installed closure is ambiguous" }; Write-Output ("$($cli[0].FullName)|$($service[0].FullName)|$ui")')"
               IFS='|' read -r cli service ui_binary <<< "${installed_paths//$'\r'/}"
               cli="$(cygpath "$cli")"; service="$(cygpath "$service")"; ui_binary="$(cygpath "$ui_binary")"
-              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nUI_TEST=%s\nSERVICE_SOCKET=127.0.0.1:50051\n' "$cli" "$service" "$ui_binary" "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test.exe" >> "$GITHUB_ENV"
+              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nSERVICE_PIPE=DobbyVPN.Control\n' "$cli" "$service" "$ui_binary" >> "$GITHUB_ENV"
               ;;
             macos)
               case "$(uname -m)" in arm64) package=dobbyVPN-macos-aarch64.pkg ;; x86_64) package=dobbyVPN-macos-amd64.pkg ;; *) exit 1 ;; esac
@@ -162,9 +141,9 @@ jobs:
                 "DOBBYVPN_CONTROL_PEER_UID=$(id -u)" \
                 "DOBBY_LOG_PATH=$RUN_DIR/service.log" \
                 installer -pkg "$GITHUB_WORKSPACE/release-packages/$package" -target /
-              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nUI_TEST=%s\nSERVICE_SOCKET=%s\n' "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli" "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver" "/Applications/Dobby VPN.app/Contents/MacOS/Dobby Vpn" "$GITHUB_WORKSPACE/release-ui/dobby-vpn-ui-test" "/var/run/dobbyvpn/control.sock" >> "$GITHUB_ENV"
+              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nSERVICE_SOCKET=%s\n' "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli" "/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend" "/Applications/Dobby VPN.app/Contents/MacOS/DobbyVPNMacApp" "/var/run/dobbyvpn/control.sock" >> "$GITHUB_ENV"
               test -x "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
-              test -x "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver"
+              test -x "/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend"
               ;;
             android)
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
@@ -298,14 +277,14 @@ jobs:
           printf '%s\n' '[android-complete-throwable-self-test stderr]' >&2
           cat "$reporter_stderr" >&2
 
-      - name: Exercise real Android Go/Fyne controls
+      - name: Exercise the native Android UI
         if: inputs.platform == 'android'
         shell: bash
         run: |
           set -euo pipefail
           # This is the same release APK installed for the functional lane,
           # not the renderer-only helper. UI Automator launches the production
-          # Go/Fyne activity, enters synthetic invalid input through the native
+          # Compose activity, enters synthetic invalid input through the native
           # touch/input path, and verifies the visible failure/reopen flow.
           # The functional lane below owns the real profile, VPN consent,
           # traffic, Connect, and Disconnect checks.
@@ -314,7 +293,7 @@ jobs:
           ui_status=0
           ui_timed_out=false
           timeout --foreground 300s "$ADB" shell am instrument -w -r \
-            -e class com.dobby.GoUiInstrumentedTest \
+            -e class com.dobby.NativeUiInstrumentedTest \
             com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
             >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
           if [ "$ui_status" -eq 124 ]; then
@@ -340,7 +319,7 @@ jobs:
             exit 1
           fi
 
-      - name: Retain Android Go/Fyne UI screenshots
+      - name: Retain Android native UI screenshots
         if: always() && inputs.platform == 'android'
         shell: bash
         run: |
@@ -425,7 +404,7 @@ jobs:
             powershell.exe -NoLogo -NoProfile -NonInteractive -Command '
           $ErrorActionPreference = "Stop"
           [Console]::Error.WriteLine("Resolving MSI-managed service")
-          $installed = Get-Service -Name "DobbyVPN Server"
+          $installed = Get-Service -Name "DobbyVPN Go backend"
           if ($installed.Status -ne "Stopped") {
             [Console]::Error.WriteLine("Stopping MSI-managed service")
             Stop-Service -InputObject $installed -Force
@@ -435,7 +414,7 @@ jobs:
           $env:DOBBY_LOG_PATH = $env:SERVICE_LOG_PATH_WIN
           $env:DOBBY_LOG_ROOT = $env:SERVICE_LOG_ROOT_WIN
           [Console]::Error.WriteLine("Starting qualification process")
-          $process = Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-port", "50051") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru
+          $process = Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-mode", "normal") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru
           [Console]::Error.WriteLine("Qualification process started")
           [System.IO.File]::WriteAllText($env:SERVICE_PID_FILE_WIN, [string]$process.Id)
           [Console]::Error.WriteLine("Qualification PID saved")
@@ -540,10 +519,11 @@ jobs:
               --raw-log-dir "$RUN_DIR"
               --service-pid "$SERVICE_PID"
               --service-binary "$SERVICE_BINARY"
-              --service-socket "$SERVICE_SOCKET"
             )
-            if [ "$PLATFORM" = windows ] || [ "$PLATFORM" = macos ]; then
-              release_args+=(--ui-test "$UI_TEST")
+            if [ "$PLATFORM" = windows ]; then
+              release_args+=(--service-pipe "$SERVICE_PIPE")
+            else
+              release_args+=(--service-socket "$SERVICE_SOCKET")
             fi
             if [ "$PLATFORM" = linux ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"

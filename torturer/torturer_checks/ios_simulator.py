@@ -103,7 +103,7 @@ def xcodebuild_ui_test_command(
         "-derivedDataPath", str(data_path),
         "-resultBundlePath", str(result_path),
         "-parallel-testing-enabled", "NO",
-        "-only-testing:iosAppUITests/GoFyneUIInteractionTests",
+        "-only-testing:iosAppUITests/NativeUIInteractionTests",
         # Simulator XCTest runners need an installable code signature, but
         # ``-`` is the ad-hoc identity and does not require an Apple
         # Development certificate or provisioning profile.

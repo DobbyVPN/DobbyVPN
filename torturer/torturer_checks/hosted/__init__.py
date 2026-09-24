@@ -1,12 +1,7 @@
-"""Trusted-runner adapters for the canonical functional engine.
+"""Platform adapters for the canonical functional engine.
 
-The desktop adapter drives the product's public CLI, with an optional
-production Fyne UI wrapper for Windows/macOS GUI qualification; Android
-uses the rendered Go/Fyne activity together with the native VPN-service
-adapter for its hosted UI and functional lanes.
 Scenario meaning and assertions stay in ``torturer_contract.functional``;
-provider credentials and profiles are supplied by a separate trusted workflow
-boundary.
+provider credentials and profiles are supplied by the trusted workflow.
 """
 
 from .cli import CommandResult, HostedAdapterError, HostedCLIAdapter, SubprocessRunner

@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-EXTRACTED_APP_BUNDLE="Dobby Vpn.app"
 APP_BUNDLE="Dobby VPN.app"
 
 mkdir -p "bin/amd64"
@@ -66,8 +65,7 @@ build_package() {
 
   (
     cd "bin/$payload_arch/"
-    echo "[+] Normalizing application bundle name"
-    mv "$EXTRACTED_APP_BUNDLE" "$APP_BUNDLE"
+    test -d "$APP_BUNDLE"
 
     mkdir Scripts
     cp ../../postinstall.sh Scripts/postinstall
@@ -76,7 +74,7 @@ build_package() {
     install_service \
       "$service_path" \
       "$service_arch" \
-      "$APP_BUNDLE/Contents/Resources/macos_grpcvpnserver"
+      "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend"
 
     if [[ "$payload_arch" == "amd64" ]]; then
       install_trusttunnel_helper \
@@ -104,5 +102,5 @@ build_package() {
   )
 }
 
-build_package aarch64 arm64 ../../services/arm64/macos_grpcvpnserver
-build_package amd64 x86_64 ../../services/amd64/macos_grpcvpnserver
+build_package aarch64 arm64 ../../services/arm64/dobbyvpn-backend
+build_package amd64 x86_64 ../../services/amd64/dobbyvpn-backend

@@ -23,7 +23,7 @@ jobs:
           go-version-file: .go-version
           cache: false
 
-      - name: Stage Linux native/Fyne dependencies
+      - name: Stage Linux native dependencies for Go tests
         run: python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
 
       - name: Install pinned golangci-lint

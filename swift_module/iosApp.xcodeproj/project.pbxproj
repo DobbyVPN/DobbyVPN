@@ -12,7 +12,26 @@
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
 		A15F0FEA2D874D38007FA45D /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (Required, ); }; };
 		D7A8C9B0E1F2435A0061FABD /* libresolv.9.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = D7A8C9B0E1F2435A0061FABC /* libresolv.9.tbd */; };
-		E00000000000000000000002 /* GoFyneUIInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000001 /* GoFyneUIInteractionTests.swift */; };
+		E00000000000000000000002 /* NativeUIInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000001 /* NativeUIInteractionTests.swift */; };
+		F20000000000000000000001 /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; };
+		F20000000000000000000002 /* CommonDI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F20000000000000000000003 /* tunnel.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A120139F2D80DE3100D43A3A /* tunnel.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F20000000000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 058557BA273AAA24004C7B11 /* Assets.xcassets */; };
+		F20000000000000000000005 /* NativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* NativeApp.swift */; };
+		F20000000000000000000006 /* IOSSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* IOSSessionClient.swift */; };
+		F20000000000000000000007 /* DobbySessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000004 /* DobbySessionClient.swift */; };
+		F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000005 /* DobbySessionViewModel.swift */; };
+		F20000000000000000000009 /* DobbyRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000006 /* DobbyRootView.swift */; };
+		F2000000000000000000000A /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
+		F20000000000000000000011 /* CommonDI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; };
+		F20000000000000000000012 /* CommonDI.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F20000000000000000000013 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 058557BA273AAA24004C7B11 /* Assets.xcassets */; };
+		F20000000000000000000014 /* NativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* NativeApp.swift */; };
+		F20000000000000000000015 /* IOSSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* IOSSessionClient.swift */; };
+		F20000000000000000000016 /* DobbySessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000004 /* DobbySessionClient.swift */; };
+		F20000000000000000000017 /* DobbySessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000005 /* DobbySessionViewModel.swift */; };
+		F20000000000000000000018 /* DobbyRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000006 /* DobbyRootView.swift */; };
+		F20000000000000000000019 /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -22,6 +41,27 @@
 			proxyType = 1;
 			remoteGlobalIDString = A15F0FCD2D874CDC007FA45D;
 			remoteInfo = CommonDI;
+		};
+		F40000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7555FF73242A565900829871 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A15F0FCD2D874CDC007FA45D;
+			remoteInfo = CommonDI;
+		};
+		F40000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7555FF73242A565900829871 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A120139E2D80DE3100D43A3A;
+			remoteInfo = tunnel;
+		};
+		F40000000000000000000003 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7555FF73242A565900829871 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F30000000000000000000007;
+			remoteInfo = iosSimulatorApp;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -36,9 +76,53 @@
 		A120139F2D80DE3100D43A3A /* tunnel.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = tunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A15F0FCE2D874CDC007FA45D /* CommonDI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = CommonDI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB3632DC29227652001CCB65 /* Config.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
-		E00000000000000000000001 /* GoFyneUIInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoFyneUIInteractionTests.swift; sourceTree = "<group>"; };
+		E00000000000000000000001 /* NativeUIInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeUIInteractionTests.swift; sourceTree = "<group>"; };
 		E00000000000000000000003 /* iosAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F10000000000000000000002 /* NativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeApp.swift; sourceTree = "<group>"; };
+		F10000000000000000000003 /* IOSSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSessionClient.swift; sourceTree = "<group>"; };
+		F10000000000000000000004 /* DobbySessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbySessionClient.swift; sourceTree = "<group>"; };
+		F10000000000000000000005 /* DobbySessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbySessionViewModel.swift; sourceTree = "<group>"; };
+		F10000000000000000000006 /* DobbyRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyRootView.swift; sourceTree = "<group>"; };
+		F10000000000000000000007 /* DobbyShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyShareSheet.swift; sourceTree = "<group>"; };
+		F10000000000000000000008 /* Dobby-Vpn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F10000000000000000000009 /* Dobby-Vpn-Simulator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn-Simulator.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		F30000000000000000000005 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+		dstSubfolderSpec = 13;
+		files = (
+			F20000000000000000000003 /* tunnel.appex in Embed App Extensions */,
+		);
+		name = "Embed App Extensions";
+		runOnlyForDeploymentPostprocessing = 0;
+	};
+		F30000000000000000000006 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				F20000000000000000000002 /* CommonDI.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F3000000000000000000000B /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				F20000000000000000000012 /* CommonDI.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		A12013A92D80DE3200D43A3A /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
@@ -89,6 +173,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F30000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F20000000000000000000001 /* CommonDI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F30000000000000000000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F20000000000000000000011 /* CommonDI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -118,6 +218,7 @@
 				E00000000000000000000004 /* iosAppUITests */,
 				A12013A12D80DE3200D43A3A /* tunnel */,
 				A15F0FCF2D874CDC007FA45D /* CommonDI */,
+				F10000000000000000000001 /* NativeUI */,
 				7555FF7C242A565900829871 /* Products */,
 				42799AB246E5F90AF97AA0EF /* Frameworks */,
 			);
@@ -129,6 +230,8 @@
 				A120139F2D80DE3100D43A3A /* tunnel.appex */,
 				A15F0FCE2D874CDC007FA45D /* CommonDI.framework */,
 				E00000000000000000000003 /* iosAppUITests.xctest */,
+				F10000000000000000000008 /* Dobby-Vpn.app */,
+				F10000000000000000000009 /* Dobby-Vpn-Simulator.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -139,6 +242,8 @@
 				A120131E2D7DB13F00D43A3A /* iosApp.entitlements */,
 				058557BA273AAA24004C7B11 /* Assets.xcassets */,
 				7555FF8C242A565B00829871 /* Info.plist */,
+				F10000000000000000000002 /* NativeApp.swift */,
+				F10000000000000000000003 /* IOSSessionClient.swift */,
 				058557D7273AAEEB004C7B11 /* Preview Content */,
 			);
 			path = iosApp;
@@ -147,9 +252,20 @@
 		E00000000000000000000004 /* iosAppUITests */ = {
 			isa = PBXGroup;
 			children = (
-				E00000000000000000000001 /* GoFyneUIInteractionTests.swift */,
+				E00000000000000000000001 /* NativeUIInteractionTests.swift */,
 			);
 			path = iosAppUITests;
+			sourceTree = "<group>";
+		};
+		F10000000000000000000001 /* NativeUI */ = {
+			isa = PBXGroup;
+			children = (
+				F10000000000000000000004 /* DobbySessionClient.swift */,
+				F10000000000000000000005 /* DobbySessionViewModel.swift */,
+				F10000000000000000000006 /* DobbyRootView.swift */,
+				F10000000000000000000007 /* DobbyShareSheet.swift */,
+			);
+			path = NativeUI;
 			sourceTree = "<group>";
 		};
 		AB1DB47929225F7C00F7AF9C /* Configuration */ = {
@@ -219,6 +335,46 @@
 			productReference = A15F0FCE2D874CDC007FA45D /* CommonDI.framework */;
 			productType = "com.apple.product-type.framework";
 		};
+		F30000000000000000000001 /* iosApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F60000000000000000000003 /* Build configuration list for PBXNativeTarget "iosApp" */;
+			buildPhases = (
+				F30000000000000000000002 /* Sources */,
+				F30000000000000000000003 /* Frameworks */,
+				F30000000000000000000004 /* Resources */,
+				F30000000000000000000005 /* Embed App Extensions */,
+				F30000000000000000000006 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F50000000000000000000001 /* PBXTargetDependency */,
+				F50000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = iosApp;
+			productName = "Dobby-Vpn";
+			productReference = F10000000000000000000008 /* Dobby-Vpn.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F30000000000000000000007 /* iosSimulatorApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E10000000000000000000003 /* Build configuration list for PBXNativeTarget "iosSimulatorApp" */;
+			buildPhases = (
+				F30000000000000000000008 /* Sources */,
+				F30000000000000000000009 /* Frameworks */,
+				F3000000000000000000000A /* Resources */,
+				F3000000000000000000000B /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F50000000000000000000004 /* PBXTargetDependency */,
+			);
+			name = iosSimulatorApp;
+			productName = "Dobby-Vpn-Simulator";
+			productReference = F10000000000000000000009 /* Dobby-Vpn-Simulator.app */;
+			productType = "com.apple.product-type.application";
+		};
 		E00000000000000000000007 /* iosAppUITests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = E00000000000000000000008 /* Build configuration list for PBXNativeTarget "iosAppUITests" */;
@@ -229,6 +385,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				F50000000000000000000003 /* PBXTargetDependency */,
 			);
 			name = iosAppUITests;
 			packageProductDependencies = (
@@ -254,6 +411,13 @@
 					A15F0FCD2D874CDC007FA45D = {
 						CreatedOnToolsVersion = 16.1;
 					};
+					F30000000000000000000001 = {
+						CreatedOnToolsVersion = 16.1;
+						ProvisioningStyle = Manual;
+					};
+					F30000000000000000000007 = {
+						CreatedOnToolsVersion = 16.1;
+					};
 					E00000000000000000000007 = {
 						CreatedOnToolsVersion = 16.1;
 					};
@@ -276,6 +440,8 @@
 			targets = (
 				A120139E2D80DE3100D43A3A /* tunnel */,
 				A15F0FCD2D874CDC007FA45D /* CommonDI */,
+				F30000000000000000000001 /* iosApp */,
+				F30000000000000000000007 /* iosSimulatorApp */,
 				E00000000000000000000007 /* iosAppUITests */,
 			);
 		};
@@ -293,6 +459,22 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F30000000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F20000000000000000000004 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F3000000000000000000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F20000000000000000000013 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -317,7 +499,33 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E00000000000000000000002 /* GoFyneUIInteractionTests.swift in Sources */,
+				E00000000000000000000002 /* NativeUIInteractionTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F30000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F20000000000000000000005 /* NativeApp.swift in Sources */,
+				F20000000000000000000006 /* IOSSessionClient.swift in Sources */,
+				F20000000000000000000007 /* DobbySessionClient.swift in Sources */,
+				F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */,
+				F20000000000000000000009 /* DobbyRootView.swift in Sources */,
+				F2000000000000000000000A /* DobbyShareSheet.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F30000000000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F20000000000000000000014 /* NativeApp.swift in Sources */,
+				F20000000000000000000015 /* IOSSessionClient.swift in Sources */,
+				F20000000000000000000016 /* DobbySessionClient.swift in Sources */,
+				F20000000000000000000017 /* DobbySessionViewModel.swift in Sources */,
+				F20000000000000000000018 /* DobbyRootView.swift in Sources */,
+				F20000000000000000000019 /* DobbyShareSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -328,6 +536,26 @@
 			isa = PBXTargetDependency;
 			target = A15F0FCD2D874CDC007FA45D /* CommonDI */;
 			targetProxy = A15F0FEC2D874D38007FA45D /* PBXContainerItemProxy */;
+		};
+		F50000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A15F0FCD2D874CDC007FA45D /* CommonDI */;
+			targetProxy = F40000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		F50000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A120139E2D80DE3100D43A3A /* tunnel */;
+			targetProxy = F40000000000000000000002 /* PBXContainerItemProxy */;
+		};
+		F50000000000000000000003 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F30000000000000000000007 /* iosSimulatorApp */;
+			targetProxy = F40000000000000000000003 /* PBXContainerItemProxy */;
+		};
+		F50000000000000000000004 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A15F0FCD2D874CDC007FA45D /* CommonDI */;
+			targetProxy = F40000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -450,6 +678,60 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F60000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = AB3632DC29227652001CCB65 /* Config.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = iosApp/iosApp.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1005001;
+				DEVELOPMENT_TEAM = A9RKXATNC8;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
+				PRODUCT_NAME = "Dobby-Vpn";
+				PROVISIONING_PROFILE_SPECIFIER = DobbyVPNAppStore;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F60000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = AB3632DC29227652001CCB65 /* Config.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = iosApp/iosApp.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1005001;
+				DEVELOPMENT_TEAM = A9RKXATNC8;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
+				PRODUCT_NAME = "Dobby-Vpn";
+				PROVISIONING_PROFILE_SPECIFIER = DobbyVPNAppStore;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -646,6 +928,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app.uitests;
 				PRODUCT_NAME = iosAppUITests;
+				TEST_TARGET_NAME = iosSimulatorApp;
 				SDKROOT = iphonesimulator;
 				SUPPORTED_PLATFORMS = iphonesimulator;
 				SWIFT_VERSION = 5.0;
@@ -663,6 +946,51 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app.uitests;
 				PRODUCT_NAME = iosAppUITests;
+				TEST_TARGET_NAME = iosSimulatorApp;
+				SDKROOT = iphonesimulator;
+				SUPPORTED_PLATFORMS = iphonesimulator;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		E10000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CURRENT_PROJECT_VERSION = 1005001;
+				DOBBY_SOURCE_COMMIT = "$(APP_SOURCE_SHA)";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
+				PRODUCT_NAME = "Dobby-Vpn-Simulator";
+				SDKROOT = iphonesimulator;
+				SUPPORTED_PLATFORMS = iphonesimulator;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E10000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "";
+				CURRENT_PROJECT_VERSION = 1005001;
+				DOBBY_SOURCE_COMMIT = "$(APP_SOURCE_SHA)";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iosApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
+				PRODUCT_NAME = "Dobby-Vpn-Simulator";
 				SDKROOT = iphonesimulator;
 				SUPPORTED_PLATFORMS = iphonesimulator;
 				SWIFT_VERSION = 5.0;
@@ -696,6 +1024,24 @@
 			buildConfigurations = (
 				A15F0FD62D874CDC007FA45D /* Debug */,
 				A15F0FD72D874CDC007FA45D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F60000000000000000000003 /* Build configuration list for PBXNativeTarget "iosApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F60000000000000000000001 /* Debug */,
+				F60000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E10000000000000000000003 /* Build configuration list for PBXNativeTarget "iosSimulatorApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E10000000000000000000001 /* Debug */,
+				E10000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

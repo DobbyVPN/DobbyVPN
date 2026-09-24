@@ -1,4 +1,4 @@
-* Share the Go/Fyne UI across desktop, Android, and iOS.
-* Keep Android VPN permission and iOS NetworkExtension lifecycle in thin native shells.
-* Remove the Kotlin Multiplatform/Compose UI and the desktop JVM runtime.
-* Add real rendered-control checks alongside headless Go UI and VPN functional tests.
+* Add native SwiftUI, Jetpack Compose, and WinUI frontends backed by the shared Go session engine.
+* Keep profile parsing, selection, VPN session policy, protocol runtimes, and recovery in the shared Go backend.
+* Replace desktop gRPC control with local JSON over Unix sockets and a Windows named pipe.
+* Persist accepted HTTPS subscription URLs in the Go backend and show local diagnostics in the native apps.

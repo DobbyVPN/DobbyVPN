@@ -26,12 +26,16 @@ type PlatformCallbacks interface {
 		state string,
 		failureCode string,
 	)
+	LoadSourceURL() string
+	SaveSourceURL(value string) bool
+	ClearSourceURL() bool
 }
 
 // RegisterSessionPlatform installs the NetworkExtension boundary used by the
 // shared runtime.
 func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 	mobileSessions.SetPlatformCallbacks(callbacks)
+	mobileSessions.AttachSourceStore()
 }
 
 func ConfigureSession(sessionID string, sequence int64, rawConfig []byte) string {

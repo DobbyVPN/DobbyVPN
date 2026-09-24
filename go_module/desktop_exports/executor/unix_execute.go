@@ -3,23 +3,21 @@
 package executor
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
+	"go_module/desktop_exports/controljson"
 	"go_module/desktop_exports/controlplane"
-	"go_module/desktop_exports/proto"
-	"go_module/grpcproto"
 
 	"go_module/log"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
-	"google.golang.org/grpc"
 )
 
 func explicitLogRoot() (string, error) {
@@ -45,10 +43,21 @@ func openManagedLocalLog(path string) (*os.File, error) {
 
 func initExplicitLocalLog() error {
 	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
+	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
 	if requested == "" {
-		return nil
+		var err error
+		root, requested, err = defaultDesktopLogPath()
+		if err != nil {
+			return err
+		}
+	} else if root == "" {
+		var err error
+		root, err = explicitLogRoot()
+		if err != nil {
+			return err
+		}
 	}
-	root, err := explicitLogRoot()
+	root, err := filepath.Abs(root)
 	if err != nil {
 		return err
 	}
@@ -119,48 +128,59 @@ func initExplicitLocalLog() error {
 	return nil
 }
 
-func run(_ int) {
+func defaultDesktopLogPath() (root, path string, err error) {
+	if runtime.GOOS == "darwin" && os.Getuid() == 0 {
+		root = "/Library/Logs/DobbyVPN"
+	} else if os.Getuid() == 0 {
+		root = "/var/log/dobbyvpn"
+	} else {
+		var base string
+		base, err = os.UserConfigDir()
+		if err != nil {
+			return "", "", err
+		}
+		root = filepath.Join(base, "DobbyVPN", "Logs")
+	}
+	return root, filepath.Join(root, "backend.jsonl"), nil
+}
+
+func run() {
 	if err := initExplicitLocalLog(); err != nil {
 		panic(fmt.Sprintf("failed to initialize local logging: %v", err))
 	}
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
-	// instead of crashing the entire gRPC server process.
+	// instead of crashing the entire desktop control process.
 	logrus.StandardLogger().ExitFunc = func(code int) {
 		panic(fmt.Sprintf("fatal error (exit code %d)", code))
 	}
 	if err := recoverInterruptedState(); err != nil {
 		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
 	}
-
-	flag.Parse()
-	lis, err := controlplane.ListenControlSocket()
+	listener, err := controlplane.ListenControlSocket()
 	if err != nil {
-		panic(fmt.Sprintf("failed to listen: %v", err))
+		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
 	}
-	s := grpc.NewServer(
-		grpc.Creds(controlplane.UnixPeerCredentials{}),
-		grpc.ChainUnaryInterceptor(
-			proto.ControlAuthUnaryInterceptor(false, ""),
-			proto.PanicRecoveryUnaryInterceptor(),
-			proto.ErrorLoggingUnaryInterceptor(),
-		),
-	)
-
-	grpcproto.RegisterVpnServer(s, &proto.Server{})
-
-	log.Debugf(desktopLogCategory, "desktop control socket ready")
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, controlplane.AuthenticateLocalPeer)
+	}()
+	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	if err := controlplane.ServeUntilSignal(s, lis, signals); err != nil {
-		panic(fmt.Sprintf("failed to serve: %v", err))
+	<-signals
+	if err := listener.Close(); err != nil {
+		panic(fmt.Sprintf("failed to close desktop control socket: %v", err))
+	}
+	if err := <-serveDone; err != nil {
+		panic(fmt.Sprintf("desktop control stopped with error: %v", err))
 	}
 }
 
-func (c *Executor) Execute(port int, mode string) {
+func (c *Executor) Execute(mode string) {
 	switch mode {
 	case "normal":
-		run(port)
+		run()
 	default:
 		log.Debugf(desktopLogCategory, "[ERROR] Invalid run mode")
 	}

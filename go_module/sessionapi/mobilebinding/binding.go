@@ -5,6 +5,7 @@
 package mobilebinding
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,9 @@ type PlatformCallbacks interface {
 	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(sessionID string, generation int64, state string, failureCode string)
+	LoadSourceURL() string
+	SaveSourceURL(value string) bool
+	ClearSourceURL() bool
 }
 
 type managerAPI interface {
@@ -53,6 +57,21 @@ type platformControl interface {
 // NewForTest permits pure tests to inject a manager without constructing native
 // protocol implementations. Production mobile builds use New.
 func NewForTest(manager managerAPI) *Binding { return &Binding{manager: manager} }
+
+// NewForDesktop wraps the process-owned manager used by the desktop Go backend.
+func NewForDesktop(manager *sessionapi.Manager) *Binding {
+	return &Binding{manager: manager}
+}
+
+func (b *Binding) AttachSourceStore() {
+	manager, ok := b.manager.(interface {
+		AttachSourceStore(context.Context, sessionapi.SourceStore) error
+	})
+	store, storeOK := b.platform.(sessionapi.SourceStore)
+	if ok && storeOK {
+		_ = manager.AttachSourceStore(context.Background(), store)
+	}
+}
 
 type envelope struct {
 	OK     bool           `json:"ok"`
@@ -85,11 +104,15 @@ func encode(value interface{}) string {
 // Configure replaces accepted configuration only if the inspected snapshot is
 // still current. The result identifies the new snapshot revision.
 func (b *Binding) Configure(sessionID string, expectedSequence int64, rawConfig []byte) string {
+	return b.ConfigureContext(context.Background(), sessionID, expectedSequence, rawConfig)
+}
+
+func (b *Binding) ConfigureContext(ctx context.Context, sessionID string, expectedSequence int64, rawConfig []byte) string {
 	sequence, err := nonNegative(expectedSequence, "configuration sequence")
 	if err != nil {
 		return failed(err)
 	}
-	result, err := b.manager.Configure(context.Background(), sessionID, sequence, append([]byte(nil), rawConfig...))
+	result, err := b.manager.Configure(ctx, sessionID, sequence, append([]byte(nil), rawConfig...))
 	if err != nil {
 		return failed(err)
 	}
@@ -98,6 +121,10 @@ func (b *Binding) Configure(sessionID string, expectedSequence int64, rawConfig 
 
 // Start starts an attempt only if the inspected snapshot is still current.
 func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, index int32) string {
+	return b.StartContext(context.Background(), sessionID, expectedSequence, mode, index)
+}
+
+func (b *Binding) StartContext(ctx context.Context, sessionID string, expectedSequence int64, mode string, index int32) string {
 	sequence, err := nonNegative(expectedSequence, "start sequence")
 	if err != nil {
 		return failed(err)
@@ -105,7 +132,7 @@ func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, i
 	if index < 0 && mode != string(sessionapi.AutoSelect) {
 		return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "profile index must be non-negative"})
 	}
-	result, err := b.manager.Start(context.Background(), sessionID, sequence, sessionapi.StartTarget{Mode: sessionapi.StartMode(mode), Index: int(index)})
+	result, err := b.manager.Start(ctx, sessionID, sequence, sessionapi.StartTarget{Mode: sessionapi.StartMode(mode), Index: int(index)})
 	if err != nil {
 		return failed(err)
 	}
@@ -115,10 +142,14 @@ func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, i
 // Stop stops only the requested generation. Repeating a completed stop is
 // harmless according to the manager contract.
 func (b *Binding) Stop(sessionID string, generation int64) string {
+	return b.StopContext(context.Background(), sessionID, generation)
+}
+
+func (b *Binding) StopContext(ctx context.Context, sessionID string, generation int64) string {
 	if generation <= 0 {
 		return failed(&sessionapi.Error{Code: sessionapi.FailureStaleGeneration, Message: "generation must be positive"})
 	}
-	result, err := b.manager.Stop(context.Background(), sessionID, uint64(generation))
+	result, err := b.manager.Stop(ctx, sessionID, uint64(generation))
 	if err != nil {
 		return failed(err)
 	}
@@ -127,7 +158,11 @@ func (b *Binding) Stop(sessionID string, generation int64) string {
 
 // Snapshot attaches to the process-owned session when sessionID is empty.
 func (b *Binding) Snapshot(sessionID string) string {
-	result, err := b.manager.Snapshot(context.Background(), sessionID)
+	return b.SnapshotContext(context.Background(), sessionID)
+}
+
+func (b *Binding) SnapshotContext(ctx context.Context, sessionID string) string {
+	result, err := b.manager.Snapshot(ctx, sessionID)
 	if err != nil {
 		return failed(err)
 	}
@@ -137,15 +172,52 @@ func (b *Binding) Snapshot(sessionID string) string {
 // Reset clears accepted configuration after successful cleanup and a matching
 // snapshot revision.
 func (b *Binding) Reset(sessionID string, expectedSequence int64) string {
+	return b.ResetContext(context.Background(), sessionID, expectedSequence)
+}
+
+func (b *Binding) ResetContext(ctx context.Context, sessionID string, expectedSequence int64) string {
 	sequence, err := nonNegative(expectedSequence, "reset sequence")
 	if err != nil {
 		return failed(err)
 	}
-	result, err := b.manager.Reset(context.Background(), sessionID, sequence)
+	result, err := b.manager.Reset(ctx, sessionID, sequence)
 	if err != nil {
 		return failed(err)
 	}
 	return success(snapshotDTO(result))
+}
+
+// CallJSON is the shared desktop/mobile command boundary. Desktop uses it over
+// its authenticated local connection; mobile's exported methods use the same
+// DTO conversion functions above.
+func (b *Binding) CallJSON(ctx context.Context, method string, params json.RawMessage) string {
+	var value struct {
+		SessionID        string `json:"session_id"`
+		ExpectedSequence int64  `json:"expected_sequence"`
+		Generation       int64  `json:"generation"`
+		Source           string `json:"source"`
+		Mode             string `json:"mode"`
+		Index            int32  `json:"index"`
+	}
+	if len(params) != 0 {
+		decoder := json.NewDecoder(bytes.NewReader(params))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&value); err != nil {
+			return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "command parameters are invalid"})
+		}
+	}
+	switch method {
+	case "Snapshot":
+		return b.SnapshotContext(ctx, value.SessionID)
+	case "Configure":
+		return b.ConfigureContext(ctx, value.SessionID, value.ExpectedSequence, []byte(value.Source))
+	case "Start":
+		return b.StartContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index)
+	case "Stop":
+		return b.StopContext(ctx, value.SessionID, value.Generation)
+	default:
+		return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "unknown command"})
+	}
 }
 
 func nonNegative(value int64, name string) (uint64, error) {
@@ -192,6 +264,7 @@ type snapshotResultDTO struct {
 	Digest          string       `json:"digest"`
 	SourceKind      string       `json:"source_kind"`
 	SourceURL       string       `json:"source_url,omitempty"`
+	SourceError     string       `json:"source_error,omitempty"`
 	Profiles        []profileDTO `json:"profiles"`
 	Warnings        []warningDTO `json:"warnings"`
 	ActiveProfile   *profileDTO  `json:"active_profile,omitempty"`
@@ -240,7 +313,8 @@ func snapshotDTO(in sessionapi.SnapshotResult) snapshotResultDTO {
 	out := snapshotResultDTO{
 		SessionID: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
 		State: string(in.State), Configured: in.Configured, Digest: in.Digest,
-		SourceKind: string(in.SourceKind), SourceURL: in.SourceURL, Profiles: profilesDTO(in.Profiles),
+		SourceKind: string(in.SourceKind), SourceURL: in.SourceURL, SourceError: in.SourceError,
+		Profiles: profilesDTO(in.Profiles),
 		Warnings: warningsDTO(in.Warnings), ActiveProfile: profileResultPtr(in.ActiveProfile),
 		CleanupComplete: in.CleanupComplete,
 		Recovering:      in.Recovering,

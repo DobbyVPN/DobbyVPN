@@ -169,14 +169,22 @@ if (-not $success) { exit 2 }
 if ($survivor) { exit 1 }
 exit 0
 """
-_WINDOWS_PORT_READY_SCRIPT = r"""
+_WINDOWS_PIPE_READY_SCRIPT = r"""
 $ErrorActionPreference = "Stop"
-$ready = Test-NetConnection -ComputerName $args[0] -Port ([int]$args[1])
-Write-Output $ready
-if ($ready.TcpTestSucceeded) {
+$client = $null
+try {
+    $client = [System.IO.Pipes.NamedPipeClientStream]::new(
+        ".", [string]$args[0], [System.IO.Pipes.PipeDirection]::InOut
+    )
+    $client.Connect(500)
+    Write-Output "pipe_ready"
     exit 0
+} catch {
+    Write-Output "pipe_not_ready"
+    exit 1
+} finally {
+    if ($null -ne $client) { $client.Dispose() }
 }
-exit 1
 """
 
 _WINDOWS_SERVICE_IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]*$")
@@ -196,22 +204,6 @@ def read_windows_service_identity(path: Path, *, expected_pid: int | None = None
     if expected_pid is not None and int(identity.split("|", 1)[0]) != expected_pid:
         raise ScenarioExecutionError("SERVICE_PID_PROBE_FAILED")
     return identity
-
-
-def _parse_control_address(value: str) -> tuple[str, int]:
-    value = value.strip()
-    if value.count(":") != 1:
-        raise HostedAdapterError("SERVICE_CONTROL_ADDRESS_INVALID")
-    host, port_text = value.rsplit(":", 1)
-    if host.lower() not in {"127.0.0.1", "localhost"}:
-        raise HostedAdapterError("SERVICE_CONTROL_ADDRESS_INVALID")
-    try:
-        port = int(port_text)
-    except ValueError as error:
-        raise HostedAdapterError("SERVICE_CONTROL_ADDRESS_INVALID") from error
-    if not 1 <= port <= 65535:
-        raise HostedAdapterError("SERVICE_CONTROL_ADDRESS_INVALID")
-    return host, port
 
 
 def _parse_windows_tree_snapshot(stdout: str) -> tuple[tuple[str, ...], bool]:
@@ -376,7 +368,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         identity_file: Path | None = None,
         runner: CommandRunner,
         raw_directory: Path,
-        control_address: str,
+        control_pipe: str,
         expected_initial_identity: str | None = None,
         initialization_deadline: float | None = None,
         replacement_command: tuple[str, ...] | None = None,
@@ -396,7 +388,9 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         self._replacement_process: object | None = None
         self._replacement_stream_threads: list[threading.Thread] = []
         self._replacement_cleanup_proven = False
-        self.control_host, self.control_port = _parse_control_address(control_address)
+        if control_pipe != "DobbyVPN.Control":
+            raise HostedAdapterError("SERVICE_CONTROL_PIPE_INVALID")
+        self.control_pipe = control_pipe
         if expected_initial_identity is not None:
             if (
                 _WINDOWS_SERVICE_IDENTITY.fullmatch(expected_initial_identity) is None
@@ -416,7 +410,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 raise HostedAdapterError("SERVICE_REPLACEMENT_COMMAND_INVALID")
             self._replacement_command = replacement_command
         else:
-            self._replacement_command = (str(binary), "-port", str(self.control_port))
+            self._replacement_command = (str(binary), "-mode", "normal")
         self._write_pid(pid)
         try:
             identity_deadline = time.monotonic() + 5.0
@@ -791,14 +785,13 @@ class WindowsServiceProcessController(HostedServiceProcessController):
     def _control_ready(self, timeout: float) -> bool:
         result = self._probe(
             self._powershell(
-                _WINDOWS_PORT_READY_SCRIPT,
-                self.control_host,
-                str(self.control_port),
+                _WINDOWS_PIPE_READY_SCRIPT,
+                self.control_pipe,
             ),
             timeout,
             "SERVICE_CONTROL_PROBE_FAILED",
         )
-        return result.returncode == 0
+        return result.returncode == 0 and result.stdout_text.strip() == "pipe_ready"
 
     def _start(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
@@ -946,7 +939,7 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         service_binary: Path | None = None,
         service_pid_file: Path | None = None,
         service_identity_file: Path | None = None,
-        service_socket: Path | None = None,
+        service_pipe: str | None = None,
         network_interface: str | None = None,
     ) -> None:
         super().__init__(
@@ -970,10 +963,7 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             raw_directory = getattr(runner, "raw_directory", None)
             if not isinstance(raw_directory, Path):
                 raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
-            control_address = str(
-                service_socket
-                or os.environ.get("DOBBYVPN_CONTROL_ADDRESS", "127.0.0.1:50051")
-            )
+            control_pipe = service_pipe or "DobbyVPN.Control"
             expected_initial_identity = None
             if service_identity_file is not None:
                 try:
@@ -990,7 +980,7 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 identity_file=service_identity_file,
                 runner=runner,
                 raw_directory=raw_directory,
-                control_address=control_address,
+                control_pipe=control_pipe,
                 expected_initial_identity=expected_initial_identity,
             )
         else:

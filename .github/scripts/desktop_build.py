@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 import platform
+import plistlib
 import re
 import shutil
 import socket
@@ -102,24 +103,14 @@ def temporary_directory(prefix: str):
         shutil.rmtree(path)
 
 SERVICE_NAMES = {
-    "linux": "ubuntu_grpcvpnserver",
-    "macos": "macos_grpcvpnserver",
-    "windows": "windows_grpcvpnserver.exe",
+    "linux": "dobbyvpn-backend",
+    "macos": "dobbyvpn-backend",
+    "windows": "dobbyvpn-backend.exe",
 }
 CLI_NAMES = {
     "linux": "dobby-cli",
     "macos": "dobby-cli",
     "windows": "dobby-cli.exe",
-}
-UI_NAMES = {
-    "linux": "dobby-vpn-ui",
-    "macos": "dobby-vpn-ui",
-    "windows": "dobby-vpn-ui.exe",
-}
-UI_TEST_NAMES = {
-    "linux": "dobby-vpn-ui-test",
-    "macos": "dobby-vpn-ui-test",
-    "windows": "dobby-vpn-ui-test.exe",
 }
 MACOS_MINIMUM_SYSTEM_VERSION = "12.0"
 PROBE_TIMEOUT_SECONDS = 30
@@ -522,7 +513,7 @@ def ensure_compiler(target_platform: str, skip_deps: bool) -> None:
     if target_platform == "linux":
         install_linux_packages(skip_deps)
         if not command_exists("gcc") or not command_exists("g++"):
-            fail("gcc and g++ are required for the Linux gRPC VPN service")
+            fail("gcc and g++ are required for the Linux Go backend")
     elif target_platform == "macos":
         if run_capture(["xcode-select", "-p"]):
             return
@@ -540,7 +531,7 @@ def ensure_compiler(target_platform: str, skip_deps: bool) -> None:
             return
         if skip_deps:
             fail(
-                "A working x86_64 MinGW gcc is required for the Windows gRPC VPN service "
+                "A working x86_64 MinGW gcc is required for the Windows Go backend "
                 f"({diagnostic})"
             )
         if not command_exists("choco"):
@@ -644,7 +635,7 @@ def install_windows_bridge(skip_deps: bool) -> None:
     bridge = bridge_dir / release.member_name
     if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
         if skip_deps:
-            fail("dobby_bridge.dll is required for the Windows gRPC VPN service")
+            fail("dobby_bridge.dll is required for the Windows Go backend")
         archive = TOOLS_DIR / "downloads" / f"{Path(release.asset_name).stem}-v{release.version}.zip"
         download(
             "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
@@ -685,8 +676,8 @@ def configure_macos_deployment_target(
     compiles C/C++ objects before that link, so leaving the SDK default in
     place can produce objects targeting the runner's newer macOS release
     while the executable advertises the product's older deployment floor.
-    Keep this invariant in the build helper so service, CLI, UI, and UI-test
-    builds all receive the same setting.
+    Keep this invariant in the build helper so backend and CLI builds receive
+    the same setting.
     """
     if target_platform != "macos":
         return
@@ -723,7 +714,7 @@ def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
     bridge = GO_MODULE_DIR / release.member_name
     if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
         if skip_deps:
-            fail("libdobby_bridge.so is required for the Linux gRPC VPN service")
+            fail("libdobby_bridge.so is required for the Linux Go backend")
 
         archive = (
             TOOLS_DIR
@@ -850,7 +841,7 @@ def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> None
     """Materialize the exact native closure required by Linux Go checks.
 
     The pinned go-go-tunnel module embeds its Linux cgo search path in the
-    module cache. The Fyne desktop headers, public bridge, and libc++ runtimes
+    module cache. The pinned bridge and libc++ runtimes
     are therefore staged in one place and added through
     CGO_LDFLAGS/LD_LIBRARY_PATH before a check starts. This keeps hosted CI on
     the same dependency contract as the desktop service build without
@@ -860,10 +851,6 @@ def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> None
         fail("prepare-go-test-deps is supported only on Linux CI runners")
 
     ensure_build_dependencies("linux", skip_deps)
-    # Go package loading reaches the shared Fyne UI as well as the VPN
-    # runtime. Keep the native desktop headers in this one dependency owner so
-    # CI lint and tests cannot drift into different cgo environments.
-    install_linux_gui_packages(skip_deps)
     install_linux_trusttunnel_bridge(skip_deps)
     runtime = install_linux_libcxx_runtime(skip_deps)
     go_mod_download(run_go_mod_tidy)
@@ -891,7 +878,12 @@ def service_output_path(target_platform: str) -> Path:
 
 
 def service_target_path(target_platform: str) -> Path:
-    return SERVICES_DIR / SERVICE_NAMES[target_platform]
+    architecture = default_service_arch(target_platform)
+    return service_target_path_for_arch(target_platform, architecture)
+
+
+def service_target_path_for_arch(target_platform: str, architecture: str) -> Path:
+    return SERVICES_DIR / f"{target_platform}-{architecture}" / SERVICE_NAMES[target_platform]
 
 
 def build_cli(target_platform: str, arch: str | None = None) -> Path:
@@ -909,160 +901,12 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
     )
     verify_macos_deployment_target(target_platform, output)
     SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    target = SERVICES_DIR / CLI_NAMES[target_platform]
+    target = service_target_path_for_arch(target_platform, target_arch).with_name(CLI_NAMES[target_platform])
     shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
     log(f"Built native Go CLI {target}")
     return target
-
-
-def install_linux_gui_packages(skip_deps: bool) -> None:
-    """Install the native headers required by Fyne's desktop driver."""
-    if host_platform() != "linux":
-        return
-    required = {
-        "gl": "libgl1-mesa-dev",
-        "wayland-client": "libwayland-dev",
-        "xkbcommon": "libxkbcommon-dev",
-        "xxf86vm": "libxxf86vm-dev",
-        "x11": "libx11-dev",
-        "xcursor": "libxcursor-dev",
-        "xinerama": "libxinerama-dev",
-        "xrandr": "libxrandr-dev",
-        "xi": "libxi-dev",
-    }
-    missing = [
-        name
-        for name in required
-        if not shutil.which("pkg-config")
-        or run_capture(["pkg-config", "--exists", name]) is None
-    ]
-    if not missing:
-        return
-    packages = sorted({required[name] for name in missing})
-    if skip_deps:
-        fail(f"Fyne desktop dependencies are missing: {', '.join(packages)}")
-    if not shutil.which("apt-get"):
-        fail(f"Install Fyne desktop dependencies manually: {', '.join(packages)}")
-    sudo = [] if os.geteuid() == 0 else ["sudo"]
-    run([*sudo, "apt-get", "update"])
-    run([*sudo, "apt-get", "install", "-y", *packages])
-
-
-def build_go_ui(
-    target_platform: str,
-    arch: str | None,
-    skip_deps: bool,
-    run_go_mod_tidy: bool,
-    output_path: Path | None = None,
-) -> Path:
-    """Build the shared Go/Fyne UI for the current native desktop host."""
-    if target_platform != host_platform():
-        fail("The Fyne UI must be built on its native target host; use a matching runner")
-    ensure_build_dependencies(target_platform, skip_deps)
-    if target_platform == "linux":
-        install_linux_gui_packages(skip_deps)
-    go_mod_download(run_go_mod_tidy)
-
-    target_arch = arch or default_service_arch(target_platform)
-    output = output_path.resolve() if output_path is not None else GO_MODULE_DIR / UI_NAMES[target_platform]
-    output.parent.mkdir(parents=True, exist_ok=True)
-    environment = os.environ.copy()
-    environment.update({
-        "CGO_ENABLED": "1",
-        "GOOS": GOOS_BY_PLATFORM[target_platform],
-        "GOARCH": target_arch,
-    })
-    configure_macos_deployment_target(target_platform, environment)
-    version_name = os.environ.get("VERSION_NAME") or read_version()
-    version_parts = ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
-    if all(os.environ.get(name) is not None for name in version_parts):
-        version_name = ".".join(os.environ[name] for name in version_parts)
-    commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "unknown"
-    ldflags = f"-buildid= -X go_module/ui.Version={version_name} -X go_module/ui.Commit={commit}"
-    if target_platform == "windows":
-        # The Go UI is a desktop launcher. Avoid opening a console window when
-        # started from Explorer or the Windows start menu; the operator CLI
-        # remains a separate console-subsystem binary.
-        ldflags += " -H=windowsgui"
-    if target_platform == "macos":
-        # Keep the native macOS binary's declared deployment floor.
-        ldflags += (
-            f" -linkmode=external -extldflags=-mmacosx-version-min="
-            f"{MACOS_MINIMUM_SYSTEM_VERSION}"
-        )
-    run(
-        [
-            "go",
-            "build",
-            "-trimpath",
-            "-tags=accessibility",
-            f"-ldflags={ldflags}",
-            "-o",
-            str(output),
-            "./cmd/dobbyui/",
-        ],
-        cwd=GO_MODULE_DIR,
-        env=environment,
-    )
-    verify_macos_deployment_target(target_platform, output)
-    if target_platform != "windows":
-        output.chmod(output.stat().st_mode | 0o111)
-    log(f"Built Go/Fyne UI {output}")
-    return output
-
-
-def build_go_ui_test(
-    target_platform: str,
-    arch: str | None,
-    skip_deps: bool,
-    run_go_mod_tidy: bool,
-    output_path: Path | None = None,
-) -> Path:
-    """Build the native headless UI companion for local/functional tests."""
-    if target_platform != host_platform():
-        fail("The headless UI companion must be built on its native target host")
-    ensure_build_dependencies(target_platform, skip_deps)
-    if target_platform == "linux":
-        install_linux_gui_packages(skip_deps)
-    go_mod_download(run_go_mod_tidy)
-
-    target_arch = arch or default_service_arch(target_platform)
-    output = output_path.resolve() if output_path is not None else GO_MODULE_DIR / UI_TEST_NAMES[target_platform]
-    output.parent.mkdir(parents=True, exist_ok=True)
-    environment = os.environ.copy()
-    environment.update({
-        "CGO_ENABLED": "1",
-        "GOOS": GOOS_BY_PLATFORM[target_platform],
-        "GOARCH": target_arch,
-    })
-    configure_macos_deployment_target(target_platform, environment)
-    ldflags = "-buildid="
-    if target_platform == "macos":
-        ldflags += (
-            f" -linkmode=external -extldflags=-mmacosx-version-min="
-            f"{MACOS_MINIMUM_SYSTEM_VERSION}"
-        )
-    run(
-        [
-            "go",
-            "build",
-            "-trimpath",
-            "-tags=accessibility",
-            f"-ldflags={ldflags}",
-            "-o",
-            str(output),
-            "./cmd/dobbyui-test/",
-        ],
-        cwd=GO_MODULE_DIR,
-        env=environment,
-    )
-    verify_macos_deployment_target(target_platform, output)
-    if target_platform != "windows":
-        output.chmod(output.stat().st_mode | 0o111)
-    log(f"Built headless Go/Fyne UI companion {output}")
-    return output
 
 
 def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
@@ -1156,7 +1000,7 @@ def build_service(
     if skip_build and output.exists():
         log(f"Reusing existing {output.name}")
     else:
-        log(f"Building {target_platform} gRPC VPN service for {target_arch}")
+        log(f"Building {target_platform} Go backend for {target_arch}")
         env = os.environ.copy()
         env.update(
             {
@@ -1169,7 +1013,7 @@ def build_service(
         ldflags = "-buildid="
         if target_platform == "macos":
             # Keep the package's declared macOS 12 floor valid for both
-            # the gRPC service and the native operator CLI.
+            # the Go backend and the native operator CLI.
             ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
         if target_platform == "linux":
             bridge_search_path = f"-L{GO_MODULE_DIR}"
@@ -1213,7 +1057,7 @@ def build_service(
         target = output
     else:
         SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-        target = service_target_path(target_platform)
+        target = service_target_path_for_arch(target_platform, target_arch)
         shutil.copyfile(output, target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
@@ -1241,12 +1085,14 @@ def required_service_platforms(require_all: bool, platform_value: str) -> list[s
 
 
 def required_service_paths(require_all: bool, platform_value: str) -> list[Path]:
-    paths = []
-    for target_platform in required_service_platforms(require_all, platform_value):
-        paths.append(service_target_path(target_platform))
-        if require_all and target_platform == "macos":
-            paths.append(SERVICES_DIR / "macos-amd64" / SERVICE_NAMES[target_platform])
-    return paths
+    if require_all:
+        return [
+            service_target_path_for_arch("linux", "amd64"),
+            service_target_path_for_arch("windows", "amd64"),
+            service_target_path_for_arch("macos", "arm64"),
+            service_target_path_for_arch("macos", "amd64"),
+        ]
+    return [service_target_path(platform) for platform in selected_platforms(platform_value)]
 
 
 def require_services(require_all: bool, platform_value: str) -> None:
@@ -1259,35 +1105,6 @@ def require_services(require_all: bool, platform_value: str) -> None:
             target.chmod(target.stat().st_mode | 0o111)
     if missing:
         fail("Missing service binaries:\n" + "\n".join(missing))
-
-
-def ui_target_path(target_platform: str, arch: str | None = None) -> Path:
-    """Return the staged UI path used by the native desktop packager."""
-    # The release workflow stages the arm64 macOS artifact at the historical
-    # platform root and the Intel artifact in a named subdirectory.  Keep that
-    # layout explicit so the package config and local builds share one rule.
-    target_arch = arch or default_service_arch(target_platform)
-    if target_platform == "macos" and target_arch == "amd64":
-        return SERVICES_DIR / "macos-amd64" / UI_NAMES[target_platform]
-    if target_platform == "macos":
-        return SERVICES_DIR / "macos-arm64" / UI_NAMES[target_platform]
-    return SERVICES_DIR / UI_NAMES[target_platform]
-
-
-def required_ui_paths(require_all: bool, platform_value: str) -> list[Path]:
-    paths = [ui_target_path(target_platform) for target_platform in required_service_platforms(require_all, platform_value)]
-    if require_all:
-        paths.append(ui_target_path("macos", arch="amd64"))
-    return paths
-
-
-def require_ui(require_all: bool, platform_value: str) -> None:
-    missing = []
-    for target in required_ui_paths(require_all, platform_value):
-        if not target.exists():
-            missing.append(str(target))
-    if missing:
-        fail("Missing native Go/Fyne UI binaries:\n" + "\n".join(missing))
 
 
 def run_native_package() -> None:
@@ -1314,52 +1131,113 @@ def run_native_package() -> None:
     )
 
 
+def native_ui_target_path(target_platform: str, target_arch: str | None = None) -> Path:
+    architecture = target_arch or default_service_arch(target_platform)
+    if target_platform == "windows":
+        return SERVICES_DIR / "windows-amd64" / "frontend"
+    if target_platform == "macos":
+        return SERVICES_DIR / f"macos-{architecture}" / "DobbyVPNMacApp"
+    raise ValueError(f"{target_platform} has no desktop UI")
+
+
+def required_native_ui_paths() -> list[Path]:
+    return [
+        SERVICES_DIR / "windows-amd64" / "frontend" / "DobbyVPN.exe",
+        SERVICES_DIR / "macos-arm64" / "DobbyVPNMacApp",
+        SERVICES_DIR / "macos-amd64" / "DobbyVPNMacApp",
+    ]
+
+
+def require_native_ui() -> None:
+    missing = [path for path in required_native_ui_paths() if not path.is_file()]
+    if missing:
+        fail("Missing native desktop frontends:\n" + "\n".join(str(path) for path in missing))
+    for path in required_native_ui_paths():
+        if path.suffix != ".exe":
+            path.chmod(path.stat().st_mode | 0o111)
+
+
+def build_native_ui(target_platform: str, arch: str | None, output: Path) -> Path:
+    if target_platform not in {"windows", "macos"}:
+        fail("native desktop UI builds are supported only on Windows and macOS")
+    if target_platform != host_platform():
+        fail("native desktop UI must be built on its target platform")
+    output = output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    version = os.environ.get("VERSION_NAME") or read_version()
+    commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "N/A"
+    if target_platform == "windows":
+        project = ROOT_DIR / "windows_module" / "DobbyVPN.Windows" / "DobbyVPN.Windows.csproj"
+        run([
+            "dotnet", "publish", str(project), "--configuration", "Release",
+            "--runtime", "win-x64", "--self-contained", "true",
+            f"-p:Version={version}", f"-p:SourceCommit={commit}",
+            "--output", str(output),
+        ], cwd=ROOT_DIR)
+        executable = output / "DobbyVPN.exe"
+        if not executable.is_file():
+            fail(f"WinUI publish did not produce {executable}")
+        return executable
+
+    environment = os.environ.copy()
+    environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
+    run(["swift", "build", "--package-path", str(ROOT_DIR / "swift_module"), "--configuration", "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
+    binary = ROOT_DIR / "swift_module" / ".build" / "release" / "DobbyVPNMacApp"
+    if not binary.is_file():
+        fail(f"Swift build did not produce {binary}")
+    if output.suffix == ".app":
+        executable = output / "Contents" / "MacOS" / "DobbyVPNMacApp"
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(binary, executable)
+        executable.chmod(executable.stat().st_mode | 0o111)
+        info = {
+            "CFBundleDisplayName": "Dobby VPN",
+            "CFBundleExecutable": "DobbyVPNMacApp",
+            "CFBundleIdentifier": "vpn.dobby.desktop",
+            "CFBundleName": "Dobby VPN",
+            "CFBundlePackageType": "APPL",
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": version,
+            "DobbySourceCommit": commit,
+            "LSMinimumSystemVersion": MACOS_MINIMUM_SYSTEM_VERSION,
+        }
+        with (output / "Contents" / "Info.plist").open("wb") as handle:
+            plistlib.dump(info, handle, sort_keys=True)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(binary, output)
+        output.chmod(output.stat().st_mode | 0o111)
+    return output
+
+
 def build_app(args: argparse.Namespace) -> None:
     platforms = selected_platforms(args.platform)
     if not args.skip_libs:
         for target_platform in platforms:
-            build_service(
-                target_platform,
-                args.arch,
-                args.skip_deps,
-                args.skip_build,
-                args.go_mod_tidy,
-            )
-
-    # The native operator CLI is a packaging input, not a JVM application
-    # output.  A source/package build may deliberately reuse already-built
-    # service binaries via --skip-libs, but it must still materialize the CLI
-    # for the selected target before the native packager assembles an archive.
-    for target_platform in platforms:
-        cli_target = service_target_path(target_platform).parent / CLI_NAMES[target_platform]
-        if not cli_target.exists():
+            build_service(target_platform, args.arch, args.skip_deps, args.skip_build, args.go_mod_tidy)
             build_cli(target_platform, args.arch)
-
-    # Desktop packaging is native now.  A local single-platform build can
-    # materialize its UI here; release builds stage all three native artifacts
-    # from the per-platform library workflow and fail if one is absent.
-    for target_platform in platforms:
-        target = ui_target_path(target_platform, args.arch)
-        if target.exists():
-            continue
-        if target_platform != host_platform():
-            fail(
-                f"Missing native UI for {target_platform}: {target}. "
-                "Build it on a matching host before packaging."
-            )
-        build_go_ui(
-            target_platform,
-            args.arch,
-            args.skip_deps,
-            args.go_mod_tidy,
-            output_path=target,
-        )
+            if target_platform in {"windows", "macos"}:
+                staged_ui = native_ui_target_path(target_platform, args.arch)
+                if target_platform == "windows":
+                    build_native_ui(target_platform, args.arch, staged_ui)
+                else:
+                    build_native_ui(target_platform, args.arch, staged_ui)
 
     if args.require_all_services:
         require_services(True, args.platform)
-        require_ui(True, args.platform)
-    else:
-        require_ui(False, args.platform)
+        required_cli = [
+            SERVICES_DIR / "linux-amd64" / "dobby-cli",
+            SERVICES_DIR / "windows-amd64" / "dobby-cli.exe",
+            SERVICES_DIR / "macos-arm64" / "dobby-cli",
+            SERVICES_DIR / "macos-amd64" / "dobby-cli",
+        ]
+        missing = [path for path in required_cli if not path.is_file()]
+        if missing:
+            fail("Missing desktop CLI binaries:\n" + "\n".join(str(path) for path in missing))
+        for path in required_cli:
+            if path.suffix != ".exe":
+                path.chmod(path.stat().st_mode | 0o111)
+        require_native_ui()
     if args.package:
         run_native_package()
 
@@ -1382,283 +1260,6 @@ def build_test_seams_service(args: argparse.Namespace) -> None:
     )
 
 
-def is_windows_admin() -> bool:
-    if host_platform() != "windows":
-        return True
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception as error:
-        raise RuntimeError("Windows administrator status check failed") from error
-
-
-def prepare_config_arg(config: str) -> str:
-    if config.startswith("http://") or config.startswith("https://"):
-        return config
-    path = Path(config)
-    if path.exists():
-        return str(path)
-    # A literal profile/config passed to the local CLI test is an owner-only
-    # run artifact.  Allocate a fresh file instead of replacing a prior
-    # config or diagnostic record at a fixed checkout path.
-    descriptor, name = tempfile.mkstemp(prefix="dobbyvpn-cli-config-", suffix=".toml")
-    config_path = Path(name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            descriptor = -1
-            handle.write(config)
-            handle.flush()
-            os.fsync(handle.fileno())
-        config_path.chmod(0o600)
-    finally:
-        if descriptor != -1:
-            os.close(descriptor)
-    return str(config_path)
-
-
-def wait_for_port(port: int, timeout_seconds: int = 30) -> bool:
-    deadline = time.monotonic() + timeout_seconds
-    last_error: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=1):
-                return True
-        except OSError as error:
-            last_error = error
-            time.sleep(1)
-    raise TimeoutError(f"port {port} did not become ready") from last_error
-
-
-def wait_for_socket(path: Path, timeout_seconds: int = 30) -> bool:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        try:
-            if stat.S_ISSOCK(path.stat().st_mode):
-                return True
-        except FileNotFoundError:
-            pass
-        time.sleep(1)
-    return False
-
-
-def sudo_prefix() -> list[str]:
-    if host_platform() == "windows":
-        return []
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        return []
-    return ["sudo"]
-
-
-def open_service_log():
-    return tempfile.TemporaryFile(mode="w+b")
-
-
-def close_service_logs(handles: list[object]) -> None:
-    failures: list[BaseException] = []
-    for handle in handles:
-        close = getattr(handle, "close", None)
-        if close:
-            try:
-                close()
-            except BaseException as error:
-                failures.append(error)
-    if failures:
-        primary = failures[0]
-        for secondary in failures[1:]:
-            primary.add_note(f"additional service-log close failure: {type(secondary).__name__}: {secondary}")
-        raise primary
-
-
-def start_service(
-    target_platform: str,
-    port: int,
-    control_socket: Path | None = None,
-) -> tuple[subprocess.Popen[str], list[object]]:
-    service = service_target_path(target_platform)
-    if not service.exists():
-        fail(f"Missing service binary: {service}")
-
-    handles: list[object] = []
-    if target_platform == "windows":
-        stdout = open_service_log()
-        stderr = open_service_log()
-        command = [str(service), "-port", str(port)]
-        environment = os.environ.copy()
-    else:
-        stdout = open_service_log()
-        stderr = subprocess.STDOUT
-        if control_socket is None:
-            fail("A private control socket path is required for Unix CLI tests")
-        environment = os.environ.copy()
-        environment["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
-        prefix = sudo_prefix()
-        command = [*prefix]
-        if prefix:
-            command.extend(["env", f"DOBBYVPN_CONTROL_SOCKET={control_socket}"])
-        command.extend([str(service), "-port", str(port)])
-    handles.append(stdout)
-    if hasattr(stderr, "close"):
-        handles.append(stderr)
-
-    log("Starting VPN control service")
-    process = subprocess.Popen(
-        command,
-        cwd=str(ROOT_DIR),
-        env=environment,
-        stdout=stdout,
-        stderr=stderr,
-        text=False,
-        **process_group_options(),
-    )
-    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
-    ready = wait_for_port(port) if target_platform == "windows" else wait_for_socket(control_socket)
-    if ready:
-        log("gRPC VPN service is ready")
-        return process, handles
-
-    failure = SystemExit("[!] gRPC VPN service did not become ready")
-    try:
-        cleanup_cli_test(process, control_socket, handles)
-    except BaseException as cleanup_error:
-        failure.add_note(
-            f"service startup cleanup failure: {type(cleanup_error).__name__}: {cleanup_error}"
-        )
-    raise failure
-
-
-def stop_service(process: subprocess.Popen[str]) -> None:
-    if process.poll() is None:
-        log("Stopping gRPC VPN service")
-    terminate_process_group(process)
-
-
-def print_service_logs(handles: list[object]) -> None:
-    failures: list[OSError] = []
-    for handle in handles:
-        try:
-            handle.flush()
-            handle.seek(0)
-            output = handle.read()
-        except OSError as error:
-            emit_process_diagnostic(f"[!] Could not read service log: {error}")
-            failures.append(error)
-            continue
-        if isinstance(output, str):
-            output = output.encode("utf-8")
-        print("--- service log ---")
-        rendered = output.decode("utf-8", errors="backslashreplace")
-        sys.stdout.write(rendered)
-        if output and not output.endswith(b"\n"):
-            sys.stdout.write("\n")
-        sys.stdout.flush()
-    if failures:
-        primary = failures[0]
-        for secondary in failures[1:]:
-            primary.add_note(f"additional service-log read failure: {type(secondary).__name__}: {secondary}")
-        raise primary
-
-
-def remove_control_socket_parent(control_socket: Path | None) -> None:
-    if control_socket is None:
-        return
-    try:
-        socket_mode = control_socket.lstat().st_mode
-    except FileNotFoundError:
-        socket_mode = None
-    if socket_mode is not None:
-        if not stat.S_ISSOCK(socket_mode):
-            fail("Control socket path is not a socket")
-        run([*sudo_prefix(), "unlink", str(control_socket)])
-    run([*sudo_prefix(), "rmdir", str(control_socket.parent)])
-
-
-def run_cli_check(config_arg: str, port: int, control_socket: Path | None = None) -> None:
-    env = os.environ.copy()
-    env["PORT"] = str(port)
-    if control_socket is not None:
-        env["DOBBYVPN_CONTROL_SOCKET"] = str(control_socket)
-    target = SERVICES_DIR / CLI_NAMES[host_platform()]
-    run([str(target), "check-config", config_arg], cwd=ROOT_DIR, env=env)
-
-
-def cleanup_cli_test(
-    process: subprocess.Popen[str] | None,
-    control_socket: Path | None,
-    handles: list[object],
-) -> None:
-    actions = []
-    if process is not None:
-        actions.append(("stop service", lambda: stop_service(process)))
-    actions.extend(
-        (
-            ("remove control socket", lambda: remove_control_socket_parent(control_socket)),
-            ("print service logs", lambda: print_service_logs(handles)),
-            ("close service logs", lambda: close_service_logs(handles)),
-        )
-    )
-    failures: list[tuple[str, BaseException]] = []
-    for label, action in actions:
-        try:
-            action()
-        except BaseException as error:
-            failures.append((label, error))
-    if failures:
-        first_label, primary = failures[0]
-        primary.add_note(f"cleanup stage: {first_label}")
-        for label, secondary in failures[1:]:
-            primary.add_note(f"additional cleanup failure at {label}: {type(secondary).__name__}: {secondary}")
-        raise primary
-
-
-def cli_test(args: argparse.Namespace) -> None:
-    config = args.config or os.environ.get("DOBBYVPN_CLI_TEST_CONFIG")
-    if not config:
-        fail("Pass --config <url-or-file> or set DOBBYVPN_CLI_TEST_CONFIG")
-    if not is_windows_admin():
-        fail("Run this command from an elevated shell so the VPN service can configure Wintun")
-
-    target_platform = host_platform()
-    ensure_build_dependencies(target_platform, args.skip_deps)
-    if target_platform == "windows":
-        install_wintun(args.skip_deps)
-
-    if not args.skip_build:
-        build_service(
-            target_platform,
-            go_arch_from_machine(),
-            args.skip_deps,
-            skip_build=False,
-            run_go_mod_tidy=args.go_mod_tidy,
-        )
-        build_cli(target_platform, go_arch_from_machine())
-    else:
-        require_services(False, "current")
-        if not (SERVICES_DIR / CLI_NAMES[target_platform]).exists():
-            build_cli(target_platform, go_arch_from_machine())
-
-    config_arg = prepare_config_arg(config)
-    process: subprocess.Popen[str] | None = None
-    handles: list[object] = []
-    with temporary_directory("dobbyvpn-cli-control-") as control_root:
-        control_socket = (
-            None
-            if target_platform == "windows"
-            else control_root / "service" / "control.sock"
-        )
-        try:
-            process, handles = start_service(target_platform, args.port, control_socket)
-            run_cli_check(config_arg, args.port, control_socket)
-        except BaseException as primary:
-            try:
-                cleanup_cli_test(process, control_socket, handles)
-            except BaseException as cleanup_error:
-                primary.add_note(
-                    f"CLI cleanup failure: {type(cleanup_error).__name__}: {cleanup_error}"
-                )
-            raise
-        else:
-            cleanup_cli_test(process, control_socket, handles)
-
-
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing build outputs when possible.")
@@ -1666,11 +1267,11 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build DobbyVPN desktop services and native Go/Fyne app inputs."
+        description="Build the shared Go backend and native desktop frontend artifacts."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    libs = subparsers.add_parser("libs", help="Build desktop gRPC VPN service binaries.")
+    libs = subparsers.add_parser("libs", help="Build the shared Go backend and operator CLI.")
     add_common_options(libs)
     libs.add_argument("--platform", default="current", help="current, linux, macos, windows, ubuntu, or all.")
     libs.add_argument("--arch", help="Override GOARCH for the service build.")
@@ -1701,25 +1302,10 @@ def parse_args() -> argparse.Namespace:
     app.add_argument("--package", action="store_true", help="Assemble native desktop archives after staging inputs.")
     app.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before service builds.")
 
-    ui = subparsers.add_parser("ui", help="Build the shared Go/Fyne desktop UI on the current host.")
-    add_common_options(ui)
-    ui.add_argument("--platform", default="current", help="Native current platform only.")
-    ui.add_argument("--arch", help="Override GOARCH for the native UI build.")
-    ui.add_argument("--output", type=Path, help="Output executable path (defaults to go_module/dobby-vpn-ui[.exe]).")
-    ui.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the UI build.")
-
-    ui_test = subparsers.add_parser("ui-test", help="Build the headless Go/Fyne UI integration companion.")
-    add_common_options(ui_test)
-    ui_test.add_argument("--platform", default="current", help="Native current platform only.")
-    ui_test.add_argument("--arch", help="Override GOARCH for the companion build.")
-    ui_test.add_argument("--output", type=Path, help="Output companion path.")
-    ui_test.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the companion build.")
-
-    cli = subparsers.add_parser("cli-test", help="Build current desktop target and run check-config.")
-    add_common_options(cli)
-    cli.add_argument("--config", help="Config URL, TOML file path, or inline TOML.")
-    cli.add_argument("--port", type=int, default=int(os.environ.get("PORT", "50151")))
-    cli.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
+    native_ui = subparsers.add_parser("native-ui", help="Build the native Windows or macOS frontend on its target host.")
+    native_ui.add_argument("--platform", default="current", help="Current native platform only.")
+    native_ui.add_argument("--arch", help="Target architecture for the native frontend.")
+    native_ui.add_argument("--output", type=Path, required=True, help="Output directory on Windows or .app bundle path on macOS.")
 
     test_seams = subparsers.add_parser(
         "test-seams-service",
@@ -1756,14 +1342,9 @@ def main() -> None:
         prepare_go_test_dependencies(args.skip_deps, args.go_mod_tidy)
     elif args.command == "app":
         build_app(args)
-    elif args.command == "ui":
+    elif args.command == "native-ui":
         platform = host_platform() if args.platform == "current" else normalize_platform(args.platform)
-        build_go_ui(platform, args.arch, args.skip_deps, args.go_mod_tidy, args.output)
-    elif args.command == "ui-test":
-        platform = host_platform() if args.platform == "current" else normalize_platform(args.platform)
-        build_go_ui_test(platform, args.arch, args.skip_deps, args.go_mod_tidy, args.output)
-    elif args.command == "cli-test":
-        cli_test(args)
+        build_native_ui(platform, args.arch, args.output)
     elif args.command == "test-seams-service":
         build_test_seams_service(args)
     else:

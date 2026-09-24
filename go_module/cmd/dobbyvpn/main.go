@@ -1,6 +1,4 @@
-// Command dobby-cli is the native desktop operator client. It uses the
-// authenticated session control channel and never starts a JVM or a second
-// VPN runtime.
+// Command dobby-cli operates the process-owned desktop Go backend.
 package main
 
 import (
@@ -13,12 +11,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
-	"go_module/grpcproto"
+	"go_module/desktop_exports/controljson"
 	applicationlog "go_module/log"
 	"go_module/sessionapi"
 )
@@ -31,6 +28,45 @@ const (
 	exitConflict = 8
 )
 
+type controlFailure struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type controlSnapshot struct {
+	SessionID       string           `json:"session_id"`
+	Sequence        uint64           `json:"sequence"`
+	Generation      uint64           `json:"generation"`
+	State           string           `json:"state"`
+	Configured      bool             `json:"configured"`
+	Digest          string           `json:"digest"`
+	SourceKind      string           `json:"source_kind"`
+	SourceURL       string           `json:"source_url"`
+	SourceError     string           `json:"source_error"`
+	Profiles        []controlProfile `json:"profiles"`
+	Warnings        []controlWarning `json:"warnings"`
+	ActiveProfile   *controlProfile  `json:"active_profile"`
+	LastFailure     *controlFailure  `json:"last_failure"`
+	CleanupComplete bool             `json:"cleanup_complete"`
+	Recovering      bool             `json:"recovering"`
+}
+
+type controlProfile struct {
+	Index       int32  `json:"index"`
+	Protocol    string `json:"protocol"`
+	Description string `json:"description"`
+}
+
+type controlWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type controlResult struct {
+	Sequence   uint64 `json:"sequence"`
+	Generation uint64 `json:"generation"`
+}
+
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
@@ -38,9 +74,6 @@ func run(args []string) int {
 		printHelp()
 		return exitOK
 	}
-	// Log clearing is a local file operation. Keep it independent from the
-	// control service so the reset remains usable before a service starts or
-	// after one has failed, as required by the desktop qualification runners.
 	if args[0] == "logs" {
 		if len(args) != 2 || args[1] != "clear" {
 			return usage("logs accepts only clear")
@@ -58,22 +91,10 @@ func run(args []string) int {
 		}
 		return profileInventory(args[1])
 	}
-	conn, err := dialService()
-	if err != nil {
-		reportCLIError("service connection failed", err)
-		return exitConnect
-	}
-	client := grpcproto.NewVpnClient(conn)
+	client := dialService()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result := runServiceCommand(ctx, client, args)
-	if closeErr := conn.Close(); closeErr != nil {
-		reportCLIError("service connection cleanup failed", closeErr)
-		if result == exitOK {
-			return exitRuntime
-		}
-	}
-	return result
+	return runServiceCommand(ctx, client, args)
 }
 
 func initApplicationLogger() error {
@@ -95,7 +116,7 @@ func isHelpCommand(args []string) bool {
 	return len(args) == 0 || args[0] == "--help" || args[0] == "-h"
 }
 
-func runServiceCommand(ctx context.Context, client grpcproto.VpnClient, args []string) int {
+func runServiceCommand(ctx context.Context, client controljson.Client, args []string) int {
 	switch args[0] {
 	case "connect":
 		if len(args) != 2 {
@@ -106,9 +127,9 @@ func runServiceCommand(ctx context.Context, client grpcproto.VpnClient, args []s
 		if len(args) != 3 {
 			return usage("connect-profile requires a source and profile index")
 		}
-		index, parseErr := parseProfileIndex(args[2])
-		if parseErr != nil {
-			reportCLIError("profile index rejected", parseErr)
+		index, err := parseProfileIndex(args[2])
+		if err != nil {
+			reportCLIError("profile index rejected", err)
 			return exitArgs
 		}
 		return connect(ctx, client, args[1], &index)
@@ -116,7 +137,7 @@ func runServiceCommand(ctx context.Context, client grpcproto.VpnClient, args []s
 		if len(args) != 2 {
 			return usage("check-config requires a config path, URL, or inline TOML")
 		}
-		return checkConfig(ctx, client, args[1])
+		return checkConfig(ctx, args[1])
 	case "disconnect":
 		if len(args) != 1 {
 			return usage("disconnect takes no arguments")
@@ -130,10 +151,18 @@ func runServiceCommand(ctx context.Context, client grpcproto.VpnClient, args []s
 	case "external-ip":
 		return externalIP()
 	case "verify-session":
-		return verifySession(ctx, client)
+		return status(ctx, client, false)
 	default:
 		return usage("unknown command")
 	}
+}
+
+func callSnapshot(ctx context.Context, client controljson.Client, sessionID string) (controlSnapshot, error) {
+	var snapshot controlSnapshot
+	err := client.Call(ctx, "Snapshot", struct {
+		SessionID string `json:"session_id"`
+	}{SessionID: sessionID}, &snapshot)
+	return snapshot, err
 }
 
 func parseProfileIndex(value string) (int32, error) {
@@ -147,32 +176,7 @@ func parseProfileIndex(value string) (int32, error) {
 	return int32(index), nil
 }
 
-func initWindowsServiceLogger(
-	ctx context.Context,
-	client grpcproto.VpnClient,
-	homeDirectory func() (string, error),
-) error {
-	home, err := homeDirectory()
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(home) == "" {
-		return fmt.Errorf("user home directory is empty")
-	}
-	path := windowsServiceLogPath(home)
-	_, err = client.InitLogger(ctx, &grpcproto.InitLoggerRequest{
-		Path: path,
-	})
-	return err
-}
-
-func windowsServiceLogPath(home string) string {
-	return filepath.Join(home, ".dobbyvpn", "go_desktop_service_logs.jsonl")
-}
-
 func applicationLogPath(home string) string {
-	// The current log is deliberately independent from the retired .myapp tree;
-	// clearing or creating it never reads, moves, or deletes legacy diagnostics.
 	return filepath.Join(home, ".dobbyvpn", "app_logs.txt")
 }
 
@@ -186,8 +190,7 @@ func clearApplicationLog() int {
 		reportCLIError("local application log unavailable", errors.New("user home directory is empty"))
 		return exitRuntime
 	}
-	path := applicationLogPath(home)
-	if err := clearLocalLogFileAtBase(path, home); err != nil {
+	if err := clearLocalLogFileAtBase(applicationLogPath(home), home); err != nil {
 		fmt.Fprintf(os.Stderr, "dobby-cli: local application log clear failed: %v\n", err)
 		return exitRuntime
 	}
@@ -195,131 +198,82 @@ func clearApplicationLog() int {
 	return exitOK
 }
 
-func initOptInServiceLogger(ctx context.Context, client grpcproto.VpnClient) error {
-	path := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
-	if path == "" {
-		return nil
-	}
-	_, err := client.InitLogger(ctx, &grpcproto.InitLoggerRequest{Path: path})
-	return err
-}
-
-func connect(ctx context.Context, client grpcproto.VpnClient, source string, profileIndex *int32) int {
+func connect(ctx context.Context, client controljson.Client, source string, profileIndex *int32) int {
 	raw, err := readSource(source)
 	if err != nil {
 		reportCLIError("configuration source rejected", err)
 		return exitArgs
 	}
-	if loggerErr := initServiceLogger(ctx, client); loggerErr != nil {
-		reportCLIError("local service logging unavailable", loggerErr)
-		return exitRuntime
+	current, err := callSnapshot(ctx, client, "")
+	if err != nil {
+		return reportFailure(err)
 	}
-	current, snapshotErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
-	if snapshotErr != nil || current == nil || current.GetFailure() != nil {
-		return reportFailure(snapshotErr, failureOf(current))
+	configured := struct {
+		Sequence uint64 `json:"sequence"`
+	}{}
+	err = client.Call(ctx, "Configure", struct {
+		SessionID        string `json:"session_id"`
+		ExpectedSequence uint64 `json:"expected_sequence"`
+		Source           string `json:"source"`
+	}{current.SessionID, current.Sequence, string(raw)}, &configured)
+	if err != nil {
+		return reportFailure(err)
 	}
-	owner := current.GetSnapshot()
-	if owner == nil {
-		return reportFailure(errors.New("service returned a snapshot response without a snapshot"), nil)
+	started := controlResult{}
+	mode, index := string(sessionapi.AutoSelect), int32(0)
+	if profileIndex != nil {
+		mode, index = string(sessionapi.ProfileIndex), *profileIndex
 	}
-	sessionID := owner.GetSessionId()
-	keepSession := false
-	var startedGeneration uint64
+	err = client.Call(ctx, "Start", struct {
+		SessionID        string `json:"session_id"`
+		ExpectedSequence uint64 `json:"expected_sequence"`
+		Mode             string `json:"mode"`
+		Index            int32  `json:"index"`
+	}{current.SessionID, configured.Sequence, mode, index}, &started)
+	if err != nil {
+		return reportFailure(err)
+	}
+	connected := false
 	defer func() {
-		if !keepSession && startedGeneration != 0 {
-			if cleanupErr := cleanupSession(client, sessionID, startedGeneration); cleanupErr != nil {
+		if !connected {
+			if cleanupErr := cleanupSession(client, current.SessionID, started.Generation); cleanupErr != nil {
 				reportCLIError("failed connection session cleanup failed", cleanupErr)
 			}
 		}
 	}()
-	configured, configureErr := client.Configure(ctx, &grpcproto.SessionConfigureRequest{
-		SessionId: sessionID, ExpectedSequence: owner.GetSequence(), RawConfig: raw,
-	})
-	if configureErr != nil || configured == nil || configured.GetFailure() != nil {
-		return reportFailure(configureErr, failureOf(configured))
-	}
-	started, startErr := startSession(ctx, client, sessionID, configured.GetSequence(), profileIndex)
-	if startErr != nil || started == nil || started.GetFailure() != nil {
-		return reportFailure(startErr, failureOf(started))
-	}
-	startedGeneration = started.GetGeneration()
-	result, connected := waitForConnection(ctx, client, sessionID)
-	keepSession = connected
-	return result
-}
-
-func initServiceLogger(ctx context.Context, client grpcproto.VpnClient) error {
-	// Qualification supplies a request-confined path on every desktop. Honor
-	// that explicit interface before the ordinary Windows user-log default so
-	// no service log byte escapes the retained request tree.
-	if strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH")) != "" {
-		return initOptInServiceLogger(ctx, client)
-	}
-	if runtime.GOOS == "windows" {
-		return initWindowsServiceLogger(ctx, client, os.UserHomeDir)
-	}
-	return initOptInServiceLogger(ctx, client)
-}
-
-func startSession(
-	ctx context.Context,
-	client grpcproto.VpnClient,
-	sessionID string,
-	expectedSequence uint64,
-	profileIndex *int32,
-) (*grpcproto.SessionStartResponse, error) {
-	start := &grpcproto.SessionStartRequest{SessionId: sessionID, ExpectedSequence: expectedSequence}
-	if profileIndex == nil {
-		start.Mode = grpcproto.SessionStartMode_SESSION_START_MODE_AUTO_SELECT
-	} else {
-		start.Mode = grpcproto.SessionStartMode_SESSION_START_MODE_PROFILE_INDEX
-		start.ProfileIndex = *profileIndex
-	}
-	return client.Start(ctx, start)
-}
-
-func waitForConnection(ctx context.Context, client grpcproto.VpnClient, sessionID string) (int, bool) {
-	stream, err := client.Watch(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
-	if err != nil {
-		return reportFailure(err, nil), false
-	}
 	for {
-		snapshot, recvErr := stream.Recv()
-		if errors.Is(recvErr, io.EOF) {
-			reportCLIError("session snapshot stream ended", io.EOF)
-			return exitRuntime, false
+		snapshot, snapshotErr := callSnapshot(ctx, client, current.SessionID)
+		if snapshotErr != nil {
+			return reportFailure(snapshotErr)
 		}
-		if recvErr != nil {
-			return reportFailure(recvErr, nil), false
-		}
-		switch snapshot.GetState() {
-		case grpcproto.SessionState_SESSION_STATE_UNSPECIFIED,
-			grpcproto.SessionState_SESSION_STATE_IDLE,
-			grpcproto.SessionState_SESSION_STATE_CONFIGURED,
-			grpcproto.SessionState_SESSION_STATE_PROBING,
-			grpcproto.SessionState_SESSION_STATE_PREPARING,
-			grpcproto.SessionState_SESSION_STATE_STOPPING:
-			continue
-		case grpcproto.SessionState_SESSION_STATE_CONNECTED:
+		switch snapshot.State {
+		case string(sessionapi.StateConnected):
+			connected = true
 			fmt.Println("CONNECTED")
-			return exitOK, true
-		case grpcproto.SessionState_SESSION_STATE_FAILED:
-			return reportFailure(nil, snapshot.GetLastFailure()), false
+			return exitOK
+		case string(sessionapi.StateFailed):
+			return reportFailure(failureError(snapshot.LastFailure))
+		}
+		select {
+		case <-ctx.Done():
+			return reportFailure(fmt.Errorf("wait for connection: %w", ctx.Err()))
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
 
-func checkConfig(ctx context.Context, client grpcproto.VpnClient, source string) int {
+func checkConfig(ctx context.Context, source string) int {
 	raw, err := readSource(source)
 	if err != nil {
 		reportCLIError("configuration source rejected", err)
 		return exitArgs
 	}
-	result, err := client.ValidateConfig(ctx, &grpcproto.SessionValidateConfigRequest{RawConfig: raw})
-	if err != nil || result == nil || result.GetFailure() != nil {
-		return reportFailure(err, failureOf(result))
+	manager := sessionapi.NewManager(sessionapi.ManagerOptions{})
+	result, err := manager.ValidateConfig(ctx, raw)
+	if err != nil {
+		return reportFailure(err)
 	}
-	fmt.Printf("profiles=%d source=%s\n", len(result.GetProfiles()), result.GetSourceKind().String())
+	fmt.Printf("profiles=%d source=%s\n", len(result.Profiles), result.SourceKind)
 	return exitOK
 }
 
@@ -331,175 +285,164 @@ func profileInventory(source string) int {
 	}
 	profiles, err := sessionapi.InspectProfiles(raw)
 	if err != nil {
-		return reportFailure(err, nil)
+		return reportFailure(err)
 	}
-	encoded, err := profileInventoryJSON(profiles)
+	type profileIdentity struct {
+		Index    int32  `json:"index"`
+		Protocol string `json:"protocol"`
+	}
+	values := make([]profileIdentity, 0, len(profiles))
+	for _, profile := range profiles {
+		values = append(values, profileIdentity{Index: profile.Index, Protocol: string(profile.Protocol)})
+	}
+	encoded, err := json.Marshal(struct {
+		Profiles []profileIdentity `json:"profiles"`
+	}{values})
 	if err != nil {
-		return reportFailure(err, nil)
+		return reportFailure(err)
 	}
 	fmt.Println(string(encoded))
 	return exitOK
 }
 
-func profileInventoryJSON(profiles []sessionapi.ProfileSummary) ([]byte, error) {
-	type profileIdentity struct {
-		Index    int32  `json:"index"`
-		Protocol string `json:"protocol"`
+func disconnect(ctx context.Context, client controljson.Client) int {
+	snapshot, err := callSnapshot(ctx, client, "")
+	if err != nil {
+		return reportFailure(err)
 	}
-	type inventory struct {
-		Profiles []profileIdentity `json:"profiles"`
-	}
-	values := make([]profileIdentity, 0, len(profiles))
-	for _, profile := range profiles {
-		if profile.Index < 0 {
-			return nil, fmt.Errorf("invalid profile identity")
+	if snapshot.Generation == 0 || snapshot.CleanupComplete {
+		if err := cleanupFailure(&snapshot); err != nil {
+			return reportFailure(err)
 		}
-		protocol := string(profile.Protocol)
-		switch profile.Protocol {
-		case sessionapi.ProtocolOutline, sessionapi.ProtocolXray, sessionapi.ProtocolTrustTunnel:
-		default:
-			return nil, fmt.Errorf("invalid profile protocol")
-		}
-		values = append(values, profileIdentity{Index: profile.Index, Protocol: protocol})
+		fmt.Println("DISCONNECTED")
+		return exitOK
 	}
-	return json.Marshal(inventory{Profiles: values})
-}
-
-func disconnect(ctx context.Context, client grpcproto.VpnClient) int {
-	response, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
-	if err != nil || response == nil || response.GetFailure() != nil {
-		return reportFailure(err, failureOf(response))
-	}
-	current := response.GetSnapshot()
-	if current == nil {
-		return reportFailure(errors.New("service returned a snapshot response without a snapshot"), nil)
-	}
-	timedOut, stopFailure, stopErr := stopAndWaitForDisconnect(ctx, client, current)
-	if timedOut {
-		return reportFailure(stopErr, stopFailure)
-	}
-	if stopErr != nil || stopFailure != nil {
-		return reportFailure(stopErr, stopFailure)
-	}
-	fmt.Println("DISCONNECTED")
-	return exitOK
-}
-
-func stopAndWaitForDisconnect(
-	ctx context.Context,
-	client grpcproto.VpnClient,
-	current *grpcproto.SessionSnapshot,
-) (bool, *grpcproto.SessionFailure, error) {
-	if current.GetGeneration() == 0 || current.GetCleanupComplete() {
-		return false, cleanupFailure(current), nil
-	}
-	generation := current.GetGeneration()
-	stopped, stopErr := client.Stop(ctx, &grpcproto.SessionStopRequest{
-		SessionId: current.GetSessionId(), Generation: generation,
-	})
-	if stopErr != nil {
-		return false, nil, stopErr
-	}
-	if stopped == nil {
-		return false, nil, fmt.Errorf("service returned an empty stop response")
-	}
-	if stopped.GetFailure() != nil {
-		return false, failureOf(stopped), stopErr
+	var stopped controlResult
+	if err := client.Call(ctx, "Stop", struct {
+		SessionID  string `json:"session_id"`
+		Generation uint64 `json:"generation"`
+	}{snapshot.SessionID, snapshot.Generation}, &stopped); err != nil {
+		return reportFailure(err)
 	}
 	for {
-		current, getErr := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: current.GetSessionId()})
-		if getErr != nil {
-			return false, nil, getErr
+		current, err := callSnapshot(ctx, client, snapshot.SessionID)
+		if err != nil {
+			return reportFailure(err)
 		}
-		if current == nil {
-			return false, nil, fmt.Errorf("service returned an empty snapshot response")
-		}
-		if current.GetFailure() != nil {
-			return false, failureOf(current), getErr
-		}
-		currentSnapshot := current.GetSnapshot()
-		if currentSnapshot == nil {
-			return false, nil, fmt.Errorf("service returned a snapshot response without a snapshot")
-		}
-		if currentSnapshot.GetCleanupComplete() {
-			if currentSnapshot.GetGeneration() == generation {
-				return false, cleanupFailure(currentSnapshot), nil
+		if current.CleanupComplete {
+			if err := cleanupFailure(&current); err != nil {
+				return reportFailure(err)
 			}
-			return false, nil, nil
+			fmt.Println("DISCONNECTED")
+			return exitOK
 		}
 		select {
 		case <-ctx.Done():
-			return true, nil, fmt.Errorf("wait for disconnect cleanup: %w", ctx.Err())
+			return reportFailure(fmt.Errorf("wait for disconnect cleanup: %w", ctx.Err()))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
 
-func status(ctx context.Context, client grpcproto.VpnClient, jsonOutput bool) int {
-	response, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{})
+func status(ctx context.Context, client controljson.Client, jsonOutput bool) int {
+	snapshot, err := callSnapshot(ctx, client, "")
 	if err != nil {
-		return reportFailure(err, nil)
+		return reportFailure(err)
 	}
-	if response == nil || response.GetFailure() != nil {
-		return reportFailure(nil, failureOf(response))
-	}
-	snapshot := response.GetSnapshot()
-	if snapshot == nil {
-		return reportFailure(errors.New("service returned a snapshot response without a snapshot"), nil)
-	}
-	state, generation := snapshot.GetState(), snapshot.GetGeneration()
+	code, label := publicStatus(snapshot.State)
 	if jsonOutput {
-		code, label := publicStatus(state)
-		encoded, encodeErr := json.Marshal(struct {
+		encoded, err := json.Marshal(struct {
 			Code  int    `json:"code"`
 			State string `json:"state"`
-		}{Code: code, State: label})
-		if encodeErr != nil {
-			return reportFailure(fmt.Errorf("encode status response: %w", encodeErr), nil)
+		}{code, label})
+		if err != nil {
+			return reportFailure(fmt.Errorf("encode status response: %w", err))
 		}
 		fmt.Println(string(encoded))
 	} else {
-		fmt.Printf("state=%s generation=%d\n", state.String(), generation)
+		fmt.Printf("state=%s generation=%d\n", snapshot.State, snapshot.Generation)
 	}
 	return exitOK
 }
 
-// publicStatus is the stable, machine-readable CLI contract consumed by the
-// desktop qualification adapters. Keep the wire vocabulary independent from
-// protobuf enum names so separate CLI processes can recover the same simple
-// lifecycle contract across operating systems.
-func publicStatus(state grpcproto.SessionState) (code int, label string) {
-	code, label = 0, "Disconnected"
-	switch state {
-	case grpcproto.SessionState_SESSION_STATE_PROBING,
-		grpcproto.SessionState_SESSION_STATE_PREPARING,
-		grpcproto.SessionState_SESSION_STATE_CONFIGURED,
-		grpcproto.SessionState_SESSION_STATE_STOPPING:
-		code, label = 1, "Connecting"
-	case grpcproto.SessionState_SESSION_STATE_CONNECTED:
-		code, label = 2, "Connected"
-	case grpcproto.SessionState_SESSION_STATE_UNSPECIFIED,
-		grpcproto.SessionState_SESSION_STATE_IDLE,
-		grpcproto.SessionState_SESSION_STATE_FAILED:
+func publicStatus(state string) (code int, label string) {
+	switch sessionapi.State(state) {
+	case sessionapi.StateConfigured, sessionapi.StateProbing, sessionapi.StatePreparing, sessionapi.StateStopping:
+		return 1, "Connecting"
+	case sessionapi.StateConnected:
+		return 2, "Connected"
+	default:
+		return 0, "Disconnected"
 	}
-	return code, label
 }
 
-func verifySession(ctx context.Context, client grpcproto.VpnClient) int {
-	return status(ctx, client, false)
+func cleanupSession(client controljson.Client, sessionID string, generation uint64) error {
+	if generation == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	current, err := callSnapshot(ctx, client, sessionID)
+	if err != nil {
+		return fmt.Errorf("read cleanup session snapshot: %w", err)
+	}
+	if current.Generation != generation || current.CleanupComplete {
+		return cleanupFailure(&current)
+	}
+	var stopped controlResult
+	if err := client.Call(ctx, "Stop", struct {
+		SessionID  string `json:"session_id"`
+		Generation uint64 `json:"generation"`
+	}{sessionID, generation}, &stopped); err != nil {
+		return fmt.Errorf("stop cleanup session: %w", err)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for cleanup session: %w", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+		current, err := callSnapshot(ctx, client, sessionID)
+		if err != nil {
+			return fmt.Errorf("poll cleanup session snapshot: %w", err)
+		}
+		if current.Generation != generation {
+			return nil
+		}
+		if current.CleanupComplete {
+			return cleanupFailure(&current)
+		}
+	}
+}
+
+func cleanupFailure(snapshot *controlSnapshot) error {
+	if snapshot.LastFailure != nil && snapshot.LastFailure.Code == string(sessionapi.FailureCleanup) {
+		return failureError(snapshot.LastFailure)
+	}
+	return nil
+}
+
+func failureError(failure *controlFailure) error {
+	if failure == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %s", failure.Code, failure.Message)
 }
 
 func readSource(source string) ([]byte, error) {
-	// A Windows drive path such as C:\\path\\config.toml parses as a URL
-	// with scheme "c". Recognize it as a filesystem path before URL parsing;
-	// otherwise the Windows desktop harness cannot pass a config file path.
 	if sourceURL, isURL, err := parseSourceURL(source); isURL {
 		if err != nil {
 			return nil, err
 		}
 		return sourceURL, nil
 	}
-	return readSourceFileOrInline(source)
+	cleanPath := filepath.Clean(source)
+	if data, err := os.ReadFile(cleanPath); err == nil {
+		return data, nil
+	} else if !sourceFileReadMayFallbackToInline(err) {
+		return nil, fmt.Errorf("cannot read configuration source: %w", err)
+	}
+	return []byte(source), nil
 }
 
 func parseSourceURL(source string) (urlSource []byte, isURL bool, err error) {
@@ -519,124 +462,21 @@ func parseSourceURL(source string) (urlSource []byte, isURL bool, err error) {
 	return []byte(source), true, nil
 }
 
-func readSourceFileOrInline(source string) ([]byte, error) {
-	cleanPath := filepath.Clean(source)
-	if data, err := os.ReadFile(cleanPath); err == nil {
-		return data, nil
-	} else if !sourceFileReadMayFallbackToInline(err) {
-		return nil, fmt.Errorf("cannot read configuration source: %w", err)
-	}
-	return []byte(source), nil
-}
-
 func isWindowsPath(source string) bool {
 	if len(source) < 3 || source[1] != ':' {
 		return false
 	}
 	letter := source[0]
-	return (letter >= 'A' && letter <= 'Z' || letter >= 'a' && letter <= 'z') &&
-		(source[2] == '\\' || source[2] == '/')
-}
-
-// cleanupSession stops only the generation started by this CLI invocation.
-// It leaves the process-owned session and accepted configuration available.
-func cleanupSession(client grpcproto.VpnClient, sessionID string, generation uint64) error {
-	if generation == 0 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	current, err := readCleanupSnapshot(ctx, client, sessionID, "read cleanup session")
-	if err != nil {
-		return err
-	}
-	if current.GetGeneration() != generation {
-		return nil
-	}
-	complete, err := cleanupCompleted(current, "cleanup session")
-	if err != nil || complete {
-		return err
-	}
-	stopped, stopErr := client.Stop(ctx, &grpcproto.SessionStopRequest{
-		SessionId: sessionID, Generation: generation,
-	})
-	if stopErr != nil {
-		return fmt.Errorf("stop cleanup session: %w", stopErr)
-	}
-	if stopped == nil {
-		return errors.New("stop cleanup session response is nil")
-	}
-	if stopped.GetFailure() != nil {
-		return sessionFailureError("stop cleanup session", stopped.GetFailure())
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for cleanup session: %w", ctx.Err())
-		case <-time.After(100 * time.Millisecond):
-		}
-		completed, snapshotErr := readCleanupSnapshot(ctx, client, sessionID, "poll cleanup session")
-		if snapshotErr != nil {
-			return snapshotErr
-		}
-		if completed.GetGeneration() != generation {
-			return nil
-		}
-		done, completionErr := cleanupCompleted(completed, "wait for cleanup session")
-		if completionErr != nil || done {
-			return completionErr
-		}
-	}
-}
-
-func readCleanupSnapshot(
-	ctx context.Context,
-	client grpcproto.VpnClient,
-	sessionID string,
-	action string,
-) (*grpcproto.SessionSnapshot, error) {
-	response, err := client.Snapshot(ctx, &grpcproto.SessionSnapshotRequest{SessionId: sessionID})
-	if err != nil {
-		return nil, fmt.Errorf("%s snapshot: %w", action, err)
-	}
-	if response == nil {
-		return nil, fmt.Errorf("%s snapshot response is nil", action)
-	}
-	if response.GetFailure() != nil {
-		return nil, sessionFailureError(action+" snapshot", response.GetFailure())
-	}
-	snapshot := response.GetSnapshot()
-	if snapshot == nil {
-		return nil, fmt.Errorf("%s snapshot payload is nil", action)
-	}
-	return snapshot, nil
-}
-
-func cleanupCompleted(snapshot *grpcproto.SessionSnapshot, action string) (bool, error) {
-	if !snapshot.GetCleanupComplete() {
-		return false, nil
-	}
-	if failure := cleanupFailure(snapshot); failure != nil {
-		return false, sessionFailureError(action, failure)
-	}
-	return true, nil
-}
-
-func cleanupFailure(snapshot *grpcproto.SessionSnapshot) *grpcproto.SessionFailure {
-	failure := snapshot.GetLastFailure()
-	if failure == nil || failure.GetCode() != grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CLEANUP_FAILED {
-		return nil
-	}
-	return failure
+	return (letter >= 'A' && letter <= 'Z' || letter >= 'a' && letter <= 'z') && (source[2] == '\\' || source[2] == '/')
 }
 
 func externalIP() int {
 	client := &http.Client{Timeout: 10 * time.Second}
 	var failures []error
 	for _, endpoint := range []string{"https://api.ipify.org", "https://ifconfig.me/ip"} {
-		request, requestErr := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, http.NoBody)
-		if requestErr != nil {
-			failures = append(failures, fmt.Errorf("create external IP request: %w", requestErr))
+		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, http.NoBody)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("create external IP request: %w", err))
 			continue
 		}
 		response, err := client.Do(request)
@@ -659,74 +499,32 @@ func externalIP() int {
 			continue
 		}
 		value := strings.TrimSpace(string(body))
-		if value == "" {
-			failures = append(failures, errors.New("external IP response body is empty"))
-			continue
+		if value != "" {
+			fmt.Println(value)
+			return exitOK
 		}
-		fmt.Println(value)
-		return exitOK
+		failures = append(failures, errors.New("external IP response body is empty"))
 	}
 	reportCLIError("external IP lookup failed", errors.Join(failures...))
 	return exitRuntime
 }
 
-type failureResponse interface {
-	GetFailure() *grpcproto.SessionFailure
-}
-
-func failureOf(response failureResponse) *grpcproto.SessionFailure {
-	if response == nil {
-		return nil
+func reportFailure(err error) int {
+	if err == nil {
+		err = errors.New("desktop backend returned no result")
 	}
-	return response.GetFailure()
-}
-
-func reportFailure(err error, failure *grpcproto.SessionFailure) int {
-	if err != nil {
-		if applicationlog.IsInitialized() {
-			applicationlog.Error("CLI", "operation transport failed", map[string]any{
-				"errorType": fmt.Sprintf("%T", err),
-				"error":     err.Error(),
-			})
+	var remote *controljson.CallError
+	if errors.As(err, &remote) {
+		if remote.Code == string(sessionapi.FailureConflict) {
+			fmt.Fprintf(os.Stderr, "dobby-cli: operation rejected failureCode=%s failureMessage=%q\n", remote.Code, remote.Message)
+			return exitConflict
 		}
-		fmt.Fprintf(os.Stderr, "dobby-cli: operation transport failed errorType=%T error=%v\n", err, err)
 	}
-	if failure != nil {
-		if applicationlog.IsInitialized() {
-			applicationlog.Error("CLI", "operation rejected", map[string]any{
-				"failureCode":    failure.GetCode().String(),
-				"failureMessage": failure.GetMessage(),
-			})
-		}
-		fmt.Fprintf(
-			os.Stderr,
-			"dobby-cli: operation rejected failureCode=%s failureMessage=%q\n",
-			failure.GetCode().String(),
-			failure.GetMessage(),
-		)
+	if applicationlog.IsInitialized() {
+		applicationlog.Error("CLI", "operation failed", map[string]any{"errorType": fmt.Sprintf("%T", err), "error": err.Error()})
 	}
-	if err == nil && failure == nil {
-		if applicationlog.IsInitialized() {
-			applicationlog.Error("CLI", "operation failed because the service returned no result or diagnostic", nil)
-		}
-		fmt.Fprintln(os.Stderr, "dobby-cli: operation failed because the service returned no result or diagnostic")
-	}
-	if failure != nil && failure.GetCode() == grpcproto.SessionFailureCode_SESSION_FAILURE_CODE_CONFLICT {
-		return exitConflict
-	}
+	fmt.Fprintf(os.Stderr, "dobby-cli: operation failed errorType=%T error=%v\n", err, err)
 	return exitRuntime
-}
-
-func sessionFailureError(operation string, failure *grpcproto.SessionFailure) error {
-	if failure == nil {
-		return fmt.Errorf("%s returned no failure diagnostic", operation)
-	}
-	return fmt.Errorf(
-		"%s failed failureCode=%s failureMessage=%q",
-		operation,
-		failure.GetCode().String(),
-		failure.GetMessage(),
-	)
 }
 
 func reportCLIError(operation string, err error) {

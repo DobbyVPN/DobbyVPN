@@ -202,8 +202,8 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         raise _error("Android ADB server socket is not configured")
     # Android instrumentation normally executes the runner in the target
     # application's process.  Do this cold-start cleanup from the controller,
-    # before the runner exists; issuing am force-stop from GoUiInstrumentedTest
-    # could terminate the test process together with the stale Fyne
+    # before the runner exists; issuing am force-stop from NativeUiInstrumentedTest
+    # could terminate the test process together with the stale app
     # NativeActivity surface.
     _adb_call(
         adb_value,
@@ -246,7 +246,7 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         serial,
         [
             "shell", "am", "instrument", "-w", "-r",
-            "-e", "class", "com.dobby.GoUiInstrumentedTest",
+            "-e", "class", "com.dobby.NativeUiInstrumentedTest",
             "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
         ],
         run_dir=run_dir,

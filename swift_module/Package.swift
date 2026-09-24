@@ -12,15 +12,24 @@ let package = Package(
     platforms: [.macOS(.v12)],
     products: [
         .library(name: "IOSLifecycleCore", targets: ["IOSLifecycleCore"]),
+        .library(name: "DobbyNativeUI", targets: ["DobbyNativeUI"]),
+        .executable(name: "DobbyVPNMacApp", targets: ["DobbyVPNMacApp"]),
     ],
     targets: [
+        .target(
+            name: "DobbyNativeUI",
+            path: "NativeUI"
+        ),
+        .executableTarget(
+            name: "DobbyVPNMacApp",
+            dependencies: ["DobbyNativeUI"],
+            path: "macOSApp"
+        ),
         .target(
             name: "IOSLifecycleCore",
             path: "CommonDI",
             exclude: [
                 "CommonDI.h",
-                "GoUIBridge.swift",
-                "ExportLogsInteractorImpl.swift",
                 "DobbyConfigsRepositoryImpl.swift",
                 "IOSSessionShell.swift",
                 "SharedKeychainSecretStore.swift",

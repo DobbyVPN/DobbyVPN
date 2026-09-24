@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import gzip
-import importlib.util
 import json
 import os
 import plistlib
@@ -37,40 +36,11 @@ from torturer_checks.ios_simulator import (
 from torturer_checks.screenshot_artifacts import png_metadata
 
 
-def _load_build_runtime_framework_validator():
-    """Load the validator owned by the product's iOS build scripts.
-
-    The functional suite consumes this module for the same preflight that the
-    package script runs.  Loading by source path keeps the test package from
-    becoming a production/build dependency while preserving one validator.
-    """
-    validator_path = (
-        Path(__file__).resolve().parents[2]
-        / "go_module"
-        / "scripts"
-        / "ios_runtime_framework.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "dobbyvpn_ios_runtime_framework", validator_path
-    )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load iOS runtime validator: {validator_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_IOS_RUNTIME_FRAMEWORK = _load_build_runtime_framework_validator()
-IOSRuntimeFrameworkError = _IOS_RUNTIME_FRAMEWORK.IOSRuntimeFrameworkError
-validate_runtime_framework = _IOS_RUNTIME_FRAMEWORK.validate_runtime_framework
-
-
 _RUNTIME = re.compile(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-(\d+(?:-\d+)*)\Z")
 _SDK_VERSION = re.compile(r"\A\s*(\d+)\.(\d+)(?:\.\d+)?\s*\Z")
 _PROJECT_PATH = Path("swift_module/iosApp.xcodeproj")
 _CONFIGURATION = "Release"
-_APP_PRODUCT = "Dobby-Vpn.app"
+_APP_PRODUCT = "Dobby-Vpn-Simulator.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
 _DEFAULT_ARCHITECTURE = "arm64"
 _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
@@ -79,9 +49,7 @@ _HARDWARE_KEYBOARD_PREFERENCE = "ConnectHardwareKeyboard"
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
-IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS = 15 * 60
-IOS_RUNTIME_FRAMEWORK_VALIDATION_TIMEOUT_SECONDS = 30
-IOS_GO_UI_BUILD_TIMEOUT_SECONDS = 15 * 60
+IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS = 10 * 60
 # A cold Xcode 26 build on the local x86_64 VM can spend almost ten minutes
 # compiling and signing the XCTest runner before the first UI assertion runs.
 # Keep one bounded attempt, but leave enough time for the actual interaction
@@ -112,9 +80,7 @@ STAGE_TIMEOUT_SECONDS = {
     "export-xctest-screenshots": 120,
     "terminate": 60,
     "shutdown": 120,
-    "build-ios-framework": IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
-    "validate-ios-framework": IOS_RUNTIME_FRAMEWORK_VALIDATION_TIMEOUT_SECONDS,
-    "package-ios-app": IOS_GO_UI_BUILD_TIMEOUT_SECONDS,
+    "package-ios-app": IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS,
 }
 
 
@@ -439,34 +405,12 @@ def _active_iphonesimulator_sdk_version(
 
 def xcodebuild_app_command(
     contract: IOSSimulatorAppContract,
-    *, candidate_root: Path,
-    work_dir: Path,
-    runtime_framework: Path | None = None,
+    *, work_dir: Path,
 ) -> list[str]:
-    go_framework = runtime_framework or candidate_root / "go_module" / "DobbyVPNRuntime.xcframework"
     return [
         "/bin/bash", "scripts/package_ios_app.sh", "iossimulator",
-        str(contract.app_path(work_dir)), str(go_framework), contract.architecture,
+        str(contract.app_path(work_dir)), "", contract.architecture,
     ]
-
-
-def _validate_runtime_framework(
-    runtime_framework: Path,
-    architecture: str,
-    *,
-    runner: CommandRunner | None = None,
-    timeout_seconds: float = IOS_RUNTIME_FRAMEWORK_VALIDATION_TIMEOUT_SECONDS,
-) -> Path:
-    try:
-        return validate_runtime_framework(
-            runtime_framework,
-            architecture,
-            platform_variant="simulator",
-            runner=runner,
-            timeout_seconds=timeout_seconds,
-        )
-    except IOSRuntimeFrameworkError as error:
-        raise IOSSimulatorAppContractError(str(error)) from error
 
 
 def _stage_timeout(
@@ -1147,7 +1091,7 @@ def run_ios_simulator_app_contract(
     contract: IOSSimulatorAppContract = PUBLIC_IOS_SIMULATOR_APP_CONTRACT,
     budget: RunBudget | None = None,
 ) -> IOSSimulatorAppEvidence:
-    """Run the one comprehensive, rendered Go/Fyne Simulator mini contract.
+    """Run the native SwiftUI Simulator mini contract.
 
     Simulator UI proves accessibility, native input, lifecycle and visible
     error/presentation behavior only.  It never claims NetworkExtension or
@@ -1227,7 +1171,7 @@ def run_ios_simulator_app_contract(
         if not app_path.is_dir():
             raise IOSSimulatorStageError(
                 "verify-app-bundle",
-                f"Go/Fyne Simulator build produced no app bundle: {app_path}",
+                f"SwiftUI Simulator build produced no app bundle: {app_path}",
             )
         _require_success(
             runner,
@@ -1368,61 +1312,22 @@ def prepare_ios_simulator_candidate(
     runner: CommandRunner,
     contract: IOSSimulatorAppContract,
     budget: RunBudget,
-    runtime_framework: Path | None = None,
 ) -> None:
-    """Build or consume the native framework needed by the Simulator app.
-
-    Local runs omit ``runtime_framework`` and keep the pinned, simulator-only
-    Go build. Hosted runs provide the already-qualified XCFramework artifact so
-    this stage never needs gomobile/gobind installed on the UI runner.
-    """
+    """Build the SwiftUI simulator app without a packet tunnel or Go runtime."""
     candidate_root = Path(candidate_root).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
-    go_root = candidate_root / "go_module"
     app_path = contract.app_path(work_dir)
-
-    if runtime_framework is None:
-        go_framework = go_root / "DobbyVPNRuntime.xcframework"
-        _require_success(
-            runner,
-            ["/bin/bash", "scripts/build_ios_xcframework.sh", "--simulator-architecture", contract.architecture],
-            "build-ios-framework",
-            cwd=go_root,
-            budget=budget,
-            timeout_seconds=IOS_NATIVE_FRAMEWORK_BUILD_TIMEOUT_SECONDS,
-        )
-        if not go_framework.is_dir():
-            raise IOSSimulatorStageError(
-                "build-ios-framework",
-                f"iOS Go build produced no XCFramework: {go_framework}",
-            )
-    else:
-        go_framework = Path(runtime_framework)
-
-    try:
-        go_framework = _validate_runtime_framework(
-            go_framework,
-            contract.architecture,
-            runner=runner,
-            timeout_seconds=_stage_timeout(budget, "validate-ios-framework"),
-        )
-    except IOSSimulatorAppContractError as error:
-        raise IOSSimulatorStageError("validate-ios-framework", str(error)) from error
-
+    go_root = candidate_root / "go_module"
     _require_success(
         runner,
-        xcodebuild_app_command(
-            contract,
-            candidate_root=candidate_root,
-            work_dir=work_dir,
-            runtime_framework=go_framework,
-        ),
+        xcodebuild_app_command(contract, work_dir=work_dir),
         "package-ios-app",
         cwd=go_root,
-        timeout_seconds=IOS_GO_UI_BUILD_TIMEOUT_SECONDS,
+        budget=budget,
+        timeout_seconds=IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS,
     )
     if not app_path.is_dir():
         raise IOSSimulatorStageError(
             "package-ios-app",
-            f"Go/Fyne build produced no Simulator app: {app_path}",
+            f"SwiftUI build produced no Simulator app: {app_path}",
         )

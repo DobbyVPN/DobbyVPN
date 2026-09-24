@@ -8,12 +8,10 @@ import (
 )
 
 func main() {
-	var SERVER_PORT int
-	var SERVER_MODE string
-	flag.IntVar(&SERVER_PORT, "port", 50051, "The server port")
-	flag.StringVar(&SERVER_MODE, "mode", "normal", "Run mode")
+	var mode string
+	flag.StringVar(&mode, "mode", "normal", "Run mode")
 	flag.Parse()
 
 	ex := &executor.Executor{}
-	ex.Execute(SERVER_PORT, SERVER_MODE)
+	ex.Execute(mode)
 }

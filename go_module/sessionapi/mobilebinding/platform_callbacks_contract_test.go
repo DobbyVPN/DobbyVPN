@@ -8,5 +8,8 @@ func (callbackContractProbe) AcquireTunnel(string, int64) int32          { retur
 func (callbackContractProbe) ReleaseTunnel(string, int64, int32) bool    { return false }
 func (callbackContractProbe) ProtectSocket(string, int64, int32) bool    { return false }
 func (callbackContractProbe) PublishState(string, int64, string, string) {}
+func (callbackContractProbe) LoadSourceURL() string                      { return "" }
+func (callbackContractProbe) SaveSourceURL(string) bool                  { return false }
+func (callbackContractProbe) ClearSourceURL() bool                       { return false }
 
 var _ PlatformCallbacks = callbackContractProbe{}

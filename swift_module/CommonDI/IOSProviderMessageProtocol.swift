@@ -197,7 +197,7 @@ public struct IOSProviderCommand: Equatable {
 /// Provider response envelope. The payload is the exact UTF-8
 /// byte sequence returned by Go, carried as base64 so Swift never reserializes
 /// or changes the inner JSON. The containing app validates this envelope and
-/// then returns only the untouched inner Go bytes to the Go/Fyne UI bridge.
+/// then returns only the untouched inner Go bytes to the SwiftUI front-end.
 public struct IOSProviderResponse: Equatable {
     public static let version = 1
 

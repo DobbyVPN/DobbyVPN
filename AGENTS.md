@@ -7,8 +7,7 @@ Do not import test or owner-infrastructure packages into production code.
 
 ## Architecture
 
-The current implementation uses a shared Go/Fyne UI. The agreed replacement
-uses native UI frontends: SwiftUI on macOS/iOS, Kotlin with Jetpack Compose on
+Native UI frontends use SwiftUI on macOS/iOS, Kotlin with Jetpack Compose on
 Android, and C# with WinUI 3 on Windows. Linux remains CLI/service only. Do
 not introduce Kotlin Multiplatform or remove Outline, Xray, or TrustTunnel.
 
@@ -23,17 +22,15 @@ control has `Snapshot`, `Configure`, `Start`, and `Stop`; visible frontends poll
 the backend directly, not a subprocess per UI action.
 
 The Go backend owns and preserves an accepted configuration URL and returns it
-to authorized UI frontends in `Snapshot`. Carry over existing desktop saved
-URLs before removing the UI-owned store. Native frontends read fixed local
-diagnostic files directly; product logs are not sanitized. Development and
-qualification output is still redacted under the diagnostic rule below.
-Replace and remove the Fyne/gRPC UI and control stack, its workarounds, tests,
-builds, and packaging as a coherent cut, then qualify the completed source.
-Preserve current VPN behavior unless a behavior change is separately decided.
+in `Snapshot`. Existing desktop saved URLs are migrated into the backend-owned
+store. Native frontends read fixed local diagnostic files directly; product
+logs are not sanitized. Development and qualification output is still redacted
+under the diagnostic rule below.
+Keep the retired Fyne UI and gRPC desktop control stack removed. Preserve
+current VPN behavior unless a behavior change is separately decided.
 
 `docs/ARCHITECTURE.md` describes the interfaces and lifecycle implemented in
-the current source; update it as the replacement lands. The existing Windows
-gRPC `Watch` stream needs authorization while that endpoint remains in use.
+the current source.
 
 ## Tests and builds
 

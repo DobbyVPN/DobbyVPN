@@ -1,0 +1,46 @@
+<Window
+    x:Class="DobbyVPN.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="DobbyVPN">
+  <Grid MinWidth="560" MinHeight="520">
+    <TabView x:Name="Pages" Margin="18" IsAddTabButtonVisible="False" SelectionChanged="Pages_SelectionChanged">
+      <TabViewItem Header="Connection">
+        <ScrollViewer>
+          <StackPanel Spacing="12" Margin="8">
+            <TextBlock Text="DobbyVPN" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock x:Name="StatusText" Text="Disconnected" AutomationProperties.AutomationId="Disconnected" />
+            <TextBlock x:Name="ProfileText" TextWrapping="WrapWholeWords" />
+            <TextBlock x:Name="WarningsText" TextWrapping="WrapWholeWords" Foreground="DarkOrange" />
+            <TextBlock x:Name="FailureText" TextWrapping="WrapWholeWords" Foreground="IndianRed" />
+            <TextBlock x:Name="ErrorText" TextWrapping="WrapWholeWords" Foreground="IndianRed" />
+            <TextBlock Text="Connection configuration" Style="{StaticResource SubtitleTextBlockStyle}" />
+            <TextBox x:Name="SourceEditor" AcceptsReturn="True" MinHeight="150" TextWrapping="Wrap" PlaceholderText="HTTPS connection URL or inline configuration" AutomationProperties.AutomationId="Connection configuration" />
+            <TextBlock Text="Enter an HTTPS connection URL or inline configuration." Foreground="Gray" />
+            <Button x:Name="ConnectionButton" Content="Connect" Click="ConnectionButton_Click" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="VPN connection action" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabViewItem>
+      <TabViewItem Header="Logs">
+        <Grid RowDefinitions="Auto,*" Margin="8" RowSpacing="10">
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="Go backend logs" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+            <Button Content="Refresh" Click="RefreshLogs_Click" />
+            <Button Content="Copy" Click="CopyLogs_Click" />
+          </StackPanel>
+          <Grid Grid.Row="1" RowDefinitions="Auto,*" RowSpacing="8">
+            <TextBlock x:Name="LogsErrorText" Foreground="IndianRed" TextWrapping="WrapWholeWords" />
+            <TextBox x:Name="LogsText" Grid.Row="1" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="Backend logs" />
+          </Grid>
+        </Grid>
+      </TabViewItem>
+      <TabViewItem Header="Settings">
+        <StackPanel Margin="8" Spacing="10">
+          <TextBlock Text="Settings" Style="{StaticResource TitleTextBlockStyle}" />
+          <TextBlock x:Name="VersionText" />
+          <TextBlock x:Name="CommitText" TextWrapping="WrapWholeWords" />
+        </StackPanel>
+      </TabViewItem>
+    </TabView>
+  </Grid>
+</Window>

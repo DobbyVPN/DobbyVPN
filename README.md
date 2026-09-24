@@ -1,53 +1,52 @@
 # doBBYVPN - do Better By VPN
 
-Yet another VPN client. Currently wraps around OutlineSDK, TrustTunnel & XRay.
+DobbyVPN is a VPN client for Outline, Xray, and TrustTunnel configurations.
 
 ## Architecture
 
-This section describes the implementation currently in the repository. Its
-native UI replacement is planned but has not been implemented. The agreed
-development direction is in [AGENTS.md](AGENTS.md).
+Every supported platform uses the same Go backend for configuration loading and
+validation, profile selection, VPN session state, protocol runtimes, recovery,
+routing, cleanup, and diagnostics.
 
-The architecture driver is one shared UI layer where sharing is valuable, one
-Go product/runtime layer for behavior, and only thin OS-specific shells where
-VPN APIs require them. Go owns configuration acquisition, parsing, selection,
-the process-local session, and the Fyne UI on desktop, Android, and iOS. The
-Android Kotlin and iOS Swift projects remain only for permission/service or
-NetworkExtension lifetime, secure storage, and the C/JNI bridge. They do not
-own UI state or protocol policy. Linux is intentionally qualified through the
-CLI/service path; desktop GUI qualification is reserved for Windows and macOS.
+The visible frontends are native to each supported UI platform:
 
-The pre-migration product is retained at the `go-ui-baseline-1.5.0` tag.
+- SwiftUI on macOS and iOS.
+- Kotlin and Jetpack Compose on Android.
+- WinUI 3 and C# on Windows.
+- Linux has the Go backend and CLI; a Linux GUI is outside the current scope.
 
-The product Go toolchain is pinned to Go 1.26.8 in `.go-version`. Desktop
-packages are native Go/Fyne executables with no desktop JVM launcher or
-Conveyor packaging. Android still runs its thin Kotlin/Java OS boundary on ART
-for permission and `VpnService` lifecycle, but has no KMP or Compose UI; iOS
-likewise retains only its thin Swift native/VPN boundary. No RAM
-benchmark or memory-usage acceptance criterion is part of this migration.
+The mobile frontends call the shared Go session API through their platform
+bridge. The macOS and Windows frontends control the installed Go backend
+through a local JSON endpoint: a Unix domain socket on macOS and a fixed named
+pipe on Windows. The Go backend runs as a launchd daemon on macOS, a Windows
+Service on Windows, and a systemd service on Linux. The operator CLI talks
+directly to the backend and is not launched once per frontend action.
 
-See the complete [architecture contract](docs/ARCHITECTURE.md) for the
-responsibility boundaries and supported configuration behavior.
+The accepted subscription URL is persisted by the Go backend and returned in
+its session snapshot. Inline TOML is kept only in the current UI session.
+Product logs remain complete and unsanitized; the native frontends read the
+local log files and can export their contents.
+
+See the [architecture contract](docs/ARCHITECTURE.md) for component ownership,
+local control, URL persistence, and platform boundaries.
+
+The product Go toolchain is pinned in .go-version. Build and test instructions
+are in [TESTING.md](TESTING.md), and the complete functional coverage contract
+is in [torturer/docs/contract.md](torturer/docs/contract.md). The private owner
+Harness runs local checks against disposable guests; its setup and commands
+are documented in the private owner workspace.
+
+Windows and macOS package builds and local desktop build commands are described
+in [.github/scripts/README.md](.github/scripts/README.md). Release qualifies the
+packages it builds. It does not publish them. Publication is a separate manual
+step and requires an explicit owner request.
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
 F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/ (official metadata may
-lag releases; v1.5.1 availability is not claimed until the index is updated.)
+lag releases; availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
-
-Desktop build commands, a local CLI configuration check, and CI build
-commands are documented in [.github/scripts/README.md](.github/scripts/README.md).
-For Windows/macOS iteration, the native `dobby-vpn-ui` executable can be
-injected into a disposable VM directly. Release qualifies the packaged
-installer/archive through hosted mini; local full qualification adds the real
-native-window interaction path (and uses the exact Release package when run in
-Release mode). No JVM is installed by the desktop client.
-
-The qualification model is documented in [TESTING.md](TESTING.md): mini is the
-portable contract, full is cumulative where a platform supports it, and the
-same Go coverage source is used across platforms. Linux remains CLI/service
-only; physical-device Android and iOS full qualification is tracked separately.
 
 Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
 URLs are rejected, redirects must remain HTTPS, and downloaded or inline

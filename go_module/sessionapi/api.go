@@ -1,9 +1,7 @@
 // Package sessionapi is the transport-neutral API for a DobbyVPN session.
 //
-// It deliberately does not bind a protocol implementation. Desktop gRPC and
-// mobile bindings can use the same manager while supplying their own Runtime
-// and PlatformAdapter. State changes wake platform clients; snapshots carry
-// authoritative control state and profile identity.
+// It keeps protocol parsing and session lifecycle independent from native UI
+// and platform VPN APIs.
 package sessionapi
 
 import (
@@ -146,6 +144,7 @@ type SnapshotResult struct {
 	Digest             string
 	SourceKind         ConfigSourceKind
 	SourceURL          string
+	SourceError        string
 	Profiles           []ProfileSummary
 	Warnings           []Warning
 	ActiveProfile      *ProfileSummary
@@ -217,18 +216,20 @@ type PlatformAdapter interface {
 type PlatformLease interface{ Release(context.Context) error }
 
 type ManagerOptions struct {
-	Runtime  Runtime
-	Platform PlatformAdapter
-	Loader   ConfigLoader
-	Now      func() time.Time
+	Runtime     Runtime
+	Platform    PlatformAdapter
+	Loader      ConfigLoader
+	SourceStore SourceStore
+	Now         func() time.Time
 }
 
 type Manager struct {
-	runtime  Runtime
-	platform PlatformAdapter
-	loader   ConfigLoader
-	now      func() time.Time
-	session  *session
+	runtime     Runtime
+	platform    PlatformAdapter
+	loader      ConfigLoader
+	sourceStore SourceStore
+	now         func() time.Time
+	session     *session
 }
 
 const (
@@ -240,15 +241,16 @@ const (
 type session struct {
 	mu sync.Mutex
 
-	id         string
-	state      State
-	generation uint64
-	configured bool
-	digest     string
-	sourceKind ConfigSourceKind
-	sourceURL  string
-	profiles   []RuntimeProfile
-	warnings   []Warning
+	id          string
+	state       State
+	generation  uint64
+	configured  bool
+	digest      string
+	sourceKind  ConfigSourceKind
+	sourceURL   string
+	sourceError string
+	profiles    []RuntimeProfile
+	warnings    []Warning
 
 	active                     *ProfileSummary
 	lastFailure                FailureCode
@@ -268,13 +270,6 @@ type session struct {
 	lastConnectedAt            time.Time
 	hasConnectedAt             bool
 	sequence                   uint64
-	watchers                   map[*snapshotWatcher]struct{}
-}
-
-type snapshotWatcher struct {
-	updates chan SnapshotResult
-	done    chan struct{}
-	once    sync.Once
 }
 
 // NewManager never starts a real core.  Its default runtime fails with the
@@ -297,46 +292,58 @@ func NewManager(options ManagerOptions) *Manager {
 		now = time.Now
 	}
 	id := randomID()
+	sourceURL := ""
+	sourceKind := ConfigSourceKind("")
+	sourceError := ""
+	if options.SourceStore != nil {
+		saved, err := options.SourceStore.Load(context.Background())
+		if err != nil {
+			sourceError = "saved configuration URL could not be read"
+		} else if len(saved) > 0 {
+			sourceURL = strings.TrimSpace(string(saved))
+			if sourceURL != "" {
+				sourceKind = ConfigSourceURL
+			}
+		}
+	}
 	return &Manager{
-		runtime: r, platform: p, loader: loader, now: now,
+		runtime: r, platform: p, loader: loader, sourceStore: options.SourceStore, now: now,
 		session: &session{
-			id: id, state: StateIdle, cleanupDone: true, sequence: 1,
-			watchers: make(map[*snapshotWatcher]struct{}),
+			id: id, state: StateIdle, cleanupDone: true, sequence: 1, sourceURL: sourceURL,
+			sourceKind: sourceKind, sourceError: sourceError,
 		},
 	}
 }
 
-// Watch delivers the current snapshot immediately and then the latest snapshot
-// after each state change. Slow readers receive the newest state, not history.
-func (m *Manager) Watch(ctx context.Context, sessionID string) (updates <-chan SnapshotResult, closeSubscription func(), err error) {
-	s, err := m.get(sessionID)
-	if err != nil {
-		return nil, func() {}, err
+// AttachSourceStore installs the native storage adapter after a mobile OS
+// bridge has registered. Desktop backends pass their store at construction.
+func (m *Manager) AttachSourceStore(ctx context.Context, store SourceStore) error {
+	if store == nil {
+		return failure(FailureInvalidArgument, "source storage is unavailable")
 	}
-	watcher := &snapshotWatcher{updates: make(chan SnapshotResult, 1), done: make(chan struct{})}
+	s := m.session
 	s.mu.Lock()
-	watcher.updates <- snapshotLocked(s)
-	s.watchers[watcher] = struct{}{}
-	s.mu.Unlock()
-	closeSubscription = func() { m.closeWatcher(s, watcher) }
-	go func() {
-		select {
-		case <-ctx.Done():
-			closeSubscription()
-		case <-watcher.done:
-		}
-	}()
-	return watcher.updates, closeSubscription, nil
-}
-
-func (m *Manager) closeWatcher(s *session, watcher *snapshotWatcher) {
-	watcher.once.Do(func() {
-		s.mu.Lock()
-		delete(s.watchers, watcher)
-		close(watcher.done)
-		close(watcher.updates)
+	if m.sourceStore != nil {
 		s.mu.Unlock()
-	})
+		return nil
+	}
+	m.sourceStore = store
+	s.mu.Unlock()
+
+	saved, err := store.Load(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		s.sourceError = "saved configuration URL could not be read"
+	} else if !s.configured && s.sourceURL == "" && len(saved) > 0 {
+		s.sourceURL = strings.TrimSpace(string(saved))
+		if s.sourceURL != "" {
+			s.sourceKind = ConfigSourceURL
+		}
+		s.sourceError = ""
+	}
+	m.appendLocked(s)
+	return nil
 }
 
 func (m *Manager) ValidateConfig(ctx context.Context, rawConfig []byte) (ConfigureResult, error) {
@@ -408,7 +415,15 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 	if acceptErr := validateConfigureBeforeAccept(ctx, s, expectedSequence); acceptErr != nil {
 		return ConfigureResult{}, acceptErr
 	}
+	if m.sourceStore != nil {
+		if loaded.Kind == ConfigSourceURL {
+			if err := m.sourceStore.Save(ctx, []byte(loaded.SourceURL)); err != nil {
+				return ConfigureResult{}, failureWithCause(FailurePlatform, "accepted configuration URL could not be saved", err)
+			}
+		}
+	}
 	s.profiles, s.digest, s.sourceKind, s.sourceURL, s.warnings, s.configured = parsed.profiles, parsed.digest, loaded.Kind, loaded.SourceURL, parsed.warnings, true
+	s.sourceError = ""
 	s.active, s.lastFailure, s.lastFailureMessage, s.state, s.cleanupDone, s.cleanupFailed = nil, "", "", StateConfigured, true, false
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
 	m.appendLocked(s)
@@ -638,7 +653,7 @@ func (m *Manager) Snapshot(_ context.Context, sessionID string) (result Snapshot
 	return result, nil
 }
 
-func (m *Manager) Reset(_ context.Context, sessionID string, expectedSequence uint64) (SnapshotResult, error) {
+func (m *Manager) Reset(ctx context.Context, sessionID string, expectedSequence uint64) (SnapshotResult, error) {
 	s, err := m.get(sessionID)
 	if err != nil {
 		return SnapshotResult{}, err
@@ -651,7 +666,13 @@ func (m *Manager) Reset(_ context.Context, sessionID string, expectedSequence ui
 	if !s.cleanupDone || s.cleanupFailed || s.recovering || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
 		return SnapshotResult{}, failure(FailureConflict, "successful cleanup is required before resetting")
 	}
+	if m.sourceStore != nil {
+		if err := m.sourceStore.Clear(ctx); err != nil {
+			return SnapshotResult{}, failureWithCause(FailurePlatform, "saved configuration URL could not be cleared", err)
+		}
+	}
 	s.configured, s.digest, s.sourceKind, s.sourceURL = false, "", "", ""
+	s.sourceError = ""
 	s.profiles, s.warnings, s.active = nil, nil, nil
 	s.lastFailure, s.lastFailureMessage, s.state = "", "", StateIdle
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
@@ -950,16 +971,6 @@ func (m *Manager) appendLocked(s *session) {
 	m.platform.PublishState(context.Background(), StateChange{
 		SessionID: s.id, Generation: s.generation, State: s.state, Failure: s.lastFailure,
 	})
-	current := snapshotLocked(s)
-	for watcher := range s.watchers {
-		select {
-		case watcher.updates <- current:
-		default:
-			// A watcher receives current state, not a transition history.
-			<-watcher.updates
-			watcher.updates <- current
-		}
-	}
 }
 
 func (m *Manager) get(id string) (*session, error) {
@@ -975,7 +986,7 @@ func (m *Manager) get(id string) (*session, error) {
 func snapshotLocked(s *session) SnapshotResult {
 	return SnapshotResult{
 		SessionID: s.id, Sequence: s.sequence, Generation: s.generation, State: s.state,
-		Configured: s.configured, Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL,
+		Configured: s.configured, Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL, SourceError: s.sourceError,
 		Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings),
 		ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure,
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,

@@ -27,8 +27,15 @@ public final class DobbyConfigsRepositoryImpl {
 
     public func getConnectionURL() -> String { secrets.string(for: sourceKey) ?? "" }
 
-    public func setConnectionURL(connectionURL: String) {
-        precondition(secrets.set(connectionURL, for: sourceKey), "secure connection source write failed")
+    @discardableResult
+    public func setConnectionURL(connectionURL: String) -> Bool {
+        guard secrets.set(connectionURL, for: sourceKey) else { return false }
         userDefaults.removeObject(forKey: sourceKey)
+        return true
+    }
+
+    @discardableResult
+    public func clearConnectionURL() -> Bool {
+        secrets.remove(sourceKey)
     }
 }

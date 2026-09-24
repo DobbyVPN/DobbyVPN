@@ -15,7 +15,6 @@ from pathlib import Path
 import platform as host_platform
 import plistlib
 import re
-import shutil
 import subprocess
 import sys
 from typing import Any
@@ -52,7 +51,7 @@ _MACOS_NATIVE_UI_ENVIRONMENT = frozenset({
 
 
 def _validate_native_ui_bundle(bundle: Path) -> Path:
-    executable = bundle / "Contents" / "MacOS" / "Dobby Vpn"
+    executable = bundle / "Contents" / "MacOS" / "DobbyVPNMacApp"
     info = bundle / "Contents" / "Info.plist"
     if not executable.is_file() or not info.is_file():
         raise LocalVMError("macOS native UI bundle is incomplete")
@@ -61,7 +60,7 @@ def _validate_native_ui_bundle(bundle: Path) -> Path:
             metadata = plistlib.load(stream)
     except (OSError, plistlib.InvalidFileException, ValueError) as error:
         raise LocalVMError("macOS native UI bundle metadata is invalid") from error
-    if not isinstance(metadata, dict) or metadata.get("CFBundleExecutable") != "Dobby Vpn":
+    if not isinstance(metadata, dict) or metadata.get("CFBundleExecutable") != "DobbyVPNMacApp":
         raise LocalVMError("macOS native UI bundle executable metadata is invalid")
     return bundle.resolve()
 
@@ -76,45 +75,10 @@ def _filtered_native_ui_environment(environment: dict[str, str]) -> dict[str, st
     }
 
 
-def stage_native_ui_bundle(run_dir: Path, executable: str | Path) -> Path:
-    """Stage a disposable product-shaped bundle for a local macOS UI run.
+def stage_native_ui_bundle(executable: str | Path) -> Path:
+    """Validate and return the native app bundle built for this candidate."""
 
-    Local candidates are built as a naked executable, while the shipped
-    macOS application is launched from ``Dobby VPN.app``.  Using the same
-    bundle boundary for the local full lane makes LaunchServices/AppKit
-    registration match the release path without changing the product binary
-    or depending on a signing certificate.  The bundle lives below the
-    disposable run directory and is removed with the run.
-    """
-
-    source = Path(executable)
-    if source.suffix == ".app":
-        return _validate_native_ui_bundle(source)
-    if source.parent.name == "MacOS" and source.parent.parent.name == "Contents":
-        bundle = source.parent.parent.parent
-        if bundle.suffix == ".app" and source.is_file():
-            return _validate_native_ui_bundle(bundle)
-    if not source.is_file():
-        raise LocalVMError("macOS native UI executable is missing")
-
-    bundle = (run_dir / "native-ui" / "Dobby VPN.app").resolve()
-    target = bundle / "Contents" / "MacOS" / "Dobby Vpn"
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-    target.chmod(0o700)
-    info = {
-        "CFBundleDisplayName": "Dobby Vpn",
-        "CFBundleExecutable": "Dobby Vpn",
-        "CFBundleIdentifier": "com.dobby.vpn",
-        "CFBundleName": "Dobby Vpn",
-        "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.5.1",
-        "CFBundleVersion": "1.5.1",
-        "LSMinimumSystemVersion": "12.0",
-    }
-    with (bundle / "Contents" / "Info.plist").open("wb") as stream:
-        plistlib.dump(info, stream, sort_keys=True)
-    return bundle
+    return _validate_native_ui_bundle(Path(executable))
 
 
 def _run_logged(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:

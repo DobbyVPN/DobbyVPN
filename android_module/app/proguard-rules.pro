@@ -1,4 +1,4 @@
-# The Go/Fyne activity and the native bridge are referenced by Android's
-# manifest/JNI names. Keep their public entry points in release builds.
--keep class org.golang.app.** { *; }
+# The Compose Activity is referenced by the manifest. The Go JNI entry points
+# and Kotlin VPN callbacks use fixed class and method names.
+-keep class com.dobby.ui.** { *; }
 -keep class com.dobby.nativebridge.** { *; }

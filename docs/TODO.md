@@ -1,23 +1,17 @@
-# Deferred product qualification
+# Deferred qualification work
 
-This is the current Go/Fyne qualification backlog. Reassess it when planning
-the native UI replacement.
+These items are not part of the current passing qualification suites and are
+not accepted unavailable skips:
 
-These checks are intentionally outside the 1.5.1 Go/Fyne migration acceptance
-set. They remain product test work rather than accepted skips inside a passing
-mini suite. Desktop full is already defined as mini plus the native-window
-journey; the mobile full entries below require physical devices.
-
-- Add physical-device Android full qualification, including the packaged
-  arm64 TrustTunnel bridge.
-- Add physical-device iOS full qualification for NetworkExtension consent,
+- Add physical-device Android qualification for the packaged arm64
+  TrustTunnel bridge.
+- Add physical-device iOS qualification for NetworkExtension permission,
   tunnel traffic, routing, disconnect, and cleanup.
-- Add suspend/resume recovery scenarios on the platforms where the operating
-  system lifecycle can be controlled reliably.
-- Restore the diagnostic-only `functional.network-transition` scenario after
-  each runner has a reversible transition that cannot cut off its test-control
-  path.
+- Define suspend/resume recovery checks where the platform lifecycle can be
+  controlled reliably.
+- Reconsider the diagnostic-only network-transition scenario after a runner
+  can test it without losing its control path.
 
-The canonical mini/full platform model and semantic scenario membership remain
-in the [functional contract](../torturer/docs/contract.md). Do not make a
-deferred item pass through an expected-unavailable allowance.
+A Linux GUI is outside the current scope. Linux remains CLI/service-only.
+The supported mini and full suite coverage is owned by the
+[functional contract](../torturer/docs/contract.md).

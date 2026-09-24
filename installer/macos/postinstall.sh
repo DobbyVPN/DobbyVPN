@@ -8,6 +8,8 @@ RESOURCES="${DOBBYVPN_SERVICE_RESOURCES:-/Applications/Dobby VPN.app/Contents/Re
 PLIST_SRC="${DOBBYVPN_SERVICE_PLIST:-$RESOURCES/vpnservice.plist}"
 PLIST_DEST="/Library/LaunchDaemons/com.dobby.vpnservice.plist"
 CONTROL_SOCKET="/var/run/dobbyvpn/control.sock"
+LOG_PATH="${DOBBY_LOG_PATH:-/Library/Logs/DobbyVPN/backend.jsonl}"
+LOG_ROOT="${DOBBY_LOG_ROOT:-$(dirname "$LOG_PATH")}"
 
 CONSOLE_UID="${DOBBYVPN_CONTROL_PEER_UID:-}"
 if [ -z "$CONSOLE_UID" ]; then
@@ -19,27 +21,31 @@ if [ -z "$CONSOLE_UID" ]; then
     CONSOLE_UID="$(id -u "$CONSOLE_USER")"
 fi
 
-chmod +x "$RESOURCES/macos_grpcvpnserver"
+chmod +x "$RESOURCES/dobbyvpn-backend"
 TRUSTTUNNEL_HELPER="$RESOURCES/trusttunnel_client"
 if [ -f "$TRUSTTUNNEL_HELPER" ]; then
     chmod 755 "$TRUSTTUNNEL_HELPER"
 fi
 
 mkdir -p "/Library/LaunchDaemons"
+mkdir -p "$LOG_ROOT"
+if [ ! -e "$LOG_PATH" ]; then
+    touch "$LOG_PATH"
+    chown root:wheel "$LOG_PATH"
+    chmod 644 "$LOG_PATH"
+fi
 cp "$PLIST_SRC" "$PLIST_DEST"
 # Source-built candidates and installed packages use this same launchd owner.
-/usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $RESOURCES/macos_grpcvpnserver" "$PLIST_DEST"
+/usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $RESOURCES/dobbyvpn-backend" "$PLIST_DEST"
 /usr/libexec/PlistBuddy -c "Set :WorkingDirectory $RESOURCES" "$PLIST_DEST"
 /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables dict" "$PLIST_DEST"
 /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBYVPN_CONTROL_SOCKET string $CONTROL_SOCKET" "$PLIST_DEST"
 /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID string $CONSOLE_UID" "$PLIST_DEST"
-if [ -n "${DOBBY_LOG_PATH:-}" ]; then
-    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_PATH string $DOBBY_LOG_PATH" "$PLIST_DEST"
-    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_ROOT string $(dirname "$DOBBY_LOG_PATH")" "$PLIST_DEST"
-    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_PRECREATED string 1" "$PLIST_DEST"
-    /usr/libexec/PlistBuddy -c "Set :StandardOutPath ${DOBBY_SERVICE_STDOUT_PATH:-$DOBBY_LOG_PATH.stdout}" "$PLIST_DEST"
-    /usr/libexec/PlistBuddy -c "Set :StandardErrorPath ${DOBBY_SERVICE_STDERR_PATH:-$DOBBY_LOG_PATH.stderr}" "$PLIST_DEST"
-fi
+/usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_PATH string $LOG_PATH" "$PLIST_DEST"
+/usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_ROOT string $LOG_ROOT" "$PLIST_DEST"
+/usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_PRECREATED string 1" "$PLIST_DEST"
+/usr/libexec/PlistBuddy -c "Set :StandardOutPath ${DOBBY_SERVICE_STDOUT_PATH:-$LOG_PATH.stdout}" "$PLIST_DEST"
+/usr/libexec/PlistBuddy -c "Set :StandardErrorPath ${DOBBY_SERVICE_STDERR_PATH:-$LOG_PATH.stderr}" "$PLIST_DEST"
 chown root:wheel "$PLIST_DEST"
 chmod 644 "$PLIST_DEST"
 

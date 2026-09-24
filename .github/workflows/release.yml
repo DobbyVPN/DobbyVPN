@@ -71,6 +71,12 @@ jobs:
     with:
       source_sha: ${{ github.sha }}
 
+  ios_libraries_build:
+    needs: [verification, prepare_version]
+    uses: ./.github/workflows/ios_libs_generate.yml
+    with:
+      source_sha: ${{ github.sha }}
+
   android_build:
     needs: [verification, prepare_version]
     uses: ./.github/workflows/android_build.yml
@@ -95,7 +101,7 @@ jobs:
       version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
   ios_build:
-    needs: [verification, prepare_version]
+    needs: [verification, prepare_version, ios_libraries_build]
     uses: ./.github/workflows/ios_build.yml
     with:
       source_sha: ${{ github.sha }}
@@ -277,9 +283,6 @@ jobs:
             --keep-artifact dobbyvpn-android-unsign.apk \
             --keep-artifact dobbyvpn-android-test-companion.apk \
             --keep-artifact dobbyvpn-android-provenance \
-            --keep-artifact dobby-vpn-ui-test-windows \
-            --keep-artifact dobby-vpn-ui-test-macos-arm64 \
-            --keep-artifact dobby-vpn-ui-test-macos-amd64 \
             --keep-artifact dobbyvpn-go-coverage \
             --keep-artifact dobbyvpn-swift-coverage \
             --keep-artifact dobbyvpn-ios-simulator-mini \

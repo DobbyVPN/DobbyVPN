@@ -3,6 +3,8 @@
 package mobilebinding
 
 import (
+	"context"
+	"errors"
 	"go_module/sessionapi"
 	"go_module/sessionapi/runtimebridge"
 )
@@ -39,4 +41,44 @@ func (p *platformAdapter) publishStateChanges() {
 		}
 		callbacks.PublishState(event.SessionID, generation, string(event.State), string(event.Failure))
 	}
+}
+
+func (p *platformAdapter) Load(ctx context.Context) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	callbacks := p.callbacks
+	p.mu.Unlock()
+	if callbacks == nil {
+		return nil, errors.New("native source storage is unavailable")
+	}
+	value := callbacks.LoadSourceURL()
+	return []byte(value), nil
+}
+
+func (p *platformAdapter) Save(ctx context.Context, value []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	callbacks := p.callbacks
+	p.mu.Unlock()
+	if callbacks == nil || !callbacks.SaveSourceURL(string(value)) {
+		return errors.New("native source storage write failed")
+	}
+	return nil
+}
+
+func (p *platformAdapter) Clear(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	callbacks := p.callbacks
+	p.mu.Unlock()
+	if callbacks == nil || !callbacks.ClearSourceURL() {
+		return errors.New("native source storage clear failed")
+	}
+	return nil
 }

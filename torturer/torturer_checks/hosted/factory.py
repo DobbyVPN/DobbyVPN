@@ -1,4 +1,5 @@
-"""Select one hosted platform adapter and its public test endpoints."""
+"""Select the functional adapter for one supported platform."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +9,6 @@ from .cli import CommandRunner
 from .linux import LinuxHostedAdapter
 from .macos import MacOSHostedAdapter
 from .windows import WindowsHostedAdapter
-from .ui import HeadlessUIAdapter
 
 PUBLIC_IDENTITY_URL = "https://api.ipify.org"
 PUBLIC_LATENCY_URL = "https://speed.cloudflare.com/__down?bytes=1"
@@ -20,7 +20,6 @@ def adapter_for_platform(
     platform: str,
     *,
     cli: Path | None = None,
-    ui_test: Path | None = None,
     profile: Path,
     runner: CommandRunner,
     adb: Path | None = None,
@@ -28,7 +27,8 @@ def adapter_for_platform(
     local_mode: bool = False,
     service_pid: int | None = None,
     service_binary: Path | None = None,
-    service_socket: Path | None = None,
+    service_pipe: str | None = None,
+    service_socket: Path | str | None = None,
     service_library_path: Path | None = None,
     service_pid_file: Path | None = None,
     service_identity_file: Path | None = None,
@@ -44,16 +44,10 @@ def adapter_for_platform(
 ):
     if platform == "android":
         for name, value in (
-            ("cli", cli),
-            ("ui_test", ui_test),
-            ("service_pid", service_pid),
-            ("service_binary", service_binary),
-            ("service_socket", service_socket),
-            ("service_library_path", service_library_path),
-            ("service_pid_file", service_pid_file),
-            ("service_identity_file", service_identity_file),
-            ("network_interface", network_interface),
-            ("routing_firewall_helper", routing_firewall_helper),
+            ("cli", cli), ("service_pid", service_pid), ("service_binary", service_binary),
+            ("service_pipe", service_pipe), ("service_socket", service_socket), ("service_library_path", service_library_path),
+            ("service_pid_file", service_pid_file), ("service_identity_file", service_identity_file),
+            ("network_interface", network_interface), ("routing_firewall_helper", routing_firewall_helper),
             ("network_transition_helper", network_transition_helper),
         ):
             if value is not None:
@@ -78,50 +72,7 @@ def adapter_for_platform(
     if cli is None:
         raise ValueError("hosted desktop adapter requires --cli")
 
-    if platform == "linux":
-        if network_transition_helper is not None:
-            raise ValueError("linux adapter received unexpected network_transition_helper")
-        adapter = LinuxHostedAdapter(
-            cli=cli,
-            profile=profile,
-            runner=runner,
-            identity_url=PUBLIC_IDENTITY_URL,
-            download_url=PUBLIC_DOWNLOAD_URL,
-            upload_url=PUBLIC_UPLOAD_URL,
-            local_mode=local_mode,
-            service_pid=service_pid,
-            service_binary=service_binary,
-            service_socket=service_socket,
-            service_library_path=service_library_path,
-            service_pid_file=service_pid_file,
-            service_identity_file=service_identity_file,
-            network_interface=network_interface,
-            routing_firewall_helper=routing_firewall_helper,
-        )
-        return _wrap_ui(adapter, ui_test=ui_test, profile=profile, runner=runner)
-    if platform == "windows":
-        if routing_firewall_helper is not None:
-            raise ValueError("windows adapter received unexpected routing_firewall_helper")
-        if network_transition_helper is not None:
-            raise ValueError("windows adapter received unexpected network_transition_helper")
-        adapter = WindowsHostedAdapter(
-            cli=cli,
-            profile=profile,
-            runner=runner,
-            identity_url=PUBLIC_IDENTITY_URL,
-            download_url=PUBLIC_DOWNLOAD_URL,
-            upload_url=PUBLIC_UPLOAD_URL,
-            local_mode=local_mode,
-            service_pid=service_pid,
-            service_binary=service_binary,
-            service_pid_file=service_pid_file,
-            service_identity_file=service_identity_file,
-            service_socket=service_socket,
-            network_interface=network_interface,
-        )
-        return _wrap_ui(adapter, ui_test=ui_test, profile=profile, runner=runner)
-
-    adapter = MacOSHostedAdapter(
+    common = dict(
         cli=cli,
         profile=profile,
         runner=runner,
@@ -133,22 +84,28 @@ def adapter_for_platform(
         service_binary=service_binary,
         service_pid_file=service_pid_file,
         service_identity_file=service_identity_file,
-        service_socket=service_socket,
         network_interface=network_interface,
+    )
+    if platform == "linux":
+        if network_transition_helper is not None:
+            raise ValueError("linux adapter received unexpected network_transition_helper")
+        return LinuxHostedAdapter(
+            **common,
+            service_socket=service_socket,
+            service_library_path=service_library_path,
+            routing_firewall_helper=routing_firewall_helper,
+        )
+    if platform == "windows":
+        if service_socket is not None or routing_firewall_helper is not None or network_transition_helper is not None:
+            raise ValueError("windows adapter received an unexpected platform helper")
+        return WindowsHostedAdapter(**common, service_pipe=service_pipe)
+    if service_pipe is not None:
+        raise ValueError("non-Windows adapter received unexpected service_pipe")
+    return MacOSHostedAdapter(
+        **common,
+        service_socket=service_socket,
         routing_firewall_helper=routing_firewall_helper,
         network_transition_helper=network_transition_helper,
-    )
-    return _wrap_ui(adapter, ui_test=ui_test, profile=profile, runner=runner)
-
-
-def _wrap_ui(adapter, *, ui_test: Path | None, profile: Path, runner: CommandRunner):
-    if ui_test is None:
-        return adapter
-    return HeadlessUIAdapter(
-        base=adapter,
-        ui_test=ui_test,
-        profile=profile,
-        runner=runner,
     )
 
 

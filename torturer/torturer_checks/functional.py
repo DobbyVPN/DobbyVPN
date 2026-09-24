@@ -58,10 +58,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=tuple(_ARCHITECTURES), required=True)
     parser.add_argument("--cli", type=Path, help="Installed candidate CLI for desktop platforms")
-    parser.add_argument(
-        "--ui-test", type=Path,
-        help="Headless production Fyne UI companion for Windows/macOS UI lanes",
-    )
     parser.add_argument("--adb", type=Path, help="ADB executable for Android")
     parser.add_argument(
         "--profile", dest="profile", type=Path,
@@ -92,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-binary", type=Path)
     parser.add_argument("--service-socket", type=Path)
+    parser.add_argument("--service-pipe")
     parser.add_argument("--service-library-path", type=Path)
     parser.add_argument("--service-pid-file", type=Path)
     parser.add_argument("--service-identity-file", type=Path)
@@ -178,7 +175,6 @@ def main(argv: list[str] | None = None) -> int:
     adapter = adapter_for_platform(
         args.platform,
         cli=cli,
-        ui_test=args.ui_test,
         adb=adb,
         profile=args.profile,
         runner=runner,
@@ -187,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         service_pid=args.service_pid,
         service_binary=args.service_binary,
         service_socket=args.service_socket,
+        service_pipe=args.service_pipe,
         service_library_path=args.service_library_path,
         service_pid_file=args.service_pid_file,
         service_identity_file=args.service_identity_file,

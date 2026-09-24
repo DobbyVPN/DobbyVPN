@@ -1,55 +1,45 @@
-# Guide to running the iOS app locally
+# Running the native Apple apps
 
-The release app's visible controls are rendered by Go/Fyne. Swift remains the
-containing-app and NetworkExtension shell: it owns app-group storage,
-permission/provider setup, the one-shot Keychain mailbox, and the C bridge
-called by the Go process.
+The macOS and iOS frontends are SwiftUI. They use the shared Go backend for
+configuration, profile selection, VPN state, protocols, recovery, and
+diagnostics.
 
-## Simulator
+## iOS Simulator
 
-On a Mac with Xcode and the pinned Go toolchain:
+Open swift_module/iosApp.xcodeproj in Xcode, select the iosSimulatorApp scheme,
+and run it on an iOS Simulator. The Test workflow builds the Go runtime
+XCFramework, packages the Simulator app, and runs the XCTest UI contract.
 
-```bash
-cd go_module
-go mod download
-go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
-./scripts/build_ios_xcframework.sh --simulator-architecture arm64
-./scripts/package_ios_app.sh iossimulator /tmp/Dobby-Vpn.app \
-  DobbyVPNRuntime.xcframework arm64
-xcrun simctl install booted /tmp/Dobby-Vpn.app
-xcrun simctl launch booted vpn.dobby.app
-```
+The Simulator check covers visible SwiftUI controls and app lifecycle. It does
+not establish a physical NetworkExtension tunnel or validate physical-device
+VPN traffic. The Simulator package uses ad-hoc signing and does not need an
+Apple development certificate.
 
-Use `amd64` on an Intel Mac. Simulator packaging supplies temporary
-self-signed metadata to the pinned Fyne packager and ad-hoc signs the bundle;
-an Apple Development certificate or provisioning profile is not required.
-The Simulator XCTest UI target validates the rendered Go/Fyne controls through
-real accessibility lookup, taps, keyboard typing, and app terminate/reopen
-lifecycle. It cannot validate a physical NetworkExtension tunnel or
-TrustTunnel. App logs are diagnostic output, not the UI pass condition.
+To build only the Go Simulator runtime slice on a Mac, install the pinned
+gomobile and gobind tools recorded by go_module/go.mod, then run:
 
-## Physical-device/App Store build
+    cd go_module
+    ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
 
-The Release workflow downloads `DobbyVPNRuntime.xcframework`, installs the
-Apple distribution certificate and both provisioning profiles, builds the
-CommonDI/tunnel frameworks, and invokes:
+Use amd64 on an Intel Mac.
 
-```bash
-./go_module/scripts/package_ios_app.sh ios swift_module/build/ipa/DobbyVPN.ipa \
-  swift_module/DobbyVPNRuntime.xcframework
-```
+## macOS
 
-Set `IOS_CERTIFICATE_NAME`, `IOS_PROFILE_NAME`, and `IOS_SIGNING_IDENTITY` to
-the identities installed by the signing job. This device path intentionally
-requires the Apple distribution credentials; that requirement does not apply
-to the Simulator path above.
+The macOS SwiftUI app is built on macOS with:
+
+    python3 .github/scripts/desktop_build.py native-ui --platform macos --output <app-path>
+
+For local UI work, the Go backend also needs to be installed or running as the
+user's local launchd service. The app talks to it through the Unix control
+socket. Release packages install the app and Go backend together.
 
 ## Swift lifecycle tests
 
-```bash
-swift test --enable-code-coverage --package-path swift_module
-```
+Run the platform-neutral Swift lifecycle tests with:
 
-These tests cover the native provider command/response and cleanup policy.
-They do not replace the Go UI tests or a real device VPN run.
+    swift test --enable-code-coverage --package-path swift_module
+
+These tests cover native provider command and response behavior. The iOS
+Simulator XCTest target separately checks the rendered SwiftUI app.
+Physical-device builds require the Apple signing identities and provisioning
+profiles configured for Release.

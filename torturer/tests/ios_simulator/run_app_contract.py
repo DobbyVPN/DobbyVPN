@@ -1,4 +1,4 @@
-"""Run the hosted iOS Simulator Go/Fyne app-startup check without credentials."""
+"""Run the hosted iOS Simulator SwiftUI app check without credentials."""
 
 from __future__ import annotations
 
@@ -24,22 +24,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate-root", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument(
-        "--runtime-framework",
-        type=Path,
-        help=(
-            "already-built DobbyVPNRuntime.xcframework; when omitted, the "
-            "local pinned Simulator framework build is used"
-        ),
-    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_arguments(argv)
     try:
-        # The workflow stages the Go runtime XCFramework first. This helper
-        # packages the Go/Fyne app with the native Swift lifecycle shell.
+        # The Simulator target checks the shared SwiftUI frontend without
+        # embedding the physical-device packet-tunnel extension.
         contract = public_ios_simulator_app_contract("arm64")
         runner = SubprocessCommandRunner()
         budget = RunBudget()
@@ -49,7 +41,6 @@ def main(argv: list[str] | None = None) -> int:
             runner=runner,
             contract=contract,
             budget=budget,
-            runtime_framework=args.runtime_framework,
         )
         evidence = run_ios_simulator_app_contract(
             candidate_root=args.candidate_root,
@@ -62,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(
-        "iOS-Simulator-Go/Fyne comprehensive XCTest UI mini contract passed: "
+        "iOS-Simulator SwiftUI XCTest UI mini contract passed: "
         f"{evidence.simulator.name} ({evidence.simulator.runtime}); "
         "VPN/NetworkExtension success is not asserted"
     )

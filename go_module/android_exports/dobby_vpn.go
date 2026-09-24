@@ -12,19 +12,21 @@ func init() { installJNIPlatform(mobileSessions) }
 
 // SetAndroidContext gives the JNI callback adapter the activity context and VM
 // pointers needed to call the native VPN shell.
-func SetAndroidContext(vm, env, context uintptr) { setAndroidContext(vm, env, context) }
+func SetAndroidContext(vm, env, context uintptr) {
+	setAndroidContext(vm, env, context)
+	mobileSessions.AttachSourceStore()
+}
 
 // PrepareAndroidService requests Android VPN consent when needed and starts
 // the foreground service once permission is already granted. Return 1 when
 // ready, 0 when consent was launched and -1 for a native bridge failure.
 func PrepareAndroidService() int { return prepareAndroidService() }
 
-// ExportLogs passes input-safe diagnostics to Android's native share sheet.
+// ExportLogs passes the complete diagnostic text to Android's native share sheet.
 func ExportLogs(raw []byte) bool { return exportAndroidLogs(raw) }
 
 // DiagnosticPaths returns the fixed app-owned files selected by the native
-// Android context. The newline-delimited value is consumed only by the shared
-// Go UI path validator; callers cannot supply or override it.
+// Android context. Callers cannot supply or override these paths.
 func DiagnosticPaths() string { return androidDiagnosticPaths() }
 
 // PlatformCallbacks is declared in the bound package so gobind emits the Java
@@ -34,11 +36,15 @@ type PlatformCallbacks interface {
 	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(sessionID string, generation int64, state string, failureCode string)
+	LoadSourceURL() string
+	SaveSourceURL(value string) bool
+	ClearSourceURL() bool
 }
 
 // RegisterSessionPlatform installs the narrow Android VpnService boundary.
 func RegisterSessionPlatform(callbacks PlatformCallbacks) {
 	mobileSessions.SetPlatformCallbacks(callbacks)
+	mobileSessions.AttachSourceStore()
 }
 
 func ConfigureSession(sessionID string, sequence int64, rawConfig []byte) string {

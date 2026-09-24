@@ -9,54 +9,30 @@ with the PID, creation ticks, and executable path before each side effect.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import shutil
-import socket
 import subprocess
 import time
 from typing import Any
 import uuid
 
-from .diagnostics import emit_streams
 from .local_vm import LocalVMError
 
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
 _INTERFACE = re.compile(r"^[1-9][0-9]*$")
 _NATIVE_UI_CREATION_TICK_TOLERANCE = 10  # one microsecond in 100-ns ticks
-_CONTROL_ADDRESS = "127.0.0.1:50051"
+_CONTROL_PIPE = "DobbyVPN.Control"
 _FIREWALL_RULE = "DobbyVPN-Torturer-Routing-Probe"
-_MESA_LLVMPIPE_URL = (
-    "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.0/"
-    "mesa3d-26.2.0-release-msvc.7z"
-)
-_MESA_LLVMPIPE_SHA256 = "dcb2719ef346dab5b609fcb193a5f13cfc4b0502e3f4de1ad43d349477402f47"
-_SEVEN_ZIP_URL = "https://github.com/ip7z/7zip/releases/download/26.03/7zr.exe"
-_SEVEN_ZIP_SHA256 = "ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d"
-_MESA_LLVMPIPE_MEMBERS = (
-    "x64/opengl32.dll",
-    "x64/libgallium_wgl.dll",
-)
-_MESA_LLVMPIPE_STAGING_NAME = "native-ui-staging"
-_MESA_LLVMPIPE_ARCHIVE_NAME = "mesa3d-26.2.0-release-msvc.7z"
-_SEVEN_ZIP_NAME = "7zr.exe"
-_MESA_DEFENDER_MARKER_NAME = ".defender-exclusion-added"
 _NATIVE_UI_ENVIRONMENT = frozenset({
     "PROGRAMDATA",
-    "DOBBYVPN_CONTROL_ADDRESS",
-    "DOBBYVPN_CONTROL_TOKEN_USER",
+    "DOBBYVPN_CONTROL_PIPE_USER",
     "DOBBY_LOG_PATH",
     "DOBBY_LOG_ROOT",
     "DOBBY_LOG_PRECREATED",
     "GODEBUG",
-    # The Windows full lane's disposable Mesa fixture is scoped to the
-    # interactive controller and the production UI child.  It must never be
-    # copied into service/runtime or machine environment state.
-    "GALLIUM_DRIVER",
     # native_ui_smoke.py resolves PowerShell through shutil.which() for
     # clipboard and UI Automation operations.  The scheduled task runs with
     # the interactive account's environment, but ProcessStartInfo receives a
@@ -66,7 +42,7 @@ _NATIVE_UI_ENVIRONMENT = frozenset({
 })
 _NATIVE_UI_USER_ENVIRONMENT = (
     # Go's desktop source store uses USERPROFILE.  The other values are the
-    # standard directories/runtime variables needed by Python, Fyne and
+    # standard directories/runtime variables needed by Python and UI Automation.
     # Windows UI Automation; none carries runner credentials.
     "APPDATA",
     "COMSPEC",
@@ -149,383 +125,6 @@ def _powershell_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _mesa_llvmpipe_staging_path(run_dir: Path) -> Path:
-    """Return the one disposable directory used by the Windows full lane."""
-
-    root = run_dir.resolve()
-    staging = root / _MESA_LLVMPIPE_STAGING_NAME
-    try:
-        staging.relative_to(root)
-    except ValueError as error:  # pragma: no cover - fixed child path
-        raise _error("Windows Mesa staging path escaped the run directory") from error
-    return staging
-
-
-def _remove_mesa_llvmpipe_staging(run_dir: Path) -> None:
-    """Remove only the fixed disposable Mesa staging path."""
-
-    staging = _mesa_llvmpipe_staging_path(run_dir)
-    try:
-        if staging.is_symlink() or staging.is_file():
-            staging.unlink()
-        elif staging.exists():
-            shutil.rmtree(staging)
-    except OSError as error:
-        raise _error("Windows Mesa staging cleanup failed") from error
-
-
-def _mesa_defender_marker_path(run_dir: Path) -> Path:
-    """Return the marker recording an exclusion owned by this run."""
-
-    return _mesa_llvmpipe_staging_path(run_dir) / _MESA_DEFENDER_MARKER_NAME
-
-
-_MESA_DEFENDER_ADD_SCRIPT = r'''$ErrorActionPreference = "Stop"
-$path = [IO.Path]::GetFullPath([string]$env:DOBBYVPN_MESA_STAGING_PATH)
-$command = $null
-try { $command = Get-Command Add-MpPreference -ErrorAction Stop } catch { }
-if ($null -eq $command) {
-  Write-Output "unavailable"
-  exit 0
-}
-$preference = Get-MpPreference -ErrorAction Stop
-$existing = @($preference.ExclusionPath | Where-Object {
-  -not [string]::IsNullOrWhiteSpace([string]$_) -and
-  [IO.Path]::GetFullPath([string]$_) -ieq $path
-})
-if ($existing.Count -gt 0) {
-  Write-Output "existing"
-} else {
-  Add-MpPreference -ExclusionPath $path -ErrorAction Stop
-  Write-Output "added"
-}
-'''
-
-_MESA_DEFENDER_REMOVE_SCRIPT = r'''$ErrorActionPreference = "Stop"
-$path = [IO.Path]::GetFullPath([string]$env:DOBBYVPN_MESA_STAGING_PATH)
-$command = $null
-try { $command = Get-Command Remove-MpPreference -ErrorAction Stop } catch { }
-if ($null -ne $command) {
-  Remove-MpPreference -ExclusionPath $path -ErrorAction Stop
-}
-Write-Output "removed"
-'''
-
-
-def _ensure_mesa_defender_exclusion(
-    run_dir: Path, *, logs: Path | None, timeout: float,
-) -> bool:
-    """Allow Defender to inspect the known fixture only for this run.
-
-    Windows Defender classifies the pinned Mesa archive as potentially
-    unwanted software and blocks every normal file read.  The full lane needs
-    to hash and extract that exact archive, so add an exclusion for the
-    disposable per-run staging directory, never for a parent directory or a
-    machine-wide location.  The caller removes it after the native window
-    exits; a marker distinguishes an exclusion added by this run from one
-    already owned by the machine policy.
-    """
-
-    if os.name != "nt":
-        return False
-    if logs is None:
-        raise _error("Windows Mesa Defender exclusion requires a log directory")
-    staging = _mesa_llvmpipe_staging_path(run_dir)
-    marker = _mesa_defender_marker_path(run_dir)
-    environment = os.environ.copy()
-    environment["DOBBYVPN_MESA_STAGING_PATH"] = str(staging)
-    result = _powershell(
-        _MESA_DEFENDER_ADD_SCRIPT,
-        cwd=run_dir,
-        logs=logs,
-        label="native-ui-mesa-exclusion-add",
-        timeout=min(timeout, 30.0),
-        environment=environment,
-    )
-    state = result.stdout.decode("utf-8", errors="backslashreplace").strip().splitlines()
-    state = state[-1].strip().casefold() if state else ""
-    if state == "added":
-        try:
-            marker.write_text("added\n", encoding="ascii")
-        except OSError as error:
-            cleanup_error: Exception | None = None
-            try:
-                _powershell(
-                    _MESA_DEFENDER_REMOVE_SCRIPT,
-                    cwd=run_dir,
-                    logs=logs,
-                    label="native-ui-mesa-exclusion-remove",
-                    timeout=min(timeout, 30.0),
-                    environment=environment,
-                )
-            except Exception as remove_error:
-                cleanup_error = remove_error
-            if cleanup_error is not None:
-                raise _error(
-                    "Windows Mesa Defender exclusion marker could not be written; "
-                    f"exclusion cleanup failed: {cleanup_error}"
-                ) from error
-            raise _error("Windows Mesa Defender exclusion marker could not be written") from error
-        return True
-    if state in {"existing", "unavailable"}:
-        return False
-    raise _error("Windows Mesa Defender exclusion command returned an invalid result")
-
-
-def _remove_mesa_defender_exclusion(
-    run_dir: Path, *, logs: Path | None, timeout: float,
-) -> None:
-    """Remove only the Defender exclusion recorded as run-owned."""
-
-    if os.name != "nt":
-        return
-    marker = _mesa_defender_marker_path(run_dir)
-    if not marker.is_file():
-        return
-    if logs is None:
-        raise _error("Windows Mesa Defender exclusion cleanup requires a log directory")
-    environment = os.environ.copy()
-    environment["DOBBYVPN_MESA_STAGING_PATH"] = str(_mesa_llvmpipe_staging_path(run_dir))
-    _powershell(
-        _MESA_DEFENDER_REMOVE_SCRIPT,
-        cwd=run_dir,
-        logs=logs,
-        label="native-ui-mesa-exclusion-remove",
-        timeout=min(timeout, 30.0),
-        environment=environment,
-    )
-    try:
-        marker.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as error:
-        raise _error("Windows Mesa Defender exclusion marker cleanup failed") from error
-
-
-def _run_mesa_fixture_command(
-    command: list[str], *, cwd: Path, timeout: float, logs: Path | None = None,
-    label: str = "native-ui-mesa",
-) -> subprocess.CompletedProcess[bytes]:
-    """Run one shell-free, disposable fixture command with a hard bound."""
-
-    if timeout <= 0:
-        raise _error("Windows Mesa fixture command timeout is exhausted")
-    if logs is not None:
-        try:
-            return _run_logged(
-                command,
-                cwd=cwd,
-                logs=logs,
-                label=label,
-                timeout=timeout,
-                check=True,
-            )
-        except LocalVMError as error:
-            # The shared runner retains complete stdout/stderr, including
-            # output emitted before a timeout or nonzero exit. Keep the Mesa
-            # context in the exception without replacing those streams.
-            raise _error(f"Windows Mesa fixture command failed: {error}") from error
-    try:
-        result = subprocess.run(
-            command,
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
-        )
-    except FileNotFoundError as error:
-        raise _error(f"Windows Mesa fixture tool is unavailable: {command[0]}") from error
-    except subprocess.TimeoutExpired as error:
-        stdout = getattr(error, "stdout", None) or b""
-        stderr = getattr(error, "stderr", None) or b""
-        detail = b"\n".join(part for part in (stdout, stderr) if part)
-        suffix = f": {detail.decode('utf-8', errors='backslashreplace')}" if detail else ""
-        raise _error(
-            f"Windows Mesa fixture command timed out: {command[0]}{suffix}"
-        ) from error
-    except OSError as error:
-        raise _error(f"Windows Mesa fixture command could not start: {command[0]}") from error
-    if result.returncode != 0:
-        details = []
-        for stream, value in (("stdout", result.stdout), ("stderr", result.stderr)):
-            if value:
-                details.append(
-                    f"{stream}: {value.decode('utf-8', errors='backslashreplace')}"
-                )
-        message = f"Windows Mesa fixture command failed: {command[0]} exited {result.returncode}"
-        if details:
-            message += ": " + " ".join(details)
-        raise _error(message)
-    # Focused callers may not have a run-log directory. Keep their successful
-    # fixture diagnostics visible as explicit stream-delimited output rather
-    # than silently discarding either stream. Production callers pass ``logs``
-    # and the shared runner has already retained both complete streams there.
-    emit_streams(label, result.stdout, result.stderr)
-    return result
-
-
-def _mesa_archive_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(block)
-    except OSError as error:
-        raise _error(
-            "Windows Mesa fixture file could not be hashed: "
-            f"{path.name}: {type(error).__name__}: {error}"
-        ) from error
-    return digest.hexdigest()
-
-
-def _prepare_mesa_llvmpipe_fixture(
-    command: list[str], *, run_dir: Path, timeout: float, logs: Path | None = None,
-) -> tuple[list[str], Path | None]:
-    """Stage the exact Windows UI beside Mesa's two WGL DLLs.
-
-    This is intentionally limited to the Windows full native-window command.
-    The production UI is copied byte-for-byte to a disposable run directory;
-    no installed file, registry value, System32 file, or machine environment
-    variable is changed.  The archive and the pinned 7-Zip extractor are
-    checksum-verified before extraction, and only the two required archive
-    members are extracted. Windows Defender is excluded only for this
-    disposable staging directory while it is in use.
-    """
-
-    if "--ui" not in command:
-        # The real full command always carries --ui.  Keeping this helper
-        # tolerant makes focused process-wrapper tests independent of a
-        # network download and does not weaken the production command builder,
-        # which validates the candidate UI path before reaching this boundary.
-        return list(command), None
-    ui_index = command.index("--ui")
-    if ui_index + 1 >= len(command) or not command[ui_index + 1]:
-        raise _error("Windows native UI binary argument is missing")
-    source = Path(command[ui_index + 1])
-    if source.is_symlink() or not source.is_file():
-        raise _error("Windows production UI binary is unavailable for Mesa staging")
-    if timeout <= 0:
-        raise _error("Windows native UI timeout must be positive")
-
-    run_dir = run_dir.resolve()
-    staging = _mesa_llvmpipe_staging_path(run_dir)
-    archive = staging / _MESA_LLVMPIPE_ARCHIVE_NAME
-    seven_zip = staging / _SEVEN_ZIP_NAME
-    extraction = staging / ".extract"
-    try:
-        # A previous worker can have been terminated by the supervisor before
-        # its finally block.  Remove that exact stale path before rebuilding.
-        _remove_mesa_defender_exclusion(
-            run_dir, logs=logs, timeout=min(timeout, 30.0),
-        )
-        _remove_mesa_llvmpipe_staging(run_dir)
-        staging.mkdir(parents=True, exist_ok=False)
-        deadline = time.monotonic() + timeout
-
-        def remaining() -> float:
-            value = deadline - time.monotonic()
-            if value <= 0:
-                raise _error("Windows Mesa fixture preparation timed out")
-            return value
-
-        _ensure_mesa_defender_exclusion(
-            run_dir, logs=logs, timeout=remaining(),
-        )
-        _run_mesa_fixture_command(
-            [
-                "curl.exe", "--fail", "--location", "--silent", "--show-error",
-                "--retry", "2", "--connect-timeout", "15",
-                "--max-time", str(max(1, int(remaining()))),
-                "--output", str(seven_zip), _SEVEN_ZIP_URL,
-            ],
-            cwd=run_dir,
-            timeout=remaining(),
-            logs=logs,
-            label="native-ui-7zip-download",
-        )
-        if seven_zip.is_symlink() or not seven_zip.is_file() or seven_zip.stat().st_size <= 0:
-            raise _error("Windows 7-Zip fixture download did not produce an extractor")
-        if _mesa_archive_sha256(seven_zip) != _SEVEN_ZIP_SHA256:
-            raise _error("Windows 7-Zip fixture checksum mismatch")
-
-        _run_mesa_fixture_command(
-            [
-                "curl.exe", "--fail", "--location", "--silent", "--show-error",
-                "--retry", "2", "--connect-timeout", "15",
-                "--max-time", str(max(1, int(remaining()))),
-                "--output", str(archive), _MESA_LLVMPIPE_URL,
-            ],
-            cwd=run_dir,
-            timeout=remaining(),
-            logs=logs,
-            label="native-ui-mesa-download",
-        )
-        if archive.is_symlink() or not archive.is_file() or archive.stat().st_size <= 0:
-            raise _error("Windows Mesa fixture download did not produce an archive")
-        observed_sha256 = _mesa_archive_sha256(archive)
-        if observed_sha256 != _MESA_LLVMPIPE_SHA256:
-            raise _error("Windows Mesa fixture archive checksum mismatch")
-
-        # Supplying the two member names to 7-Zip is deliberate: no archive
-        # wildcard or whole-archive extraction can add an unreviewed DLL.
-        extraction.mkdir()
-        _run_mesa_fixture_command(
-            [
-                str(seven_zip), "x", str(archive),
-                *_MESA_LLVMPIPE_MEMBERS,
-                f"-o{extraction}", "-y",
-            ],
-            cwd=run_dir,
-            timeout=remaining(),
-            logs=logs,
-            label="native-ui-mesa-extract",
-        )
-        for member in _MESA_LLVMPIPE_MEMBERS:
-            extracted = extraction.joinpath(*member.split("/"))
-            if extracted.is_symlink() or not extracted.is_file():
-                raise _error(f"Windows Mesa fixture member is missing: {member}")
-            destination = staging / Path(member).name
-            shutil.copy2(extracted, destination)
-            if destination.is_symlink() or not destination.is_file():
-                raise _error(f"Windows Mesa fixture member could not be staged: {member}")
-
-        destination_ui = staging / source.name
-        shutil.copy2(source, destination_ui)
-        if destination_ui.is_symlink() or not destination_ui.is_file():
-            raise _error("Windows production UI copy did not complete")
-
-        # The archive and temporary extraction tree are not needed while the
-        # GUI runs.  Keeping only the UI and the two DLLs minimizes cleanup
-        # surface and ensures no downloaded artifact is retained on success.
-        archive.unlink()
-        seven_zip.unlink()
-        shutil.rmtree(extraction)
-        staged_command = list(command)
-        staged_command[ui_index + 1] = str(destination_ui)
-        return staged_command, staging
-    except Exception as error:
-        cleanup_errors: list[str] = []
-        try:
-            _remove_mesa_defender_exclusion(
-                run_dir, logs=logs, timeout=min(timeout, 30.0),
-            )
-        except Exception as cleanup_error:
-            cleanup_errors.append(
-                f"Windows Mesa Defender exclusion cleanup failed: {cleanup_error}"
-            )
-        try:
-            _remove_mesa_llvmpipe_staging(run_dir)
-        except Exception as cleanup_error:
-            cleanup_errors.append(
-                f"Windows Mesa fixture cleanup failed: {cleanup_error}"
-            )
-        if cleanup_errors:
-            raise _error(f"{error}; {'; '.join(cleanup_errors)}") from error
-        raise
-
-
 def _creation_ticks_match(expected: int, observed: int) -> bool:
     """Match Win32/.NET process times within WMI's sub-microsecond loss."""
 
@@ -571,7 +170,7 @@ def _validated_interactive_account(value: object, *, context: str) -> str:
 
 
 _NATIVE_UI_PREFLIGHT_SCRIPT = r'''$ErrorActionPreference = "Stop"
-$target = [string]$env:DOBBYVPN_CONTROL_TOKEN_USER
+$target = [string]$env:DOBBYVPN_CONTROL_PIPE_USER
 if ([string]::IsNullOrWhiteSpace($target)) {
   Write-Error "interactive user is not configured"
   exit 3
@@ -690,7 +289,7 @@ def _preflight_interactive_desktop(
     """Prove the scheduled task has a visible Explorer session before launch."""
 
     environment = os.environ.copy()
-    environment["DOBBYVPN_CONTROL_TOKEN_USER"] = user
+    environment["DOBBYVPN_CONTROL_PIPE_USER"] = user
     try:
         result = _powershell(
             _NATIVE_UI_PREFLIGHT_SCRIPT,
@@ -727,13 +326,13 @@ def _preflight_interactive_desktop(
 
 
 _STOP_INSTALLED_SERVICE_SCRIPT = r'''$ErrorActionPreference = "Stop"
-$service = Get-Service -Name "DobbyVPN Server" -ErrorAction Stop
+$service = Get-Service -Name "DobbyVPN Go backend" -ErrorAction Stop
 if ($service.Status -ne "Stopped") {
   Stop-Service -InputObject $service -Force -ErrorAction Stop
   $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
 }
-$service = Get-Service -Name "DobbyVPN Server" -ErrorAction Stop
-if ($service.Status -ne "Stopped") { throw "DobbyVPN Server did not stop" }
+$service = Get-Service -Name "DobbyVPN Go backend" -ErrorAction Stop
+if ($service.Status -ne "Stopped") { throw "DobbyVPN Go backend did not stop" }
 '''
 
 
@@ -917,7 +516,6 @@ def _native_ui_access_script(
     wrapper: Path,
     profile: Path,
     command: list[str],
-    read_directories: tuple[Path, ...] = (),
 ) -> str:
     """Grant the interactive account bounded access to the disposable UI tree.
 
@@ -979,11 +577,6 @@ def _native_ui_access_script(
         f"Grant-Access {_powershell_literal(str(logs))} {_powershell_literal('(OI)(CI)M')} $true",
         f"Grant-Access {_powershell_literal(str(run_dir))} {_powershell_literal('W')} $false",
     ])
-    for path in read_directories:
-        lines.append(
-            f"Grant-Access {_powershell_literal(str(path))} "
-            f"{_powershell_literal('(OI)(CI)RX')} $true"
-        )
     for path in optional_paths:
         lines.append(
             f"if (Test-Path -LiteralPath {_powershell_literal(path)}) {{ "
@@ -1175,7 +768,7 @@ def run_interactive_ui(
     logs = logs.resolve()
     logs.mkdir(parents=True, exist_ok=True)
     user = _validated_interactive_account(
-        environment.get("DOBBYVPN_CONTROL_TOKEN_USER"),
+        environment.get("DOBBYVPN_CONTROL_PIPE_USER"),
         context="Windows interactive UI user",
     )
     # Keep the task and all markers inside this disposable candidate.  The
@@ -1202,17 +795,10 @@ def run_interactive_ui(
         key: str(value)
         for key, value in environment.items()
         if key in _NATIVE_UI_ENVIRONMENT
-        and key != "GALLIUM_DRIVER"
         and isinstance(value, str)
     }
-    if filtered_environment.get("DOBBYVPN_CONTROL_TOKEN_USER") != user:
-        raise LocalVMError("Windows interactive UI control-token user is invalid")
-    # A previous supervisor timeout can leave only the disposable Mesa tree
-    # behind.  Remove that fixed path before probing or downloading anything.
-    _remove_mesa_defender_exclusion(
-        run_dir, logs=logs, timeout=min(timeout, 30.0),
-    )
-    _remove_mesa_llvmpipe_staging(run_dir)
+    if filtered_environment.get("DOBBYVPN_CONTROL_PIPE_USER") != user:
+        raise LocalVMError("Windows interactive UI control-pipe user is invalid")
     # A SYSTEM worker can register an interactive task even when the target
     # account has no visible shell.  Prove the user's Explorer session first;
     # otherwise the wait for the task's exit marker can consume the full lane
@@ -1227,16 +813,7 @@ def run_interactive_ui(
             pass
         except OSError as error:
             raise LocalVMError(f"Windows native UI marker is not removable: {path.name}") from error
-    staged_command, staging = _prepare_mesa_llvmpipe_fixture(
-        command, run_dir=run_dir, timeout=timeout, logs=logs,
-    )
-    if staging is not None:
-        filtered_environment["GALLIUM_DRIVER"] = "llvmpipe"
-    try:
-        staged_ui_flag = staged_command.index("--ui")
-        ui_binary = staged_command[staged_ui_flag + 1]
-    except (ValueError, IndexError):
-        ui_binary = None
+    ui_binary = requested_ui_binary
     if ui_binary is not None and (
         not isinstance(ui_binary, str) or not ui_binary
     ):
@@ -1268,7 +845,7 @@ def run_interactive_ui(
     try:
         wrapper.write_text(
             _native_ui_wrapper(
-                staged_command,
+                command,
                 cwd=cwd,
                 environment=filtered_environment,
                 stdout=stdout,
@@ -1287,8 +864,7 @@ def run_interactive_ui(
                 logs=logs,
                 wrapper=wrapper,
                 profile=run_dir / "profile",
-                command=staged_command,
-                read_directories=(staging,) if staging is not None else (),
+                command=command,
             ),
             cwd=run_dir,
             logs=logs,
@@ -1342,7 +918,7 @@ def run_interactive_ui(
             raise LocalVMError("Windows native UI exit marker is invalid")
         returncode = int(raw_exit_code)
         return subprocess.CompletedProcess(
-            staged_command,
+            command,
             returncode,
             stdout.read_bytes() if stdout.is_file() else b"",
             stderr.read_bytes() if stderr.is_file() else b"",
@@ -1377,18 +953,6 @@ def run_interactive_ui(
                     f"marker cleanup failed ({path.name}): "
                     f"{type(cleanup_error).__name__}: {cleanup_error}"
                 )
-        try:
-            _remove_mesa_defender_exclusion(
-                run_dir, logs=logs, timeout=min(timeout, 30.0),
-            )
-        except Exception as cleanup_error:
-            cleanup_failures.append(
-                f"Mesa Defender exclusion cleanup failed: {cleanup_error}"
-            )
-        try:
-            _remove_mesa_llvmpipe_staging(run_dir)
-        except Exception as cleanup_error:
-            cleanup_failures.append(f"Mesa fixture cleanup failed: {cleanup_error}")
         if cleanup_failures:
             detail = "; ".join(cleanup_failures)
             if failure is None:
@@ -1467,14 +1031,29 @@ def _query_identity(pid: int, binary: Path, *, run_dir: Path, logs: Path, timeou
 
 
 def _wait_ready(run_dir: Path, logs: Path, timeout: float) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", 50051), timeout=min(0.5, timeout)):
-                return
-        except OSError:
-            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
-    raise _error("Windows candidate service did not become ready")
+    script = rf'''$ErrorActionPreference = "Stop"
+$deadline = [DateTime]::UtcNow.AddSeconds({timeout:.3f})
+while ([DateTime]::UtcNow -lt $deadline) {{
+  $client = $null
+  try {{
+    $client = [System.IO.Pipes.NamedPipeClientStream]::new(".", "{_CONTROL_PIPE}", [System.IO.Pipes.PipeDirection]::InOut)
+    $client.Connect(500)
+    Write-Output "pipe_ready"
+    exit 0
+  }} catch {{
+    if ($null -ne $client) {{ $client.Dispose() }}
+  }}
+  Start-Sleep -Milliseconds 100
+}}
+Write-Error "candidate named pipe did not become ready"
+exit 1
+'''
+    result = _powershell(
+        script, cwd=run_dir, logs=logs, label="service-ready-pipe", timeout=timeout + 5,
+        check=False,
+    )
+    if result.returncode != 0 or result.stdout.decode("utf-8", errors="replace").strip() != "pipe_ready":
+        raise _error("Windows candidate service did not become ready on its named pipe")
 
 
 def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float) -> dict[str, Any]:
@@ -1489,8 +1068,7 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     identity_file = run_dir / "service.identity"
     runtime: dict[str, Any] = {
         "binary": str(binary),
-        "socket": _CONTROL_ADDRESS,
-        "control_address": _CONTROL_ADDRESS,
+        "pipe": _CONTROL_PIPE,
         "pid_file": str(pid_file),
         "identity_file": str(identity_file),
         "service_log": str(service_log),
@@ -1509,28 +1087,24 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     environment = os.environ.copy()
     environment.update({
         "PROGRAMDATA": str(run_dir / "ProgramData"),
-        "DOBBYVPN_CONTROL_ADDRESS": _CONTROL_ADDRESS,
         "DOBBY_LOG_PATH": str(service_log),
         "DOBBY_LOG_ROOT": str(logs),
         "DOBBY_LOG_PRECREATED": "1",
-        # Preserve the documented local Windows workaround unless the guest
+        # Preserve the current Windows Go scheduler workaround unless the guest
         # deliberately supplied a different value.
         "GODEBUG": environment.get("GODEBUG", "asyncpreemptoff=1"),
     })
-    # controlplane/token_windows.go rejects SYSTEM as the installed-user ACL
-    # identity.  Provisioning supplies this value; fail before launch when a
-    # SYSTEM task would otherwise make an unusable token.
-    token_user = _validated_interactive_account(
-        environment.get("DOBBYVPN_CONTROL_TOKEN_USER"),
-        context="Windows control-token user",
+    _validated_interactive_account(
+        environment.get("DOBBYVPN_CONTROL_PIPE_USER"),
+        context="Windows control-pipe user",
     )
-    # The functional CLI is launched by the same local-VM command but needs
-    # the service's control-token and PROGRAMDATA settings as well.  Keep a
+    # The functional CLI is launched by the same local-VM command and needs
+    # the same pipe identity and PROGRAMDATA settings. Keep a
     # small allow-list in state instead of serializing the whole guest env.
     runtime["environment"] = {
         key: environment[key]
         for key in (
-            "PROGRAMDATA", "DOBBYVPN_CONTROL_ADDRESS", "DOBBYVPN_CONTROL_TOKEN_USER",
+            "PROGRAMDATA", "DOBBYVPN_CONTROL_PIPE_USER",
             "DOBBY_LOG_PATH", "DOBBY_LOG_ROOT", "DOBBY_LOG_PRECREATED", "GODEBUG",
         )
     }
@@ -1539,7 +1113,7 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     try:
         with service_stdout.open("ab") as stdout, service_stderr.open("ab") as stderr:
             process = subprocess.Popen(
-                [str(binary), "-port", "50051"],
+                [str(binary), "-mode", "normal"],
                 cwd=str(binary.parent),
                 env=environment,
                 stdin=subprocess.DEVNULL,
@@ -1618,7 +1192,7 @@ def _cleanup_interactive_owner(runtime: dict[str, Any]) -> str:
     if not isinstance(environment, dict):
         raise _error("Windows cleanup interactive owner is not configured")
     return _validated_interactive_account(
-        environment.get("DOBBYVPN_CONTROL_TOKEN_USER"),
+        environment.get("DOBBYVPN_CONTROL_PIPE_USER"),
         context="Windows cleanup interactive owner",
     )
 
@@ -1747,18 +1321,5 @@ def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) 
                 )
             except Exception as error:
                 errors.append(f"cleanup-network-interface: {type(error).__name__}: {error}")
-    # The supervisor runs this cleanup command even when the native UI worker
-    # was terminated by its outer timeout.  Keep the fixed Mesa path out of
-    # retained run directories without touching any installed/release files.
-    try:
-        _remove_mesa_defender_exclusion(
-            run_dir, logs=logs, timeout=min(timeout, 30.0),
-        )
-    except Exception as error:
-        errors.append(f"cleanup-mesa-defender-exclusion: {type(error).__name__}: {error}")
-    try:
-        _remove_mesa_llvmpipe_staging(run_dir)
-    except Exception as error:
-        errors.append(f"cleanup-mesa-fixture: {type(error).__name__}: {error}")
     if errors:
         raise _error("; ".join(errors))

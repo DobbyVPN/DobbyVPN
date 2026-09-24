@@ -31,23 +31,18 @@ DEFAULT_ARCHITECTURES = {
     "macos": "arm64",
 }
 SERVICE_NAMES = {
-    "linux": "ubuntu_grpcvpnserver",
-    "windows": "windows_grpcvpnserver.exe",
-    "macos": "macos_grpcvpnserver",
+    "linux": "dobbyvpn-backend",
+    "windows": "dobbyvpn-backend.exe",
+    "macos": "dobbyvpn-backend",
 }
 CLI_NAMES = {
     "linux": "dobby-cli",
     "windows": "dobby-cli.exe",
     "macos": "dobby-cli",
 }
-UI_TEST_NAMES = {
-    "linux": "dobby-vpn-ui-test",
-    "windows": "dobby-vpn-ui-test.exe",
-    "macos": "dobby-vpn-ui-test",
-}
 UI_NAMES = {
-    "windows": "Dobby Vpn.exe",
-    "macos": "Dobby Vpn",
+    "windows": "DobbyVPN.exe",
+    "macos": "Dobby VPN.app",
 }
 ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
 ARCHITECTURE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -360,6 +355,7 @@ def _sign_android_pair(
 
 def _build_desktop(
     source_root: Path,
+    candidate_root: Path,
     platform: str,
     architecture: str,
     skip_deps: bool,
@@ -374,33 +370,20 @@ def _build_desktop(
         libs.append("--skip-deps")
     _run(libs, source_root=source_root, environment=environment)
     if platform in {"windows", "macos"}:
-        ui_test_output = source_root / "go_module" / UI_TEST_NAMES[platform]
-        ui_test = [
+        ui_output = candidate_root / ("frontend" if platform == "windows" else UI_NAMES[platform])
+        native_ui = [
             *common,
-            "ui-test",
+            "native-ui",
             "--platform",
             "current",
             "--arch",
             architecture,
             "--output",
-            str(ui_test_output),
+            str(ui_output),
         ]
         if skip_deps:
-            ui_test.append("--skip-deps")
-        _run(ui_test, source_root=source_root, environment=environment)
-        ui = [
-            *common,
-            "ui",
-            "--platform",
-            "current",
-            "--arch",
-            architecture,
-            "--output",
-            str(source_root / "go_module" / UI_NAMES[platform]),
-        ]
-        if skip_deps:
-            ui.append("--skip-deps")
-        _run(ui, source_root=source_root, environment=environment)
+            native_ui.append("--skip-deps")
+        _run(native_ui, source_root=source_root, environment=environment)
 
 
 def _build_android(
@@ -441,7 +424,6 @@ def _descriptor(
     app_path: Path | None,
     test_companion_path: Path | None,
     cli_path: Path | None,
-    ui_test_path: Path | None,
     ui_path: Path | None,
     service_path: Path | None,
     network_path: Path,
@@ -469,12 +451,15 @@ def _descriptor(
     result["service"] = str(_regular_file(service_path, request_root, "service"))
     result["cli"] = str(_regular_file(cli_path, request_root, "CLI"))
     if platform in {"windows", "macos"}:
-        if ui_test_path is None:
-            raise CandidateError("desktop UI candidate paths are incomplete")
-        result["ui_test"] = str(_regular_file(ui_test_path, request_root, "headless UI companion"))
         if ui_path is None:
             raise CandidateError("desktop native UI path is missing")
-        result["ui"] = str(_regular_file(ui_path, request_root, "desktop UI"))
+        if platform == "macos":
+            ui_path = _confined(ui_path, request_root, "macOS desktop UI")
+            if ui_path.is_symlink() or not ui_path.is_dir() or ui_path.suffix != ".app":
+                raise CandidateError("macOS desktop UI must be an application bundle")
+        else:
+            ui_path = _regular_file(ui_path, request_root, "desktop UI")
+        result["ui"] = str(ui_path)
     result["network"] = str(_confined(network_path, request_root, "network interface"))
     return result
 
@@ -528,21 +513,20 @@ def prepare_candidate(
     if platform in DESKTOP_PLATFORMS:
         _build_desktop(
             source_root,
+            candidate_root,
             platform,
             architecture,
             skip_deps,
         )
         service_path = source_root / "go_module" / SERVICE_NAMES[platform]
         cli_path = source_root / "go_module" / CLI_NAMES[platform]
-        ui_test_path = source_root / "go_module" / UI_TEST_NAMES[platform]
-        ui_path = source_root / "go_module" / UI_NAMES[platform] if platform in {"windows", "macos"} else None
+        ui_path = candidate_root / ("frontend" if platform == "windows" else UI_NAMES[platform]) if platform in {"windows", "macos"} else None
         app_path = None
     else:
         app_path = _build_android(source_root, candidate_root, architecture)
         test_companion_path = candidate_root / "dobbyvpn-test-companion.apk"
         service_path = None
         cli_path = None
-        ui_test_path = None
 
     # Linux Unix-domain socket paths are commonly limited to 107 usable bytes.
     # Linux's request/source path reached 113 bytes and bind returned EINVAL.
@@ -560,7 +544,6 @@ def prepare_candidate(
         app_path=app_path,
         test_companion_path=test_companion_path,
         cli_path=cli_path,
-        ui_test_path=ui_test_path,
         ui_path=ui_path,
         service_path=service_path,
         network_path=network_path,

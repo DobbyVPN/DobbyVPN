@@ -76,7 +76,7 @@ platform :ios do
     install_provisioning_profile(path: profile2)
   end
 
-  desc "Build the Go/Fyne IPA and native NetworkExtension shell"
+  desc "Build the native SwiftUI IPA and shared Go NetworkExtension runtime"
   lane :build_ios do
     unless COMMIT&.match?(/\A[0-9a-f]{40}\z/)
       raise "APP_SOURCE_SHA must be the exact lowercase 40-character source commit"

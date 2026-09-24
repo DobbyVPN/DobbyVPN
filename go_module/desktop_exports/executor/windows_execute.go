@@ -4,23 +4,32 @@ package executor
 
 import (
 	"fmt"
-	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"go_module/desktop_exports/controljson"
 	"go_module/desktop_exports/controlplane"
-	"go_module/desktop_exports/proto"
-	"go_module/grpcproto"
 
 	"go_module/log"
 
 	"golang.org/x/sys/windows/svc"
-	"google.golang.org/grpc"
 )
 
-type managerService struct {
-	serverPort int
+type managerService struct{}
+
+func serveDesktopControl() (func() error, <-chan error, error) {
+	listener, err := controlplane.ListenDesktopControlPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, nil)
+	}()
+	return listener.Close, serveDone, nil
 }
 
 func secureExplicitLogPath(root, requested string) (string, error) {
@@ -53,7 +62,11 @@ func openPrecreatedAppendLog(path string) (*os.File, error) {
 func initExplicitLocalLog() error {
 	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
 	if requested == "" {
-		return nil
+		programData := strings.TrimSpace(os.Getenv("ProgramData"))
+		if programData == "" {
+			return fmt.Errorf("ProgramData is unavailable for Go backend logs")
+		}
+		return log.SetPath(filepath.Join(programData, "DobbyVPN", "Logs", "backend.jsonl"))
 	}
 	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
 	if root == "" {
@@ -89,89 +102,63 @@ func initExplicitLocalLog() error {
 	return log.SetPath(path)
 }
 
-func (service *managerService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
+func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	changes <- svc.Status{State: svc.StartPending}
 	if err := recoverInterruptedState(); err != nil {
 		log.Debugf(desktopLogCategory, "[ERROR] failed to recover interrupted product state: %v", err)
 		return true, 1
 	}
-
-	token, err := controlplane.LoadOrCreateControlToken()
+	stopControl, serveDone, err := serveDesktopControl()
 	if err != nil {
+		log.Debugf(desktopLogCategory, "[ERROR] failed to listen for desktop control: %v", err)
 		return true, 1
 	}
-	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", service.serverPort))
-	if err != nil {
-		log.Debugf(desktopLogCategory, "[ERROR] failed to listen: %v", err)
-		return true, 1
-	}
-	grpcServer := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(
-			proto.ControlAuthUnaryInterceptor(true, token),
-			proto.PanicRecoveryUnaryInterceptor(),
-			proto.ErrorLoggingUnaryInterceptor(),
-		),
-	)
-
-	grpcproto.RegisterVpnServer(grpcServer, &proto.Server{})
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptSessionChange}
-
-	go func() {
-		log.Debugf(desktopLogCategory, "server listening at %v", lis.Addr())
-		if err := grpcServer.Serve(lis); err != nil {
-			log.Debugf(desktopLogCategory, "[ERROR] failed to serve: %v", err)
+	for request := range requests {
+		if request.Cmd != svc.Stop {
+			log.Debugf(desktopLogCategory, "Unexpected service control request #%d", request.Cmd)
+			continue
 		}
-	}()
-
-loop:
-	for c := range r {
-		switch c.Cmd {
-		case svc.Stop:
-			grpcServer.GracefulStop()
-			break loop
-		default:
-			log.Debugf(desktopLogCategory, "Unexpected service control request #%d", c)
+		if err := stopControl(); err != nil {
+			log.Debugf(desktopLogCategory, "[ERROR] failed to close desktop control: %v", err)
+			return true, 1
 		}
+		if err := <-serveDone; err != nil {
+			log.Debugf(desktopLogCategory, "[ERROR] desktop control stopped with error: %v", err)
+			return true, 1
+		}
+		changes <- svc.Status{State: svc.StopPending}
+		return false, 0
 	}
-
-	changes <- svc.Status{State: svc.StopPending}
-
-	return
+	return false, 0
 }
 
-func runService(port int) error {
-	return svc.Run("DobbyVPN vpn service", &managerService{serverPort: port})
+func runService() error {
+	return svc.Run("DobbyVPN Go backend", &managerService{})
 }
 
-func run(port int) {
+func run() {
 	if err := recoverInterruptedState(); err != nil {
 		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
 	}
-	token, err := controlplane.LoadOrCreateControlToken()
+	stopControl, serveDone, err := serveDesktopControl()
 	if err != nil {
-		panic(fmt.Sprintf("failed to prepare control authentication: %v", err))
+		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
 	}
-	lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		panic(fmt.Sprintf("failed to listen: %v", err))
+	log.Debugf(desktopLogCategory, "desktop JSON control pipe ready")
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	<-signals
+	if err := stopControl(); err != nil {
+		panic(fmt.Sprintf("failed to close desktop control pipe: %v", err))
 	}
-	s := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(
-			proto.ControlAuthUnaryInterceptor(true, token),
-			proto.PanicRecoveryUnaryInterceptor(),
-			proto.ErrorLoggingUnaryInterceptor(),
-		),
-	)
-
-	grpcproto.RegisterVpnServer(s, &proto.Server{})
-
-	log.Debugf(desktopLogCategory, "desktop control listener ready")
-	if err := s.Serve(lis); err != nil {
-		panic(fmt.Sprintf("failed to serve: %v", err))
+	if err := <-serveDone; err != nil {
+		panic(fmt.Sprintf("desktop control stopped with error: %v", err))
 	}
 }
 
-func (c *Executor) Execute(port int, mode string) {
+func (c *Executor) Execute(mode string) {
 	if err := initExplicitLocalLog(); err != nil {
 		fmt.Fprintln(os.Stderr, "failed to initialize local logging")
 		return
@@ -180,9 +167,11 @@ func (c *Executor) Execute(port int, mode string) {
 
 	switch mode {
 	case "normal":
-		run(port)
+		run()
 	case "service":
-		runService(port)
+		if err := runService(); err != nil {
+			log.Debugf(desktopLogCategory, "[ERROR] Go backend service failed: %v", err)
+		}
 	default:
 		log.Debugf(desktopLogCategory, "[ERROR] Invalid run mode")
 	}

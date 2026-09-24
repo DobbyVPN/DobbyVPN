@@ -292,9 +292,9 @@ if [[ -n "$test_companion_output" ]]; then
 fi
 python3 "$source_verifier" "${source_verifier_args[@]}"
 
-# Verify the final Go/Fyne shared libraries against the ABI policy. TrustTunnel
+# Verify the final Go backend libraries against the ABI policy. TrustTunnel
 # bridge symbols are present only in arm64-v8a; x86_64 must remain a portable
-# renderer/service build with no unresolved native bridge dependency.
+# backend build with no unresolved native bridge dependency.
 readelf_bin=${ANDROID_READELF:-}
 if [[ -z "$readelf_bin" ]]; then
   mapfile -t ndk_toolchains < <(

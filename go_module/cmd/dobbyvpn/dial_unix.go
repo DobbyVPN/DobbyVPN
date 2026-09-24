@@ -3,11 +3,10 @@
 package main
 
 import (
-	"go_module/desktop_exports/client"
-
-	"google.golang.org/grpc"
+	"go_module/desktop_exports/controljson"
+	"go_module/desktop_exports/controlplane"
 )
 
-func dialService() (*grpc.ClientConn, error) {
-	return client.Dial()
+func dialService() controljson.Client {
+	return controljson.Client{Dial: controlplane.DialDesktopControl}
 }

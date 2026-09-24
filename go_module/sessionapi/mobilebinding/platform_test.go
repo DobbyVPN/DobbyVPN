@@ -19,6 +19,9 @@ func (releaseResultCallbacks) AcquireTunnel(string, int64) int32          { retu
 func (c releaseResultCallbacks) ReleaseTunnel(string, int64, int32) bool  { return c.releaseOK }
 func (releaseResultCallbacks) ProtectSocket(string, int64, int32) bool    { return true }
 func (releaseResultCallbacks) PublishState(string, int64, string, string) {}
+func (releaseResultCallbacks) LoadSourceURL() string                      { return "" }
+func (releaseResultCallbacks) SaveSourceURL(string) bool                  { return true }
+func (releaseResultCallbacks) ClearSourceURL() bool                       { return true }
 
 func TestTunnelLeaseReleasePropagatesPlatformCleanupFailure(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "mobile-tun")
@@ -132,6 +135,9 @@ func (c *trackingCallbacks) ReleaseTunnel(string, int64, int32) bool {
 }
 func (*trackingCallbacks) ProtectSocket(string, int64, int32) bool    { return true }
 func (*trackingCallbacks) PublishState(string, int64, string, string) {}
+func (*trackingCallbacks) LoadSourceURL() string                      { return "" }
+func (*trackingCallbacks) SaveSourceURL(string) bool                  { return true }
+func (*trackingCallbacks) ClearSourceURL() bool                       { return true }
 func (c *trackingCallbacks) releaseCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

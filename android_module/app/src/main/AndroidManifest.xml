@@ -14,12 +14,9 @@
         android:theme="@style/Theme.Dobby"
         android:usesCleartextTraffic="false">
         <activity
-            android:name="org.golang.app.GoNativeActivity"
+            android:name="com.dobby.ui.MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
-            android:theme="@android:style/Theme"
             android:windowSoftInputMode="adjustResize">
-            <meta-data android:name="android.app.lib_name" android:value="dobby_vpn" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -37,9 +34,6 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
-        <receiver
-            android:name="org.golang.app.FyneNotificationReceiver"
-            android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

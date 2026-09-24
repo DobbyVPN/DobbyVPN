@@ -23,11 +23,11 @@ ALLOWED_FINAL_FIELDS = {
     "CurrentVersionCode",
     "UpdateCheckData",
 }
-GO_FYNE_SOURCES = [
+ANDROID_BUILD_SOURCES = [
     "go@go1.26.8",
     "reproducible-apk-tools@v0.3.2",
 ]
-GO_FYNE_BUILD = [
+ANDROID_BUILD = [
     "pushd $$go$$/src",
     "./make.bash",
     "popd",
@@ -42,7 +42,6 @@ GO_FYNE_BUILD = [
     'test "$("$GOROOT/bin/go" env GOVERSION)" = "go1.26.8"',
     'go env GOROOT GOVERSION GOFLAGS GOTOOLCHAIN',
     'cd ..',
-    'export REPO_ROOT=$(pwd)',
     'pushd go_module',
     'go mod download',
     'popd',
@@ -286,14 +285,13 @@ def finalize(
         raise MetadataError("requested build has no source commit")
     target["commit"] = source_sha
     # The release shell is a plain Android project now. Point the candidate at
-    # the one Gradle root that owns the Go/Fyne APK and replace the inherited
-    # Legacy mobile recipe with the pinned Go/Fyne build inputs.
+    # the Android Gradle root and install the pinned Go backend build inputs.
     target["subdir"] = "android_module"
     target["gradle"] = ["yes"]
-    target["srclibs"] = list(GO_FYNE_SOURCES)
-    target["rm"] = ["swift_module"]
-    target["build"] = list(GO_FYNE_BUILD)
+    target["srclibs"] = list(ANDROID_BUILD_SOURCES)
+    target["build"] = list(ANDROID_BUILD)
     target.pop("preassemble", None)
+    target.pop("rm", None)
     document["Binaries"] = binary_url
     document["UpdateCheckData"] = baseline["UpdateCheckData"]
     document["CurrentVersion"] = version_name

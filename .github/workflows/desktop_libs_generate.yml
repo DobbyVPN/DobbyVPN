@@ -1,4 +1,4 @@
-name: Build Desktop VPN Libraries
+name: Build shared Go backend and native desktop frontends
 
 on:
   workflow_call:
@@ -12,27 +12,23 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
-  build_desktop_libs:
+  build_desktop:
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows
-            runner: windows-latest
+          - runner: windows-latest
             platform: windows
             arch: amd64
-          - os: ubuntu
-            runner: ubuntu-latest
+          - runner: ubuntu-24.04
             platform: linux
             arch: amd64
-          - os: macos
-            runner: macos-15
+          - runner: macos-15
             platform: macos
             arch: arm64
-          - os: macos
-            runner: macos-15-intel
+          - runner: macos-15-intel
             platform: macos
             arch: amd64
     steps:
@@ -47,15 +43,8 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "source_sha must be a full lowercase 40-character commit SHA" >&2
-            exit 1
-          fi
-          actual_sha="$(git rev-parse HEAD)"
-          if [[ "$actual_sha" != "$SOURCE_SHA" ]]; then
-            echo "Checked out $actual_sha, expected $SOURCE_SHA" >&2
-            exit 1
-          fi
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -63,215 +52,151 @@ jobs:
           go-version-file: .go-version
           cache: false
 
-      # Intel macOS deliberately uses the official CLI helper rather than the
-      # arm64-only go-go-tunnel static archive. The release is universal, but
-      # it is packaged only with the amd64 service artifact.
-      - name: Download official TrustTunnel macOS universal helper
-        if: matrix.os == 'macos' && matrix.arch == 'amd64'
+      # Intel macOS uses the official universal helper; the other targets use
+      # the in-process TrustTunnel bridge.
+      - name: Download official TrustTunnel macOS helper
+        if: matrix.platform == 'macos' && matrix.arch == 'amd64'
         working-directory: go_module
         shell: bash
         run: |
+          set -euo pipefail
           curl -#fL -o trusttunnel_client-v1.0.49-macos-universal.tar.gz "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/v1.0.49/trusttunnel_client-v1.0.49-macos-universal.tar.gz"
           echo "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64  trusttunnel_client-v1.0.49-macos-universal.tar.gz" | shasum -a 256 -c -
           tar -xzf trusttunnel_client-v1.0.49-macos-universal.tar.gz --strip-components=1 trusttunnel_client-v1.0.49-macos-universal/trusttunnel_client
           chmod 755 trusttunnel_client
           codesign --verify --strict --verbose=2 trusttunnel_client
-          # Preserve both complete codesign streams before deriving the stable
-          # TeamIdentifier assertion from the tool's diagnostic stream.
           codesign_stdout="$RUNNER_TEMP/trusttunnel-codesign.stdout"
           codesign_stderr="$RUNNER_TEMP/trusttunnel-codesign.stderr"
           set +e
           codesign -dv --verbose=2 trusttunnel_client >"$codesign_stdout" 2>"$codesign_stderr"
-          codesign_status=$?
+          status=$?
           set -e
           cat "$codesign_stdout"
           cat "$codesign_stderr" >&2
-          test "$codesign_status" -eq 0
+          test "$status" -eq 0
           grep -F "TeamIdentifier=TC3Q7MAJXF" "$codesign_stderr"
           rm trusttunnel_client-v1.0.49-macos-universal.tar.gz
 
-      - name: Build desktop VPN library
+      - name: Build Go backend and CLI
+        shell: bash
         run: |
-          if [ "${{ matrix.os }}" == "macos" ] && [ "${{ matrix.arch }}" == "arm64" ]; then
+          set -euo pipefail
+          if [[ "${{ matrix.platform }}" == macos && "${{ matrix.arch }}" == arm64 ]]; then
             export CGO_LDFLAGS="-lc++ -framework SystemConfiguration -framework CoreFoundation -framework Security -framework Network"
-          elif [ "${{ matrix.os }}" == "macos" ] && [ "${{ matrix.arch }}" == "amd64" ]; then
-            # The Intel backend has no go-go-tunnel cgo dependency.
+          elif [[ "${{ matrix.platform }}" == macos ]]; then
             unset CGO_LDFLAGS
           else
-            export CGO_LDFLAGS="-L${{ github.workspace }}/go_module"
+            export CGO_LDFLAGS="-L${GITHUB_WORKSPACE}/go_module"
           fi
-          python .github/scripts/desktop_build.py libs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --go-mod-tidy --with-cli
-        shell: bash
+          python3 .github/scripts/desktop_build.py libs \
+            --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" \
+            --go-mod-tidy --with-cli
 
-      - name: Build shared Go/Fyne UI
+      - name: Build Windows WinUI frontend
+        if: matrix.platform == 'windows'
+        shell: pwsh
         run: |
-          python .github/scripts/desktop_build.py ui \
-            --platform current \
-            --arch ${{ matrix.arch }} \
-            --go-mod-tidy
-        shell: bash
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content VERSION -Raw).Trim()
+          dotnet publish windows_module/DobbyVPN.Windows/DobbyVPN.Windows.csproj `
+            --configuration Release --runtime win-x64 --self-contained true `
+            "-p:Version=$version" `
+            -p:SourceCommit="${{ inputs.source_sha }}" `
+            --output runtime/services/windows-amd64/frontend
+          if (-not (Test-Path runtime/services/windows-amd64/frontend/DobbyVPN.exe)) {
+            throw "WinUI publish did not produce DobbyVPN.exe"
+          }
 
-      - name: Build headless Go/Fyne UI companion
+      - name: Build macOS SwiftUI frontend
+        if: matrix.platform == 'macos'
+        shell: bash
         run: |
-          python .github/scripts/desktop_build.py ui-test \
-            --platform current \
-            --arch ${{ matrix.arch }} \
-            --go-mod-tidy
-        shell: bash
+          set -euo pipefail
+          GITHUB_SHA="${{ inputs.source_sha }}" python3 .github/scripts/desktop_build.py native-ui \
+            --platform macos --arch "${{ matrix.arch }}" \
+            --output "runtime/services/macos-${{ matrix.arch }}/DobbyVPNMacApp"
 
-      - name: Verify Windows service runtime closure
+      - name: Verify Windows backend runtime closure
         if: matrix.platform == 'windows'
         shell: bash
         run: |
           set -euo pipefail
-          for file in \
-            windows_grpcvpnserver.exe \
-            dobby_bridge.dll \
-            wintun.dll; do
-            path="go_module/$file"
-            if [[ ! -f "$path" || -L "$path" ]]; then
-              echo "Windows service runtime closure is missing a regular $file" >&2
-              exit 1
-            fi
+          for file in dobbyvpn-backend.exe dobby_bridge.dll wintun.dll; do
+            path="runtime/services/windows-amd64/$file"
+            test -f "$path" && test ! -L "$path"
           done
           python3 - <<'PY'
           from hashlib import file_digest
           from pathlib import Path
-
           expected = {
               "dobby_bridge.dll": "10e2f921aaa949060bed936e3c361b0967b2ad8b7a71dd983d36abd94c903063",
               "wintun.dll": "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce",
           }
           for name, digest in expected.items():
-              with (Path("go_module") / name).open("rb") as file:
+              with (Path("runtime/services/windows-amd64") / name).open("rb") as file:
                   actual = file_digest(file, "sha256").hexdigest()
               if actual != digest:
                   raise SystemExit(f"{name} checksum mismatch")
           PY
 
-      - name: Upload built libraries
+      - name: Upload Windows backend
         if: matrix.platform == 'windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: windows_grpcvpnserver.exe
+          name: dobbyvpn-backend-windows-amd64
           path: |
-            go_module/windows_grpcvpnserver.exe
-            go_module/dobby_bridge.dll
-            go_module/wintun.dll
+            runtime/services/windows-amd64/dobbyvpn-backend.exe
+            runtime/services/windows-amd64/dobby_bridge.dll
+            runtime/services/windows-amd64/wintun.dll
           if-no-files-found: error
           retention-days: 3
 
-      - name: Upload built libraries
+      - name: Upload Linux backend
         if: matrix.platform == 'linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ubuntu_grpcvpnserver
+          name: dobbyvpn-backend-linux-amd64
           path: |
-            go_module/ubuntu_grpcvpnserver
-            go_module/libdobby_bridge.so
-            go_module/libc++.so.1
-            go_module/libc++abi.so.1
+            runtime/services/linux-amd64/dobbyvpn-backend
+            runtime/services/linux-amd64/libdobby_bridge.so
+            runtime/services/linux-amd64/libc++.so.1
+            runtime/services/linux-amd64/libc++abi.so.1
           if-no-files-found: error
           retention-days: 3
 
-      - name: Upload macOS arm64 service
-        if: matrix.platform == 'macos' && matrix.arch == 'arm64'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: macos_grpcvpnserver-${{ matrix.arch }}
-          path: |
-            go_module/macos_grpcvpnserver
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload macOS amd64 service and TrustTunnel helper
-        if: matrix.platform == 'macos' && matrix.arch == 'amd64'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: macos_grpcvpnserver-${{ matrix.arch }}
-          path: |
-            go_module/macos_grpcvpnserver
-            go_module/trusttunnel_client
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload Windows desktop CLI
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobby-cli-windows
-          path: go_module/dobby-cli.exe
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload Windows Go/Fyne UI
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobby-vpn-ui-windows
-          path: go_module/dobby-vpn-ui.exe
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload Windows headless Go/Fyne UI companion
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobby-vpn-ui-test-windows
-          path: go_module/dobby-vpn-ui-test.exe
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload Linux desktop CLI
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobby-cli-linux
-          path: go_module/dobby-cli
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload Linux Go/Fyne UI
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobby-vpn-ui-linux
-          path: go_module/dobby-vpn-ui
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload Linux headless Go/Fyne UI companion
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobby-vpn-ui-test-linux
-          path: go_module/dobby-vpn-ui-test
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload macOS desktop CLI
+      - name: Upload macOS backend
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dobby-cli-macos-${{ matrix.arch }}
-          path: go_module/dobby-cli
+          name: dobbyvpn-backend-macos-${{ matrix.arch }}
+          path: |
+            runtime/services/macos-${{ matrix.arch }}/dobbyvpn-backend
+            runtime/services/macos-${{ matrix.arch }}/trusttunnel_client
           if-no-files-found: error
           retention-days: 3
 
-      - name: Upload macOS Go/Fyne UI
-        if: matrix.platform == 'macos'
+      - name: Upload native desktop CLI
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dobby-vpn-ui-macos-${{ matrix.arch }}
-          path: go_module/dobby-vpn-ui
+          name: dobby-cli-${{ matrix.platform }}-${{ matrix.arch }}
+          path: runtime/services/${{ matrix.platform }}-${{ matrix.arch }}/dobby-cli*
           if-no-files-found: error
           retention-days: 3
 
-      - name: Upload macOS headless Go/Fyne UI companion
+      - name: Upload Windows frontend
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobby-native-ui-windows-amd64
+          path: runtime/services/windows-amd64/frontend/**
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload macOS frontend
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dobby-vpn-ui-test-macos-${{ matrix.arch }}
-          path: go_module/dobby-vpn-ui-test
+          name: dobby-native-ui-macos-${{ matrix.arch }}
+          path: runtime/services/macos-${{ matrix.arch }}/DobbyVPNMacApp
           if-no-files-found: error
           retention-days: 3

@@ -1,4 +1,4 @@
-"""Hosted Android adapters for binding and rendered Go/Fyne Android lanes.
+"""Hosted Android adapters for binding and rendered Compose UI lanes.
 
 DobbyVPN owns Android session state and cleanup; Torturer owns the test set,
 assertions, result values, and disposable runner scratch. The protocol-matrix lane
@@ -58,13 +58,13 @@ from .cli import (
 
 
 _PACKAGE_NAME = "com.dobby.vpn"
-_MAIN_ACTIVITY = "com.dobby.vpn/org.golang.app.GoNativeActivity"
+_MAIN_ACTIVITY = "com.dobby.vpn/com.dobby.ui.MainActivity"
 _APP_DATA = "/data/user/0/com.dobby.vpn"
 _APP_FILES = "/data/user/0/com.dobby.vpn/files"
 _INSTRUMENTATION_COMPONENT = (
     "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner"
 )
-_INSTRUMENTATION_CLASS = "com.dobby.GoUiHostedProfileTest"
+_INSTRUMENTATION_CLASS = "com.dobby.NativeUiHostedProfileTest"
 _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _ALLOWED_OPERATIONS = {
     "configure",
@@ -101,9 +101,9 @@ _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
-# Keep this boundary in step with sessionapi's product parser.  The rendered
-# lane needs one input small enough for the real Fyne/Android editor, but it
-# must still receive an untouched, complete TOML protocol block.  In
+# Keep this boundary in step with sessionapi's product parser. The rendered
+# lane uses one representative input, while the binding lane exercises all
+# profiles. It still receives an untouched, complete TOML protocol block. In
 # particular, do not re-encode or otherwise normalize private profile bytes in
 # the controller.
 _GUI_PROFILE_HEADER = re.compile(
@@ -111,9 +111,7 @@ _GUI_PROFILE_HEADER = re.compile(
     rb"[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
 )
 _GUI_PROFILE_PROTOCOLS = frozenset({b"Outline", b"Xray"})
-# Fyne's Android editor forwards each insertion through a native text bridge.
-# Keep the rendered representative comfortably below the product's 1 MiB
-# configuration limit; the full bundle remains the binding lane's concern.
+# Keep emulator input bounded; the binding lane owns the complete profile set.
 _GUI_PROFILE_MAX_BYTES = 64 * 1024
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
@@ -129,7 +127,6 @@ _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
             "Connected",
             "Error",
             "Failed",
-            "Ready",
             "Disconnected",
             "UNKNOWN",
         }
@@ -185,10 +182,9 @@ def _remaining(deadline: float, code: str) -> float:
 def _select_gui_profile(raw: bytes) -> bytes:
     """Return the first complete emulator-supported protocol block.
 
-    Android's rendered lane intentionally proves one real GUI journey while
+    Android's rendered lane intentionally proves one real UI journey while
     the binding lane retains full profile-matrix coverage.  A large
-    multi-profile bundle can overwhelm the native editor before Fyne has
-    delivered every inserted span, so the rendered lane stages one
+    multi-profile bundle is unnecessary for one UI journey, so the rendered lane stages one
     source-preserving ``Outline`` or ``Xray`` block within the conservative
     native-editor bound. TrustTunnel is excluded because it is not an
     emulator-supported representative for this lane. Oversized candidates
@@ -724,11 +720,11 @@ class AndroidHostedAdapter:
             or (self.ui_mode == "gui-auto" and progress_name is not None)
         )
         if not preserve_active:
-            # A preceding real-renderer invocation can leave Fyne's
-            # NativeActivity process alive after Android has torn down the
+            # A preceding real-renderer invocation can leave the app's
+            # activity process alive after Android has torn down the
             # instrumentation session.  Starting the next runner against
             # that process can produce a blank surface and leave
-            # GoUiHostedProfileTest waiting until its outer deadline.  The
+            # NativeUiHostedProfileTest waiting until its outer deadline.  The
             # runner has not started yet, so this controller-side stop cannot
             # kill an active instrumentation process.  Preserve the live
             # process deliberately for the first half of process-loss
@@ -740,7 +736,7 @@ class AndroidHostedAdapter:
             )
         if preserve_active:
             # The rendered process-loss phase must not inherit the previous
-            # scenario's Fyne editor/activity state.  A preserved Activity
+            # scenario's editor/activity state. A preserved Activity
             # can still contain the prior profile, and appending the next
             # source through its real InputConnection would make the failure
             # look like a profile-entry or Go parse problem.  Reset only the

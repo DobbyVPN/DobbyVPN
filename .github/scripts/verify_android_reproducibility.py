@@ -34,7 +34,8 @@ TOOLCHAIN = {
     "android_ndk": ANDROID_NDK,
     "go": f"go{GO_VERSION}",
     "go_source_commit": GO_SOURCE_COMMIT,
-    "fyne": "fyne.io/fyne/v2@v2.8.1",
+    "kotlin": "2.2.0",
+    "compose_bom": "androidx.compose:compose-bom:2025.12.00",
     "gradle": GRADLE_VERSION,
     "java": str(JAVA_MAJOR),
 }

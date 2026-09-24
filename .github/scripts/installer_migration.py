@@ -292,11 +292,11 @@ $entries = @(
 if ($entries.Count -ne 1) { throw "expected one DobbyVPN ARP entry" }
 if ([string]$entries[0].DisplayVersion -ne $env:DOBBYVPN_EXPECTED_VERSION) { throw "unexpected installed version" }
 $root = Join-Path ${env:ProgramFiles} 'DobbyVPN'
-foreach ($name in @('bin\Dobby Vpn.exe', 'bin\dobby-cli.exe', 'bin\windows_grpcvpnserver.exe')) {
+foreach ($name in @('bin\DobbyVPN.exe', 'bin\dobby-cli.exe', 'bin\dobbyvpn-backend.exe')) {
   if (-not (Test-Path (Join-Path $root $name) -PathType Leaf)) { throw "missing installed file $name" }
 }
-$service = Get-Service -Name 'DobbyVPN Server' -ErrorAction Stop
-if ($service.Status -ne 'Running') { throw "DobbyVPN Server is not running" }
+$service = Get-Service -Name 'DobbyVPN Go backend' -ErrorAction Stop
+if ($service.Status -ne 'Running') { throw "DobbyVPN Go backend is not running" }
 '''
         environment = {**os.environ, "DOBBYVPN_EXPECTED_VERSION": expected_version}
         self.runner.run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], label=label, environment=environment)
@@ -328,7 +328,7 @@ if ($entries.Count -ne 0) { throw "DobbyVPN remains registered after uninstall" 
 if (Test-Path (Join-Path ${env:ProgramFiles} 'DobbyVPN')) { throw "DobbyVPN install directory remains" }
 $service = $null
 try {
-  $service = Get-Service -Name 'DobbyVPN Server' -ErrorAction Stop
+  $service = Get-Service -Name 'DobbyVPN Go backend' -ErrorAction Stop
 } catch {
   $detail = $_ | Out-String
   if ($detail -match 'Cannot find any service|cannot find|does not exist') {
@@ -337,7 +337,7 @@ try {
     throw
   }
 }
-if ($null -ne $service) { throw "DobbyVPN Server remains registered" }
+if ($null -ne $service) { throw "DobbyVPN Go backend remains registered" }
 '''
         self.runner.run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], label=label)
 
@@ -385,7 +385,7 @@ cat "$package_info"
 test "$package_status" -eq 0
 version="$(awk '/^version:/{print $2}' "$package_info")"
 test "$version" = "$EXPECTED_VERSION"
-test -x "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver"
+test -x "/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend"
 test -x "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
 test -f "/Library/LaunchDaemons/com.dobby.vpnservice.plist"
 if [ "$EXPECTED_VERSION" = "1.5.1" ]; then

@@ -1,227 +1,84 @@
-# Go product/runtime
+# Go backend and CLI
 
-This module owns configuration acquisition and parsing, session policy and
-generation state, protocol-device construction, routing/TUN/tun2socks
-resources, probes, cleanup, local diagnostics, and the native desktop CLI.
-The shared Go/Fyne UI talks to this layer through the authenticated desktop
-gRPC service or the one protocol-neutral mobile binding. Platform code
-only supplies the OS VPN callbacks and permission/lifecycle hooks it cannot
-provide in Go.
+This module owns configuration acquisition and parsing, accepted subscription
+URL persistence, session policy and generation state, profile selection,
+protocol construction, routing and TUN resources, probes, recovery, cleanup,
+and local diagnostics. Outline, Xray, and TrustTunnel remain supported.
 
-The supported configuration sections are Outline (including its WebSocket
-transport variant), Xray, and TrustTunnel. Unsupported sections are reported
-in session diagnostics and never reach protocol-device construction.
+The native frontends use the shared session API. Android and iOS call it through
+the mobile binding. The macOS and Windows frontends use the local JSON control
+endpoint provided by the Go backend: a Unix domain socket on macOS and a named
+pipe on Windows. The Go CLI uses the same backend directly. There is no desktop
+gRPC control server.
 
-## Build
+## Go tests
 
-```bash
-go mod tidy
-go mod download
-```
+On Linux, first stage the pinned native TrustTunnel bridge and C++ runtime:
 
-### Go desktop UI feasibility build
+    python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
 
-The UI is built on the native target host because Fyne uses the platform
-graphics toolchain. Accessibility support is enabled so Windows UI Automation,
-macOS XCTest and the mobile accessibility bridges can locate controls by
-labels rather than screen coordinates:
+Then run from this directory:
 
-```bash
-python3 .github/scripts/desktop_build.py ui --platform current
-```
+    go test -tags=ci ./...
+    go test -race ./routing/... ./sessionapi/... ./tunnel/...
 
-The command writes an unbundled executable to `go_module/dobby-vpn-ui` (or
-`dobby-vpn-ui.exe` on Windows). It is suitable for disposable native-window
-qualification or direct injection into a test VM; Release separately tests
-the packaged installer/archive.
+The setup command changes only its own environment. The Test workflow runs the
+same Go test targets after preparing those dependencies.
 
-macOS native-window qualification requires a host that can create an NSGL
-window. The desktop entrypoint first requests the normal accelerated pixel
-format and retries through a product-owned AppKit bridge without only the
-accelerated flag when the host offers Apple's software renderer. It does not
-require Metal or a larger VM framebuffer; see [TESTING.md](../TESTING.md) for
-the qualification contract.
+## Desktop backend and CLI
 
-Build the headless UI companion on the native target host for service-backed
-UI qualification:
+The desktop build helper builds the Go backend and operator CLI for the current
+host. Use the native target host when building Windows or macOS binaries:
 
-```bash
-python3 .github/scripts/desktop_build.py ui-test --platform current
-```
+    python3 .github/scripts/desktop_build.py libs --with-cli
 
-It drives the production Fyne widgets with the Fyne test driver and speaks a
-small private JSON-lines protocol to the shared functional harness. The
-companion is not an operating-system input simulator; Windows/macOS release
-qualification additionally runs `.github/scripts/native_ui_smoke.py` against
-the packaged GUI to inject a real click and close gesture.
+The backend runs as the installed Windows Service, launchd daemon on macOS, or
+systemd service on Linux. On Unix systems, the frontend and CLI connect through
+a local socket. Windows uses the fixed DobbyVPN.Control named pipe. The Windows
+pipe ACL restricts access to the installed service user and rejects remote
+clients.
 
-Release desktop archives are assembled from those native binaries by the
-small, deterministic packager (no JVM or Gradle runtime is involved):
+The CLI supports connect, connect-profile, check-config, profile-inventory,
+disconnect, status, logs clear, external-ip, and verify-session. It is intended
+for operator commands and scripts; the native frontends send requests directly
+to the backend for each action.
 
-```bash
-python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
-```
+## Android runtime
 
-The existing WiX and macOS `pkgbuild` steps consume the generated Windows and
-macOS archives; Linux receives the generated Debian package directly.
+Android uses a Kotlin/Compose frontend and a Go backend library. Build the
+release app from android_module with the pinned Go compiler:
 
-### Mobile Go/Fyne UI
+    cd android_module
+    ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
 
-The shared Fyne screens are the release UI on Android and iOS. Android's plain
-`android_module` Gradle project cross-compiles `cmd/dobbyui` directly and
-packages the pinned Fyne Java activity:
+The Go runtime is packaged for arm64-v8a and x86_64. TrustTunnel is available
+only on arm64-v8a; x86_64 returns the typed unsupported-protocol result.
 
-```bash
-cd ../android_module
-./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
-```
+## iOS runtime
 
-The Kotlin sources in that project contain only the Android permission,
-foreground `VpnService`, TUN allocation, and JNI callback boundary. The
-session manager and all visible state remain in Go.
+The Go NetworkExtension runtime is built as an XCFramework. The visible iOS UI
+is SwiftUI in swift_module, and the tunnel provider uses the Go mobile binding.
+The pinned gomobile and gobind tools are recorded in go.mod.
 
-For a real Android emulator, install the matching app and test companion from
-one build, then drive the package through the accessibility and native-input
-path:
+For a Simulator architecture, use the package build script on macOS with the
+pinned Go toolchain and mobile tools installed:
 
-```bash
-adb shell am instrument -w -r \
-  -e class com.dobby.GoUiInstrumentedTest \
-  com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner
-```
+    ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
 
-The upstream tun2socks dependency is pinned to commit
-`8fe75611866e343bfa14fdfb80561c7bd49fdd3e`, which fixes double-closing an
-FD-backed device during repeated start and stop. The project uses the upstream
-module directly; it does not carry a local copy or patch.
+The default script builds both a physical-device slice and a universal
+Simulator slice for Release. Simulator packaging does not require an Apple
+development certificate. Physical-device packaging uses the signing identities
+and profiles provided by Release.
 
-### Windows
+## Desktop JSON control
 
-```bash
-wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.1/dobby_bridge-windows-x86_64.zip
-echo "a7e64db0568547d395bc45e33787f22c7303dca6f5c575c84439e73a70124331  dobby_bridge-windows-x86_64.zip" | sha256sum -c -
-mkdir -p lib/windows
-unzip -j dobby_bridge-windows-x86_64.zip dobby_bridge.dll dobby_bridge.lib -d lib/windows
-  go build -trimpath -ldflags="-buildid=" -o dobby-cli.exe ./cmd/dobbyvpn/
-```
+The local desktop endpoint exposes Snapshot, Configure, Start, and Stop.
+Frontends poll Snapshot for state and use session ID, sequence, and generation
+values to reject stale commands and responses. The Go backend owns the
+persisted accepted subscription URL; an inline TOML source stays in the
+frontend's current session.
 
-### Linux
-
-```bash
-wget https://github.com/DobbyVPN/go-go-tunnel/releases/download/v1.0.1/libdobby_bridge-linux-x86_64.zip
-echo "67536090d74212a5635739d297f5a78fbabda1966d161b12a16bfe487a8c68b9  libdobby_bridge-linux-x86_64.zip" | sha256sum -c -
-unzip libdobby_bridge-linux-x86_64.zip
-CGO_LDFLAGS="-L." go build -trimpath -ldflags="-buildid=" -o dobby-cli ./cmd/dobbyvpn/
-```
-
-The pinned `v1.0.1` desktop bridge archives are bound to go-go-tunnel source
-commit `6115b0e372ecf6daed2ae6bf4afe56bef03ef45c`; their
-`release-assets.manifest.json` is the canonical machine-readable member and
-platform-run provenance record. The Go module is pinned independently in
-`go.mod` to source commit `bc54923e3c85427e025e97417243f847163c3f3d`, which
-uses the supported Go 1.26.8 toolchain.
-
-### MacOS
-
-```bash
-MACOSX_DEPLOYMENT_TARGET=12.0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-arm64 ./cmd/dobbyvpn/
-MACOSX_DEPLOYMENT_TARGET=12.0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-buildid=" -o dobby-cli-macos-amd64 ./cmd/dobbyvpn/
-```
-
-With CGO enabled, build each target on its matching macOS runner/toolchain. CI
-uses GitHub-hosted `macos-15` for arm64 and `macos-15-intel` for amd64.
-
-### Android runtime and app
-
-```bash
-export ANDROID_HOME=<ANDROID_SDK_PATH>
-export ANDROID_SDK_ROOT=$ANDROID_HOME
-
-cd ../android_module
-./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
-```
-
-The release driver verifies `libdobby_vpn.so` in both ABI payloads. The
-TrustTunnel native bridge is linked only for arm64-v8a; x86_64 reports the
-typed unsupported-protocol failure.
-
-### iOS runtime and app
-
-```bash
-go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260520154334-0e4426e1883d
-go install golang.org/x/mobile/cmd/gobind@v0.0.0-20260520154334-0e4426e1883d
-gopath="$(go env GOPATH)"
-mkdir -p "$gopath/pkg/gomobile"
-export PATH="$gopath/bin:$PATH"
-go mod download golang.org/x/mobile
-./scripts/build_ios_xcframework.sh
-```
-
-Do not run `gomobile init` here. It deletes and recreates the shared
-`$GOPATH/pkg/gomobile` directory and installs an unpinned gobind tool; the pinned
-bootstrap above creates only the required directory and installs both tools at
-the exact revision recorded by `go.mod`. The build therefore does not mutate
-the module files or resolve an unpinned tool.
-
-With no arguments, the script builds one physical-iOS slice and one universal
-Simulator slice for the release XCFramework. A local Simulator check can avoid
-the unused slice by selecting its native architecture explicitly:
-
-```bash
-./scripts/build_ios_xcframework.sh --simulator-architecture arm64
-# or: ./scripts/build_ios_xcframework.sh --simulator-architecture amd64
-```
-
-The XCFramework is only the Go NetworkExtension runtime. It is linked by the
-Swift tunnel target; the containing app's visible controls are the Go/Fyne
-binary packaged by `scripts/package_ios_app.sh`:
-
-```bash
-./scripts/build_ios_xcframework.sh --simulator-architecture arm64
-./scripts/package_ios_app.sh iossimulator /tmp/Dobby-Vpn.app \
-  DobbyVPNRuntime.xcframework arm64
-```
-
-Simulator packaging uses temporary ad-hoc signing metadata and does not look
-up an Apple Development certificate. Physical-device/App Store packaging uses
-the supplied distribution identity and profiles. The Simulator XCTest target
-checks real Go/Fyne accessibility actions, keyboard input, visible connection
-failure handling, and terminate/reopen lifecycle. Physical packet-tunnel
-traffic qualification is intentionally not claimed until a real iPhone is
-available; the Simulator does not run the physical NetworkExtension tunnel or
-TrustTunnel bridge.
-
-## Session API
-
-The manager owns one process-local session. Clients attach with `Snapshot`;
-`Watch` sends a current snapshot and then the latest snapshot after changes.
-`ValidateConfig` is stateless and serves the Go CLI's `check-config` and
-`profile-inventory` commands. App clients configure directly. `Configure` and
-`Start` use an expected snapshot revision, `Stop` uses a generation, and
-`Reset` clears configuration after cleanup. Configuration sources,
-credentials, and protocol payloads stay out of responses and diagnostics.
-
-The native `dobby-cli` shares this authenticated control channel with the
-Go/Fyne GUI. It supports `connect`, `connect-profile`, `profile-inventory`,
-`check-config`, `disconnect`, `status`, `logs clear`, `external-ip`, and
-`verify-session` without starting a JVM. `profile-inventory` validates a
-configuration and returns only the ordered connection indices and protocols;
-it and `logs clear` do not need the VPN service to be running.
-
-See the canonical [vpnserver.proto](grpcproto/vpnserver.proto)
-for the authenticated session and local Diagnostics transport.
-
-After editing that proto, regenerate stubs:
-
-**Go** (`protoc` must be available on `PATH`):
-
-```bash
-cd go_module
-export PATH="$(go env GOPATH)/bin:$PATH"
-./scripts/regenerate-grpcproto.sh
-```
-
-The script verifies the canonical proto in `grpcproto/` and runs
-the `protoc` executable from `PATH`. It requires `protoc-gen-go` and
-`protoc-gen-go-grpc` in `$(go env GOPATH)/bin`; install those user-local plugins
-only when they are absent.
+The JSON transport is local to the machine. Unix control sockets are protected
+by filesystem ownership and permissions. The Windows named pipe has a fixed
+name and a local access list. Do not add a second protocol or command wrapper
+without a concrete requirement.

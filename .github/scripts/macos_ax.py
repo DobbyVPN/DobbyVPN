@@ -4,8 +4,7 @@
 This helper deliberately runs in its own process.  A malformed or stale
 Accessibility element must be killable by the caller; a timeout in the parent
 therefore cannot leave the native UI protocol wedged behind one AX call.
-Only the public ApplicationServices/CoreFoundation APIs are used.  No Fyne
-or GLFW source is copied or patched here.
+Only the public ApplicationServices/CoreFoundation APIs are used.
 """
 
 from __future__ import annotations
@@ -472,7 +471,7 @@ def _window_obstruction_probe(frameworks: Frameworks, pid: int) -> dict[str, obj
     seen: set[tuple[int, tuple[int, ...]]] = set()
     # CGWindowListCopyWindowInfo is front-to-back. Only records before the
     # target can cover it; the exact product PID is never considered an
-    # obstruction even when Fyne exposes multiple top-level surfaces.
+    # obstruction even when the app exposes multiple top-level surfaces.
     for record in records[:target_index]:
         if record.get("owner_pid") == pid:
             continue
@@ -568,10 +567,7 @@ def _window_title_probe(frameworks: Frameworks, pid: int) -> dict[str, object]:
 def _raise_window(frameworks: Frameworks, pid: int) -> dict[str, object]:
     """Raise the exact process window through the public AX window action.
 
-    This is deliberately limited to the window-management action.  Fyne's
-    Darwin controls expose discovery metadata but no actionable AXPress or
-    writable AXValue callback; input events are synthesized by the caller
-    only after this exact-PID/window validation succeeds.
+    Input events are sent only after this exact-PID/window validation succeeds.
     """
 
     windows = _windows(frameworks, pid)

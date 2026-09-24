@@ -63,11 +63,9 @@ def _step(id: str, operation: str, timeout: int = 8) -> ScenarioStep:
 
 
 _COMMON_CONNECT = (
-    # Android mini enters the real profile through Fyne's transient native
-    # editor and then proves a rendered Settings/Back transition.  That cold
-    # UI path already uses the same 60-second bound in functional.configure;
-    # keep the configure operation consistent in every semantic scenario
-    # instead of giving the identical work the generic eight-second default.
+    # Android mini enters a real profile through the rendered Compose editor.
+    # That cold UI path uses the same 60-second bound in functional.configure;
+    # keep the configure operation consistent in every semantic scenario.
     _step("configure", "configure", 60),
     _step("connect", "connect", 40),
     _step("tunnel", "observe_tunnel"),

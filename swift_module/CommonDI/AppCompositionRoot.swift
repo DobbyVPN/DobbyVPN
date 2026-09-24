@@ -137,9 +137,7 @@ public enum IOSAppCompositionRoot {
         return sharedLogPath(isTunnel ? "go_tunnel_logs.jsonl" : "go_app_logs.jsonl")
     }
 
-    /// Fixed files are resolved by the native app-group/container boundary.
-    /// The Go UI receives these URLs through the C bridge and validates that
-    /// they stay in this one directory before opening them.
+    /// Fixed files owned by the iOS app group and packet tunnel.
     public static func diagnosticPaths() -> [URL] {
         [
             sharedLogPath("ui_diagnostics.jsonl"),
@@ -154,7 +152,6 @@ public enum IOSAppCompositionRoot {
         return DobbyLogStore(path: current)
     }()
 
-    public static let exportLogsInteractor = ExportLogsInteractorImpl()
     public static let vpnManager = VpnManagerImpl()
     public static let sessionShell = IOSSessionShell(manager: vpnManager)
 }

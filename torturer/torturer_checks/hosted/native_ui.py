@@ -130,7 +130,7 @@ def _ui_path_is_launchable(platform: str, path: Path) -> bool:
         return True
     if platform != "macos" or path.suffix != ".app":
         return False
-    return (path / "Contents" / "MacOS" / "Dobby Vpn").is_file()
+    return (path / "Contents" / "MacOS" / "DobbyVPNMacApp").is_file()
 
 
 def _smoke_timeout(response_timeout: float) -> float:
@@ -521,9 +521,6 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
     runner = SubprocessRunner(
         args.raw_log_dir,
     )
-    service_socket: Path | str = args.service_socket
-    if args.platform == "macos":
-        service_socket = Path(args.service_socket)
     base = adapter_for_platform(
         args.platform,
         cli=args.cli,
@@ -532,7 +529,8 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         local_mode=True,
         service_pid=args.service_pid,
         service_binary=args.service_binary,
-        service_socket=service_socket,
+        service_socket=Path(args.service_socket) if args.service_socket else None,
+        service_pipe=args.service_pipe,
         service_library_path=args.service_library_path,
         service_pid_file=args.service_pid_file,
         service_identity_file=args.service_identity_file,
@@ -659,9 +657,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=_timeout, default=900.0)
     parser.add_argument("--service-pid", type=int, required=True)
     parser.add_argument("--service-binary", type=_path, required=True)
-    # Windows uses a loopback host:port while macOS uses a filesystem socket.
-    # Leave platform-specific validation to the existing adapter.
-    parser.add_argument("--service-socket", type=str, required=True)
+    parser.add_argument("--service-socket", type=str)
+    parser.add_argument("--service-pipe")
     parser.add_argument("--service-library-path", type=_path)
     parser.add_argument("--service-pid-file", type=_path)
     parser.add_argument("--service-identity-file", type=_path)
@@ -673,6 +670,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if (args.platform == "windows" and (args.service_pipe != "DobbyVPN.Control" or args.service_socket)) or (
+        args.platform == "macos" and (not args.service_socket or args.service_pipe)
+    ):
+        raise SystemExit("native UI journey requires the platform's configured local control endpoint")
     if (
         not args.cli.is_file()
         or not _ui_path_is_launchable(args.platform, args.ui)

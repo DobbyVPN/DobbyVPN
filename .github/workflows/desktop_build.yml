@@ -35,132 +35,78 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
-          if ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "source_sha must be a full lowercase 40-character commit SHA" >&2
-            exit 1
-          fi
-          actual_sha="$(git rev-parse HEAD)"
-          if [[ "$actual_sha" != "$SOURCE_SHA" ]]; then
-            echo "Checked out $actual_sha, expected $SOURCE_SHA" >&2
-            exit 1
-          fi
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
-      - name: Download Windows gRPC vpn service
+      - name: Download Windows backend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: windows_grpcvpnserver.exe
-          path: runtime/services
-
-      - name: Download Windows desktop CLI
+          name: dobbyvpn-backend-windows-amd64
+          path: runtime/services/windows-amd64
+      - name: Download Windows CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: dobby-cli-windows
-          path: runtime/services
-
-      - name: Download Linux gRPC vpn service
+          name: dobby-cli-windows-amd64
+          path: runtime/services/windows-amd64
+      - name: Download Windows frontend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: ubuntu_grpcvpnserver
-          path: runtime/services
+          name: dobby-native-ui-windows-amd64
+          path: runtime/services/windows-amd64/frontend
 
-      - name: Download Linux desktop CLI
+      - name: Download Linux backend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: dobby-cli-linux
-          path: runtime/services
-
-      - name: Add permissions to ubuntu service executable
-        working-directory: runtime/services
-        run: |
-          chmod +x ubuntu_grpcvpnserver dobby-cli
-
-      - name: Download macOS arm64 gRPC vpn service
+          name: dobbyvpn-backend-linux-amd64
+          path: runtime/services/linux-amd64
+      - name: Download Linux CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: macos_grpcvpnserver-arm64
-          path: runtime/services
+          name: dobby-cli-linux-amd64
+          path: runtime/services/linux-amd64
 
-      - name: Download macOS arm64 desktop CLI
+      - name: Download macOS arm64 backend
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-backend-macos-arm64
+          path: runtime/services/macos-arm64
+      - name: Download macOS arm64 CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-macos-arm64
           path: runtime/services/macos-arm64
-
-      - name: Download macOS amd64 gRPC vpn service
+      - name: Download macOS arm64 frontend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: macos_grpcvpnserver-amd64
-          path: runtime/services/macos-amd64
+          name: dobby-native-ui-macos-arm64
+          path: runtime/services/macos-arm64
 
-      - name: Download macOS amd64 desktop CLI
+      - name: Download macOS amd64 backend
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-backend-macos-amd64
+          path: runtime/services/macos-amd64
+      - name: Download macOS amd64 CLI
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobby-cli-macos-amd64
           path: runtime/services/macos-amd64
-
-      - name: Verify staged macOS gRPC vpn services
-        working-directory: runtime/services
-        run: |
-          set -euo pipefail
-          chmod +x macos_grpcvpnserver macos-amd64/macos_grpcvpnserver macos-arm64/dobby-cli macos-amd64/dobby-cli
-          test -x macos_grpcvpnserver
-          test -x macos-amd64/macos_grpcvpnserver
-          test -x macos-arm64/dobby-cli
-
-      - name: Verify staged desktop CLI binaries
-        working-directory: runtime/services
-        run: |
-          test -x dobby-cli
-          test -f dobby-cli.exe
-          test -x macos-arm64/dobby-cli
-          test -x macos-amd64/dobby-cli
-
-      - name: Download Windows Go/Fyne UI
+      - name: Download macOS amd64 frontend
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: dobby-vpn-ui-windows
-          path: runtime/services
-
-      - name: Download Linux Go/Fyne UI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobby-vpn-ui-linux
-          path: runtime/services
-
-      - name: Download macOS arm64 Go/Fyne UI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobby-vpn-ui-macos-arm64
-          path: runtime/services/macos-arm64
-
-      - name: Download macOS amd64 Go/Fyne UI
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobby-vpn-ui-macos-amd64
+          name: dobby-native-ui-macos-amd64
           path: runtime/services/macos-amd64
 
-      - name: Verify staged native Go/Fyne UI binaries
-        working-directory: runtime/services
+      - name: Restore Unix executable modes and verify staged closure
+        shell: bash
         run: |
           set -euo pipefail
-          chmod +x dobby-vpn-ui macos-arm64/dobby-vpn-ui macos-amd64/dobby-vpn-ui
-          test -f dobby-vpn-ui.exe
-          test -x dobby-vpn-ui
-          test -x macos-arm64/dobby-vpn-ui
-          test -x macos-amd64/dobby-vpn-ui
+          chmod +x runtime/services/linux-amd64/dobbyvpn-backend runtime/services/linux-amd64/dobby-cli
+          chmod +x runtime/services/macos-arm64/dobbyvpn-backend runtime/services/macos-arm64/dobby-cli runtime/services/macos-arm64/DobbyVPNMacApp
+          chmod +x runtime/services/macos-amd64/dobbyvpn-backend runtime/services/macos-amd64/dobby-cli runtime/services/macos-amd64/DobbyVPNMacApp
+          python3 .github/scripts/desktop_build.py app --skip-libs --require-all-services
 
-      - name: Build desktop via script
-        run: |
-          python .github/scripts/desktop_build.py app --skip-libs --require-all-services
-        env:
-          APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
-          APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
-          APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
-          APPLE_BUILD_NUMBER: ${{ github.run_number }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-
-      - name: Package native desktop archives
+      - name: Assemble native desktop archives
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-pil
@@ -169,65 +115,44 @@ jobs:
             --staging-root runtime/services \
             --output output
 
-      - name: Find files
-        id: find_deb
+      - name: Verify package outputs and runtime closure
+        shell: bash
         env:
           EXPECTED_VERSION: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
         run: |
           set -euo pipefail
-          deb_file="./output/dobby-vpn_${EXPECTED_VERSION}_amd64.deb"
-          mac_aarch64_file="./output/dobby-vpn-${EXPECTED_VERSION}-mac-aarch64.zip"
-          mac_amd64_file="./output/dobby-vpn-${EXPECTED_VERSION}-mac-amd64.zip"
-          win_zip_file="./output/dobby-vpn-${EXPECTED_VERSION}-windows-amd64.zip"
-          for artifact in "$deb_file" "$mac_aarch64_file" "$mac_amd64_file" "$win_zip_file"; do
-            test -f "$artifact"
-          done
+          deb_file="output/dobby-vpn_${EXPECTED_VERSION}_amd64.deb"
+          mac_aarch64_file="output/dobby-vpn-${EXPECTED_VERSION}-mac-aarch64.zip"
+          mac_amd64_file="output/dobby-vpn-${EXPECTED_VERSION}-mac-amd64.zip"
+          win_zip_file="output/dobby-vpn-${EXPECTED_VERSION}-windows-amd64.zip"
+          for artifact in "$deb_file" "$mac_aarch64_file" "$mac_amd64_file" "$win_zip_file"; do test -f "$artifact"; done
           test "$(dpkg-deb -f "$deb_file" Version)" = "$EXPECTED_VERSION"
-          {
-            echo "DEB_FILE=$deb_file"
-            echo "MAC_AARCH64_FILE=$mac_aarch64_file"
-            echo "MAC_AMD64_FILE=$mac_amd64_file"
-            echo "WIN_ZIP_FILE=$win_zip_file"
-          } >> "$GITHUB_ENV"
 
-      - name: Verify Debian service runtime closure
-        shell: bash
-        run: |
-          set -euo pipefail
           package_root="$(mktemp -d)"
           trap 'rm -rf "$package_root"' EXIT
-          dpkg-deb -x "${{ env.DEB_FILE }}" "$package_root"
-          service="$package_root/opt/dobbyvpn/lib/app/ubuntu_grpcvpnserver"
-          unit="$package_root/usr/local/lib/systemd/system/dobbyvpn.service"
-          test -x "$service"
-          test -f "$unit"
-          grep -Fx 'Environment=LD_LIBRARY_PATH=/opt/dobbyvpn/lib/runtime' "$unit"
-          LD_LIBRARY_PATH="$package_root/opt/dobbyvpn/lib/runtime" ldd "$service" > "$package_root/ldd.txt"
+          dpkg-deb -x "$deb_file" "$package_root/debian"
+          service="$package_root/debian/opt/dobbyvpn/bin/dobbyvpn-backend"
+          unit="$package_root/debian/usr/lib/systemd/system/dobbyvpn.service"
+          test -x "$service"; test -f "$unit"
+          grep -Fx 'ExecStart=/opt/dobbyvpn/bin/dobbyvpn-backend' "$unit"
+          LD_LIBRARY_PATH="$package_root/debian/opt/dobbyvpn/lib" ldd "$service" > "$package_root/ldd.txt"
           if grep -F 'not found' "$package_root/ldd.txt"; then
-            echo 'Debian service has an unresolved runtime library' >&2
+            cat "$package_root/ldd.txt" >&2
             exit 1
           fi
 
-      - name: Verify Windows GUI and CLI launcher subsystems
-        shell: bash
-        run: |
-          set -euo pipefail
-          package_root="$(mktemp -d)"
-          trap 'rm -rf "$package_root"' EXIT
-          unzip "${{ env.WIN_ZIP_FILE }}" -d "$package_root"
-          python3 - "$package_root" <<'PY'
+          mkdir "$package_root/windows"
+          unzip "$win_zip_file" -d "$package_root/windows"
+          python3 - "$package_root/windows" <<'PY'
           from pathlib import Path
           import struct
           import sys
-
           root = Path(sys.argv[1])
-
-          def single(name: str) -> Path:
+          def one(name: str) -> Path:
               matches = list(root.rglob(name))
               if len(matches) != 1:
                   raise SystemExit(f"expected exactly one {name}, found {len(matches)}")
               return matches[0]
-
           def subsystem(path: Path) -> int:
               data = path.read_bytes()
               if data[:2] != b"MZ" or len(data) < 0x40:
@@ -236,54 +161,46 @@ jobs:
               if data[offset:offset + 4] != b"PE\0\0":
                   raise SystemExit(f"{path.name} has an invalid PE header")
               return struct.unpack_from("<H", data, offset + 4 + 20 + 68)[0]
-
-          if subsystem(single("Dobby Vpn.exe")) != 2:
-              raise SystemExit("Dobby Vpn.exe must remain a GUI launcher")
-          if subsystem(single("dobby-cli.exe")) != 3:
-              raise SystemExit("dobby-cli.exe must be a console launcher")
+          if subsystem(one("DobbyVPN.exe")) != 2:
+              raise SystemExit("DobbyVPN.exe must be a Windows GUI application")
+          if subsystem(one("dobby-cli.exe")) != 3:
+              raise SystemExit("dobby-cli.exe must be a console application")
+          one("dobbyvpn-backend.exe")
+          one("dobby_bridge.dll")
+          one("wintun.dll")
           PY
 
-      - name: Rename files
-        run: |
           mkdir upload
-          cp "${{ env.DEB_FILE }}" upload/dobbyVPN-linux.deb
-          cp "${{ env.MAC_AARCH64_FILE }}" upload/dobbyVPN-macos-aarch64.zip
-          cp "${{ env.MAC_AMD64_FILE }}" upload/dobbyVPN-macos-amd64.zip
-          cp "${{ env.WIN_ZIP_FILE }}" upload/dobbyVPN-windows.zip
+          cp "$deb_file" upload/dobbyVPN-linux.deb
+          cp "$mac_aarch64_file" upload/dobbyVPN-macos-aarch64.zip
+          cp "$mac_amd64_file" upload/dobbyVPN-macos-amd64.zip
+          cp "$win_zip_file" upload/dobbyVPN-windows.zip
 
-      - name: Upload Debian
+      - name: Upload Debian package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-linux.deb
           path: upload/dobbyVPN-linux.deb
           if-no-files-found: error
           retention-days: 90
-
-      - name: Upload zip for macOS aarch64
+      - name: Upload macOS arm64 archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-macos-aarch64.zip
           path: upload/dobbyVPN-macos-aarch64.zip
           if-no-files-found: error
           retention-days: 90
-
-      - name: Upload zip for macOS amd64
+      - name: Upload macOS amd64 archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-macos-amd64.zip
           path: upload/dobbyVPN-macos-amd64.zip
           if-no-files-found: error
           retention-days: 90
-
-      - name: Upload Windows zip
+      - name: Upload Windows archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyVPN-windows.zip
           path: upload/dobbyVPN-windows.zip
           if-no-files-found: error
           retention-days: 90
-
-      - name: Display file tree with sizes after Windows build
-        run: |
-          echo "Displaying the size of files and directories in 'output' directory:"
-          du -ah output | sort -rh

@@ -57,7 +57,7 @@ _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS = 900.0
 # or arbitrary tool configuration cross the desktop boundary.
 _NATIVE_UI_HOST_ENVIRONMENT = frozenset({
     # native_ui_smoke.py resolves macOS helpers (and Windows PowerShell) by
-    # name, while the Go UI/CLI use HOME for their user-owned stores.
+    # name, while the Go backend and CLI use HOME for their user-owned stores.
     "PATH",
     "HOME",
 })
@@ -65,8 +65,7 @@ _NATIVE_UI_RUNTIME_ENVIRONMENT = {
     "windows": frozenset({
         "HOME",
         "PROGRAMDATA",
-        "DOBBYVPN_CONTROL_ADDRESS",
-        "DOBBYVPN_CONTROL_TOKEN_USER",
+        "DOBBYVPN_CONTROL_PIPE_USER",
         "DOBBY_LOG_PATH",
         "DOBBY_LOG_ROOT",
         "DOBBY_LOG_PRECREATED",
@@ -647,11 +646,6 @@ def _release_artifact_map(run_dir: Path, manifest: dict[str, Any], platform: str
                 "dobbyVPN-windows-amd64.msi",
                 "release/windows/dobbyVPN-windows-amd64.msi",
             ),
-            ("ui-test", "amd64"): (
-                "dobby-vpn-ui-test-windows",
-                "dobby-vpn-ui-test.exe",
-                "release/windows/dobby-vpn-ui-test.exe",
-            ),
         }
     elif platform == "macos":
         expected = {
@@ -664,16 +658,6 @@ def _release_artifact_map(run_dir: Path, manifest: dict[str, Any], platform: str
                 "dobbyVPN-macos-amd64.pkg",
                 "dobbyVPN-macos-amd64.pkg",
                 "release/amd64/dobbyVPN-macos-amd64.pkg",
-            ),
-            ("ui-test", "arm64"): (
-                "dobby-vpn-ui-test-macos-arm64",
-                "dobby-vpn-ui-test",
-                "release/arm64/dobby-vpn-ui-test",
-            ),
-            ("ui-test", "amd64"): (
-                "dobby-vpn-ui-test-macos-amd64",
-                "dobby-vpn-ui-test",
-                "release/amd64/dobby-vpn-ui-test",
             ),
         }
     else:
@@ -707,19 +691,6 @@ def _release_artifact_map(run_dir: Path, manifest: dict[str, Any], platform: str
             raise LocalVMError(f"staged Release artifact is invalid: {relative}")
         if _file_sha256(path) != digest:
             raise LocalVMError(f"Release artifact hash mismatch: {file_name}")
-        if platform == "macos" and role == "ui-test":
-            try:
-                # scp does not promise to preserve the source executable bit.
-                # Apply the guest-local mode only after hashing the bytes, then
-                # require the companion to be owner-only and executable.
-                path.chmod(0o700)
-                mode = path.stat()
-            except OSError as error:
-                raise LocalVMError("could not prepare macOS UI companion") from error
-            if mode.st_uid != os.getuid() or stat.S_IMODE(mode.st_mode) != 0o700:
-                raise LocalVMError("macOS UI companion ownership or mode is invalid")
-            if not os.access(path, os.X_OK):
-                raise LocalVMError("macOS UI companion is not executable")
         observed[key] = path
     if set(observed) != set(expected):
         raise LocalVMError("Release manifest artifact set is incomplete")
@@ -1043,7 +1014,6 @@ def _install_windows_release(
     logs: Path, timeout: float,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     package = artifacts[("package", "amd64")]
-    ui_test = artifacts[("ui-test", "amd64")]
     release = _release_state(run_dir, manifest, package, "amd64")
     state = _read_state(run_dir) or {}
     release["install_attempted"] = True
@@ -1071,8 +1041,8 @@ def _install_windows_release(
         query = r'''$ErrorActionPreference = "Stop"
 $root = Join-Path $env:ProgramFiles "DobbyVPN"
 $cli = @(Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File)
-$service = @(Get-ChildItem $root -Filter "windows_grpcvpnserver.exe" -Recurse -File)
-$ui = Join-Path $root "bin\Dobby Vpn.exe"
+$service = @(Get-ChildItem $root -Filter "dobbyvpn-backend.exe" -Recurse -File)
+$ui = Join-Path $root "bin\DobbyVPN.exe"
 if ($cli.Count -ne 1 -or $service.Count -ne 1 -or -not (Test-Path -LiteralPath $ui -PathType Leaf)) {
   throw "installed Release closure is ambiguous"
 }
@@ -1086,12 +1056,10 @@ Write-Output ("$($cli[0].FullName)|$($service[0].FullName)|$ui")
             raise LocalVMError("installed Windows Release paths are invalid")
         descriptor = {
             "service": paths[1], "cli": paths[0], "ui": paths[2],
-            "ui_test": str(ui_test),
             "network": str(run_dir / ".dobbyvpn-run" / "s"),
         }
         release["installed_paths"] = {
             "service": paths[1], "cli": paths[0], "ui": paths[2],
-            "ui_test": str(ui_test),
         }
         state["release"] = release
         state["candidate"] = descriptor
@@ -1114,7 +1082,6 @@ def _install_macos_release(
     if not architecture:
         raise LocalVMError(f"unsupported macOS guest architecture: {machine}")
     package = artifacts[("package", architecture)]
-    ui_test = artifacts[("ui-test", architecture)]
     release = _release_state(run_dir, manifest, package, architecture)
     state = _read_state(run_dir) or {}
     release["install_attempted"] = True
@@ -1141,19 +1108,18 @@ def _install_macos_release(
         state["release"] = release
         _write_json(run_dir / "platform.json", state)
         paths = {
-            "service": Path("/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver"),
+            "service": Path("/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend"),
             "cli": Path("/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"),
-            "ui": Path("/Applications/Dobby VPN.app/Contents/MacOS/Dobby Vpn"),
+            "ui": Path("/Applications/Dobby VPN.app"),
         }
-        if any(not path.is_file() for path in paths.values()):
+        if any(not paths[name].is_file() for name in ("service", "cli")) or not paths["ui"].is_dir():
             raise LocalVMError("installed macOS Release closure is incomplete")
         descriptor = {
             "service": str(paths["service"]), "cli": str(paths["cli"]),
-            "ui": str(paths["ui"]), "ui_test": str(ui_test),
+            "ui": str(paths["ui"]),
             "network": str(run_dir / ".dobbyvpn-run" / "s"),
         }
         release["installed_paths"] = {key: str(value) for key, value in paths.items()}
-        release["installed_paths"]["ui_test"] = str(ui_test)
         state["release"] = release
         state["candidate"] = descriptor
         state["status"] = "candidate-prepared"
@@ -1225,10 +1191,9 @@ def _functional_command(
         command.extend(("--adb", str(descriptor["runtime"]["adb"])))
     else:
         command.extend(("--cli", str(_candidate_path(descriptor, "cli")),))
-        if platform in {"windows", "macos"}:
-            command.extend(("--ui-test", str(_candidate_path(descriptor, "ui_test")),))
         runtime = descriptor.get("runtime", {})
-        for name, flag in (("pid", "--service-pid"), ("binary", "--service-binary"), ("socket", "--service-socket"), ("library_path", "--service-library-path"), ("pid_file", "--service-pid-file"), ("identity_file", "--service-identity-file")):
+        endpoint = ("pipe", "--service-pipe") if platform == "windows" else ("socket", "--service-socket")
+        for name, flag in (("pid", "--service-pid"), ("binary", "--service-binary"), endpoint, ("library_path", "--service-library-path"), ("pid_file", "--service-pid-file"), ("identity_file", "--service-identity-file")):
             if name in runtime:
                 command.extend((flag, str(runtime[name])))
         if "network_interface" in runtime:
@@ -1262,7 +1227,8 @@ def _native_ui_command(
     for name in ("cli", "ui"):
         if not isinstance(descriptor.get(name), str):
             raise LocalVMError(f"native desktop UI candidate path is missing: {name}")
-    for name in ("pid", "binary", "socket"):
+    endpoint = "pipe" if platform == "windows" else "socket"
+    for name in ("pid", "binary", endpoint):
         if name not in runtime:
             raise LocalVMError(f"native desktop UI runtime value is missing: {name}")
     task_timeout = min(timeout, _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS)
@@ -1280,8 +1246,8 @@ def _native_ui_command(
         "--timeout", str(_native_ui_driver_timeout(task_timeout)),
         "--service-pid", str(runtime["pid"]),
         "--service-binary", str(runtime["binary"]),
-        "--service-socket", str(runtime["socket"]),
     ]
+    command.extend(("--service-pipe" if platform == "windows" else "--service-socket", str(runtime[endpoint])))
     for name, flag in (
         ("library_path", "--service-library-path"),
         ("pid_file", "--service-pid-file"),
@@ -1596,16 +1562,13 @@ def run(args: argparse.Namespace) -> int:
             runtime["environment"] = runtime_environment
             native_descriptor = descriptor
             if args.platform == "macos":
-                # Release candidates already live inside the installed app
-                # bundle; local build candidates are naked binaries.  Stage
-                # the latter in the same disposable bundle shape so the
-                # native journey exercises the real AppKit/LaunchServices
-                # launch boundary without modifying the product candidate.
+                # Validate the product-shaped bundle before LaunchServices
+                # opens the local or installed application.
                 from .local_vm_macos import stage_native_ui_bundle
 
                 native_descriptor = {
                     **descriptor,
-                    "ui": str(stage_native_ui_bundle(run_dir, descriptor["ui"])),
+                    "ui": str(stage_native_ui_bundle(descriptor["ui"])),
                 }
             state["runtime"] = runtime
             _write_json(run_dir / "platform.json", state)

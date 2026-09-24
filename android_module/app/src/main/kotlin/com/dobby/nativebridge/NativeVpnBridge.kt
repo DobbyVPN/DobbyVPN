@@ -7,6 +7,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.system.Os
 import android.util.Log
 import androidx.core.content.FileProvider
 import java.io.File
@@ -21,12 +22,12 @@ import java.util.zip.GZIPOutputStream
 import org.json.JSONObject
 
 /**
- * Private JNI target used by the Go/Fyne activity. Kotlin contains only the
+ * Private JNI target used by the Compose Activity and Go backend. Kotlin contains only the
  * Android permission/service boundary; configuration and session policy stay
  * in the Go manager.
  */
 object NativeVpnBridge {
-    private const val REQUEST_VPN_PERMISSION = 4201
+    internal const val VPN_PERMISSION_REQUEST = 4201
     private const val CONSENT_LAUNCH_NOT_REQUESTED = "NOT_REQUESTED"
     private const val CONSENT_LAUNCH_QUEUED = "QUEUED"
     private const val CONSENT_LAUNCH_STARTED = "STARTED"
@@ -35,6 +36,8 @@ object NativeVpnBridge {
     private const val DIAGNOSTIC_DIRECTORY = "diagnostics"
     private const val UI_DIAGNOSTIC_FILE = "ui_diagnostics.jsonl"
     private const val NATIVE_DIAGNOSTIC_FILE = "native_logs.jsonl"
+    private const val SAVED_SOURCE_DIRECTORY = "configs"
+    private const val SAVED_SOURCE_FILE = "connection-url.txt"
     private const val GO_DIAGNOSTIC_FILE = "go_app_logs.jsonl"
     private val diagnosticLock = Any()
 
@@ -64,9 +67,8 @@ object NativeVpnBridge {
                 if (context is Activity) {
                     // Keep the consent activity in the caller's task. Adding
                     // FLAG_ACTIVITY_NEW_TASK to startActivityForResult can
-                    // detach the system dialog from the visible Go/Fyne
-                    // Activity on newer Android releases.
-                    context.startActivityForResult(permission, REQUEST_VPN_PERMISSION)
+                    // detach the system dialog from the visible Activity.
+                    context.startActivityForResult(permission, VPN_PERMISSION_REQUEST)
                 } else {
                     // Instrumentation and recovery callers may only have the
                     // application context. The VPN consent is process-global,
@@ -101,12 +103,9 @@ object NativeVpnBridge {
     /**
      * Queue consent on Android's main thread without waiting for it.
      *
-     * Fyne's Android event loop itself runs inside RunOnJVM. Waiting here for
-     * the main-thread runnable can therefore form a cycle: the Go/Fyne caller
-     * waits for JNI, while the Android activity launch waits for that caller
-     * to return. The caller already observes the real system activity and
-     * owns its deadline, so scheduling success is the only synchronous result
-     * this bridge needs to report.
+     * Go may call this bridge on an attached worker thread. Schedule the
+     * permission UI on Android's main thread without waiting for the Activity
+     * result; the foreground screen handles that result and retries start.
      */
     private fun launchConsentOnMainThread(launch: Runnable): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -250,9 +249,8 @@ object NativeVpnBridge {
     }
 
     /**
-     * Returns the fixed files directory owned by this application. The Go UI
-     * uses the first path only for its clear boundary and reads the remaining
-     * producer files without deleting or truncating them.
+     * Returns the fixed files owned by this application. The native UI reads
+     * these files directly and leaves their contents intact.
      */
     @JvmStatic
     fun diagnosticPaths(context: Context): String {
@@ -263,6 +261,53 @@ object NativeVpnBridge {
             File(directory, NATIVE_DIAGNOSTIC_FILE),
             File(directory, GO_DIAGNOSTIC_FILE),
         ).joinToString("\n") { it.absolutePath }
+    }
+
+    @JvmStatic
+    fun loadSourceURL(context: Context): String = try {
+        File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE)
+            .takeIf { it.isFile }
+            ?.readText(Charsets.UTF_8)
+            .orEmpty()
+    } catch (error: IOException) {
+        Log.e("DobbyVPN", "Saved configuration URL could not be read", error)
+        ""
+    }
+
+    @JvmStatic
+    fun saveSourceURL(context: Context, value: String): Boolean {
+        if (value.isBlank()) return false
+        val directory = File(context.filesDir, SAVED_SOURCE_DIRECTORY)
+        if (!directory.exists() && !directory.mkdirs()) return false
+        val destination = File(directory, SAVED_SOURCE_FILE)
+        val temporary = try {
+            File.createTempFile("dobby-source-", ".tmp", directory)
+        } catch (error: IOException) {
+            Log.e("DobbyVPN", "Saved configuration URL temporary file could not be created", error)
+            return false
+        }
+        return try {
+            FileOutputStream(temporary).use { output ->
+                output.write(value.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            Os.rename(temporary.absolutePath, destination.absolutePath)
+            true
+        } catch (error: Exception) {
+            Log.e("DobbyVPN", "Saved configuration URL could not be written", error)
+            false
+        } finally {
+            if (temporary.exists()) temporary.delete()
+        }
+    }
+
+    @JvmStatic
+    fun clearSourceURL(context: Context): Boolean = try {
+        val file = File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE)
+        !file.exists() || file.delete()
+    } catch (error: SecurityException) {
+        Log.e("DobbyVPN", "Saved configuration URL could not be cleared", error)
+        false
     }
 
     private fun diagnosticsDirectory(context: Context): File =

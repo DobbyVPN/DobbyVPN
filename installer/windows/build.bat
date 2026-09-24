@@ -22,14 +22,14 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 		goto :error
 	)
 
-	for %%F in (windows_grpcvpnserver.exe dobby_bridge.dll wintun.dll) do (
+	for %%F in (dobbyvpn-backend.exe dobby_bridge.dll wintun.dll) do (
 		if not exist "%%F" (
 			echo [-] Required Windows service runtime %%F not found
 			goto :error
 		)
 	)
-	echo [+] Inserting windows_grpcvpnserver.exe and dobby_bridge.dll to the dobbyvpn application
-	xcopy "windows_grpcvpnserver.exe" ".\dobbyVPN-windows\bin\" /Y || goto :error
+	echo [+] Inserting the Go backend and native bridge to the installer payload
+	xcopy "dobbyvpn-backend.exe" ".\dobbyVPN-windows\bin\" /Y || goto :error
 	xcopy "dobby_bridge.dll" ".\dobbyVPN-windows\bin\" /Y || goto :error
 	if not exist "wintun\bin\amd64\" mkdir "wintun\bin\amd64\" || goto :error
 	echo [+] Inserting staged wintun.dll to the installer payload

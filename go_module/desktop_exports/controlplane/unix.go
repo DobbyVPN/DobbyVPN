@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"google.golang.org/grpc/credentials"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,39 +16,6 @@ import (
 )
 
 var errWrongLocalConnection = errors.New("control plane accepted a non-Unix connection")
-
-type unixPeerAuthInfo struct {
-	uid      int
-	expected int
-}
-
-func (unixPeerAuthInfo) AuthType() string                 { return "dobby-unix-peer" }
-func (a unixPeerAuthInfo) ControlPeerAuthenticated() bool { return a.uid == a.expected }
-
-type UnixPeerCredentials struct{}
-
-func (UnixPeerCredentials) ClientHandshake(context.Context, string, net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	return nil, nil, errors.New("Unix peer credentials are server-only")
-}
-func (UnixPeerCredentials) ServerHandshake(conn net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	expected, err := expectedPeerUID()
-	if err != nil {
-		return nil, nil, err
-	}
-	uid, err := peerUID(conn)
-	if err != nil {
-		return nil, nil, err
-	}
-	if uid != expected {
-		return nil, nil, fmt.Errorf("control peer UID is not the installed user")
-	}
-	return conn, unixPeerAuthInfo{uid: uid, expected: expected}, nil
-}
-func (UnixPeerCredentials) Info() credentials.ProtocolInfo {
-	return credentials.ProtocolInfo{SecurityProtocol: "unix-peer"}
-}
-func (UnixPeerCredentials) Clone() credentials.TransportCredentials { return UnixPeerCredentials{} }
-func (UnixPeerCredentials) OverrideServerName(string) error         { return nil }
 
 func expectedPeerUID() (int, error) {
 	if value := os.Getenv("DOBBYVPN_CONTROL_PEER_UID"); value != "" {
@@ -127,11 +93,38 @@ func supervisedUnprivilegedSocket(path string, expected int) (bool, error) {
 }
 
 func ListenControlSocket() (net.Listener, error) {
-	expected, err := expectedPeerUID()
+	path, err := ControlSocketPath()
 	if err != nil {
 		return nil, err
 	}
+	return listenControlSocket(path)
+}
+
+func DialDesktopControl(ctx context.Context) (net.Conn, error) {
 	path, err := ControlSocketPath()
+	if err != nil {
+		return nil, err
+	}
+	return (&net.Dialer{}).DialContext(ctx, "unix", path)
+}
+
+func AuthenticateLocalPeer(conn net.Conn) error {
+	expected, err := expectedPeerUID()
+	if err != nil {
+		return err
+	}
+	uid, err := peerUID(conn)
+	if err != nil {
+		return err
+	}
+	if uid != expected {
+		return fmt.Errorf("control peer UID is not the installed user")
+	}
+	return nil
+}
+
+func listenControlSocket(path string) (net.Listener, error) {
+	expected, err := expectedPeerUID()
 	if err != nil {
 		return nil, err
 	}

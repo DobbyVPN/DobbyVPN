@@ -116,6 +116,86 @@ func TestSnapshotCarriesOnlyAcceptedConfigurationURL(t *testing.T) {
 	}
 }
 
+func TestSourceStoreKeepsLastAcceptedURLWhenInlineSourceIsUsed(t *testing.T) {
+	store := &managerTestSourceStore{value: []byte("https://configs.invalid/old")}
+	m := NewManager(ManagerOptions{Loader: acceptedSourceURLLoader{}, SourceStore: store})
+	initial, err := m.Snapshot(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Configured || initial.SourceURL != "https://configs.invalid/old" {
+		t.Fatalf("restored source snapshot = %#v", initial)
+	}
+	configured, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("https://configs.invalid/new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(store.value); got != "https://configs.invalid/new" {
+		t.Fatalf("stored URL = %q", got)
+	}
+	if _, err := m.Configure(context.Background(), initial.SessionID, configured.Sequence, []byte("https://configs.invalid/bad")); err == nil {
+		t.Fatal("malformed replacement unexpectedly succeeded")
+	}
+	if got := string(store.value); got != "https://configs.invalid/new" {
+		t.Fatalf("failed replacement changed stored URL to %q", got)
+	}
+	current := snapshotForTest(t, m, initial.SessionID)
+	if _, err := m.Configure(context.Background(), initial.SessionID, current.Sequence, fixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(store.value); got != "https://configs.invalid/new" {
+		t.Fatalf("inline configuration replaced the last accepted URL with %q", got)
+	}
+	inline := snapshotForTest(t, m, initial.SessionID)
+	if inline.SourceKind != ConfigSourceInline || inline.SourceURL != "" {
+		t.Fatalf("inline session source = %#v", inline)
+	}
+	if _, err := m.Reset(context.Background(), initial.SessionID, inline.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.value) != 0 {
+		t.Fatalf("Reset retained persisted URL %q", store.value)
+	}
+}
+
+func TestSourceStoreFailureLeavesConfigurationUnchanged(t *testing.T) {
+	store := &managerTestSourceStore{saveErr: errors.New("private storage path")}
+	m := NewManager(ManagerOptions{Loader: acceptedSourceURLLoader{}, SourceStore: store})
+	initial, err := m.Snapshot(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("https://configs.invalid/new")); CodeOf(err) != FailurePlatform {
+		t.Fatalf("Configure storage failure = %v", err)
+	}
+	unchanged := snapshotForTest(t, m, initial.SessionID)
+	if unchanged.Configured || unchanged.Sequence != initial.Sequence || unchanged.SourceURL != "" {
+		t.Fatalf("failed persistence changed session: %#v", unchanged)
+	}
+}
+
+type managerTestSourceStore struct {
+	value   []byte
+	saveErr error
+}
+
+func (s *managerTestSourceStore) Load(context.Context) ([]byte, error) {
+	return append([]byte(nil), s.value...), nil
+}
+
+func (s *managerTestSourceStore) Save(_ context.Context, value []byte) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	s.value = append([]byte(nil), value...)
+	return nil
+}
+
+func (s *managerTestSourceStore) Clear(context.Context) error {
+	s.value = nil
+	return nil
+}
+
 type acceptedSourceURLLoader struct{}
 
 func (acceptedSourceURLLoader) Load(_ context.Context, source []byte) (LoadedConfig, error) {
@@ -189,39 +269,6 @@ func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) 
 				t.Fatalf("rejected input changed session state: %#v", snapshot)
 			}
 		})
-	}
-}
-
-func TestWatchStartsWithSnapshotAndReportsResetAsCurrentState(t *testing.T) {
-	m := NewManager(ManagerOptions{})
-	id, err := currentSessionForTest(t, m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	updates, closeSubscription, err := m.Watch(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeSubscription()
-	initial := <-updates
-	if initial.SessionID != id || initial.State != StateIdle || initial.Sequence == 0 {
-		t.Fatalf("initial snapshot = %#v", initial)
-	}
-	if _, err := configureForTest(t, m, id, fixture(t)); err != nil {
-		t.Fatal(err)
-	}
-	configured := <-updates
-	if configured.SessionID != id || configured.State != StateConfigured || configured.Sequence <= initial.Sequence {
-		t.Fatalf("configured snapshot = %#v", configured)
-	}
-	if err := resetForTest(t, m, id); err != nil {
-		t.Fatal(err)
-	}
-	reset := <-updates
-	if reset.SessionID != id || reset.State != StateIdle || reset.Configured || reset.Sequence <= configured.Sequence {
-		t.Fatalf("reset snapshot = %#v", reset)
 	}
 }
 
@@ -442,116 +489,6 @@ func TestConfigureAndResetAtSameRevisionOnlyOneMutationWins(t *testing.T) {
 		if resetErr != nil && CodeOf(resetErr) != FailureConflict {
 			t.Fatalf("iteration %d: reset error = %v", i, resetErr)
 		}
-	}
-}
-
-func TestWatchCoalescesMoreThanSixtyFourChangesAndCancellationUnregisters(t *testing.T) {
-	m := NewManager(ManagerOptions{})
-	ctx, cancel := context.WithCancel(context.Background())
-	id, err := currentSessionForTest(t, m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	updates, closeSubscription, err := m.Watch(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeSubscription()
-	initial := <-updates
-	if initial.SessionID != id || initial.State != StateIdle {
-		t.Fatalf("initial snapshot = %#v", initial)
-	}
-
-	const changes = 96
-	configureRepeatedly(t, m, id, fixture(t), changes)
-	latest := snapshotForTest(t, m, id)
-	if latest.Sequence != initial.Sequence+changes || latest.State != StateConfigured || !latest.Configured {
-		t.Fatalf("latest snapshot after %d changes = %#v", changes, latest)
-	}
-	assertCoalescedWatchUpdate(t, updates, latest)
-	cancel()
-	assertWatchClosed(t, updates)
-}
-
-func configureRepeatedly(t *testing.T, m *Manager, id string, raw []byte, changes int) {
-	t.Helper()
-	done := make(chan error, 1)
-	go func() {
-		for i := 0; i < changes; i++ {
-			current, snapshotErr := m.Snapshot(context.Background(), id)
-			if snapshotErr != nil {
-				done <- snapshotErr
-				return
-			}
-			if _, configureErr := m.Configure(context.Background(), id, current.Sequence, raw); configureErr != nil {
-				done <- configureErr
-				return
-			}
-		}
-		done <- nil
-	}()
-	select {
-	case workerErr := <-done:
-		if workerErr != nil {
-			t.Fatal(workerErr)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("slow watcher blocked repeated configuration changes")
-	}
-}
-
-func assertCoalescedWatchUpdate(t *testing.T, updates <-chan SnapshotResult, latest SnapshotResult) {
-	t.Helper()
-	select {
-	case coalesced := <-updates:
-		if coalesced.Sequence != latest.Sequence || coalesced.Digest != latest.Digest || coalesced.State != latest.State {
-			t.Fatalf("slow watcher got stale snapshot %#v; latest %#v", coalesced, latest)
-		}
-	default:
-		t.Fatal("watcher did not receive a coalesced update")
-	}
-}
-
-func assertWatchClosed(t *testing.T, updates <-chan SnapshotResult) {
-	t.Helper()
-	select {
-	case _, open := <-updates:
-		if open {
-			// The update may have raced with cancellation. The next receive must
-			// observe closure once the cancellation handler unregisters it.
-			select {
-			case _, open = <-updates:
-			case <-time.After(time.Second):
-				t.Fatal("canceled watch remained registered")
-			}
-		}
-		if open {
-			t.Fatal("canceled watch channel remained open")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("canceled watch did not close")
-	}
-}
-
-func TestSlowWatcherDoesNotBlockStop(t *testing.T) {
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: &fakePlatform{}})
-	id := configured(t, m)
-	updates, closeSubscription, err := m.Watch(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeSubscription()
-	<-updates // leave the subscriber behind while the lifecycle advances
-	start, err := startForTest(t, m, id, StartTarget{Mode: ProfileIndex, Index: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, m, id, StateConnected)
-	if _, err := m.Stop(context.Background(), id, start.Generation); err != nil {
-		t.Fatal(err)
-	}
-	if stopped := waitState(t, m, id, StateIdle); stopped.Generation != start.Generation {
-		t.Fatalf("stopped generation = %#v", stopped)
 	}
 }
 

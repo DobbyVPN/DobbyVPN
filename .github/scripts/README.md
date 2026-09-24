@@ -1,158 +1,102 @@
-# Desktop Build Script
+# Build and release scripts
 
-`desktop_build.py` is the shared entry point for desktop service builds, native
-Go/Fyne UI builds, and local CLI checks. It is intended to be used both locally and from
-GitHub Actions.
+These scripts build the shared Go backend and CLI, native desktop frontends,
+mobile runtimes, and platform packages. They are used locally and by GitHub
+Actions.
 
-The script checks required dependencies and installs missing local toolchains
-where practical:
+The Go toolchain is pinned in .go-version. Local tools downloaded by the
+desktop build helper are kept in .local-tools/desktop-build.
 
-- Go from `.go-version`
-- Fyne's native desktop headers on Linux
-- Linux compiler packages through `apt-get`
-- Windows MinGW through Chocolatey when needed
-- `wintun.dll` for Windows CLI checks
+## Desktop commands
 
-Local toolchains are installed under `.local-tools/desktop-build`.
+Build the Go backend and CLI for the current host:
 
-## Commands
+    python3 .github/scripts/desktop_build.py libs --with-cli
 
-Build the current platform gRPC VPN service:
+Build the Windows or macOS native frontend on its target operating system:
 
-```bash
-python3 .github/scripts/desktop_build.py libs
-```
+    python3 .github/scripts/desktop_build.py native-ui --platform current --output <path>
 
-Build the native desktop inputs for the current host:
+The Windows frontend is built with dotnet and the macOS frontend with Swift
+Package Manager. Linux has no graphical frontend build.
 
-```bash
-python3 .github/scripts/desktop_build.py app
-```
+Stage desktop backends, CLIs, and available native frontend inputs:
 
-Build the production-widget headless UI companion for Windows/macOS GUI
-qualification (on the matching native host):
+    python3 .github/scripts/desktop_build.py app --skip-libs
 
-```bash
-python3 .github/scripts/desktop_build.py ui-test --platform current
-```
+Assemble Windows and macOS archives and the Linux DEB from staged inputs:
 
-Build release archives from staged native inputs:
+    python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
 
-```bash
-python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
-```
+The Windows and macOS installers consume those archives. The Linux package
+contains the backend, CLI, and service files. Desktop packaging does not install
+a JVM.
 
-This produces the Windows/macOS ZIPs and the Linux DEB consumed by the
-platform installers; it does not invoke Java, Gradle, or a third-party
-packager.
+The Windows backend package includes dobbyvpn-backend.exe, dobby_bridge.dll,
+and wintun.dll. macOS packages include the backend and CLI in the app bundle;
+the Intel package also includes the pinned TrustTunnel helper.
 
-Build and run the local CLI config check:
+## Android
 
-```bash
-python3 .github/scripts/desktop_build.py cli-test --config 'https://example.com/config.toml'
-```
+Android uses Kotlin and Jetpack Compose for its UI and a Go backend library for
+VPN behavior. Build commands require JDK 17, Android SDK, and the pinned Go and
+NDK toolchains. The main release build is:
 
-The config can be an HTTPS URL, a local TOML file path, or inline TOML passed
-through `--config` or `DOBBYVPN_CLI_TEST_CONFIG`.
+    cd android_module
+    ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
 
-## CI Usage
+The build packages the Go backend for arm64-v8a and x86_64. TrustTunnel's
+native bridge is available only on arm64-v8a.
 
-Desktop service binaries are built with explicit platform and architecture:
+The local Harness builds the app and its Android instrumentation tests from the
+same selected worktree. Android mini runs on an emulator and checks rendered
+Compose controls and the VPN service.
 
-```bash
-python .github/scripts/desktop_build.py libs --platform linux --arch amd64 --go-mod-tidy
-python .github/scripts/desktop_build.py libs --platform macos --arch arm64 --go-mod-tidy
-python .github/scripts/desktop_build.py libs --platform macos --arch amd64 --go-mod-tidy
-python .github/scripts/desktop_build.py libs --platform windows --arch amd64 --go-mod-tidy
-```
+## iOS
 
-The macOS commands run on matching official GitHub-hosted runners: `macos-15`
-for arm64 and `macos-15-intel` for amd64. Their artifacts are kept separate so
-the installer and CLI lanes never combine architectures.
+The iOS application uses SwiftUI and embeds the Go NetworkExtension runtime.
+The Test workflow builds the Simulator app and runs the XCTest UI contract.
+The Simulator check covers rendering and lifecycle; physical-device VPN
+traffic requires a physical iOS runner.
 
-The Windows service artifact is a minimal runtime closure. It contains
-`windows_grpcvpnserver.exe`, its checksum-pinned `dobby_bridge.dll` import,
-and checksum-pinned `wintun.dll`, which the service loads at startup. The
-installer build requires those files and verifies their names in the finished
-MSI before upload.
+The release workflow builds and signs the physical-device package with the
+configured Apple certificates and provisioning profiles. Swift lifecycle
+tests can be run with:
 
-The desktop app build uses service binaries downloaded into `runtime/services`:
+    swift test --enable-code-coverage --package-path swift_module
 
-```bash
-python .github/scripts/desktop_build.py app --skip-libs --require-all-services
-```
+## Functional qualification
 
-`--go-mod-tidy` is intentionally explicit. CI uses it to preserve the previous
-workflow behavior; local service builds only run `go mod download` by default.
+The supported checks and platform coverage are documented in [TESTING.md](../../TESTING.md)
+and [the functional contract](../../torturer/docs/contract.md).
 
-Use `--skip-deps` to require dependencies to already exist and `--skip-build` to
-reuse existing build outputs where supported.
+Hosted Release qualification installs the exact packages built in that run and
+runs the canonical mini suite. The private owner Harness also supports local
+mini checks. Windows and macOS full checks require interactive desktop guests
+and exercise the native frontend with the installed Go backend. Linux checks
+cover the backend and CLI only.
 
-## Local Android builds
+The private Harness builds candidate packages from a selected worktree and
+runs the functional engine from that same worktree. Its run descriptor records
+the app/package paths and platform details needed by the guest adapter.
 
-The private runner calls `local_candidate.py`, which uses
-`android_build_driver.sh --local` and a disposable signing key.
-Local mode accepts the supplied worktree, builds the app once with normal
-incremental caches, and builds its test companion. It does not prove release
-reproducibility or invent a Git identity for uncommitted source.
-For desktop targets, the resulting `candidate.json` is a flat map of built
-native paths. Linux carries `service`, `cli`, and `network`. Windows/macOS add
-the native `ui` and headless `ui_test` companion paths. Linux local checks
-remain CLI/service-only.
-Desktop local VM checks use the native Go/Fyne executable. Android additionally
-records the signed `app` and `test_companion` APK paths.
-The runner already owns platform identities and logs, so the descriptor does
-not repeat those values or perform a cross-user permission handoff.
+## Android reproducibility and F-Droid
 
-The private Harness selects the `mini` or `full` suite. Hosted desktop runs
-use mini's headless widget/service boundary and semantic VPN checks. A local
-Windows/macOS full run executes mini once and then opens the native window for
-visible input, lifecycle actions, and UI-driven service process-loss recovery;
-the service restart itself never issues a CLI reconnect. Exact-Release full mode uses the binary
-installed from the Release package. Android mini uses the rendered emulator
-and real VPN service; iOS Simulator has one rendered non-Metal mini contract;
-Linux remains CLI/service-only. The exact platform commands and coverage
-contract are in [TESTING.md](../../TESTING.md) and
-[torturer/docs/contract.md](../../torturer/docs/contract.md).
+Release verifies Android APK reproducibility and source identity. The F-Droid
+check updates a temporary metadata candidate, then uses fdroidserver's build
+server to build the same Kotlin/Compose app and Go backend from the candidate
+source. It compares the resulting unsigned APK with the signed Release APK's
+payload.
 
-## Release
+The Android recipe pins the Go toolchain and Compose dependencies used by the
+product build. Historical changelogs remain as published release records.
 
-Pushes and pull requests run checks. For the manual Release and Publish steps,
-see [Testing DobbyVPN](../../TESTING.md); that is the single source for the
-workflow instructions.
+## iOS signing and release metadata
 
-Release-only Android checks build unsigned APKs twice and compare them.
-`verify_android_reproducibility.py` verifies identical payloads;
-`verify_android_apk_source.py` checks the embedded source identity.
-Signing verification checks the established certificate and that signing did
-not change application payloads. The F-Droid Release lane then fetches the
-current upstream recipe and server, uses fdroidserver's own update logic for a
-new candidate, and builds the exact source in the official buildserver
-container. `fdroid_release_metadata.py` validates that historical recipe
-entries are preserved while the new candidate is switched to the pinned
-Go/Fyne Android recipe; `fdroid_release_check.sh` runs `fetchsrclibs`, the on-server
-build, and the official APK scanner. F-Droid compares its unsigned output with
-the signed Release APK through the temporary local HTTPS reference URL and verifies
-the declared signing key. These checks protect the recipe as well as the
-artifact.
+The iOS signing check validates app and extension signatures, provisioning
+profiles, bundle identifiers, App Group, source revision, version, build
+number, and packet-tunnel entitlement before uploading the package as a
+run-scoped artifact.
 
-The marketing version determines Android's version code:
-`major * 1,000,000 + minor * 1,000 + maintenance`.
-Apple uses the release run number as its build number.
-F-Droid builds the promoted source commit. Publish creates the `version.txt`
-release asset used by F-Droid's update check. The Release check is a
-pre-publication compatibility check; it does not publish metadata or packages.
-
-## Signed iOS packages
-
-`verify_ios_app_group.py` checks signatures, profiles, bundle identifiers,
-Apple team, source revision, version, build number, App Group, and
-packet-tunnel entitlement before the exact IPA is uploaded as a run-scoped
-artifact for TestFlight submission.
-
-## Public release metadata
-
-`release_provenance.py` creates and verifies the asset checksums and source
-metadata in `release-provenance.json`. It contains no credentials or private
-test evidence. Publishing credentials are confined to protected jobs, never
-passed to the candidate application.
+Release provenance records asset checksums and source metadata. It contains no
+credentials or private test evidence.

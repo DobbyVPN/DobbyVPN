@@ -70,11 +70,14 @@ public final class SharedKeychainSecretStore {
         set(Data(value.utf8), for: key)
     }
 
-    public func remove(_ key: String) {
+    @discardableResult
+    public func remove(_ key: String) -> Bool {
         let status = SecItemDelete(baseQuery(key) as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound {
             reportFailure("delete", key, status)
+            return false
         }
+        return true
     }
 
     public func migrate(keys: [String], from defaults: UserDefaults) {

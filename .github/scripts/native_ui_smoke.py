@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the packaged desktop UI through the operating system.
-
-The headless companion owns the detailed VPN assertions.  This process proves
-the other half of the contract: a real rendered Fyne window exposes its
-controls, accepts keyboard/paste and pointer input, updates its visible state,
-survives close/reopen, and can disconnect through the UI.  Linux remains
-CLI/service-only.
-"""
+"""Drive the packaged Windows or macOS frontend through native input."""
 
 from __future__ import annotations
 
@@ -234,7 +227,7 @@ _T = TypeVar("_T")
 
 
 _FILETIME_TO_DATETIME_TICKS = 504911232000000000
-_MACOS_UI_PROCESS_NAME = "Dobby Vpn"
+_MACOS_UI_PROCESS_NAME = "DobbyVPNMacApp"
 _MACOS_AX_HELPER = Path(__file__).with_name("macos_ax.py")
 _MACOS_INPUT_SENTINEL = b"DobbyVPN-native-input-sentinel-v1"
 # Keep the parent subprocess alive long enough to receive a helper's final
@@ -247,16 +240,6 @@ _SCREENSHOT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _PNG_MAX_PIXELS = 64 * 1024 * 1024
 _NATIVE_ACTION_LABEL = "VPN connection action"
-_NATIVE_STATUS_STATES = (
-    "Disconnected",
-    "Ready",
-    "Connecting",
-    "Connected",
-    "Disconnecting",
-    "Reconnecting",
-    "Failed",
-    "Error",
-)
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
     if (visible of process "Finder") is false then error "Finder is not visible"
@@ -928,7 +911,7 @@ class _MacOSProcessIdentity:
 def _windows_interactive_identity() -> str:
     """Return the user/session owning this process or fail before launching a GUI.
 
-    A GitHub/owner runner may be a service session (session 0), where Fyne can
+    A GitHub/owner runner may be a service session (session 0), where native UI can
     start and exit without ever creating a visible window.  Reporting that as a
     UI pass would be dishonest, so require the current process to be attached
     to an interactive session and record the identity used for the launch.
@@ -1253,7 +1236,7 @@ def _windows_filetime_to_datetime_ticks(filetime: int) -> str:
 def _windows_accessibility_rect(
     hwnd: int, name: str, *, prefix: bool = False
 ) -> tuple[int, int, int, int]:
-    """Get a Fyne element's bounds from the real UI Automation tree."""
+    """Get a native UI element's bounds from the real UI Automation tree."""
     powershell = shutil.which("powershell") or shutil.which("pwsh")
     if not powershell:
         raise NativeUISmokeError("PowerShell is required for Windows UI Automation")
@@ -1274,13 +1257,19 @@ if ($hwndValue -le 0) {
     throw "invalid positive HWND"
 }
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new($hwndValue))
-$condition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
+$nameCondition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
     [System.Windows.Automation.AutomationElement]::NameProperty, $env:DOBBY_UI_NAME)
+$idCondition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $env:DOBBY_UI_NAME)
+$condition = New-Object -TypeName System.Windows.Automation.OrCondition -ArgumentList @($nameCondition, $idCondition)
 if ($env:DOBBY_UI_PREFIX -eq "1") {
     $element = $root.FindAll(
         [System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.Condition]::TrueCondition) |
-        Where-Object { $_.Current.Name.StartsWith($env:DOBBY_UI_NAME, [System.StringComparison]::Ordinal) } |
+        Where-Object {
+            $_.Current.Name.StartsWith($env:DOBBY_UI_NAME, [System.StringComparison]::Ordinal) -or
+            $_.Current.AutomationId -eq $env:DOBBY_UI_NAME
+        } |
         Select-Object -First 1
 } else {
     $element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
@@ -1844,7 +1833,7 @@ def _macos_accessibility_rect(
     *,
     prefix: bool = False,
 ) -> tuple[int, int, int, int]:
-    """Get a Fyne element through a bounded exact-PID AXUIElement walk."""
+    """Get a native UI element through a bounded exact-PID AXUIElement walk."""
 
     return _macos_retry_ax_request(
         timeout,
@@ -1868,12 +1857,8 @@ def _macos_window_title(process_pid: int, timeout: float = 2.0) -> str:
     )
 
 
-def _macos_title_has_state(title: str, state: str) -> bool:
-    return title == f"Dobby VPN — {state}"
-
-
-def _macos_title_is_status(title: str) -> bool:
-    return any(_macos_title_has_state(title, state) for state in _NATIVE_STATUS_STATES)
+def _macos_has_status(process_pid: int, state: str, timeout: float = 1.5) -> bool:
+    return _macos_has_element(process_pid, state, timeout=timeout)
 
 
 def _macos_frontmost_pid() -> int:
@@ -2012,7 +1997,7 @@ def _macos_click(bounds: tuple[int, int, int, int], process_pid: int) -> None:
 
     # CGEventCreateMouseEvent/CGEventPost are physical input synthesis at the
     # AX-validated control center.  System Events ``click at`` is intentionally
-    # not used: on official Fyne Darwin controls it resolves to unsupported
+    # not used: on official native UI Darwin controls it resolves to unsupported
     # AXPress rather than delivering a widget mouse event.
     for event_type in (1, 2):  # left-down, left-up
         event = graphics.CGEventCreateMouseEvent(None, event_type, point, 0)
@@ -2054,32 +2039,6 @@ end tell'''
         raise NativeUISmokeError(_subprocess_failure("macOS native keystroke failed", completed))
 
 
-def _macos_focus_next(process_pid: int) -> None:
-    """Move focus once through the real Fyne canvas keyboard chain."""
-
-    if process_pid <= 0:
-        raise NativeUISmokeError("macOS native UI process identity is unavailable")
-    _macos_focus_window(process_pid)
-    script = f'''tell application "System Events"
-    tell (first process whose unix id is {process_pid})
-        set frontmost to true
-        key code 48
-    end tell
-end tell'''
-    try:
-        completed = _native_run(
-            ["osascript", "-e", script],
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError(f"macOS native focus traversal failed: {error}") from error
-    if completed.returncode != 0:
-        raise NativeUISmokeError(_subprocess_failure("macOS native focus traversal failed", completed))
-
-
 def _macos_has_element(
     process_pid: int,
     name: str,
@@ -2095,17 +2054,17 @@ def _macos_has_element(
 
 
 def _macos_allowlisted_state_labels(process_pid: int) -> tuple[str, ...]:
-    """Report only safe stale-state labels after an activation timeout.
+    """Report safe native state labels after an activation timeout.
 
     This diagnostic deliberately asks for a short allowlist rather than
     dumping the accessibility tree.  It distinguishes a presentation
-    publication problem (old Ready/Disconnected/action labels are still
-    present) from a missing/incorrect AX root without exposing profile text.
+    publication problem (native state/action labels are missing) from a
+    missing/incorrect AX root without exposing profile text.
     A diagnostic lookup must never replace the original activation timeout.
     """
 
     observed: list[str] = []
-    for name in ("Ready", "Disconnected", _NATIVE_ACTION_LABEL):
+    for name in ("Disconnected", _NATIVE_ACTION_LABEL):
         try:
             if _macos_has_element(process_pid, name, timeout=1.5):
                 observed.append(name)
@@ -2497,7 +2456,7 @@ def _terminate_existing_macos_instances(timeout: float, expected_executable: str
         _wait_until(
             lambda: not any(_macos_identity_is_alive(identity) for identity in existing),
             timeout,
-            "pre-existing macOS Dobby Vpn process did not exit",
+            "pre-existing macOS DobbyVPN process did not exit",
         )
     except NativeUIWaitTimeout:
         remaining = [identity for identity in existing if _macos_identity_is_alive(identity)]
@@ -2506,7 +2465,7 @@ def _terminate_existing_macos_instances(timeout: float, expected_executable: str
         _wait_until(
             lambda: not any(_macos_identity_is_alive(identity) for identity in existing),
             timeout,
-            "pre-existing macOS Dobby Vpn process could not be terminated",
+            "pre-existing macOS DobbyVPN process could not be terminated",
         )
 
 
@@ -2517,7 +2476,7 @@ class NativeUIController:
     process that owns it must be in the logged-in desktop session; callers
     remain responsible for VPN observations, fault injection, and cleanup.
     This lets a full local lane interleave native user actions with the
-    existing platform adapter without replacing CLI/gRPC operations with
+    existing platform adapter without replacing CLI/backend operations with
     test-only UI hooks.
     """
 
@@ -2839,28 +2798,11 @@ class NativeUIController:
         self._windows_validate_window()
         return bool(_windows_has_element(self.hwnd, name, prefix=prefix))
 
-    def _windows_window_title(self) -> str:
-        """Read the exact product window title from the owned HWND."""
-
-        self._windows_validate_window()
-        user32 = _windows_user32()
-        length = int(user32.GetWindowTextLengthW(self.hwnd))
-        if length <= 0:
-            raise NativeUISmokeError("Windows native UI window has no readable title")
-        buffer = ctypes.create_unicode_buffer(length + 1)
-        copied = int(user32.GetWindowTextW(self.hwnd, buffer, len(buffer)))
-        if copied <= 0:
-            raise NativeUISmokeError("Windows native UI window title lookup failed")
-        return buffer.value
-
-    def _windows_title_has_state(self, state: str) -> bool:
-        return self._windows_window_title() == f"Dobby VPN — {state}"
-
     def _launch_windows(self) -> None:
         user32 = _windows_user32()
         output_root = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
         if output_root:
-            # The packaged Go UI uses the Windows GUI subsystem, so a crash
+            # The packaged native UI uses the Windows GUI subsystem, so a crash
             # after the window opens has no visible console. Keep its complete
             # process streams with this disposable run for exit diagnostics.
             root = Path(output_root)
@@ -2973,7 +2915,7 @@ class NativeUIController:
                     raise NativeUISmokeError("macOS native UI executable identity is unavailable")
                 identities = _macos_process_identities(self.macos_expected_executable)
                 if len(identities) > 1:
-                    raise NativeUISmokeError("multiple Dobby Vpn processes appeared during launch")
+                    raise NativeUISmokeError("multiple DobbyVPN processes appeared during launch")
                 if len(identities) == 1:
                     self.macos_process_identity = identities[0]
                     self.macos_pid = identities[0].pid
@@ -2998,12 +2940,10 @@ class NativeUIController:
             # never turns screen coordinates into an interaction fallback.
             try:
                 _macos_window_rect(process_pid, min(2.0, self.timeout))
-                if not _macos_title_is_status(_macos_window_title(process_pid, min(2.0, self.timeout))):
-                    return False
                 return _macos_has_element(process_pid, "Connection configuration")
             except NativeUIWindowNotReady as error:
                 # A process can be discoverable a few milliseconds before
-                # Fyne's OnStarted callback calls Show and attaches AX roots.
+                # SwiftUI can publish its process before the first AX root.
                 # Retry only this explicit no-value/empty-collection result;
                 # disabled AX, malformed helper output, and timeouts remain
                 # hard failures.
@@ -3048,11 +2988,6 @@ class NativeUIController:
         if self.platform == "windows":
             names = ("Connected", "Connecting", "Reconnecting", "Disconnected", "Failed", "Error")
             status = next((name for name in names if self._windows_has_name(name)), "Unknown")
-            if status == "Unknown":
-                for name in names:
-                    if self._windows_title_has_state(name):
-                        status = name
-                        break
         else:
             names = ("Connected", "Connecting", "Reconnecting", "Disconnected", "Failed", "Error")
             status = "Unknown"
@@ -3060,7 +2995,7 @@ class NativeUIController:
                 if self.macos_pid is None:
                     break
                 process_pid = self._macos_pid_or_error()
-                if _macos_title_has_state(_macos_window_title(process_pid), name):
+                if _macos_has_status(process_pid, name):
                     status = name
                     break
         return {
@@ -3071,9 +3006,8 @@ class NativeUIController:
     def _macos_action_state(self, process_pid: int) -> str | None:
         """Return the first current post-activation state, without secrets."""
 
-        title = _macos_window_title(process_pid, timeout=1.5)
         for name in ("Connecting", "Connected", "Error", "Failed"):
-            if _macos_title_has_state(title, name):
+            if _macos_has_status(process_pid, name):
                 return name
         return None
 
@@ -3145,11 +3079,9 @@ class NativeUIController:
                 process_pid = self._macos_pid_or_error()
                 bounds = _macos_accessibility_rect(process_pid, "Connection configuration", 10)
                 process_pid = self._macos_pid_or_error()
-                # Fyne's first focusable object is the configuration Entry.
-                # A single native Tab reaches it without depending on the
-                # renderer's cached mouse position; Connect/Disconnect below
-                # remain physical AX-discovered clicks.
-                _macos_focus_next(process_pid)
+                # Click the accessible SwiftUI editor before sending native
+                # keyboard input.
+                _macos_click(bounds, process_pid)
                 _macos_clipboard_set_verified(_MACOS_INPUT_SENTINEL)
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "a")
@@ -3167,11 +3099,8 @@ class NativeUIController:
                 _macos_keystroke(process_pid, "a")
                 process_pid = self._macos_pid_or_error()
                 _macos_keystroke(process_pid, "v")
-                # Posting Cmd+V does not await Fyne's clipboard read. Keep
-                # the source available through the physical Connect callback,
-                # which reads SourceText before acknowledging activation.
-                # The subsequent VPN observations prove the entered profile
-                # actually establishes the required connection.
+                # Keep the clipboard available until the UI action consumes it;
+                # the tunnel checks below verify that the profile was accepted.
             except BaseException as error:
                 self._restore_pending_macos_clipboard(error)
                 raise
@@ -3182,21 +3111,20 @@ class NativeUIController:
             raise NativeUISmokeError("native UI wait state is empty")
         if self.platform == "windows":
             self._wait(
-                lambda: self._windows_has_name(status) or self._windows_title_has_state(status),
+                lambda: self._windows_has_name(status),
                 f"Windows UI did not display {status}",
                 timeout,
             )
         else:
             def visible() -> bool:
                 process_pid = self._macos_pid_or_error()
-                title = _macos_window_title(process_pid, timeout=min(2.0, self.timeout))
                 if status not in {"Error", "Failed"}:
                     for failure in ("Error", "Failed"):
-                        if _macos_title_has_state(title, failure):
+                        if _macos_has_status(process_pid, failure):
                             raise NativeUISmokeError(
                                 f"macOS UI reported {failure} while waiting for {status}"
                             )
-                return _macos_title_has_state(title, status)
+                return _macos_has_status(process_pid, status)
 
             self._wait(
                 visible,
@@ -3263,7 +3191,7 @@ class NativeUIController:
                 self._restore_pending_macos_clipboard(error)
                 raise
             # The title transition is the existing acknowledgement that the
-            # queued Connect event reached Fyne after the profile paste.
+            # queued Connect event reached native UI after the profile paste.
             self._restore_pending_macos_clipboard()
         return self.wait_status("Connected")
 
@@ -3280,18 +3208,17 @@ class NativeUIController:
     def settings(self) -> dict[str, object]:
         if self.platform == "windows":
             self._windows_click_name("Settings")
-            self._wait(lambda: self._windows_has_name("Back"), "Windows UI did not open Settings")
             version = self._windows_has_name("Version:", prefix=True)
             commit = self._windows_has_name("Source commit:", prefix=True)
-            self._windows_click_name("Back")
+            self._windows_click_name("Connection")
         else:
             process_pid = self._macos_pid_or_error()
             bounds = _macos_accessibility_rect(process_pid, "Settings", 10)
             process_pid = self._macos_pid_or_error()
             _macos_click(bounds, process_pid)
             self._wait(
-                lambda: _macos_has_element(self._macos_pid_or_error(), "Back"),
-                "macOS UI did not open Settings",
+                lambda: _macos_has_element(self._macos_pid_or_error(), "Version:", prefix=True),
+                "macOS UI did not show Settings metadata",
             )
             version = _macos_has_element(
                 self._macos_pid_or_error(), "Version:", prefix=True
@@ -3300,7 +3227,7 @@ class NativeUIController:
                 self._macos_pid_or_error(), "Source commit:", prefix=True
             )
             process_pid = self._macos_pid_or_error()
-            bounds = _macos_accessibility_rect(process_pid, "Back", 10)
+            bounds = _macos_accessibility_rect(process_pid, "Connection", 10)
             process_pid = self._macos_pid_or_error()
             _macos_click(bounds, process_pid)
         if not version or not commit:

@@ -14,8 +14,8 @@ static JavaVM *dobby_vm;
 static jobject dobby_context;
 static jclass dobby_bridge;
 static char *dobby_jstring_utf8(JNIEnv *, jstring);
-// The Fyne runtime can refresh the native context while its snapshot watcher
-// is making a JNI call. Keep global-reference replacement and use under one
+// The native activity can refresh its context while the snapshot poller is
+// making a JNI call. Keep global-reference replacement and use under one
 // lock; a deleted global reference must never be passed to Java.
 static pthread_mutex_t dobby_bridge_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -295,7 +295,7 @@ static bool dobby_call_export_logs(const unsigned char *logs, int length) {
 	return result == JNI_TRUE;
 }
 
-// Return only paths selected by the Android shell. The Go UI treats this as a
+// Return only paths selected by the Android shell. The Go backend treats this as a
 // fixed native contract and validates the returned directory before opening
 // any file; it never accepts a path from a profile or test command.
 static char *dobby_call_diagnostic_paths(void) {
@@ -326,6 +326,80 @@ static char *dobby_call_diagnostic_paths(void) {
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return copy;
+}
+
+static char *dobby_call_load_source_url(void) {
+	bool attached = false; JNIEnv *env = dobby_env(&attached);
+	if (env == NULL) { dobby_detach(attached); return NULL; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL || dobby_context == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return NULL;
+	}
+	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "loadSourceURL", "(Landroid/content/Context;)Ljava/lang/String;");
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return NULL;
+	}
+	jobject value = (*env)->CallStaticObjectMethod(env, dobby_bridge, method, dobby_context);
+	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); value = NULL; }
+	char *copy = dobby_jstring_utf8(env, (jstring)value);
+	if (value != NULL) (*env)->DeleteLocalRef(env, value);
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return copy;
+}
+
+static bool dobby_call_save_source_url(const char *source) {
+	bool attached = false; JNIEnv *env = dobby_env(&attached);
+	if (env == NULL || source == NULL) { dobby_detach(attached); return false; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL || dobby_context == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
+	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "saveSourceURL", "(Landroid/content/Context;Ljava/lang/String;)Z");
+	jstring value = (*env)->NewStringUTF(env, source);
+	if (method == NULL || value == NULL) {
+		dobby_clear_exception(env);
+		if (value != NULL) (*env)->DeleteLocalRef(env, value);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
+	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, dobby_context, value);
+	(*env)->DeleteLocalRef(env, value);
+	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = JNI_FALSE; }
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return result == JNI_TRUE;
+}
+
+static bool dobby_call_clear_source_url(void) {
+	bool attached = false; JNIEnv *env = dobby_env(&attached);
+	if (env == NULL) { dobby_detach(attached); return false; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	if (dobby_bridge == NULL || dobby_context == NULL) {
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
+	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "clearSourceURL", "(Landroid/content/Context;)Z");
+	if (method == NULL) {
+		dobby_clear_exception(env);
+		pthread_mutex_unlock(&dobby_bridge_lock);
+		dobby_detach(attached);
+		return false;
+	}
+	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, dobby_context);
+	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = JNI_FALSE; }
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return result == JNI_TRUE;
 }
 
 static void dobby_set_android_context(uintptr_t vm, uintptr_t envPointer, uintptr_t context) {
@@ -422,6 +496,25 @@ func (jniPlatformCallbacks) PublishState(sessionID string, generation int64, sta
 	C.dobby_call_publish(id, C.int64_t(generation), stateValue, failure)
 }
 
+func (jniPlatformCallbacks) LoadSourceURL() string {
+	value := C.dobby_call_load_source_url()
+	if value == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(value))
+	return C.GoString(value)
+}
+
+func (jniPlatformCallbacks) SaveSourceURL(source string) bool {
+	value := C.CString(source)
+	defer C.free(unsafe.Pointer(value))
+	return bool(C.dobby_call_save_source_url(value))
+}
+
+func (jniPlatformCallbacks) ClearSourceURL() bool {
+	return bool(C.dobby_call_clear_source_url())
+}
+
 func setAndroidContext(vm, env, context uintptr) {
 	C.dobby_set_android_context(C.uintptr_t(vm), C.uintptr_t(env), C.uintptr_t(context))
 }
@@ -453,7 +546,7 @@ func installJNIPlatform(binding *mobilebinding.Binding) {
 }
 
 // The instrumentation APK uses the same narrow binding as the production
-// Fyne activity. These JNI entry points are intentionally data-only wrappers;
+// Android activity. These JNI entry points are intentionally data-only wrappers;
 // they do not expose the manager or native descriptors to Java. The explicit
 // diagnostic export is the only non-session payload crossing this boundary.
 
@@ -463,6 +556,7 @@ func Java_com_dobby_nativebridge_NativeGoSession_attach(env *C.JNIEnv, _ C.jclas
 		return
 	}
 	setAndroidContext(uintptr(C.dobby_vm_for_env(env)), uintptr(unsafe.Pointer(env)), uintptr(unsafe.Pointer(context)))
+	mobileSessions.AttachSourceStore()
 }
 
 func jniString(env *C.JNIEnv, value C.jstring) string {

@@ -1,70 +1,47 @@
 # DobbyVPN functional tests
 
-This directory contains the product's functional suite, formerly the separate
-Torturer repository. Product and tests now share one commit and review process.
-It is test tooling, not a production runtime dependency.
+This directory contains the product functional suite. Product code and tests
+share one repository and one revision. The suite is test tooling, not a
+production runtime dependency.
 
 ## Ownership
 
-`torturer_contract/` defines scenarios, assertions, and result semantics.
-`torturer_checks/` supplies platform adapters and validation.
-`torturer_provider/` manages disposable Render test resources.
-The parent repository owns product build/install interfaces and all GitHub
-workflows. Private VM setup lives in `torturer_checks/local_vm.py`; the owner
-workspace supplies SSH transport and a small guest-side lock/deadline helper.
+torturer_contract defines scenarios, assertions, and result semantics.
+torturer_checks supplies platform adapters and validation.
+torturer_provider manages disposable Render test resources. The product
+repository owns build and installation interfaces and GitHub workflows. The
+private owner workspace supplies SSH transport and the guest lock/deadline
+helper.
 
 See [the functional contract](docs/contract.md) for coverage and
-[product testing](../TESTING.md) for contributor commands. Development rules
-are in [the product instructions](../AGENTS.md); this directory adds no
-separate agent approval policy.
+[product testing](../TESTING.md) for commands. Development rules are in
+[the product instructions](../AGENTS.md).
 
 ## Hosted and local qualification
 
-Hosted qualification installs the exact packages GitHub built, using tests
-from the same source revision. It covers Linux, Windows, macOS, and Android.
-Public fixtures and disposable connection details are synthetic; account,
-signing, and publication credentials are excluded from candidate execution.
+Hosted qualification installs the exact packages built by Release and runs the
+canonical mini suite from the same source revision. It covers Linux, Windows,
+macOS, and Android. The mini suite checks Linux CLI/service behavior, native
+Windows and macOS UI behavior where the hosted runner supports it, and the
+Android Compose UI with the real VPN service. The iOS Simulator has its own
+single mini UI/lifecycle contract in the Test workflow.
 
-One Release qualification creates one Render VPN service, shares it across the
-Linux, Windows, macOS, and Android jobs, and deletes it in a final cleanup job.
-The tests query `api.ipify.org` for the exit IP and use Cloudflare's public
-speed-test endpoints for bounded download/upload probes. There is no
-test-owned HTTP server and no second Render service. Cleanup runs even when a
-platform fails; a cleanup failure fails the run and is reported separately.
-Start a new explicit Release run to retry qualification. Re-running only failed
-jobs after cleanup is not supported: the old Render service and profile are
-already gone, while build artifact names belong to the original run attempt.
+The private Harness packages the product and suite from one selected worktree,
+downloads a fresh owner profile, and runs the functional engine on disposable
+VMs. It supports mini across the available platforms and full on interactive
+Windows and macOS guests. Full opens the native frontend and exercises user
+input, lifecycle actions, and UI-driven backend process-loss recovery.
 
-The private Harness packages the product and this directory from one selected
-worktree, downloads a fresh owner profile, and invokes the same functional
-engine on local VMs. Local diagnostic output remains private and is delivered
-before disposable scratch is removed; the functional contract does not create
-an evidence archive.
+The suite retains full diagnostic output for the current run and removes its
+disposable test files after collection. It does not create separate evidence
+archives.
 
-The iOS Simulator app-contract helper is a local UI/lifecycle check, not VPN
-E2E. The parent Test workflow owns the Go runtime XCFramework, Go/Fyne package,
-and XCTest accessibility/input interaction check; there is no separate public
-Torturer Simulator workflow.
-
-## Hosted configuration after the merge
-
-GitHub repository settings do not move with source files. The DobbyVPN
-repository needs the existing `render-functional` environment, its
-`RENDER_API_TOKEN` secret, and these variables: `RENDER_OWNER_ID`,
-`RENDER_IMAGE_OWNER_ID`, `RENDER_IMAGE_PATH`, `RENDER_IMAGE_DIGEST`, and
-`RENDER_REGION`. The one pinned Outline image is reused; no sink image or
-image-publishing workflow is required. Existing product signing/publication
-environments stay with the product.
-
-All workflows are in the parent `.github/workflows/`. The former external
-Torturer dispatch, release-read, and publication tokens are not needed by the
-integrated workflow chain. Retire the old repository's workflows when the new
-configuration is installed, so there is only one active qualification path.
+Hosted VPN tests use one disposable Render VPN service and public connectivity
+checks. Cleanup runs after qualification, including failed runs. Start a new
+Release run to repeat qualification after cleanup.
 
 ## Import history
 
 The suite was imported from DobbyVPN/Torturer commit
-`d71462247704de99ad302246ee9dc979da454d39`. Its original license is retained in [LICENSE](LICENSE).
-The former public Torturer repository is no longer the source of truth. Archive
-it after the integrated hosted workflow is confirmed; preserve its history and
-license attribution.
+d71462247704de99ad302246ee9dc979da454d39. Its original license is retained in
+[LICENSE](LICENSE).

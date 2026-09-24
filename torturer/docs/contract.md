@@ -1,174 +1,93 @@
-# Functional tests
+# Functional test contract
 
-This file describes coverage, not an additional approval process.
-Product and tests live in one repository. Local and hosted runs use the same
-[scenario definitions](../torturer_contract/functional/scenarios.py),
-[assertions](../torturer_contract/functional/assertions.py), and
-[result fields](../torturer_contract/functional/results.py).
+This file owns the functional scenario set, platform coverage, and required
+diagnostic and cleanup behavior. Product and tests are built from one source
+revision. [TESTING.md](../../TESTING.md) lists supported checks and commands.
 
-## Coverage model
+## Suites and platforms
 
-`mini` is the portable qualification contract. `full` is cumulative: it runs
-mini once and adds environment-specific coverage. Hosted qualification accepts
-mini. Local full is currently defined only for Windows and macOS, where it
-adds the AUTO native-window journey after the shared semantic lane (exact-
-Release mode uses the installed package).
-Android and iOS full remain physical-device work; Linux is intentionally
-CLI/service mini-only.
+The mini suite is the portable qualification contract. Full is available only
+on Windows and macOS with an interactive desktop; it runs mini once, then adds
+the native-window journey. A missing tool or environment is unavailable
+coverage and cannot be counted as a pass.
 
-GUI connection journeys temporarily exercise AUTO only and do not iterate
-individual profiles. The Android non-GUI binding matrix still exercises every
-discovered profile; other non-GUI profile matrices remain unchanged. Desktop
-full is mini once plus the AUTO native-window journey; all other required UI
-actions are unchanged.
+| Platform | Mini | Full |
+| --- | --- | --- |
+| Windows and macOS | Go backend and CLI semantic scenarios, including VPN observations | Mini once, then the native frontend journey on an interactive desktop |
+| Android | Compose UI on an emulator, VPN permission and connection checks, and semantic VPN scenarios; the binding lane covers every discovered profile | Not currently supported; future full coverage needs physical-device runners |
+| iOS Simulator | One SwiftUI interaction and lifecycle journey; no VPN traffic claim | Not currently supported; future full coverage needs a physical device |
+| Linux | Go backend and CLI semantic scenarios, including VPN observations | Not defined; GUI work is outside the current scope |
 
-| Platform | Mini qualification | Full qualification |
-|---|---|---|
-| Windows/macOS | Headless production Go/Fyne AUTO widget/service boundary plus the semantic scenarios below and real VPN observations | Mini once plus the AUTO native-window journey: visible native-window input, Connect/Disconnect/reconnect, settings, and close/reopen actions |
-| Android | Rendered emulator AUTO journey plus consent, Connect/Disconnect/reconnect, traffic, and routing; the binding matrix covers every discovered profile | Physical device, including the device-only VPN bridge |
-| iOS | One comprehensive rendered Simulator UI/input/lifecycle/diagnostics contract; no VPN traffic | Physical device and NetworkExtension traffic |
-| Linux | CLI/service and real VPN observations | Not defined |
+Hosted Windows and macOS qualification runs mini. It does not claim to render
+the native window. The native-window journey runs in the local full suite and
+uses the candidate or exact installed Release package. It types configuration,
+connects and disconnects through visible controls, checks settings and
+close/reopen behavior, and proves backend restart recovery through the UI.
+Independent adapter observations verify the tunnel, routing, stability,
+traffic, and cleanup.
 
-## Semantic scenarios
+Android's rendered journey enters one complete supported Outline or Xray
+profile through the production Compose screen. The separate binding lane
+retains the complete profile matrix. The iOS Simulator journey types an
+invalid non-empty value, observes the frontend's error handling, checks
+release metadata and the Logs screen, then relaunches the app. Simulator
+coverage does not assert a successful configuration or VPN connection.
 
-The semantic mini lane (desktop, Android, and Linux) runs these scenarios for
-the connections its platform adapter exposes. GUI adapters expose the single
-AUTO selection and do not iterate individual profiles. Android additionally
-runs the same scenarios through its non-GUI binding matrix for every discovered
-profile. The iOS Simulator mini lane is the separate comprehensive rendered UI
-contract described in the coverage table.
+## Canonical scenarios
 
-The iOS Simulator UI journey types and edits a non-empty value, then submits
-it to the production Connect action. The current Simulator run surfaces
-`PLATFORM_FAILED: configuration mailbox write returned failure`; this verifies
-only that the rendered UI handles the provider-side failure without claiming a
-connection. It does not establish that Go parsed that value or that VPN traffic
-works. Empty input is validated locally and has a separate required-input
-assertion. Do not describe the non-empty submission as malformed-config parser
-qualification.
+Mini and full use the same semantic scenario set. Full adds native-window
+coverage only on Windows and macOS.
 
-| Scenario | Behavior |
-|---|---|
-| `functional.configure` | Accept and configure the profile. |
-| `functional.core-connection` | Connect, observe the tunnel and routed identity, measure traffic, check stability, disconnect. |
-| `functional.start-stop-start` | Disconnect and reconnect, then independently observe the new tunnel and routing. |
-| `functional.product-process-loss` | Recover after the product process is stopped and restarted. |
+| Scenario | Required behavior |
+| --- | --- |
+| functional.configure | Go accepts and configures the supplied profile |
+| functional.core-connection | Connect, observe the tunnel and routed identity, measure stability and traffic, disconnect, and verify cleanup |
+| functional.start-stop-start | Disconnect and reconnect; independently verify the second tunnel and routing before final cleanup |
+| functional.product-process-loss | Recover after the Go backend process is stopped and restarted |
 
 Measurements must be finite and positive. Stability uses five successful
-samples at one-second intervals. Scenario reset and process cleanup must
-succeed; a failure is not converted into a skip or a pass.
+samples at one-second intervals. Cleanup failure fails the scenario.
 
-`functional.network-transition` remains defined for focused diagnostics but is
-deferred from both qualification suites. Suspend/resume is not yet defined as
-a qualification scenario. A focused or explicitly selected scenario is
-diagnostic output only, not a claim that the suite passed. The default
-qualification suites have no accepted unavailable skips.
+The diagnostic-only functional.network-transition scenario remains selectable
+for focused work but is not part of either passing suite. Suspend/resume is
+not currently a functional scenario. Focused scenario selections are diagnostic
+runs and do not qualify a suite.
 
-## Hosted boundaries
+## Traffic and shared service
 
-Hosted Windows/macOS runs use the production Go/Fyne widgets and authenticated
-service boundary through the headless Fyne driver; they do not claim that a
-hosted runner displayed a native desktop window. The real native-window journey
-belongs to local full qualification and requires an interactive desktop.
-The local native-window journey keeps service fault injection separate from UI
-recovery: process-loss control kills/restarts only the desktop service, then
-the visible Go/Fyne window re-enters the profile and clicks Connect. The lane
-repeats tunnel, routed public-IP, stability, and throughput observations after
-both explicit reconnect and UI-driven process-loss recovery; a CLI
-`connect-profile` shortcut is not qualification coverage.
+Release qualification installs the exact packages produced earlier in that
+Release run. Linux, Windows, macOS, and Android use one fresh Render Outline
+VPN service. The workflow deletes it after platform work, including failure
+paths. One shared deadline includes service setup and platform queue time, and
+reserves time for deletion.
 
-Android hosted mini uses a rendered emulator and the real VPN service. Its
-`gui-auto` lane takes the first complete `Outline` or `Xray` protocol block
-from the fresh private bundle without rewriting its bytes; the separate
-`protocol-matrix` lane keeps the original bundle and exercises every product
-profile through the binding. This keeps the real GUI AUTO journey bounded
-while preserving full profile-matrix coverage. iOS
-Simulator mini proves rendered controls, input, lifecycle, and diagnostics but
-cannot prove a physical-device NetworkExtension tunnel or VPN traffic. Unknown
-unavailability fails the run rather than silently reducing coverage.
+Identity checks use api.ipify.org. Cloudflare supplies bounded latency and
+traffic measurements. Requests must traverse the app tunnel. An unsupported
+or failed measurement is not converted to a pass.
 
-## Traffic and infrastructure
+Android's observation driver makes requests through the VPN network; the
+functional engine owns the assertions. Process disappearance alone does not
+prove recovery: a new working session must be observed.
 
-Hosted Release jobs install the exact packages built earlier in the same
-workflow run. Linux, Windows, macOS, and Android run in parallel against one
-fresh Render Outline WebSocket VPN. The workflow requests its deletion after
-all platform jobs finish, even when tests fail. The Render test service has a
-30-minute lifetime. One shared deadline starts when service creation begins;
-platform setup and queue time count against it. Each platform receives only
-the remaining time, with five minutes reserved for Render deletion. Cleanup is
-still attempted at the end.
+## Diagnostics and cleanup
 
-Scenario reset and deletion of the shared Render service are checked. The
-initial VPN service and Android emulator are left to the disposable
-GitHub-hosted runner; their shutdown is not separately verified.
+Product log files are read and displayed as written; the product does not
+sanitize their contents. When test tooling forwards command output, it redacts
+credentials and private profile values while preserving the surrounding
+diagnostic content.
 
-IP checks use `api.ipify.org`. Cloudflare's public speed-test service supplies
-bounded 1-MiB download/upload probes and a tiny latency request.
-There is no custom measurement server. Defaults live in
-[the adapter factory](../torturer_checks/hosted/factory.py), shared by local
-and hosted runs. Requests must traverse the app's VPN, not merely execute
-on a host outside the tested environment.
+The invoking process receives complete stdout and stderr from repository-owned
+commands, including failures, timeouts, original exceptions, and cleanup
+errors. Output is not truncated, reduced to selected lines, or replaced by a
+status code or byte count. Collection failures are reported alongside the
+test failure. Test cleanup runs after pass, failure, and timeout.
 
-Non-success measurement HTTP responses are reported separately from routing
-or transport failures. No fallback silently turns an unavailable check into
-a pass.
+Required UI screenshots are kept with the current disposable run. Captures
+are limited to the target window. Only private profile values are redacted
+when output policy requires it; other diagnostic content remains intact. A
+failed capture or transfer fails the check.
+The test Harness creates no separate log or evidence archive. The owner
+workspace retains only the latest completed run under its storage rules.
 
-Android's observation driver makes requests through the VPN network and
-reports observations. The Python engine owns the assertions; see
-[the observation contract](../torturer_contract/functional/android_observation.py).
-Process disappearance alone is not recovery: a new working session must be
-observed.
-
-## Results, diagnostics, and cleanup
-
-The engine decides pass/fail from behavior and required reset/cleanup.
-Command, service, app, device, build, and cleanup output is part of the
-diagnostic contract. Every repository-owned process boundary preserves the
-complete stdout and stderr streams, including successful output, non-zero
-exit output, launch exceptions, timeout output after termination, and cleanup
-output. Output is never replaced with byte counts or status codes, selected as
-“useful” lines, tailed, or truncated by a repository-owned size limit. Execution
-deadlines remain bounded, but output has no artificial repository limit.
-
-Adapters may keep output in memory or in owner-only disposable scratch while
-parsing and asserting. The invoking process receives complete redacted streams
-before scratch is removed. Local detached guests expose separate test and
-cleanup streams after completion; the controller attempts to deliver every
-stream before removing the guest run. A collection failure is reported beside
-the original test failure and does not erase it. A failed test remains failed
-even if cleanup succeeds; a failed cleanup remains separately visible and
-blocks successful release completion.
-
-Credentials and private profile values are redacted at the transport boundary
-without deleting surrounding diagnostic text. Public service names and error
-context such as `api.ipify.org` are not removed merely because they occur near a
-redacted value. No separate log or evidence archive is created; the retained
-structured result, complete redacted `streams/`, and collection status are the
-one local run governed by the owner and workflow retention policies described
-by the testing documentation. No older stream copy is retained elsewhere.
-
-Every GUI lane retains required milestone and failure screenshots in that same
-current run: headless Go/Fyne frames for desktop mini, exact native windows for
-desktop full, rendered emulator frames for Android mini, and XCTest captures
-for iOS Simulator mini. When a rendered frame can contain private profile or
-diagnostic content, configuration, log, and detail regions are masked before
-transfer. Complete PNG structure, CRCs, dimensions, byte length, and SHA-256
-are validated. A required capture, masking, transfer, or validation failure
-fails the lane while preserving any earlier product failure as primary.
-Screenshots supplement complete streams and functional assertions; they never
-replace either.
-
-Local candidates are disposable and cleaned up after every run. Rerun the
-same command to repeat a test; a failed cleanup is reported separately.
-
-Start a fresh explicit Release to retry hosted qualification. Re-running only
-failed jobs cannot reuse the Render server deleted by final cleanup. A
-successful Release retains only the package artifacts needed by exact-package
-qualification and the separate manual Publish workflow while it remains the
-newest completed workflow run. Publish takes that Release's ID and does not
-rebuild or retest.
-Signing and Render account credentials stay in their protected jobs; the
-test runner receives only the disposable connection profile.
-
-For commands and configuration, see [the suite README](../README.md) and
-[product testing](../../TESTING.md).
+Local candidates and runner resources are disposable. A successful scenario
+requires both its behavioral assertions and its required cleanup to pass.

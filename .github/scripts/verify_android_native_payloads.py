@@ -43,7 +43,7 @@ def require_payloads(path: Path, label: str, directory: str, *, libcxx: bool) ->
     for abi in ANDROID_ABIS:
         prefix = f"{directory}/{abi}/"
         if f"{prefix}libdobby_vpn.so" not in entries:
-            raise NativePayloadError(f"{label} is missing the Go/Fyne library for {abi}")
+            raise NativePayloadError(f"{label} is missing the Go backend library for {abi}")
         if libcxx and f"{prefix}libc++_shared.so" not in entries:
             raise NativePayloadError(f"{label} is missing libc++_shared.so for {abi}")
 

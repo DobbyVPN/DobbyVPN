@@ -7,7 +7,7 @@
             android:name="com.dobby.test.source_sha"
             android:value="${dobbyTestSourceSha}" />
         <provider
-            android:name="com.dobby.GoUiRoutingProbeProvider"
+            android:name="com.dobby.AndroidRoutingProbeProvider"
             android:authorities="com.dobby.vpn.test.routing_probe"
             android:exported="true"
             android:process=":routing_probe" />

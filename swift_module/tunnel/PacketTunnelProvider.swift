@@ -80,6 +80,18 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
     ) {
         stateHandler(sessionID, generation, state, failureCode)
     }
+
+    func loadSourceURL() -> String? {
+        DobbyConfigsRepositoryImpl.shared.getConnectionURL()
+    }
+
+    func saveSourceURL(_ value: String) -> Bool {
+        DobbyConfigsRepositoryImpl.shared.setConnectionURL(connectionURL: value)
+    }
+
+    func clearSourceURL() -> Bool {
+        DobbyConfigsRepositoryImpl.shared.clearConnectionURL()
+    }
 }
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
