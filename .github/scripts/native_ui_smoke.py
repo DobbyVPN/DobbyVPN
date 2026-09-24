@@ -2857,7 +2857,27 @@ class NativeUIController:
 
     def _launch_windows(self) -> None:
         user32 = _windows_user32()
-        self.process = subprocess.Popen([str(self.binary)])
+        output_root = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
+        if output_root:
+            # The packaged Go UI uses the Windows GUI subsystem, so a crash
+            # after the window opens has no visible console. Keep its complete
+            # process streams with this disposable run for exit diagnostics.
+            root = Path(output_root)
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            root.chmod(0o700)
+            try:
+                with (root / "windows-app.stdout.log").open("xb") as stdout, (
+                    root / "windows-app.stderr.log"
+                ).open("xb") as stderr:
+                    self.process = subprocess.Popen(
+                        [str(self.binary)], stdout=stdout, stderr=stderr,
+                    )
+            except OSError as error:
+                raise NativeUISmokeError(
+                    f"Windows native UI process streams could not be retained: {error}"
+                ) from error
+        else:
+            self.process = subprocess.Popen([str(self.binary)])
         if self._windows_child_pid_file is not None:
             try:
                 creation_ticks = _windows_process_creation_ticks(self.process.pid)
