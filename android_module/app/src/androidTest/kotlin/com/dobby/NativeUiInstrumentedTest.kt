@@ -1,7 +1,6 @@
 package com.dobby
 
 import android.app.Instrumentation
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -15,7 +14,6 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
-import com.dobby.ui.MainActivity
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -98,7 +96,7 @@ class NativeUiInstrumentedTest {
 
     @Test
     fun releaseUiTypesAndShowsConnectFailureThenReopens() {
-        waitForTargetForeground(10_000)
+        launch()
 
         waitForOneOf(arrayOf("Disconnected"), 30_000)
         requireObject(connectionActionLabel)
@@ -131,17 +129,15 @@ class NativeUiInstrumentedTest {
     }
 
     private fun launch() {
-        val launch = instrumentation.targetContext.packageManager
-            .getLaunchIntentForPackage(packageName)
-            // Match a launcher-icon reopen while preserving the current task.
-            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            ?: throw IllegalStateException("ANDROID_LAUNCH_ACTIVITY_MISSING")
-        try {
-            check(instrumentation.startActivitySync(launch) is MainActivity) {
-                "ANDROID_LAUNCH_ACTIVITY_INVALID"
-            }
-        } catch (error: RuntimeException) {
-            throw IllegalStateException("ANDROID_LAUNCH_ACTIVITY_FAILED", error)
+        // Instrumentation runs while Android has the test runner in front.
+        // Start the real Activity through UiAutomation so Android does not
+        // treat this as a blocked background Activity launch.
+        val output = device.executeShellCommand(
+            "am start -W -n $packageName/com.dobby.ui.MainActivity",
+        )
+        println(output)
+        check(output.contains("Status: ok") && output.contains("Complete")) {
+            "ANDROID_LAUNCH_ACTIVITY_FAILED"
         }
         val deadline = System.currentTimeMillis() + 10_000
         while (System.currentTimeMillis() < deadline) {
@@ -152,15 +148,6 @@ class NativeUiInstrumentedTest {
             Thread.sleep(100)
         }
         throw AssertionError("ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT")
-    }
-
-    private fun waitForTargetForeground(timeoutMillis: Long) {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (System.currentTimeMillis() < deadline) {
-            if (device.currentPackageName == packageName) return
-            Thread.sleep(100)
-        }
-        throw AssertionError("ANDROID_UI_APP_NOT_FOREGROUND")
     }
 
     private fun backgroundActivity() {
