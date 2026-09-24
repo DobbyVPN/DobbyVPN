@@ -216,6 +216,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
         add(attachment)
     }
 
+    private func attachFullScreenScreenshot(_ label: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "dobbyvpn-ui-\(label)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func waitForFailureState() -> Bool {
         let failure = app.descendants(matching: .any).matching(
             NSPredicate(format: "label == 'Error' OR label == 'Failed' OR identifier == 'Error' OR identifier == 'Failed'")
@@ -303,6 +310,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
                     continue
                 }
                 currentInput.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                // Refocusing can present the system keyboard's first-use UI
+                // even when an earlier, stale keyboard snapshot was checked.
+                checkedSoftwareKeyboardQuickPathIntroduction = false
                 return true
             }
             return false
@@ -382,19 +392,6 @@ final class GoFyneUIInteractionTests: XCTestCase {
                     continue
                 }
 
-                // First-use keyboard UI is asynchronous. Wait until the
-                // rendered keyboard exists before checking for Apple's
-                // QuickPath introduction, then reacquire its elements after
-                // any system-window tap.
-                if !checkedSoftwareKeyboardQuickPathIntroduction {
-                    dismissSoftwareKeyboardQuickPathIntroductionIfPresent()
-                    if !attachedSoftwareKeyboardScreenshot {
-                        attachScreenshot("software-keyboard")
-                        attachedSoftwareKeyboardScreenshot = true
-                    }
-                    continue
-                }
-
                 let predicate: NSPredicate
                 if let label {
                     predicate = NSPredicate(
@@ -441,6 +438,19 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 }
                 unavailableKeyAttempts = 0
 
+                // Check the full screen only after a live key is available.
+                // XCTest's app screenshot omits SpringBoard-owned keyboard
+                // tutorials, which otherwise cover the keys without the Go
+                // app receiving them.
+                if !checkedSoftwareKeyboardQuickPathIntroduction {
+                    dismissSoftwareKeyboardQuickPathIntroductionIfPresent()
+                    if !attachedSoftwareKeyboardScreenshot {
+                        attachFullScreenScreenshot("software-keyboard")
+                        attachedSoftwareKeyboardScreenshot = true
+                    }
+                    continue
+                }
+
                 // The accessibility action point for Fyne's keyboard keys is
                 // unreliable on no-Metal Simulators. A frame-centered tap
                 // dispatches the real key event without asking XCTest to
@@ -461,16 +471,16 @@ final class GoFyneUIInteractionTests: XCTestCase {
         guard !checkedSoftwareKeyboardQuickPathIntroduction else { return }
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let settleDeadline = Date().addingTimeInterval(2)
+        let settleDeadline = Date().addingTimeInterval(8)
         var continueButton: CGRect?
-        var screenshot: UIImage?
+        var screenshot: XCUIScreenshot?
 
         // The keyboard and its first-use tutorial arrive asynchronously. Do
         // not remember an early empty screenshot as proof that no tutorial
         // will appear; inspect the rendered screen briefly after keys exist.
         while Date() < settleDeadline {
-            let currentScreenshot = app.screenshot().image
-            let visibleText = recognizedText(in: currentScreenshot)
+            let currentScreenshot = XCUIScreen.main.screenshot()
+            let visibleText = recognizedText(in: currentScreenshot.image)
             if let renderedContinue = visibleText.first(where: {
                 $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     .localizedCaseInsensitiveCompare("Continue") == .orderedSame
@@ -482,7 +492,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
             if visibleText.contains(where: {
                 $0.text.localizedCaseInsensitiveContains("Speed up your typing")
             }) {
-                attachScreenshot("quickpath-introduction")
+                attachFullScreenScreenshot("quickpath-introduction")
                 XCTFail("iOS QuickPath introduction was visible but its Continue button was not recognized")
                 return
             }
@@ -494,13 +504,13 @@ final class GoFyneUIInteractionTests: XCTestCase {
             return
         }
 
-        attachScreenshot("quickpath-introduction")
+        attachFullScreenScreenshot("quickpath-introduction")
 
         // Vision uses a bottom-left origin. Convert the visible button point
         // to a screen-relative point and post an actual tap through SpringBoard
         // because the tutorial belongs to iOS, not to the Go/Fyne app.
-        let screenX = continueButton.midX * screenshot.size.width
-        let screenY = (1 - continueButton.midY) * screenshot.size.height
+        let screenX = continueButton.midX * screenshot.image.size.width
+        let screenY = (1 - continueButton.midY) * screenshot.image.size.height
         let frame = springboard.frame
         guard frame.width > 0, frame.height > 0 else {
             XCTFail("SpringBoard did not expose the screen frame for QuickPath dismissal")
@@ -514,7 +524,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
         }
 
         func quickPathIntroductionIsGone() -> Bool {
-            let text = recognizedText(in: app.screenshot().image).map(\.text)
+            let text = recognizedText(in: XCUIScreen.main.screenshot().image).map(\.text)
             return !text.contains {
                 $0.localizedCaseInsensitiveContains("Speed up your typing")
                     || $0.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -544,7 +554,7 @@ final class GoFyneUIInteractionTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
 
-        attachScreenshot("quickpath-dismissal-failed")
+        attachFullScreenScreenshot("quickpath-dismissal-failed")
         XCTFail("QuickPath Continue panel remained visible after real screen taps")
     }
 
