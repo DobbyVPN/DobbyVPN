@@ -2,14 +2,14 @@ import Foundation
 
 /// Small platform boundary shared by the iOS and macOS SwiftUI frontends.
 /// The Go session manager owns all connection state and configuration rules.
-public protocol DobbySessionClient: AnyObject {
+public protocol DobbySessionClient: AnyObject, Sendable {
     func call(_ method: String, parameters: [String: Any]) -> String
     var diagnosticPaths: [URL] { get }
     var version: String { get }
     var sourceCommit: String { get }
 }
 
-public struct DobbySessionSnapshot: Decodable {
+public struct DobbySessionSnapshot: Decodable, Sendable {
     public let sessionID: String
     public let sequence: Int64
     public let generation: Int64
@@ -74,7 +74,7 @@ public struct DobbySessionSnapshot: Decodable {
     }
 }
 
-public struct DobbyProfile: Decodable {
+public struct DobbyProfile: Decodable, Sendable {
     public let protocolName: String
     public let description: String
 
@@ -90,12 +90,12 @@ public struct DobbyProfile: Decodable {
     }
 }
 
-public struct DobbyWarning: Decodable {
+public struct DobbyWarning: Decodable, Sendable {
     public let code: String
     public let message: String
 }
 
-public struct DobbyFailure: Decodable {
+public struct DobbyFailure: Decodable, Sendable {
     public let code: String
     public let message: String
 }

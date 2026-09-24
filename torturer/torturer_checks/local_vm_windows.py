@@ -910,10 +910,23 @@ def run_interactive_ui(
                 )
             cleanup_child()
             raise LocalVMError("Windows native UI task timed out")
-        try:
-            raw_exit_code = exit_code.read_text(encoding="ascii").strip()
-        except OSError as error:
-            raise LocalVMError("Windows native UI exit marker is unreadable") from error
+        raw_exit_code: str | None = None
+        marker_error: OSError | None = None
+        for attempt in range(10):
+            try:
+                raw_exit_code = exit_code.read_text(encoding="ascii").strip()
+                marker_error = None
+                break
+            except OSError as error:
+                marker_error = error
+                if attempt < 9:
+                    time.sleep(0.05)
+        if marker_error is not None:
+            raise LocalVMError(
+                "Windows native UI exit marker is unreadable "
+                f"(errno={marker_error.errno}, winerror={getattr(marker_error, 'winerror', None)})"
+            ) from marker_error
+        assert raw_exit_code is not None
         if not re.fullmatch(r"-?[0-9]+", raw_exit_code):
             raise LocalVMError("Windows native UI exit marker is invalid")
         returncode = int(raw_exit_code)

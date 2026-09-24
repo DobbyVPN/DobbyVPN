@@ -1,7 +1,7 @@
 import Foundation
 import CommonDI
 
-final class IOSSessionClient: DobbySessionClient {
+final class IOSSessionClient: DobbySessionClient, @unchecked Sendable {
     private let shell = IOSAppCompositionRoot.sessionShell
 
     var diagnosticPaths: [URL] { IOSAppCompositionRoot.diagnosticPaths() }

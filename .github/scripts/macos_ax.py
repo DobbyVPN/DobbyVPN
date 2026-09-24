@@ -230,6 +230,16 @@ def _element_texts(frameworks: Frameworks, element: ctypes.c_void_p) -> Iterator
             frameworks.release(value)
 
 
+def _role(frameworks: Frameworks, element: ctypes.c_void_p) -> str | None:
+    value = _attribute(frameworks, element, "AXRole")
+    if value is None:
+        return None
+    try:
+        return frameworks.text(value)
+    finally:
+        frameworks.release(value)
+
+
 def _children(frameworks: Frameworks, element: ctypes.c_void_p) -> tuple[ctypes.c_void_p, ...]:
     value = _attribute(frameworks, element, "AXChildren")
     if value is None:
@@ -621,7 +631,9 @@ def _find_control(
             # avoids stale dynamic labels and keeps refreshes bounded without
             # guessing a control by name or screen position. Menus are
             # smaller roots and are skipped in favour of that same generation's
-            # content root; an absent current root is a hard failure.
+            # content root; an absent current root is a hard failure. SwiftUI's
+            # window-level toolbar and tab buttons are siblings of the content
+            # root, so include those explicit navigation roles as well.
             roots = _children(frameworks, window)
             owned_elements.extend(roots)
             selected_root = None
@@ -657,48 +669,57 @@ def _find_control(
                     "current-root",
                     "Accessibility window had no current full-window root",
                 )
-            pending: list[tuple[ctypes.c_void_p, int, bool]] = [
-                (selected_root, 0, False)
-            ]
-            while pending:
-                _check_deadline()
-                element, depth, owned = pending.pop()
-                if owned:
-                    owned_elements.append(element)
-                if not element or depth > _MAX_DEPTH:
-                    continue
-                hash_value = int(frameworks.core.CFHash(element))
-                bucket = seen.setdefault(hash_value, [])
-                if any(frameworks.core.CFEqual(previous, element) for previous in bucket):
-                    continue
-                bucket.append(element)
-                nodes += 1
-                if nodes > _MAX_NODES:
-                    raise AXLookupError("ax-tree", "Accessibility tree exceeded the node limit")
-                matching = any(
-                    text.startswith(name) if prefix else text == name
-                    for text in _element_texts(frameworks, element)
-                )
-                if matching:
-                    frame = _frame(frameworks, element)
-                    if frame is not None and _contains(window_frame, frame):
-                        # The official Darwin bridge retains regenerated
-                        # roots in a process-global array. A refresh can
-                        # therefore expose the same logical control more
-                        # than once. Collapse only exact same-frame
-                        # duplicates; distinct controls remain ambiguous.
-                        if frame not in match_frames:
-                            match_frames.add(frame)
-                            matches.append(frame)
-                        if len(matches) > 1:
-                            raise AXLookupError(
-                                "ambiguous",
-                                f"accessibility element {name!r} matched multiple controls",
-                            )
-                children = _children(frameworks, element)
-                for child in reversed(children):
-                    if child:
-                        pending.append((child, depth + 1, True))
+            search_roots = [selected_root]
+            search_roots.extend(
+                candidate
+                for candidate in roots
+                if candidate != selected_root
+                and _role(frameworks, candidate)
+                in {"AXToolbar", "AXButton", "AXRadioButton", "AXTabGroup"}
+            )
+            for search_root in search_roots:
+                pending: list[tuple[ctypes.c_void_p, int, bool]] = [
+                    (search_root, 0, False)
+                ]
+                while pending:
+                    _check_deadline()
+                    element, depth, owned = pending.pop()
+                    if owned:
+                        owned_elements.append(element)
+                    if not element or depth > _MAX_DEPTH:
+                        continue
+                    hash_value = int(frameworks.core.CFHash(element))
+                    bucket = seen.setdefault(hash_value, [])
+                    if any(frameworks.core.CFEqual(previous, element) for previous in bucket):
+                        continue
+                    bucket.append(element)
+                    nodes += 1
+                    if nodes > _MAX_NODES:
+                        raise AXLookupError("ax-tree", "Accessibility tree exceeded the node limit")
+                    matching = any(
+                        text.startswith(name) if prefix else text == name
+                        for text in _element_texts(frameworks, element)
+                    )
+                    if matching:
+                        frame = _frame(frameworks, element)
+                        if frame is not None and _contains(window_frame, frame):
+                            # The official Darwin bridge retains regenerated
+                            # roots in a process-global array. A refresh can
+                            # therefore expose the same logical control more
+                            # than once. Collapse only exact same-frame
+                            # duplicates; distinct controls remain ambiguous.
+                            if frame not in match_frames:
+                                match_frames.add(frame)
+                                matches.append(frame)
+                            if len(matches) > 1:
+                                raise AXLookupError(
+                                    "ambiguous",
+                                    f"accessibility element {name!r} matched multiple controls",
+                                )
+                    children = _children(frameworks, element)
+                    for child in reversed(children):
+                        if child:
+                            pending.append((child, depth + 1, True))
         if matches:
             return {
                 "ok": True,

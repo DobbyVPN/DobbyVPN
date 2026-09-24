@@ -6,20 +6,18 @@
   <Grid MinWidth="560" MinHeight="520">
     <TabView x:Name="Pages" Margin="18" IsAddTabButtonVisible="False" SelectionChanged="Pages_SelectionChanged">
       <TabViewItem Header="Connection">
-        <ScrollViewer>
-          <StackPanel Spacing="12" Margin="8">
+        <Grid RowDefinitions="Auto,*,Auto" Margin="8" RowSpacing="12">
+          <StackPanel Spacing="6">
             <TextBlock Text="DobbyVPN" Style="{StaticResource TitleTextBlockStyle}" />
             <TextBlock x:Name="StatusText" Text="Disconnected" AutomationProperties.AutomationId="Disconnected" />
             <TextBlock x:Name="ProfileText" TextWrapping="WrapWholeWords" />
             <TextBlock x:Name="WarningsText" TextWrapping="WrapWholeWords" Foreground="DarkOrange" />
             <TextBlock x:Name="FailureText" TextWrapping="WrapWholeWords" Foreground="IndianRed" />
             <TextBlock x:Name="ErrorText" TextWrapping="WrapWholeWords" Foreground="IndianRed" />
-            <TextBlock Text="Connection configuration" Style="{StaticResource SubtitleTextBlockStyle}" />
-            <TextBox x:Name="SourceEditor" AcceptsReturn="True" MinHeight="150" TextWrapping="Wrap" PlaceholderText="HTTPS connection URL or inline configuration" AutomationProperties.AutomationId="Connection configuration" />
-            <TextBlock Text="Enter an HTTPS connection URL or inline configuration." Foreground="Gray" />
-            <Button x:Name="ConnectionButton" Content="Connect" Click="ConnectionButton_Click" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="VPN connection action" />
           </StackPanel>
-        </ScrollViewer>
+          <TextBox x:Name="SourceEditor" Grid.Row="1" AcceptsReturn="True" Height="180" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" PlaceholderText="HTTPS connection URL or inline configuration" AutomationProperties.AutomationId="Connection configuration" AutomationProperties.Name="Connection configuration" />
+          <Button x:Name="ConnectionButton" Grid.Row="2" Content="Connect" Click="ConnectionButton_Click" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="VPN connection action" />
+        </Grid>
       </TabViewItem>
       <TabViewItem Header="Logs">
         <Grid RowDefinitions="Auto,*" Margin="8" RowSpacing="10">
@@ -30,7 +28,7 @@
           </StackPanel>
           <Grid Grid.Row="1" RowDefinitions="Auto,*" RowSpacing="8">
             <TextBlock x:Name="LogsErrorText" Foreground="IndianRed" TextWrapping="WrapWholeWords" />
-            <TextBox x:Name="LogsText" Grid.Row="1" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="Backend logs" />
+            <TextBox x:Name="LogsText" Grid.Row="1" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="Backend logs" />
           </Grid>
         </Grid>
       </TabViewItem>

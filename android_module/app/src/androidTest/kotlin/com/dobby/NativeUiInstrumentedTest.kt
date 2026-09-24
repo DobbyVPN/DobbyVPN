@@ -108,10 +108,10 @@ class NativeUiInstrumentedTest {
         tapStable("Connection configuration")
         val nativeInput = waitForFocusedNativeInput(10_000)
         nativeInput.setText("invalidprofile")
+        device.waitForIdle()
         // The backend rejects this deliberately invalid source. The visible
         // Error state proves the Compose input reached the production binding.
-        device.waitForIdle()
-        device.pressBack()
+        dismissNativeInputIfVisible()
 
         // Navigate only after typing so a real control transition proves the
         // Entry focus/IME teardown completed and the entered source survives
@@ -263,6 +263,9 @@ class NativeUiInstrumentedTest {
         val outcomes = arrayOf("Error", "Failed")
         tapStable(connectionActionLabel)
         waitForOneOf(outcomes, 10_000)
+        check(waitForObject("Enter an HTTPS connection URL or inline configuration", 1_000) == null) {
+            "ANDROID_UI_SOURCE_WAS_EMPTY"
+        }
     }
 
     private fun tapAndWaitForVisible(control: String, outcome: String) {
@@ -297,7 +300,7 @@ class NativeUiInstrumentedTest {
         var bitmap: Bitmap? = null
         var output: File? = null
         try {
-            ensureNativeInputDismissedForScreenshot()
+            dismissNativeInputIfVisible()
             sourceBitmap = instrumentation.uiAutomation.takeScreenshot()
                 ?: throw IllegalStateException("ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY")
             val source = sourceBitmap ?: throw IllegalStateException(
@@ -383,8 +386,8 @@ class NativeUiInstrumentedTest {
         }
     }
 
-    /** Hide the keyboard before capturing the rendered Compose surface. */
-    private fun ensureNativeInputDismissedForScreenshot() {
+    /** Send Back only when the Compose keyboard is visible. */
+    private fun dismissNativeInputIfVisible() {
         if (isImeVisible()) device.pressBack()
         device.waitForIdle()
     }

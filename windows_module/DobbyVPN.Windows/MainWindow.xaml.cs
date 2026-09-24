@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO.Pipes;
 using Windows.ApplicationModel.DataTransfer;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -23,10 +24,13 @@ public sealed partial class MainWindow : Window
     private bool _busy;
     private bool _snapshotInFlight;
     private string? _acceptedInThisWindow;
+    private string? _renderedSource;
+    private bool _sourceInitialized;
 
     public MainWindow()
     {
         InitializeComponent();
+        SetConnectionAction("Connect");
         var assembly = Assembly.GetExecutingAssembly();
         VersionText.Text = $"Version: {assembly.GetName().Version?.ToString(3) ?? "Unknown"}";
         var commit = assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -66,7 +70,8 @@ public sealed partial class MainWindow : Window
         _snapshotInFlight = true;
         try
         {
-            var result = await CallAsync<Snapshot>("Snapshot", new { session_id = _snapshot?.SessionId ?? "" });
+            var result = await ReadSnapshotAsync();
+            var recoveringFromSnapshotError = _snapshot is null || StatusText.Text == "Error";
             _snapshot = result;
             StatusText.Text = result.Recovering ? "Reconnecting" : result.State switch
             {
@@ -76,7 +81,7 @@ public sealed partial class MainWindow : Window
                 _ => "Disconnected"
             };
             AutomationProperties.SetAutomationId(StatusText, StatusText.Text);
-            ConnectionButton.Content = result.State == "CONNECTED" ? "Disconnect" : "Connect";
+            SetConnectionAction(result.State == "CONNECTED" ? "Disconnect" : "Connect");
             ConnectionButton.IsEnabled = !_busy;
             SourceEditor.IsEnabled = !_busy;
             ProfileText.Text = result.ActiveProfile is null
@@ -86,31 +91,54 @@ public sealed partial class MainWindow : Window
             FailureText.Text = result.LastFailure is null
                 ? ""
                 : $"{result.LastFailure.Message} ({result.LastFailure.Code})";
-            if (!_sourceDirty)
+            if (!_sourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
+                (!_sourceInitialized || string.Equals(NormalizeSource(SourceEditor.Text), _renderedSource, StringComparison.Ordinal)))
             {
+                string sourceToDisplay;
                 if (!string.IsNullOrEmpty(result.SourceUrl))
                 {
-                    SetSourceText(result.SourceUrl);
+                    sourceToDisplay = result.SourceUrl;
                     _acceptedInThisWindow = result.SourceUrl;
-                }
-                else if (_acceptedInThisWindow is null)
-                {
-                    SetSourceText("");
                 }
                 else
                 {
-                    SetSourceText(_acceptedInThisWindow);
+                    sourceToDisplay = _acceptedInThisWindow ?? "";
                 }
+                SetSourceText(sourceToDisplay);
+                _renderedSource = sourceToDisplay;
+                _sourceInitialized = true;
             }
             if (!string.IsNullOrEmpty(result.SourceError)) ErrorText.Text = result.SourceError;
+            else if (recoveringFromSnapshotError) ErrorText.Text = string.Empty;
         }
         catch (Exception error)
         {
+            _snapshot = null;
             ErrorText.Text = error.Message;
+            StatusText.Text = "Error";
+            AutomationProperties.SetAutomationId(StatusText, StatusText.Text);
+            SetConnectionAction("Connect");
+            ConnectionButton.IsEnabled = false;
         }
         finally
         {
             _snapshotInFlight = false;
+        }
+    }
+
+    private async Task<Snapshot> ReadSnapshotAsync()
+    {
+        var sessionId = _snapshot?.SessionId ?? "";
+        try
+        {
+            return await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId });
+        }
+        catch (BackendCommandException error) when (error.Code == "NOT_FOUND" && !string.IsNullOrEmpty(sessionId))
+        {
+            // The Go backend owns session state. A replacement backend has a
+            // new session ID, so reattach through its owner-independent
+            // Snapshot entry point and let it restore the saved configuration URL.
+            return await CallAsync<Snapshot>("Snapshot", new { session_id = "" });
         }
     }
 
@@ -130,7 +158,7 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                var source = SourceEditor.Text.Trim();
+                var source = NormalizeSource(SourceEditor.Text).Trim();
                 var needsConfigure = !current.Configured || _sourceDirty;
                 if (needsConfigure && string.IsNullOrWhiteSpace(source))
                     throw new InvalidOperationException("Enter an HTTPS connection URL or inline configuration.");
@@ -144,8 +172,10 @@ public sealed partial class MainWindow : Window
                         source
                     });
                     sequence = configured.Sequence;
+                    SetSourceText(source);
                     _acceptedInThisWindow = source;
                     _sourceDirty = false;
+                    _renderedSource = source;
                 }
                 await CallAsync<JsonElement>("Start", new
                 {
@@ -185,7 +215,9 @@ public sealed partial class MainWindow : Window
         if (!response.RootElement.GetProperty("ok").GetBoolean())
         {
             var failure = response.RootElement.GetProperty("error");
-            throw new InvalidOperationException($"{failure.GetProperty("message").GetString()} ({failure.GetProperty("code").GetString()})");
+            var code = failure.GetProperty("code").GetString() ?? "INTERNAL";
+            var message = failure.GetProperty("message").GetString() ?? "Go backend command failed";
+            throw new BackendCommandException(code, message);
         }
         var payload = response.RootElement.GetProperty("result");
         var result = payload.Deserialize<T>(JsonOptions);
@@ -202,9 +234,18 @@ public sealed partial class MainWindow : Window
         finally { _updatingSource = false; }
     }
 
-    private async void Pages_SelectionChanged(TabView sender, SelectionChangedEventArgs args)
+    private void SetConnectionAction(string value)
     {
-        if (sender.SelectedIndex == 1) await RefreshLogsAsync();
+        ConnectionButton.Content = value;
+        AutomationProperties.SetName(ConnectionButton, value);
+    }
+
+    private static string NormalizeSource(string value) =>
+        value.Replace("\r\n", "\n").Replace("\r", "\n");
+
+    private async void Pages_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (Pages.SelectedIndex == 1) await RefreshLogsAsync();
     }
 
     private async void RefreshLogs_Click(object sender, RoutedEventArgs e) => await RefreshLogsAsync();
@@ -264,5 +305,16 @@ public sealed partial class MainWindow : Window
     private sealed class CommandSequence
     {
         [JsonPropertyName("sequence")] public long Sequence { get; init; }
+    }
+
+    private sealed class BackendCommandException : InvalidOperationException
+    {
+        public BackendCommandException(string code, string message)
+            : base($"{message} ({code})")
+        {
+            Code = code;
+        }
+
+        public string Code { get; }
     }
 }

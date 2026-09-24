@@ -29,6 +29,9 @@ The CLI and desktop frontends call the same Go backend. The frontend sends one
 JSON request per local connection. The supported calls are Snapshot,
 Configure, Start, and Stop. Frontends poll Snapshot for current state. Every
 change remains fenced by the Go session ID, sequence, or generation.
+If Snapshot returns `NOT_FOUND` after the Go backend restarts, the frontend
+reattaches with a new `Snapshot` request without a session ID before displaying
+state or accepting another action. The backend then supplies its saved URL.
 
 macOS and Linux use a Unix domain socket with local peer checks. Windows uses
 the fixed DobbyVPN.Control named pipe. Its access list grants the installed

@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
+    @FocusState private var configurationFocused: Bool
 
     public init(model: DobbySessionViewModel) {
         self.model = model
@@ -51,9 +52,10 @@ public struct DobbyRootView: View {
                     get: { model.sourceText },
                     set: { model.sourceChanged($0) }
                 ))
-                .frame(minHeight: 150)
+                .frame(height: 180)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.4)))
                 .accessibilityIdentifier("Connection configuration")
+                .focused($configurationFocused)
                 .disabled(model.busy)
                 Text("Enter an HTTPS connection URL or inline configuration.")
                     .font(.footnote)
@@ -68,6 +70,15 @@ public struct DobbyRootView: View {
             }
             .padding(24)
         }
+#if os(iOS)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { configurationFocused = false }
+                    .accessibilityIdentifier("Dismiss configuration keyboard")
+            }
+        }
+#endif
     }
 
     private var logs: some View {
@@ -94,8 +105,10 @@ public struct DobbyRootView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Settings").font(.largeTitle.bold())
             Text("Version: \(model.client.version)")
+                .accessibilityIdentifier("Settings version metadata")
             Text("Source commit: \(model.client.sourceCommit)")
                 .textSelection(.enabled)
+                .accessibilityIdentifier("Settings source commit metadata")
             if let url = URL(string: "https://github.com/DobbyVPN/DobbyVPN/tree/\(model.client.sourceCommit)"),
                model.client.sourceCommit.count == 40 {
                 Link("Open source", destination: url)

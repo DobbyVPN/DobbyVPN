@@ -272,12 +272,7 @@ public final class NativeUiHostedProfileTest {
                 switch (name) {
                     case "configure": {
                         if (guiAuto) {
-                            long configureDeadline = System.currentTimeMillis()
-                                    + operationTimeout(operation);
-                            configureThroughRenderedUI(
-                                    profile,
-                                    remainingTimeout(configureDeadline,
-                                            "ANDROID_UI_CONFIGURE_TIMEOUT"));
+                            configureThroughRenderedUI(profile, operationTimeout(operation));
                             // The one-step configure scenario must prove that
                             // the rendered profile was accepted by Go.  A
                             // later connect/reconnect owns that visible start
@@ -288,20 +283,13 @@ public final class NativeUiHostedProfileTest {
                             boolean consentHandled = false;
                             if (!startsLater) {
                                 consentHandled = connectThroughRenderedUI(
-                                        remainingTimeout(configureDeadline,
-                                                "ANDROID_UI_CONFIGURE_TIMEOUT"));
-                                assertRenderedSourceRetained(
-                                        Math.min(2_000L, remainingTimeout(configureDeadline,
-                                                "ANDROID_UI_CONFIGURE_TIMEOUT")));
+                                        operationTimeout(operation));
+                                assertRenderedSourceRetained(2_000L);
                                 disconnectThroughRenderedUI(
-                                        remainingTimeout(configureDeadline,
-                                                "ANDROID_UI_CONFIGURE_TIMEOUT"));
+                                        operationTimeout(operation));
                                 boolean noVpn = awaitVpnNetwork(
                                         false,
-                                        Math.min(
-                                                NETWORK_RECOVERY_TIMEOUT_MILLIS,
-                                                remainingTimeout(configureDeadline,
-                                                        "ANDROID_UI_CONFIGURE_TIMEOUT"))) == null;
+                                        NETWORK_RECOVERY_TIMEOUT_MILLIS) == null;
                                 if (!noVpn) {
                                     throw new IllegalStateException(
                                             "ANDROID_UI_CONFIGURE_DISCONNECT_FAILED");
@@ -641,7 +629,7 @@ public final class NativeUiHostedProfileTest {
         markProgress("configure", "configuration-control", "started");
         tapUiControl("Connection configuration",
                 remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
-        UiObject2 input = waitForUiControl("Connection configuration",
+        UiObject2 input = waitForFocusedNativeInput(
                 remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         markProgress("configure", "configuration-control", "completed");
 
@@ -651,10 +639,12 @@ public final class NativeUiHostedProfileTest {
         }
         expectedRenderedSource = text.trim();
         markProgress("configure", "profile-entry", "started");
-        input.setText(text);
+        input.setText(expectedRenderedSource);
         waitForIdleBounded(uiDevice(), deadline);
+        assertRenderedSourceRetained(
+                Math.min(2_000L, remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT")));
         markProgress("configure", "profile-entry", "completed");
-        uiDevice().pressBack();
+        dismissNativeInputIfVisible();
         markProgress("configure", "input-dismiss", "completed");
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
 
@@ -663,6 +653,8 @@ public final class NativeUiHostedProfileTest {
         waitForUiControl("Back", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         tapUiControl("Back", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+        assertRenderedSourceRetained(
+                Math.min(2_000L, remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT")));
         markProgress("configure", "rendered-navigation", "completed");
     }
 
@@ -785,11 +777,26 @@ public final class NativeUiHostedProfileTest {
     private void assertRenderedSourceRetained(long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
-            UiObject2 input = findUiObject("Connection configuration");
+            UiObject2 input = findNativeInput();
             if (input != null && expectedRenderedSource.equals(input.getText())) return;
             SystemClock.sleep(POLL_MILLIS);
         }
         throw new IllegalStateException("ANDROID_UI_ACCEPTED_SOURCE_NOT_VISIBLE");
+    }
+
+    private UiObject2 findNativeInput() {
+        return findVisibleUiObject(uiDevice().findObjects(
+                By.clazz("android.widget.EditText").pkg(context.getPackageName())));
+    }
+
+    private UiObject2 waitForFocusedNativeInput(long timeout) throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 input = findNativeInput();
+            if (input != null && input.isFocused()) return input;
+            Thread.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException("ANDROID_UI_INPUT_FOCUS_TIMEOUT");
     }
 
     private void disconnectThroughRenderedUI(long timeout) throws Exception {
@@ -1993,7 +2000,7 @@ public final class NativeUiHostedProfileTest {
         Bitmap bitmap = null;
         File output = null;
         try {
-            ensureNativeInputDismissedForScreenshot();
+            dismissNativeInputIfVisible();
             List<Rect> masks = new ArrayList<>();
             Rect configurationBounds = stableInputBoundsOrNull();
             if (configurationBounds != null) masks.add(configurationBounds);
@@ -2192,8 +2199,8 @@ public final class NativeUiHostedProfileTest {
         }
     }
 
-    /** Hide the Compose keyboard before capturing a required rendered frame. */
-    private void ensureNativeInputDismissedForScreenshot() throws Exception {
+    /** Send Back only when the Compose keyboard is visible. */
+    private void dismissNativeInputIfVisible() throws Exception {
         UiDevice device = uiDevice();
         if (isImeVisible()) device.pressBack();
         device.waitForIdle();

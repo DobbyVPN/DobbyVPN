@@ -15,6 +15,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
         configuration.tap()
         configuration.typeText("invalidprofile")
+        app.buttons["Dismiss configuration keyboard"].tap()
         app.tabBars.buttons["Settings"].tap()
         app.tabBars.buttons["Connection"].tap()
         app.buttons["VPN connection action"].tap()
@@ -40,7 +41,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
     private func attachScreenshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "DobbyVPN-\(name)"
+        attachment.name = "dobbyvpn-ui-\(name)"
         attachment.lifetime = .keepAlways
         add(attachment)
     }

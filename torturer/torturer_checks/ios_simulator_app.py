@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import gzip
 import json
 import os
 import plistlib
@@ -330,9 +329,9 @@ class IOSSimulatorAppEvidence:
     # result bundle. It is an extra diagnostic output; command streams remain
     # the authoritative process diagnostics.
     result_bundle: Path | None = None
-    # The app's own complete gzip export is retained separately from the
-    # XCTest result bundle.  XCTest attachments never replace this stream.
-    log_exports: tuple[Path, ...] = ()
+    # The app's complete native runtime log is retained separately from the
+    # XCTest result bundle. XCTest attachments never replace this stream.
+    native_log: Path | None = None
 
 
 def select_available_iphone(
@@ -524,20 +523,6 @@ def _copy_complete_directory(source: Path, destination: Path, *, label: str) -> 
     return destination
 
 
-def _validate_gzip_export(path: Path) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise IOSSimulatorAppContractError(f"iOS app log export is not a regular file: {path}")
-    try:
-        with gzip.open(path, "rb") as archive:
-            payload = archive.read()
-    except (OSError, EOFError) as error:
-        raise IOSSimulatorAppContractError(
-            f"iOS app log export gzip is unreadable: {path}"
-        ) from error
-    if not payload:
-        raise IOSSimulatorAppContractError(f"iOS app log export gzip is empty: {path}")
-
-
 def _retain_xctest_result_bundle(result_bundle: Path, work_dir: Path) -> Path:
     destination = _ios_diagnostics_directory(work_dir) / result_bundle.name
     return _copy_complete_directory(
@@ -669,15 +654,15 @@ def _retain_xctest_screenshots(
     return destination
 
 
-def _collect_ios_app_log_exports(
+def _collect_ios_native_log(
     runner: CommandRunner,
     simulator: AvailableSimulator,
     contract: IOSSimulatorAppContract,
     work_dir: Path,
     *,
     budget: RunBudget,
-) -> tuple[Path, ...]:
-    """Retain the native app log and every complete app-created gzip."""
+) -> Path:
+    """Retain the complete native app log after the UI test."""
     result = _require_success(
         runner,
         simctl_get_app_container_command(simulator.udid, contract.bundle_identifier),
@@ -714,43 +699,7 @@ def _collect_ios_app_log_exports(
             f"could not copy complete native app log: {native_log_copy}",
         ) from error
     native_log_copy.chmod(0o600)
-
-    # A failed app may not reach the UI action that exports its structured
-    # gzip log. Preserve the native runtime log first so that absence of that
-    # optional export cannot discard the diagnostics most useful for a crash.
-    candidates = sorted(
-        (
-            path for path in container.rglob("DobbyVPN_logs_*.jsonl.gz")
-            if not path.is_symlink() and path.is_file()
-        ),
-        key=lambda path: str(path),
-    )
-    if not candidates:
-        raise IOSSimulatorStageError(
-            "collect-app-log-export",
-            "Simulator app did not leave a DobbyVPN_logs_*.jsonl.gz export",
-        )
-
-    retained: list[Path] = []
-    for source in candidates:
-        _validate_gzip_export(source)
-        destination = destination_dir / source.name
-        try:
-            shutil.copy2(source, destination)
-        except OSError as error:
-            raise IOSSimulatorStageError(
-                "collect-app-log-export",
-                f"could not copy complete app log export: {destination}",
-            ) from error
-        try:
-            _validate_gzip_export(destination)
-        except IOSSimulatorAppContractError as error:
-            raise IOSSimulatorStageError(
-                "collect-app-log-export",
-                f"retained app log export failed validation: {destination}",
-            ) from error
-        retained.append(destination)
-    return tuple(retained)
+    return native_log_copy
 
 
 def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path, ...]:
@@ -788,16 +737,6 @@ def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path,
             destination.chmod(0o600)
             retained.append(destination)
             continue
-        if source.name.startswith("DobbyVPN_logs_") and source.name.endswith(".jsonl.gz"):
-            _validate_gzip_export(source)
-            try:
-                shutil.copy2(source, destination)
-            except OSError as error:
-                raise IOSSimulatorAppContractError(
-                    f"could not retain iOS app log export in guest logs: {destination}"
-                ) from error
-            _validate_gzip_export(destination)
-            retained.append(destination)
     if not retained:
         raise IOSSimulatorAppContractError(
             f"retained iOS diagnostics contain no complete artifacts: {source_dir}"
@@ -1110,7 +1049,7 @@ def run_ios_simulator_app_contract(
     result_bundle = work_dir / "xctest-results.xcresult"
     xctest_started = False
     retained_result_bundle: Path | None = None
-    retained_log_exports: tuple[Path, ...] = ()
+    retained_native_log: Path | None = None
 
     try:
         inventory = _require_success(
@@ -1222,10 +1161,10 @@ def run_ios_simulator_app_contract(
         failure = error
     finally:
         # XCTest attachments are extra artifacts, not a replacement for its
-        # complete stdout/stderr streams. Retain the result bundle and the
-        # app-created gzip while the app data container is still installed;
-        # collection failures remain explicit and secondary to a product
-        # assertion so cleanup can still run.
+        # complete stdout/stderr streams. Retain the result bundle and native
+        # app log while the app data container is still installed; collection
+        # failures remain explicit and secondary to a product assertion so
+        # cleanup can still run.
         if xctest_started:
             if result_bundle.exists():
                 try:
@@ -1248,7 +1187,7 @@ def run_ios_simulator_app_contract(
                 )
             if simulator is not None and app_installed:
                 try:
-                    retained_log_exports = _collect_ios_app_log_exports(
+                    retained_native_log = _collect_ios_native_log(
                         runner,
                         simulator,
                         contract,
@@ -1290,7 +1229,7 @@ def run_ios_simulator_app_contract(
                 )
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
-    if simulator is None or retained_result_bundle is None or not retained_log_exports:
+    if simulator is None or retained_result_bundle is None or retained_native_log is None:
         raise IOSSimulatorAppContractError("iOS Simulator check produced no result")
     budget.assert_within_deadline()
     return IOSSimulatorAppEvidence(
@@ -1301,7 +1240,7 @@ def run_ios_simulator_app_contract(
             architecture=contract.architecture,
         ),
         result_bundle=retained_result_bundle,
-        log_exports=retained_log_exports,
+        native_log=retained_native_log,
     )
 
 

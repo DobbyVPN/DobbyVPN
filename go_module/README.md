@@ -74,9 +74,11 @@ and profiles provided by Release.
 
 The local desktop endpoint exposes Snapshot, Configure, Start, and Stop.
 Frontends poll Snapshot for state and use session ID, sequence, and generation
-values to reject stale commands and responses. The Go backend owns the
-persisted accepted subscription URL; an inline TOML source stays in the
-frontend's current session.
+values to reject stale commands and responses. After a backend restart, a
+`NOT_FOUND` Snapshot response means the frontend must reattach with a new
+Snapshot request without a session ID. The Go backend owns the persisted
+accepted subscription URL; an inline TOML source stays in the frontend's
+current session.
 
 The JSON transport is local to the machine. Unix control sockets are protected
 by filesystem ownership and permissions. The Windows named pipe has a fixed

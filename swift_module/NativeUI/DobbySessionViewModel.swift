@@ -61,14 +61,15 @@ public final class DobbySessionViewModel: ObservableObject {
         guard !snapshotInFlight else { return }
         snapshotInFlight = true
         let currentID = snapshot.sessionID
-        worker.async { [weak self] in
-            guard let self else { return }
-            let response = self.client.call("Snapshot", parameters: ["session_id": currentID])
-            let decoded = Result { try DobbyResponse.result(from: response, as: DobbySessionSnapshot.self) }
-            Task { @MainActor in
+        let recoveringFromSnapshotFailure = currentID.isEmpty && !error.isEmpty
+        let client = client
+        worker.async { [weak self, client] in
+            let decoded = readSnapshot(client: client, sessionID: currentID)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
                 self.snapshotInFlight = false
                 switch decoded {
-                case let .success(value):
+                case let .success((value, reattached)):
                     self.snapshot = value
                     if !self.sourceIsDirty {
                         if !value.sourceURL.isEmpty {
@@ -79,8 +80,13 @@ public final class DobbySessionViewModel: ObservableObject {
                             self.sourceText = ""
                         }
                     }
-                    if !value.sourceError.isEmpty { self.error = value.sourceError }
+                    if !value.sourceError.isEmpty {
+                        self.error = value.sourceError
+                    } else if reattached || recoveringFromSnapshotFailure {
+                        self.error = ""
+                    }
                 case let .failure(failure):
+                    self.snapshot = .empty
                     self.error = failure.localizedDescription
                 }
             }
@@ -89,16 +95,20 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public func performPrimaryAction() {
         guard !busy else { return }
+        guard !snapshot.sessionID.isEmpty else {
+            error = "Go backend session is not ready"
+            return
+        }
         busy = true
         error = ""
         let current = snapshot
         let source = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
         let configure = !current.configured || sourceIsDirty
-        worker.async { [weak self] in
-            guard let self else { return }
+        let client = client
+        worker.async { [weak self, client, current, source, configure] in
             let outcome = Result {
                 if current.state == "CONNECTED" {
-                    let response = self.client.call("Stop", parameters: [
+                    let response = client.call("Stop", parameters: [
                         "session_id": current.sessionID,
                         "generation": current.generation,
                     ])
@@ -107,7 +117,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     guard !configure || !source.isEmpty else { throw DobbyClientError.noConfiguration }
                     var sequence = current.sequence
                     if configure {
-                        let response = self.client.call("Configure", parameters: [
+                        let response = client.call("Configure", parameters: [
                             "session_id": current.sessionID,
                             "expected_sequence": sequence,
                             "source": source,
@@ -115,7 +125,7 @@ public final class DobbySessionViewModel: ObservableObject {
                         let configured = try DobbyResponse.result(from: response, as: DobbyCommandSequence.self)
                         sequence = configured.sequence
                     }
-                    let response = self.client.call("Start", parameters: [
+                    let response = client.call("Start", parameters: [
                         "session_id": current.sessionID,
                         "expected_sequence": sequence,
                         "mode": "AUTO_SELECT",
@@ -124,7 +134,8 @@ public final class DobbySessionViewModel: ObservableObject {
                     try DobbyResponse.check(response)
                 }
             }
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
                 self.busy = false
                 switch outcome {
                 case .success:
@@ -142,11 +153,11 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public func refreshLogs() {
         logsError = ""
-        worker.async { [weak self] in
-            guard let self else { return }
+        let client = client
+        worker.async { [weak self, client] in
             var output: [String] = []
             var errors: [String] = []
-            for url in self.client.diagnosticPaths {
+            for url in client.diagnosticPaths {
                 guard FileManager.default.fileExists(atPath: url.path) else { continue }
                 do {
                     output.append(try String(contentsOf: url, encoding: .utf8))
@@ -156,11 +167,29 @@ public final class DobbySessionViewModel: ObservableObject {
             }
             let text = output.joined(separator: "\n")
             let issue = errors.joined(separator: "\n")
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
                 self.logs = text
                 self.logsError = issue
             }
         }
+    }
+}
+
+private func readSnapshot(
+    client: DobbySessionClient,
+    sessionID: String
+) -> Result<(DobbySessionSnapshot, reattached: Bool), Error> {
+    let response = client.call("Snapshot", parameters: ["session_id": sessionID])
+    do {
+        return .success((try DobbyResponse.result(from: response, as: DobbySessionSnapshot.self), false))
+    } catch DobbyClientError.command(let code, _) where code == "NOT_FOUND" && !sessionID.isEmpty {
+        let replacement = client.call("Snapshot", parameters: ["session_id": ""])
+        return Result {
+            (try DobbyResponse.result(from: replacement, as: DobbySessionSnapshot.self), true)
+        }
+    } catch {
+        return .failure(error)
     }
 }
 

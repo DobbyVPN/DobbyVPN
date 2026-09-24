@@ -256,7 +256,14 @@ private class SessionController(private val activity: MainActivity) {
 
     private fun refreshSnapshot() {
         try {
-            val response = JSONObject(NativeGoSession.snapshot(latest.sessionId))
+            val sessionId = latest.sessionId
+            var reattached = false
+            var response = JSONObject(NativeGoSession.snapshot(sessionId))
+            val failureCode = response.optJSONObject("error")?.optString("code").orEmpty()
+            if (!response.optBoolean("ok") && sessionId.isNotEmpty() && failureCode == "NOT_FOUND") {
+                response = JSONObject(NativeGoSession.snapshot(""))
+                reattached = true
+            }
             requireOK(response)
             val snapshot = response.getJSONObject("result")
             val active = snapshot.optJSONObject("active_profile")
@@ -291,11 +298,17 @@ private class SessionController(private val activity: MainActivity) {
                 state = state.copy(
                     session = current,
                     source = if (state.sourceDirty || current.sourceUrl.isEmpty()) state.source else current.sourceUrl,
-                    error = if (current.sourceError.isNotEmpty()) current.sourceError else state.error,
+                    error = when {
+                        current.sourceError.isNotEmpty() -> current.sourceError
+                        reattached -> ""
+                        else -> state.error
+                    },
                 )
             }
         } catch (failure: Exception) {
-            report(commandError(failure))
+            latest = SessionData()
+            val message = commandError(failure)
+            main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
         }
     }
 

@@ -520,7 +520,13 @@ def prepare_candidate(
         )
         service_path = source_root / "go_module" / SERVICE_NAMES[platform]
         cli_path = source_root / "go_module" / CLI_NAMES[platform]
-        ui_path = candidate_root / ("frontend" if platform == "windows" else UI_NAMES[platform]) if platform in {"windows", "macos"} else None
+        ui_path = (
+            candidate_root / "frontend" / UI_NAMES[platform]
+            if platform == "windows"
+            else candidate_root / UI_NAMES[platform]
+            if platform == "macos"
+            else None
+        )
         app_path = None
     else:
         app_path = _build_android(source_root, candidate_root, architecture)

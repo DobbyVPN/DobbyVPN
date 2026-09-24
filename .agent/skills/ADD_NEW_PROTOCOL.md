@@ -1,47 +1,43 @@
 ---
 name: add-new-protocol
-description: Add a protocol engine through the neutral Go runtime while preserving the shared UI and thin platform shells.
+description: Add a protocol engine to the shared Go backend used by native frontends.
 ---
 
 # Add a new protocol
 
-This guide is intentionally protocol-neutral. DobbyVPN has one shared Go/Fyne
-UI, one Go product/runtime layer, and thin operating-system shells only where
-the platform VPN API requires them. A new protocol must not create a second
-session manager, protocol-specific RPC, platform UI repository, Swift lifecycle owner,
-or UI toggle.
+Protocol implementations belong in the shared Go backend. Native frontends use
+the common session API and do not add protocol-specific UI, control transports,
+or session managers. See [AGENTS.md](../../AGENTS.md) and
+[docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) for the implemented
+architecture.
 
-## Required implementation sequence
+## Implementation sequence
 
-1. Add one configuration section and a safe profile summary in Go. Keep raw
-   configuration, URLs, endpoints, credentials, and authentication metadata
-   inside the Go boundary.
-2. Implement the neutral `protocol.ProtocolDevice` interface for the engine:
-   open/start, proxy-address (when applicable), server identity, and close.
-   Make cancellation, startup failure, and reverse-order cleanup explicit.
-3. Register one factory in the Go runtime composition root and route all
-   control through SessionV2. Do not add a protocol-specific RPC or lifecycle
-   export; desktop, Android, and iOS all use the existing SessionV2 contract.
-4. Add parser, runtime, cleanup, and integration tests, including cancellation,
-   failed startup, stale callbacks, and reconnect/recovery behavior.
-5. Update the supported-protocol documentation and sanitized examples. Keep
-   the shared Go/Fyne presentation flow unchanged.
-6. Add matching SessionV2, Harness, and Torturer contract coverage only after
-   the application behavior is complete. Preserve the existing test suite and
-   its evidence norms.
+1. Add configuration parsing and a safe profile summary in Go. Keep credentials
+   and raw configuration out of diagnostics and committed fixtures.
+2. Implement the protocol device lifecycle, including cancellation, startup
+   failure, and reverse-order cleanup.
+3. Register the protocol factory in the Go runtime and expose it through the
+   existing `sessionapi`. Keep desktop JSON control and the mobile binding
+   protocol-neutral.
+4. Add focused parser, runtime, cleanup, and integration tests for success,
+   cancellation, startup failure, and recovery.
+5. Update supported-protocol documentation and synthetic examples. Product
+   diagnostics are displayed as written; do not add log sanitization.
+6. Add functional coverage through the existing shared scenarios and contract.
+   Keep scenario definitions and pass criteria in `torturer/docs/contract.md`.
 
-## Platform boundary checklist
+## Platform boundaries
 
-- Desktop shells provide authenticated local transport, service installation,
-  and local diagnostics only.
-- Android owns VPN permission, foreground-service lifetime, TUN allocation,
-  socket protection, and native callback publication.
-- iOS owns NetworkExtension/Packet Tunnel lifetime, TUN/socket callbacks, and
-  native callback publication.
-- Shared Go/Fyne code renders safe SessionV2 snapshots/events and never parses
-  protocol configuration or owns VPN resources.
+- Windows and macOS frontends call the Go backend over the existing local JSON
+  endpoint. Linux remains backend and CLI only.
+- Android and iOS keep VPN permission and operating-system lifecycle work in
+  their native boundaries, with protocol behavior in Go.
+- The Go backend owns parsing, profile selection, session state, protocol
+  runtimes, recovery, and cleanup.
+- Native frontends read the fixed diagnostic files and display their contents
+  without sanitization.
 
-Before merging, prove that SessionV2 remains the sole externally meaningful
-session/state/generation owner, that the Go module graph contains only the
-intended engine dependencies, and that no per-protocol lifecycle path or
-credential-bearing diagnostic output was introduced.
+Before completion, run the Go and relevant functional checks. Confirm that all
+supported frontends use the shared session API and that no protocol-specific
+control path or duplicate session owner was added.

@@ -1257,11 +1257,10 @@ if ($hwndValue -le 0) {
     throw "invalid positive HWND"
 }
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new($hwndValue))
-$nameCondition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
-    [System.Windows.Automation.AutomationElement]::NameProperty, $env:DOBBY_UI_NAME)
 $idCondition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $env:DOBBY_UI_NAME)
-$condition = New-Object -TypeName System.Windows.Automation.OrCondition -ArgumentList @($nameCondition, $idCondition)
+$nameCondition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
+    [System.Windows.Automation.AutomationElement]::NameProperty, $env:DOBBY_UI_NAME)
 if ($env:DOBBY_UI_PREFIX -eq "1") {
     $element = $root.FindAll(
         [System.Windows.Automation.TreeScope]::Descendants,
@@ -1272,7 +1271,14 @@ if ($env:DOBBY_UI_PREFIX -eq "1") {
         } |
         Select-Object -First 1
 } else {
-    $element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    $element = $root.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        $idCondition)
+    if ($null -eq $element) {
+        $element = $root.FindFirst(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $nameCondition)
+    }
 }
 if ($null -eq $element) { exit 3 }
 $rect = $element.Current.BoundingRectangle
@@ -1320,29 +1326,8 @@ Write-Output ("{0},{1},{2},{3}" -f $rect.Left, $rect.Top, $rect.Right, $rect.Bot
     return values  # type: ignore[return-value]
 
 
-def _windows_click(user32: object, bounds: tuple[int, int, int, int]) -> None:
-    left, top, right, bottom = bounds
-    user32.SetCursorPos((left + right) // 2, (top + bottom) // 2)
-    user32.mouse_event(0x0002, 0, 0, 0, 0)
-    user32.mouse_event(0x0004, 0, 0, 0, 0)
-
-
-def _windows_has_element(hwnd: int, name: str, *, prefix: bool = False) -> bool:
-    try:
-        _windows_accessibility_rect(hwnd, name, prefix=prefix)
-        return True
-    except NativeUIElementNotFound:
-        return False
-
-
 def _windows_clipboard_snapshot(powershell: str) -> str | None:
-    """Return the current text clipboard, or None when it is empty.
-
-    The value crosses the PowerShell boundary as base64 so neither command
-    arguments nor diagnostics contain clipboard text.  A missing snapshot is
-    intentionally treated as an empty/unknown clipboard and is cleared during
-    cleanup.
-    """
+    """Snapshot plain text so native input can restore the disposable VM."""
     command = r'''
 $ErrorActionPreference = "Stop"
 try {
@@ -1361,15 +1346,13 @@ try {
             text=True,
             capture_output=True,
             timeout=10,
+            redact_stdout=True,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"Windows clipboard snapshot failed: {error}") from error
     if result.returncode == 3:
         return None
     if result.returncode != 0:
-        # An empty/unsupported clipboard is an allowed pre-test state. Keep
-        # the complete provider diagnostic visible so it is never mistaken
-        # for a successful snapshot, then let cleanup clear the clipboard.
         print(
             _subprocess_failure(
                 "Windows clipboard snapshot unavailable", result, redact_stdout=True,
@@ -1387,14 +1370,7 @@ try {
 
 
 def _windows_set_clipboard(powershell: str, value: str) -> None:
-    """Set text clipboard content without putting the value in command text."""
-    # Windows PowerShell's ``Set-Clipboard -Value ''`` binds an empty string
-    # as a null parameter and fails with ``Value cannot be null``.  Its
-    # ``Set-Clipboard`` implementation on the supported guest does not have
-    # the newer ``-Clear`` switch either, so clear through the WinForms
-    # clipboard API instead of trying to set an empty text value.  Keep the
-    # stdin boundary for both branches so profile text never appears in
-    # command arguments or diagnostics.
+    """Set text clipboard content without putting it in command text."""
     if value:
         command = r'''
 $ErrorActionPreference = "Stop"
@@ -1429,7 +1405,7 @@ Add-Type -AssemblyName System.Windows.Forms
 
 
 def _windows_restore_clipboard(powershell: str, previous: str | None) -> None:
-    """Restore text clipboard content, reporting a clear fallback as well."""
+    """Restore text clipboard content, clearing it if restoration fails."""
     value = previous if previous is not None else ""
     try:
         _windows_set_clipboard(powershell, value)
@@ -1448,13 +1424,14 @@ def _windows_restore_clipboard(powershell: str, previous: str | None) -> None:
         ) from restore_error
 
 
-def _windows_paste(profile: Path) -> Callable[[], None]:
+def _windows_paste(value: str) -> Callable[[], None]:
+    """Stage one profile for Ctrl+V and return its idempotent restoration."""
     powershell = shutil.which("powershell") or shutil.which("pwsh")
     if not powershell:
         raise NativeUISmokeError("PowerShell is required for native clipboard input")
     previous = _windows_clipboard_snapshot(powershell)
     try:
-        _windows_set_clipboard(powershell, profile.read_text(encoding="utf-8"))
+        _windows_set_clipboard(powershell, value)
     except BaseException as error:
         try:
             _windows_restore_clipboard(powershell, previous)
@@ -1474,6 +1451,198 @@ def _windows_paste(profile: Path) -> Callable[[], None]:
         _windows_restore_clipboard(powershell, previous)
 
     return restore
+
+
+def _windows_accessibility_focus(hwnd: int, name: str) -> None:
+    """Confirm the visible configuration field owns keyboard focus."""
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        raise NativeUISmokeError("PowerShell is required for Windows UI Automation")
+    command = r'''
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$hwndValue = [Int64]::Parse($env:DOBBY_UI_HWND, [Globalization.CultureInfo]::InvariantCulture)
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new($hwndValue))
+$condition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $env:DOBBY_UI_NAME)
+$element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+if ($null -eq $element) { exit 3 }
+$element.SetFocus()
+Start-Sleep -Milliseconds 100
+[Console]::WriteLine([string]$element.Current.HasKeyboardFocus)
+'''
+    environment = os.environ.copy()
+    environment["DOBBY_UI_HWND"] = str(hwnd)
+    environment["DOBBY_UI_NAME"] = name
+    try:
+        result = _native_run(
+            [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            check=False,
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=10,
+            stream_label="Windows configuration focus",
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"Windows configuration focus failed: {error}") from error
+    if result.returncode != 0:
+        if result.returncode == 3:
+            raise NativeUIElementNotFound(
+                f"Windows accessibility element {name!r} was not found\n"
+                + _subprocess_streams(result)
+            )
+        raise NativeUISmokeError(
+            _subprocess_failure("Windows configuration focus failed", result)
+        )
+    if result.stdout.strip().lower() != "true":
+        raise NativeUISmokeError(
+            "Windows configuration field did not receive keyboard focus\n"
+            + _subprocess_streams(result)
+        )
+
+
+def _windows_accessibility_verify_value(hwnd: int, name: str, value: str) -> None:
+    """Verify the pasted TextBox value without returning its contents."""
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if not powershell:
+        raise NativeUISmokeError("PowerShell is required for Windows configuration verification")
+    command = r'''
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$hwndValue = [Int64]::Parse($env:DOBBY_UI_HWND, [Globalization.CultureInfo]::InvariantCulture)
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new($hwndValue))
+$condition = New-Object -TypeName System.Windows.Automation.PropertyCondition -ArgumentList @(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $env:DOBBY_UI_NAME)
+$element = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+if ($null -eq $element) { exit 3 }
+$encoded = [Console]::In.ReadToEnd()
+$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))
+$clipboard = [string](Get-Clipboard -Raw -Format Text)
+$normalizedValue = $value.Replace("`r`n", "`n").Replace("`r", "`n")
+$normalizedClipboard = $clipboard.Replace("`r`n", "`n").Replace("`r", "`n")
+$clipboardMatches = [string]::Equals($normalizedClipboard, $normalizedValue, [StringComparison]::Ordinal)
+$pattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+$initial = [string]$pattern.Current.Value
+$normalizedInitial = $initial.Replace("`r`n", "`n").Replace("`r", "`n")
+$initialMatches = [string]::Equals($normalizedInitial, $normalizedValue, [StringComparison]::Ordinal)
+$deadline = [DateTime]::UtcNow.AddSeconds(10)
+$immediate = $initial
+$normalizedImmediate = $normalizedInitial
+while (-not [string]::Equals($normalizedImmediate, $normalizedValue, [StringComparison]::Ordinal) -and
+       [DateTime]::UtcNow -lt $deadline) {
+    Start-Sleep -Milliseconds 100
+    $immediate = [string]$pattern.Current.Value
+    $normalizedImmediate = $immediate.Replace("`r`n", "`n").Replace("`r", "`n")
+}
+$immediateMatches = [string]::Equals($normalizedImmediate, $normalizedValue, [StringComparison]::Ordinal)
+if ($immediateMatches) { Start-Sleep -Milliseconds 1000 }
+$observed = [string]$pattern.Current.Value
+$normalizedObserved = $observed.Replace("`r`n", "`n").Replace("`r", "`n")
+$matches = [string]::Equals($normalizedObserved, $normalizedValue, [StringComparison]::Ordinal)
+$hasKeyboardFocus = [bool]$element.Current.HasKeyboardFocus
+$firstDifference = -1
+if (-not $matches) {
+    $limit = [Math]::Min($normalizedValue.Length, $normalizedObserved.Length)
+    for ($index = 0; $index -lt $limit; $index++) {
+        if ($normalizedValue[$index] -ne $normalizedObserved[$index]) {
+            $firstDifference = $index
+            break
+        }
+    }
+}
+$inputLineFeeds = [regex]::Matches($value, "`n").Count
+$observedLineFeeds = [regex]::Matches($observed, "`n").Count
+[Console]::WriteLine((@{
+    initial_chars = $initial.Length
+    initial_matches_input = $initialMatches
+    clipboard_chars = $clipboard.Length
+    clipboard_matches_input = $clipboardMatches
+    immediate_chars = $immediate.Length
+    immediate_matches_input = $immediateMatches
+    stable_chars = $observed.Length
+    stable_matches_input = $matches
+    has_keyboard_focus = $hasKeyboardFocus
+    first_difference_index = $firstDifference
+    input_line_feeds = $inputLineFeeds
+    stable_line_feeds = $observedLineFeeds
+} | ConvertTo-Json -Compress))
+'''
+    environment = os.environ.copy()
+    environment["DOBBY_UI_HWND"] = str(hwnd)
+    environment["DOBBY_UI_NAME"] = name
+    encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+    try:
+        result = _native_run(
+            [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            input=encoded,
+            check=False,
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=20,
+            stream_label="Windows configuration input",
+            sensitive_values=(value,),
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise NativeUISmokeError(f"Windows configuration verification failed: {error}") from error
+    if result.returncode != 0:
+        if result.returncode == 3:
+            raise NativeUIElementNotFound(
+                f"Windows accessibility element {name!r} was not found\n"
+                + _subprocess_streams(result, sensitive_values=(value,))
+            )
+        raise NativeUISmokeError(
+            _subprocess_failure(
+                "Windows configuration verification failed",
+                result,
+                sensitive_values=(value,),
+            )
+        )
+    try:
+        verification = json.loads(result.stdout.strip())
+        initial_length = int(verification["initial_chars"])
+        immediate_length = int(verification["immediate_chars"])
+        observed_length = int(verification["stable_chars"])
+        exact_match = bool(verification["stable_matches_input"])
+        immediate_match = bool(verification["immediate_matches_input"])
+        first_difference = int(verification["first_difference_index"])
+        input_line_feeds = int(verification["input_line_feeds"])
+        observed_line_feeds = int(verification["stable_line_feeds"])
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise NativeUISmokeError(
+            "Windows configuration verification returned invalid data\n"
+            + _subprocess_streams(result, sensitive_values=(value,))
+        ) from error
+    if not exact_match:
+        raise NativeUISmokeError(
+            "Windows configuration field did not retain the pasted profile "
+            f"(expected_chars={len(value)}, initial_chars={initial_length}, "
+            f"immediate_chars={immediate_length}, observed_chars={observed_length}, "
+            f"initial_matches={verification['initial_matches_input']}, "
+            f"immediate_matches={immediate_match}, first_difference_index={first_difference}, "
+            f"input_line_feeds={input_line_feeds}, observed_line_feeds={observed_line_feeds}, "
+            f"clipboard_chars={verification['clipboard_chars']}, "
+            f"clipboard_matches={verification['clipboard_matches_input']}, "
+            f"has_keyboard_focus={verification['has_keyboard_focus']})"
+        )
+
+
+def _windows_click(user32: object, bounds: tuple[int, int, int, int]) -> None:
+    left, top, right, bottom = bounds
+    user32.SetCursorPos((left + right) // 2, (top + bottom) // 2)
+    user32.mouse_event(0x0002, 0, 0, 0, 0)
+    user32.mouse_event(0x0004, 0, 0, 0, 0)
+
+
+def _windows_has_element(hwnd: int, name: str, *, prefix: bool = False) -> bool:
+    try:
+        _windows_accessibility_rect(hwnd, name, prefix=prefix)
+        return True
+    except NativeUIElementNotFound:
+        return False
 
 
 def _macos_ax_request(
@@ -1889,8 +2058,10 @@ end tell'''
 
 
 def _macos_focus_window(process_pid: int, timeout: float = 3.0) -> None:
-    """Raise and verify one exact-PID window before sending input events."""
+    """Verify the exact process is frontmost, raising its window only if needed."""
 
+    if _macos_frontmost_pid() == process_pid:
+        return
     _macos_ax_raise_window(process_pid, min(max(timeout, 0.1), 3.0))
     _wait_until(
         lambda: _macos_frontmost_pid() == process_pid,
@@ -2790,7 +2961,9 @@ class NativeUIController:
         user32 = ctypes.windll.user32
         bounds = _windows_accessibility_rect(self.hwnd, name, prefix=prefix)
         self._windows_validate_window()
+        user32.SetForegroundWindow(self.hwnd)
         _windows_click(user32, bounds)
+        time.sleep(0.1)
 
     def _windows_has_name(self, name: str, *, prefix: bool = False) -> bool:
         if not self.hwnd:
@@ -3057,14 +3230,29 @@ class NativeUIController:
             ) from error
 
     def configure(self) -> dict[str, object]:
-        restore_clipboard: Callable[[], None]
         if self.platform == "windows":
-            restore_clipboard = _windows_paste(self.profile)
+            value = self.profile.read_text(encoding="utf-8")
+            restore_clipboard = _windows_paste(value)
             try:
                 self._windows_click_name("Connection configuration")
+                _windows_accessibility_focus(
+                    self.hwnd, "Connection configuration",
+                )
                 self._windows_key(0x11, 0x41)  # Ctrl+A
                 self._windows_key(0x11, 0x56)  # Ctrl+V
-            finally:
+                _windows_accessibility_verify_value(
+                    self.hwnd, "Connection configuration", value,
+                )
+            except BaseException as error:
+                try:
+                    restore_clipboard()
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        "Windows clipboard restoration failed: "
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    )
+                raise
+            else:
                 restore_clipboard()
         else:
             # A second configure abandons the first staged paste. Restore it
@@ -3137,13 +3325,20 @@ class NativeUIController:
 
     def _connect_control_visible(self) -> bool:
         if self.platform == "windows":
-            return self._windows_has_name(_NATIVE_ACTION_LABEL)
+            return self._windows_has_name("Connect")
         if self.macos_pid is None:
             return False
         try:
-            return _macos_has_element(self._macos_pid_or_error(), _NATIVE_ACTION_LABEL)
+            return _macos_has_element(self._macos_pid_or_error(), "Connect")
         except NativeUIElementNotFound:
             return False
+
+    def _recovery_ready(self) -> bool:
+        if self.platform == "windows":
+            return self._windows_has_name("Disconnected")
+        if self.macos_pid is None:
+            return False
+        return _macos_has_element(self._macos_pid_or_error(), "Disconnected")
 
     def recover_after_process_loss(self) -> dict[str, object]:
         """Reconfigure and reconnect through the visible production UI.
@@ -3157,17 +3352,20 @@ class NativeUIController:
         """
         self._reconnecting_seen = False
         reconnect_timeout = min(2.0, self.timeout)
-        reconnect_probe_error: NativeUIWaitTimeout | None = None
+        reconnect_probe_error: BaseException | None = None
         try:
             self.wait_status("Reconnecting", timeout=reconnect_timeout)
-        except NativeUIWaitTimeout as error:
+        except NativeUISmokeError as error:
             # A fast replacement may never render this intermediate state.
-            # Keep the bounded probe diagnostic without making it a pass
-            # condition; non-timeout driver/accessibility errors still abort.
+            # The restarted backend may also be briefly unavailable while the
+            # UI reattaches. Keep this bounded probe diagnostic, then require a
+            # fresh Disconnected snapshot and a visible Connect action.
             reconnect_probe_error = error
+        self._wait(self._recovery_ready, f"{self.platform} UI did not reattach after service recovery")
         self._wait(
             self._connect_control_visible,
-            f"{self.platform} UI did not expose Connect after service recovery",
+            f"{self.platform} UI showed Disconnected without exposing Connect",
+            timeout=min(5.0, self.timeout),
         )
         self.configure()
         result = self.connect()
@@ -3182,7 +3380,7 @@ class NativeUIController:
         else:
             try:
                 process_pid = self._macos_pid_or_error()
-                bounds = _macos_accessibility_rect(process_pid, _NATIVE_ACTION_LABEL, 10)
+                bounds = _macos_accessibility_rect(process_pid, "Connect", 10)
                 process_pid = self._macos_pid_or_error()
                 _macos_click(bounds, process_pid)
                 process_pid = self._macos_pid_or_error()
@@ -3200,7 +3398,7 @@ class NativeUIController:
             self._windows_click_name(_NATIVE_ACTION_LABEL)
         else:
             process_pid = self._macos_pid_or_error()
-            bounds = _macos_accessibility_rect(process_pid, _NATIVE_ACTION_LABEL, 10)
+            bounds = _macos_accessibility_rect(process_pid, "Disconnect", 10)
             process_pid = self._macos_pid_or_error()
             _macos_click(bounds, process_pid)
         return self.wait_status("Disconnected")
@@ -3217,14 +3415,16 @@ class NativeUIController:
             process_pid = self._macos_pid_or_error()
             _macos_click(bounds, process_pid)
             self._wait(
-                lambda: _macos_has_element(self._macos_pid_or_error(), "Version:", prefix=True),
+                lambda: _macos_has_element(
+                    self._macos_pid_or_error(), "Settings version metadata"
+                ),
                 "macOS UI did not show Settings metadata",
             )
             version = _macos_has_element(
-                self._macos_pid_or_error(), "Version:", prefix=True
+                self._macos_pid_or_error(), "Settings version metadata"
             )
             commit = _macos_has_element(
-                self._macos_pid_or_error(), "Source commit:", prefix=True
+                self._macos_pid_or_error(), "Settings source commit metadata"
             )
             process_pid = self._macos_pid_or_error()
             bounds = _macos_accessibility_rect(process_pid, "Connection", 10)
