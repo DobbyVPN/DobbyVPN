@@ -2546,6 +2546,7 @@ class NativeUIController:
         self.macos_expected_executable: str | None = None
         self._pending_macos_clipboard_restore: Callable[[], None] | None = None
         self._reconnecting_seen = False
+        self._windows_launch_count = 0
         marker = os.environ.get("DOBBYVPN_NATIVE_UI_CHILD_PID_FILE")
         self._windows_child_pid_file = (
             Path(marker) if platform == "windows" and marker else None
@@ -2865,9 +2866,11 @@ class NativeUIController:
             root = Path(output_root)
             root.mkdir(mode=0o700, parents=True, exist_ok=True)
             root.chmod(0o700)
+            self._windows_launch_count += 1
+            launch = f"{self._windows_launch_count:02d}"
             try:
-                with (root / "windows-app.stdout.log").open("xb") as stdout, (
-                    root / "windows-app.stderr.log"
+                with (root / f"windows-app-{launch}.stdout.log").open("xb") as stdout, (
+                    root / f"windows-app-{launch}.stderr.log"
                 ).open("xb") as stderr:
                     self.process = subprocess.Popen(
                         [str(self.binary)], stdout=stdout, stderr=stderr,
