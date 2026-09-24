@@ -23,6 +23,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.view.View;
+import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityNodeInfo;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -2193,10 +2195,28 @@ public final class NativeUiHostedProfileTest {
     /** Hide the Compose keyboard before capturing a required rendered frame. */
     private void ensureNativeInputDismissedForScreenshot() throws Exception {
         UiDevice device = uiDevice();
-        UiObject2 input = device.findObject(By.clazz("android.widget.EditText")
-                .pkg(context.getPackageName()));
-        if (input != null && input.isFocused()) device.pressBack();
+        if (isImeVisible()) device.pressBack();
         device.waitForIdle();
+    }
+
+    private boolean isImeVisible() {
+        AtomicReference<Boolean> visible = new AtomicReference<>(false);
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        instrumentation.runOnMainSync(() -> {
+            Activity activity = MainActivity.current;
+            View decor = activity == null ? null : activity.getWindow().getDecorView();
+            if (decor == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                WindowInsets insets = decor.getRootWindowInsets();
+                visible.set(insets != null && insets.isVisible(WindowInsets.Type.ime()));
+            } else {
+                Rect frame = new Rect();
+                decor.getWindowVisibleDisplayFrame(frame);
+                int rootHeight = decor.getRootView().getHeight();
+                visible.set(rootHeight > 0 && rootHeight - frame.bottom > rootHeight * 0.15f);
+            }
+        });
+        return visible.get();
     }
 
     private void deleteIfPresent(File file) {

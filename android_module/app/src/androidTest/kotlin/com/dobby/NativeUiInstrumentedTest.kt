@@ -7,7 +7,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowInsets
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -60,19 +62,6 @@ class NativeUiInstrumentedTest {
                 }
             }
             if (finalFailure != null) {
-                try {
-                    finalFailure.addSuppressed(
-                        AssertionError(
-                            "ANDROID_UI_LOGCAT_BEGIN\n" +
-                                device.executeShellCommand("logcat -d") +
-                                "\nANDROID_UI_LOGCAT_END",
-                        ),
-                    )
-                } catch (logcatError: Throwable) {
-                    finalFailure.addSuppressed(
-                        AssertionError("ANDROID_UI_LOGCAT_COLLECTION_FAILED", logcatError),
-                    )
-                }
                 try {
                     CompleteThrowableReporter.report(instrumentation, finalFailure)
                 } catch (reportError: Throwable) {
@@ -160,22 +149,7 @@ class NativeUiInstrumentedTest {
             }
             Thread.sleep(100)
         }
-        val failure = AssertionError(
-            "ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT launch_output=$output",
-        )
-        try {
-            failure.addSuppressed(
-                AssertionError(
-                    "ANDROID_UI_LOGCAT_BEGIN\n${device.executeShellCommand("logcat -d")}\n" +
-                        "ANDROID_UI_LOGCAT_END",
-                ),
-            )
-        } catch (collectionError: Throwable) {
-            failure.addSuppressed(
-                AssertionError("ANDROID_UI_LOGCAT_COLLECTION_FAILED", collectionError),
-            )
-        }
-        throw failure
+        throw AssertionError("ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT launch_output=$output")
     }
 
     private fun targetActivityHasWindowFocus(): Boolean {
@@ -411,8 +385,28 @@ class NativeUiInstrumentedTest {
 
     /** Hide the keyboard before capturing the rendered Compose surface. */
     private fun ensureNativeInputDismissedForScreenshot() {
-        device.pressBack()
+        if (isImeVisible()) device.pressBack()
         device.waitForIdle()
+    }
+
+    private fun isImeVisible(): Boolean {
+        val visible = booleanArrayOf(false)
+        instrumentation.runOnMainSync {
+            val decor = MainActivity.current?.window?.decorView
+            if (decor != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    visible[0] = decor.rootWindowInsets
+                        ?.isVisible(WindowInsets.Type.ime()) == true
+                } else {
+                    val frame = Rect()
+                    decor.getWindowVisibleDisplayFrame(frame)
+                    val rootHeight = decor.rootView.height
+                    visible[0] = rootHeight > 0 &&
+                        rootHeight - frame.bottom > rootHeight * 0.15f
+                }
+            }
+        }
+        return visible[0]
     }
 
     private fun sha256(file: File): String {
