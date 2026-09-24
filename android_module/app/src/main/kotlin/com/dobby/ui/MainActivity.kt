@@ -359,7 +359,12 @@ private fun ConnectionScreen(controller: SessionController) {
     ) {
         Text("Dobby VPN", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(status, modifier = Modifier.semantics { contentDescription = status }, style = MaterialTheme.typography.titleLarge)
-        if (session.activeProfile.isNotEmpty()) Text(session.activeProfile)
+        if (session.activeProfile.isNotEmpty()) {
+            Text(
+                session.activeProfile,
+                modifier = Modifier.semantics { contentDescription = "Active profile" },
+            )
+        }
         if (session.warnings.isNotEmpty()) Text(session.warnings)
         if (session.failure.isNotEmpty()) Text(session.failure)
         if (state.error.isNotEmpty()) Text(state.error)
@@ -422,7 +427,11 @@ private fun LogsScreen(controller: SessionController) {
         if (state.logsError.isNotEmpty()) Text(state.logsError)
         Text(
             state.logs.ifEmpty { "No logs are available yet" },
-            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .semantics { contentDescription = "Connection logs" },
             style = MaterialTheme.typography.bodySmall,
         )
     }

@@ -262,18 +262,20 @@ class NativeUiInstrumentedTest {
                 ?: throw IllegalStateException("ANDROID_UI_SCREENSHOT_COPY_FAILED")
             source.recycle()
             sourceBitmap = null
-            val masks = listOf(
-                "Connection configuration",
-                "Connection logs",
-                "Connection details",
-            ).map { requiredLabel ->
-                val bounds = waitForStableBounds(requiredLabel, 3_000)
+            val masks = buildList {
+                add(waitForStableBounds("Connection configuration", 3_000))
+                for (optionalLabel in listOf("Active profile", "Connection logs")) {
+                    if (waitForObject(optionalLabel, 100) != null) {
+                        add(waitForStableBounds(optionalLabel, 3_000))
+                    }
+                }
+            }.map { bounds ->
                 val clipped = Rect(0, 0, bitmap.width, bitmap.height)
                 check(clipped.intersect(bounds)) {
-                    "ANDROID_UI_SCREENSHOT_MASK_OUTSIDE_FRAME:$requiredLabel"
+                    "ANDROID_UI_SCREENSHOT_MASK_OUTSIDE_FRAME"
                 }
                 check(!clipped.isEmpty) {
-                    "ANDROID_UI_SCREENSHOT_MASK_EMPTY:$requiredLabel"
+                    "ANDROID_UI_SCREENSHOT_MASK_EMPTY"
                 }
                 clipped
             }

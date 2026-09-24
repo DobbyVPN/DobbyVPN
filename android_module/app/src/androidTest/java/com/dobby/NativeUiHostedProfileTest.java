@@ -1994,11 +1994,9 @@ public final class NativeUiHostedProfileTest {
             ensureNativeInputDismissedForScreenshot();
             List<Rect> masks = new ArrayList<>();
             for (String label : new String[]{
-                    "Connection configuration", "Connection logs", "Connection details"}) {
-                // These panels are sensitive when visible, but the rendered
-                // status screen after Connect intentionally has none of
-                // them. A missing panel therefore means there is nothing to
-                // redact on this frame, not a failed screenshot.
+                    "Connection configuration", "Active profile", "Connection logs"}) {
+                // These Compose regions can contain private profile values.
+                // A region absent from the current screen needs no masking.
                 Rect bounds = stableRenderedBoundsOrNull(label);
                 if (bounds != null) masks.add(bounds);
             }
