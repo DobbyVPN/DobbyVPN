@@ -61,6 +61,19 @@ class NativeUiInstrumentedTest {
             }
             if (finalFailure != null) {
                 try {
+                    finalFailure.addSuppressed(
+                        AssertionError(
+                            "ANDROID_UI_LOGCAT_BEGIN\n" +
+                                device.executeShellCommand("logcat -d") +
+                                "\nANDROID_UI_LOGCAT_END",
+                        ),
+                    )
+                } catch (logcatError: Throwable) {
+                    finalFailure.addSuppressed(
+                        AssertionError("ANDROID_UI_LOGCAT_COLLECTION_FAILED", logcatError),
+                    )
+                }
+                try {
                     CompleteThrowableReporter.report(instrumentation, finalFailure)
                 } catch (reportError: Throwable) {
                     finalFailure.addSuppressed(
