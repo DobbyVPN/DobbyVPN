@@ -160,7 +160,9 @@ class NativeUiInstrumentedTest {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (System.currentTimeMillis() < deadline) {
             for (selector in selectors) {
-                device.findObject(selector)?.let { return it }
+                for (candidate in device.findObjects(selector)) {
+                    if (!candidate.visibleBounds.isEmpty) return candidate
+                }
             }
             Thread.sleep(100)
         }
@@ -196,7 +198,33 @@ class NativeUiInstrumentedTest {
             }
             Thread.sleep(100)
         }
-        throw AssertionError("ANDROID_UI_CONTROL_TIMEOUT")
+        throw AssertionError("ANDROID_UI_CONTROL_TIMEOUT:$label")
+    }
+
+    private fun stableVisibleBoundsOrNull(
+        label: String,
+        timeoutMillis: Long,
+        findObject: () -> UiObject2?,
+    ): Rect? {
+        val initial = findObject()?.visibleBounds
+        if (initial == null || initial.isEmpty) return null
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        var previous: Rect? = Rect(initial)
+        var stableSamples = 0
+        while (System.currentTimeMillis() < deadline) {
+            val current = findObject()?.visibleBounds
+            if (current != null && !current.isEmpty) {
+                if (current == previous) {
+                    stableSamples++
+                    if (stableSamples >= 10) return Rect(current)
+                } else {
+                    previous = Rect(current)
+                    stableSamples = 0
+                }
+            }
+            Thread.sleep(100)
+        }
+        throw AssertionError("ANDROID_UI_SCREENSHOT_MASK_UNSTABLE:$label")
     }
 
     private fun tapStable(label: String) {
@@ -262,14 +290,17 @@ class NativeUiInstrumentedTest {
                 ?: throw IllegalStateException("ANDROID_UI_SCREENSHOT_COPY_FAILED")
             source.recycle()
             sourceBitmap = null
-            val masks = buildList {
-                add(waitForStableBounds("Connection configuration", 3_000))
-                for (optionalLabel in listOf("Active profile", "Connection logs")) {
-                    if (waitForObject(optionalLabel, 100) != null) {
-                        add(waitForStableBounds(optionalLabel, 3_000))
-                    }
-                }
-            }.map { bounds ->
+            val masks = listOfNotNull(
+                stableVisibleBoundsOrNull("Connection configuration", 3_000) {
+                    device.findObject(By.clazz("android.widget.EditText").pkg(packageName))
+                },
+                stableVisibleBoundsOrNull("Active profile", 3_000) {
+                    device.findObject(By.desc("Active profile").pkg(packageName))
+                },
+                stableVisibleBoundsOrNull("Connection logs", 3_000) {
+                    device.findObject(By.desc("Connection logs").pkg(packageName))
+                },
+            ).map { bounds ->
                 val clipped = Rect(0, 0, bitmap.width, bitmap.height)
                 check(clipped.intersect(bounds)) {
                     "ANDROID_UI_SCREENSHOT_MASK_OUTSIDE_FRAME"

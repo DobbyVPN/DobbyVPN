@@ -1993,8 +1993,10 @@ public final class NativeUiHostedProfileTest {
         try {
             ensureNativeInputDismissedForScreenshot();
             List<Rect> masks = new ArrayList<>();
+            Rect configurationBounds = stableInputBoundsOrNull();
+            if (configurationBounds != null) masks.add(configurationBounds);
             for (String label : new String[]{
-                    "Connection configuration", "Active profile", "Connection logs"}) {
+                    "Active profile", "Connection logs"}) {
                 // These Compose regions can contain private profile values.
                 // A region absent from the current screen needs no masking.
                 Rect bounds = stableRenderedBoundsOrNull(label);
@@ -2118,13 +2120,18 @@ public final class NativeUiHostedProfileTest {
     }
 
     private Rect stableRenderedBounds(String label) throws Exception {
+        return stableRenderedBounds(label, () -> findRenderedObject(label));
+    }
+
+    private Rect stableRenderedBounds(
+            String label, java.util.function.Supplier<UiObject2> objectLookup) throws Exception {
         long deadline = System.currentTimeMillis() + 3_000L;
         Rect previous = null;
         int stableSamples = 0;
         boolean staleNodeObserved = false;
         while (System.currentTimeMillis() < deadline) {
             try {
-                UiObject2 object = findRenderedObject(label);
+                UiObject2 object = objectLookup.get();
                 Rect current = object == null ? null : object.getVisibleBounds();
                 if (current != null && !current.isEmpty()) {
                     if (current.equals(previous)) {
@@ -2161,6 +2168,19 @@ public final class NativeUiHostedProfileTest {
     private Rect stableRenderedBoundsOrNull(String label) throws Exception {
         try {
             return stableRenderedBounds(label);
+        } catch (IllegalStateException error) {
+            if (error.getMessage() != null
+                    && error.getMessage().startsWith("ANDROID_UI_SCREENSHOT_MASK_MISSING:")) {
+                return null;
+            }
+            throw error;
+        }
+    }
+
+    private Rect stableInputBoundsOrNull() throws Exception {
+        try {
+            return stableRenderedBounds("Connection configuration", () -> uiDevice().findObject(
+                    By.clazz("android.widget.EditText").pkg(context.getPackageName())));
         } catch (IllegalStateException error) {
             if (error.getMessage() != null
                     && error.getMessage().startsWith("ANDROID_UI_SCREENSHOT_MASK_MISSING:")) {
