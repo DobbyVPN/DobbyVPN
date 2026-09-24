@@ -444,6 +444,15 @@ final class GoFyneUIInteractionTests: XCTestCase {
                 }
                 unavailableKeyAttempts = 0
 
+                // Apple's first-use QuickPath panel can appear after the
+                // full-screen OCR check has already marked this keyboard
+                // session clear. Check the system UI immediately before each
+                // key action so a late SpringBoard panel is never tapped
+                // through.
+                if dismissSoftwareKeyboardQuickPathContinueIfPresent() {
+                    continue
+                }
+
                 // Check the full screen only after a live key is available.
                 // XCTest's app screenshot omits SpringBoard-owned keyboard
                 // tutorials, which otherwise cover the keys without the Go
@@ -472,6 +481,35 @@ final class GoFyneUIInteractionTests: XCTestCase {
                     + (isDelete ? "delete" : label ?? "unknown")
             )
         }
+    }
+
+    private func dismissSoftwareKeyboardQuickPathContinueIfPresent() -> Bool {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let predicate = NSPredicate(
+            format: "label ==[c] %@ OR identifier ==[c] %@",
+            "Continue",
+            "Continue"
+        )
+        let continueButton = springboard.descendants(matching: .any).matching(predicate).firstMatch
+        guard continueButton.waitForExistence(timeout: 0.1), !continueButton.frame.isEmpty else {
+            return false
+        }
+
+        attachFullScreenScreenshot("quickpath-accessibility")
+        continueButton.tap()
+        let dismissalDeadline = Date().addingTimeInterval(3)
+        while Date() < dismissalDeadline {
+            let currentContinueButton = springboard.descendants(matching: .any).matching(predicate).firstMatch
+            if !currentContinueButton.exists || currentContinueButton.frame.isEmpty
+                || !currentContinueButton.isHittable {
+                checkedSoftwareKeyboardQuickPathIntroduction = true
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+
+        XCTFail("QuickPath Continue control remained visible after its real SpringBoard tap")
+        return true
     }
 
     private func dismissSoftwareKeyboardQuickPathIntroductionIfPresent() {
