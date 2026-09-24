@@ -81,8 +81,10 @@ final class GoFyneUIInteractionTests: XCTestCase {
         assertRenderedConfiguration("bad", in: inputAfterSettings)
         attachScreenshot("configuration-input")
 
-        dismissSoftwareKeyboard()
-        XCTAssertFalse(connect.frame.isEmpty, "Fyne Connect control has no tappable frame after keyboard dismissal")
+        XCTAssertFalse(
+            connect.frame.isEmpty,
+            "Fyne Connect control has no tappable frame while the software keyboard is visible"
+        )
         XCTAssertTrue(
             tapConnectExpectingFailure(connect),
             "Connect did not produce a visible error state for non-empty input"
@@ -518,21 +520,6 @@ final class GoFyneUIInteractionTests: XCTestCase {
             guard let candidate = observation.topCandidates(1).first else { return nil }
             return (candidate.string, observation.boundingBox)
         }
-    }
-
-    private func dismissSoftwareKeyboard() {
-        // A coordinate tap in the rendered GL view resigns Fyne's native
-        // responder after the final physical key event. Wait for the real
-        // keyboard to leave the accessibility tree before the next edit
-        // refocuses the Entry; iOS 26 can otherwise retain an empty keyboard
-        // container whose key children never become tappable.
-        let keyboard = app.keyboards.firstMatch
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.06)).tap()
-        let gone = expectation(
-            for: NSPredicate(format: "exists == false"),
-            evaluatedWith: keyboard
-        )
-        _ = XCTWaiter.wait(for: [gone], timeout: 5)
     }
 
     private func dismissExportPrompt(returningTo export: XCUIElement) {
