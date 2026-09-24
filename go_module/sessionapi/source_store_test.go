@@ -35,8 +35,8 @@ func TestFileSourceStoreMigratesLegacyURLOnce(t *testing.T) {
 	if err != nil || string(got) != string(want) {
 		t.Fatalf("Load() = %q, %v", got, err)
 	}
-	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Fatalf("legacy URL remains after migration: %v", err)
+	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
+		t.Fatalf("legacy URL remains after migration: %v", statErr)
 	}
 	info, err := os.Stat(current)
 	if err != nil || info.Mode().Perm() != 0600 {

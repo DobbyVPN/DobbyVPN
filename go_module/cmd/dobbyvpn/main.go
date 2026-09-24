@@ -371,6 +371,8 @@ func publicStatus(state string) (code int, label string) {
 		return 1, "Connecting"
 	case sessionapi.StateConnected:
 		return 2, "Connected"
+	case sessionapi.StateIdle, sessionapi.StateFailed:
+		return 0, "Disconnected"
 	default:
 		return 0, "Disconnected"
 	}

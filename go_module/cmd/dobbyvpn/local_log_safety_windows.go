@@ -15,10 +15,6 @@ const localLogClearMarker = "{\"schema\":\"dobby.log/v1\",\"event\":\"logs.clear
 
 var localLogPathMu sync.Mutex
 
-func clearLocalLogFile(path string) error {
-	return clearLocalLogFileAtBase(path, filepath.Dir(filepath.Dir(path)))
-}
-
 func clearLocalLogFileAtBase(path, base string) error {
 	localLogPathMu.Lock()
 	defer localLogPathMu.Unlock()

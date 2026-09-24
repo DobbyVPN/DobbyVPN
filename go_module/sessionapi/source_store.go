@@ -68,7 +68,7 @@ func (s FileSourceStore) Save(ctx context.Context, raw []byte) error {
 	if err := validateNoSymlinkAncestors(dir); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create saved configuration directory: %w", err)
 	}
 	if err := validateSourcePath(dir, s.Path); err != nil {
@@ -80,7 +80,7 @@ func (s FileSourceStore) Save(ctx context.Context, raw []byte) error {
 	}
 	name := temporary.Name()
 	defer func() { _ = os.Remove(name) }()
-	if err := temporary.Chmod(0600); err != nil {
+	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("restrict saved configuration permissions: %w", err)
 	}
@@ -98,7 +98,7 @@ func (s FileSourceStore) Save(ctx context.Context, raw []byte) error {
 	if err := replaceSourceFile(name, s.Path); err != nil {
 		return fmt.Errorf("replace saved configuration URL: %w", err)
 	}
-	if err := os.Chmod(s.Path, 0600); err != nil {
+	if err := os.Chmod(s.Path, 0o600); err != nil {
 		return fmt.Errorf("restrict saved configuration permissions: %w", err)
 	}
 	return nil
