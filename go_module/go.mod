@@ -2,10 +2,6 @@ module go_module
 
 go 1.26.8
 
-// Keep the v2.6.0 production closure local so the upstream Android FD
-// double-close correction remains reproducible on the project's Go toolchain.
-replace github.com/xjasonlyu/tun2socks/v2 => ./modules/tun2socks
-
 replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260919065324-bc54923e3c85
 
 require (
@@ -16,7 +12,7 @@ require (
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/things-go/go-socks5 v0.1.0
 	github.com/vishvananda/netlink v1.3.1
-	github.com/xjasonlyu/tun2socks/v2 v2.6.0
+	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20251008121831-8fe75611866e
 	github.com/xtls/xray-core v1.260327.0
 	golang.getoutline.org/sdk v0.0.21
 	golang.getoutline.org/sdk/x v0.1.0
@@ -35,7 +31,7 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
 	github.com/go-chi/chi/v5 v5.2.4 // indirect
-	github.com/go-chi/cors v1.2.1 // indirect
+	github.com/go-chi/cors v1.2.2 // indirect
 	github.com/go-chi/render v1.0.3 // indirect
 	github.com/go-gost/relay v0.5.0 // indirect
 	github.com/google/btree v1.1.3 // indirect

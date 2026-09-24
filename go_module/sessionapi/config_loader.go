@@ -26,8 +26,9 @@ const (
 )
 
 type LoadedConfig struct {
-	Raw  []byte
-	Kind ConfigSourceKind
+	Raw       []byte
+	Kind      ConfigSourceKind
+	SourceURL string
 }
 
 // ConfigLoader is injectable so parser tests remain deterministic and do not
@@ -134,7 +135,7 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	if closeErr != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be closed", configLoaderCause{cause: closeErr})
 	}
-	return LoadedConfig{Raw: body, Kind: ConfigSourceURL}, nil
+	return LoadedConfig{Raw: body, Kind: ConfigSourceURL, SourceURL: source}, nil
 }
 
 func versionOrDev(version string) string {

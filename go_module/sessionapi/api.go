@@ -145,6 +145,7 @@ type SnapshotResult struct {
 	Configured         bool
 	Digest             string
 	SourceKind         ConfigSourceKind
+	SourceURL          string
 	Profiles           []ProfileSummary
 	Warnings           []Warning
 	ActiveProfile      *ProfileSummary
@@ -245,6 +246,7 @@ type session struct {
 	configured bool
 	digest     string
 	sourceKind ConfigSourceKind
+	sourceURL  string
 	profiles   []RuntimeProfile
 	warnings   []Warning
 
@@ -406,7 +408,7 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 	if acceptErr := validateConfigureBeforeAccept(ctx, s, expectedSequence); acceptErr != nil {
 		return ConfigureResult{}, acceptErr
 	}
-	s.profiles, s.digest, s.sourceKind, s.warnings, s.configured = parsed.profiles, parsed.digest, loaded.Kind, parsed.warnings, true
+	s.profiles, s.digest, s.sourceKind, s.sourceURL, s.warnings, s.configured = parsed.profiles, parsed.digest, loaded.Kind, loaded.SourceURL, parsed.warnings, true
 	s.active, s.lastFailure, s.lastFailureMessage, s.state, s.cleanupDone, s.cleanupFailed = nil, "", "", StateConfigured, true, false
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
 	m.appendLocked(s)
@@ -649,7 +651,7 @@ func (m *Manager) Reset(_ context.Context, sessionID string, expectedSequence ui
 	if !s.cleanupDone || s.cleanupFailed || s.recovering || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping {
 		return SnapshotResult{}, failure(FailureConflict, "successful cleanup is required before resetting")
 	}
-	s.configured, s.digest, s.sourceKind = false, "", ""
+	s.configured, s.digest, s.sourceKind, s.sourceURL = false, "", "", ""
 	s.profiles, s.warnings, s.active = nil, nil, nil
 	s.lastFailure, s.lastFailureMessage, s.state = "", "", StateIdle
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
@@ -973,7 +975,7 @@ func (m *Manager) get(id string) (*session, error) {
 func snapshotLocked(s *session) SnapshotResult {
 	return SnapshotResult{
 		SessionID: s.id, Sequence: s.sequence, Generation: s.generation, State: s.state,
-		Configured: s.configured, Digest: s.digest, SourceKind: s.sourceKind,
+		Configured: s.configured, Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL,
 		Profiles: summaries(s.profiles), Warnings: cloneWarnings(s.warnings),
 		ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure,
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,

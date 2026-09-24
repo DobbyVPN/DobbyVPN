@@ -191,6 +191,7 @@ type snapshotResultDTO struct {
 	Configured      bool         `json:"configured"`
 	Digest          string       `json:"digest"`
 	SourceKind      string       `json:"source_kind"`
+	SourceURL       string       `json:"source_url,omitempty"`
 	Profiles        []profileDTO `json:"profiles"`
 	Warnings        []warningDTO `json:"warnings"`
 	ActiveProfile   *profileDTO  `json:"active_profile,omitempty"`
@@ -239,7 +240,7 @@ func snapshotDTO(in sessionapi.SnapshotResult) snapshotResultDTO {
 	out := snapshotResultDTO{
 		SessionID: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
 		State: string(in.State), Configured: in.Configured, Digest: in.Digest,
-		SourceKind: string(in.SourceKind), Profiles: profilesDTO(in.Profiles),
+		SourceKind: string(in.SourceKind), SourceURL: in.SourceURL, Profiles: profilesDTO(in.Profiles),
 		Warnings: warningsDTO(in.Warnings), ActiveProfile: profileResultPtr(in.ActiveProfile),
 		CleanupComplete: in.CleanupComplete,
 		Recovering:      in.Recovering,

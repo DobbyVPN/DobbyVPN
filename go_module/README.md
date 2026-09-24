@@ -90,11 +90,10 @@ adb shell am instrument -w -r \
   com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-The reviewed tun2socks v2.6.0 dependency closure is likewise tracked under
-`go_module/modules/tun2socks`. It contains the upstream correction from
-`xjasonlyu/tun2socks#495`, backported without the unrelated post-v2.6.0
-networking changes: closing an FD-backed device is idempotent, so stack teardown
-cannot close a descriptor number after the operating system has reassigned it.
+The upstream tun2socks dependency is pinned to commit
+`8fe75611866e343bfa14fdfb80561c7bd49fdd3e`, which fixes double-closing an
+FD-backed device during repeated start and stop. The project uses the upstream
+module directly; it does not carry a local copy or patch.
 
 ### Windows
 

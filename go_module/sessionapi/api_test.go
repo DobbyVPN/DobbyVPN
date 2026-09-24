@@ -86,6 +86,49 @@ func TestConfigurePreservesMixedSourceOrder(t *testing.T) {
 	}
 }
 
+func TestSnapshotCarriesOnlyAcceptedConfigurationURL(t *testing.T) {
+	m := NewManager(ManagerOptions{Loader: acceptedSourceURLLoader{}})
+	initial, err := m.Snapshot(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuredURL, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("https://configs.invalid/profile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := snapshotForTest(t, m, initial.SessionID)
+	if accepted.SourceKind != ConfigSourceURL || accepted.SourceURL != "https://configs.invalid/profile" {
+		t.Fatalf("accepted URL snapshot = %#v", accepted)
+	}
+	if _, err := m.Configure(context.Background(), initial.SessionID, configuredURL.Sequence, []byte("https://configs.invalid/bad")); err == nil {
+		t.Fatal("malformed URL configuration unexpectedly succeeded")
+	}
+	unchanged := snapshotForTest(t, m, initial.SessionID)
+	if unchanged.SourceURL != accepted.SourceURL {
+		t.Fatalf("failed configuration replaced accepted URL: got %q, want %q", unchanged.SourceURL, accepted.SourceURL)
+	}
+	if _, err := m.Configure(context.Background(), initial.SessionID, unchanged.Sequence, fixture(t)); err != nil {
+		t.Fatal(err)
+	}
+	inline := snapshotForTest(t, m, initial.SessionID)
+	if inline.SourceURL != "" || inline.SourceKind != ConfigSourceInline {
+		t.Fatalf("inline configuration retained stale URL: %#v", inline)
+	}
+}
+
+type acceptedSourceURLLoader struct{}
+
+func (acceptedSourceURLLoader) Load(_ context.Context, source []byte) (LoadedConfig, error) {
+	value := string(source)
+	if strings.HasSuffix(value, "/bad") {
+		return LoadedConfig{Raw: []byte("not a configuration"), Kind: ConfigSourceURL, SourceURL: value}, nil
+	}
+	if strings.HasPrefix(value, "https://") {
+		return LoadedConfig{Raw: []byte(loaderTestConfig), Kind: ConfigSourceURL, SourceURL: value}, nil
+	}
+	return LoadedConfig{Raw: append([]byte(nil), source...), Kind: ConfigSourceInline}, nil
+}
+
 func TestConfigureRejectsRemovedCloakProfiles(t *testing.T) {
 	raw := strings.Join([]string{
 		"[[Outline]]", `Description = "supported-before"`, `Server = "198.51.100.20"`, "Port = 443", `Password = "synthetic-password"`,

@@ -32,7 +32,7 @@ func TestDefaultConfigLoaderAcceptsInlineAndHTTPSURL(t *testing.T) {
 	defer server.Close()
 	client := server.Client()
 	loaded, err = (DefaultConfigLoader{Client: client}).Load(context.Background(), []byte(server.URL))
-	if err != nil || loaded.Kind != ConfigSourceURL || string(loaded.Raw) != string(inline) {
+	if err != nil || loaded.Kind != ConfigSourceURL || loaded.SourceURL != server.URL || string(loaded.Raw) != string(inline) {
 		t.Fatalf("HTTPS load = %#v, %v", loaded, err)
 	}
 	if client.CheckRedirect != nil {
