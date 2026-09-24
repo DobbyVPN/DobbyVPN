@@ -34,10 +34,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
         // starts rather than product behavior.
         let settings = element(named: "Settings")
         XCTAssertTrue(settings.waitForExistence(timeout: 10), "Fyne Settings control is not accessible")
-        settings.tap()
-
+        let version = element(withLabelPrefix: "Version:")
         XCTAssertTrue(
-            element(withLabelPrefix: "Version:").waitForExistence(timeout: 10),
+            tapFyneControl(settings) { version.waitForExistence(timeout: 5) },
             "Settings did not expose the release version"
         )
         XCTAssertTrue(
@@ -48,10 +47,9 @@ final class GoFyneUIInteractionTests: XCTestCase {
 
         let back = element(named: "Back")
         XCTAssertTrue(back.waitForExistence(timeout: 10), "Fyne Back control is not accessible")
-        back.tap()
         let inputAfterSettings = element(named: "Connection configuration")
         XCTAssertTrue(
-            inputAfterSettings.waitForExistence(timeout: 30),
+            tapFyneControl(back) { inputAfterSettings.waitForExistence(timeout: 5) },
             "Go/Fyne UI did not return from Settings"
         )
         attachScreenshot("connection")
@@ -184,12 +182,12 @@ final class GoFyneUIInteractionTests: XCTestCase {
         let clear = element(named: "Clear logs")
         XCTAssertTrue(clear.waitForExistence(timeout: 10), "production app did not expose Clear logs")
         XCTAssertTrue(clear.isEnabled, "Clear logs control is unexpectedly disabled")
-        clear.tap()
-        let cleared = expectation(
-            for: NSPredicate(format: "value == %@", ""),
-            evaluatedWith: logs
+        XCTAssertTrue(
+            tapFyneControl(clear) {
+                waitForPredicate(logs, matching: NSPredicate(format: "value == %@", ""), timeout: 5)
+            },
+            "Clear logs did not clear the visible log text"
         )
-        wait(for: [cleared], timeout: 10)
         attachScreenshot("cleared")
 
         let export = element(named: "Export logs")
@@ -225,24 +223,33 @@ final class GoFyneUIInteractionTests: XCTestCase {
         return failure.waitForExistence(timeout: 15)
     }
 
-    private func tapConnectExpectingFailure(_ connect: XCUIElement) -> Bool {
-        // Prefer XCTest's native accessibility action. Some no-Metal Fyne
-        // controls expose a label but return an invalid action point after
-        // XCTest's visibility scroll, so the action can be a no-op while the
-        // element still looks tappable.
-        connect.tap()
-        if waitForFailureState() {
+    private func waitForPredicate(
+        _ element: XCUIElement,
+        matching predicate: NSPredicate,
+        timeout: TimeInterval
+    ) -> Bool {
+        let expected = expectation(for: predicate, evaluatedWith: element)
+        return XCTWaiter.wait(for: [expected], timeout: timeout) == .completed
+    }
+
+    private func tapFyneControl(_ control: XCUIElement, until condition: () -> Bool) -> Bool {
+        // Try XCTest's native accessibility action first. Fyne's virtual
+        // controls can report a no-op action point on Simulator; when the
+        // expected screen change does not occur, tap the center of the
+        // control's rendered frame instead.
+        control.tap()
+        if condition() {
             return true
         }
-
-        // Only recover after the expected rendered failure did not appear.
-        // This is a real screen-coordinate tap derived from the current
-        // rendered element frame, not a direct callback or text injection.
-        guard !connect.frame.isEmpty else {
+        guard control.exists, !control.frame.isEmpty else {
             return false
         }
-        connect.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        return waitForFailureState()
+        control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        return condition()
+    }
+
+    private func tapConnectExpectingFailure(_ connect: XCUIElement) -> Bool {
+        tapFyneControl(connect) { waitForFailureState() }
     }
 
     private func waitForEnabled(_ element: XCUIElement, timeout: TimeInterval = 30) -> Bool {
@@ -304,11 +311,33 @@ final class GoFyneUIInteractionTests: XCTestCase {
         func resetSoftwareKeyboard(until deadline: Date) {
             // On no-Metal Simulators XCTest can retain the parent keyboard
             // accessibility object after a real key tap while its key
-            // children have gone stale. A rendered tap outside Fyne's Entry
-            // makes the production responder resign; refocusing below then
-            // asks UIKit for a fresh keyboard tree. Keep the disappearance
-            // wait short and bounded because the object itself may be stale.
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.06)).tap()
+            // children have gone stale. Tap the empty in-app gap between
+            // Clear logs and Settings, outside Fyne's Entry and away from the
+            // iOS status area; refocusing then asks UIKit for a fresh tree.
+            // Keep the keyboard-disappearance wait short and bounded.
+            let clearLogs = element(named: "Clear logs")
+            let settings = element(named: "Settings")
+            let lookupTimeout = min(1, max(0.1, min(deadline.timeIntervalSinceNow, editDeadline.timeIntervalSinceNow)))
+            guard clearLogs.waitForExistence(timeout: lookupTimeout),
+                  settings.waitForExistence(timeout: lookupTimeout),
+                  !clearLogs.frame.isEmpty,
+                  !settings.frame.isEmpty else {
+                XCTFail("could not locate the in-app gap needed to refresh the software keyboard")
+                return
+            }
+            let appFrame = app.frame
+            let gapStart = clearLogs.frame.maxY
+            let gapEnd = settings.frame.minY
+            guard gapEnd > gapStart, appFrame.height > 0 else {
+                XCTFail("no safe in-app gap was available to refresh the software keyboard")
+                return
+            }
+            let normalizedY = ((gapStart + gapEnd) / 2 - appFrame.minY) / appFrame.height
+            guard (0...1).contains(normalizedY) else {
+                XCTFail("software-keyboard reset point was outside the app window")
+                return
+            }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: normalizedY)).tap()
             let keyboard = app.keyboards.firstMatch
             let timeout = min(3, max(0.1, min(deadline.timeIntervalSinceNow, editDeadline.timeIntervalSinceNow)))
             guard timeout > 0 else { return }
