@@ -267,17 +267,34 @@ func TestDefaultConfigLoaderClosesSuccessfulBody(t *testing.T) {
 }
 
 func TestDefaultConfigLoaderHonorsCallerCancellation(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	started := make(chan struct{})
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		close(started)
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err := (DefaultConfigLoader{Client: server.Client()}).Load(ctx, []byte(server.URL))
-	if CodeOf(err) != FailureInvalidArgument {
-		t.Fatalf("canceled load error = %v", err)
-	} else if errors.Unwrap(err) == nil {
-		t.Fatalf("canceled load lost its original cause: %v", err)
+	result := make(chan error, 1)
+	go func() {
+		_, err := (DefaultConfigLoader{Client: client}).Load(ctx, []byte("https://example.invalid/config"))
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("configuration request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if CodeOf(err) != FailureInvalidArgument {
+			t.Fatalf("canceled load error = %v", err)
+		} else if errors.Unwrap(err) == nil {
+			t.Fatalf("canceled load lost its original cause: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("configuration load did not stop after caller cancellation")
 	}
 }
 
