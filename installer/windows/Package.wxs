@@ -17,11 +17,12 @@
 
 		<MediaTemplate EmbedCab="yes" />
 
+		<!-- Remove v1.5.0 before installing components with changed key files. -->
 		<MajorUpgrade
 			AllowDowngrades="no"
 			AllowSameVersionUpgrades="yes"
 			DowngradeErrorMessage="A newer version of [ProductName] is already installed."
-			Schedule="afterInstallExecute" />
+			Schedule="afterInstallInitialize" />
 
     <Feature Id="Main">
       <ComponentGroupRef Id="AppComponents" />

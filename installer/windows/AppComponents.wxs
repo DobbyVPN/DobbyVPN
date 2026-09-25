@@ -1,7 +1,8 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
     <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
-		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNExecutable" Guid="5a8e6ab1-0ea6-45a5-9a93-316fdde30dc7">
+		<!-- The v1.5.1 executable path changed; this needs a new MSI component identity. -->
+		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNExecutable" Guid="da24efb2-1702-4156-8ea1-892b0de2e50f">
 			<File Source="dobbyVPN-windows\bin\DobbyVPN.exe" KeyPath="yes">
 				<Shortcut 
 					Id="DobbyVPNStartMenuShortcut" 
@@ -21,7 +22,8 @@
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNCliExecutable" Guid="31c65f0f-407e-4d7b-99cb-3b5de6d2ea2e">
 			<File Source="dobbyVPN-windows\bin\dobby-cli.exe" KeyPath="yes" />
 		</Component>
-		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="1ef0c193-dccb-41a5-ae7e-b1f0c214924d">
+		<!-- The v1.5.1 service key file and runtime closure changed. -->
+		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="5810499f-aa36-44a7-b9df-9a9505597be2">
 			<File Source="dobbyVPN-windows\bin\dobbyvpn-backend.exe" KeyPath="yes" />
 			<File Source="dobbyVPN-windows\bin\dobby_bridge.dll" />
 			<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
