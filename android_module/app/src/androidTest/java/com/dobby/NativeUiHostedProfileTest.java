@@ -913,20 +913,32 @@ public final class NativeUiHostedProfileTest {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         Rect previous = null;
         int stable = 0;
+        int attempts = 0;
+        int enabledVisibleMatches = 0;
+        int emptyBounds = 0;
+        int changedBounds = 0;
+        int maxStableSamples = 0;
+        String lastBounds = "none";
         while (System.currentTimeMillis() < deadline) {
+            attempts++;
             UiObject2 value = findEnabledUiObject(label);
             if (value != null) {
+                enabledVisibleMatches++;
                 Rect bounds = value.getVisibleBounds();
                 if (bounds.isEmpty()) {
+                    emptyBounds++;
                     previous = null;
                     stable = 0;
                 } else {
                     if (bounds.equals(previous)) {
                         stable++;
                     } else {
+                        if (previous != null) changedBounds++;
                         previous = new Rect(bounds);
                         stable = 0;
                     }
+                    maxStableSamples = Math.max(maxStableSamples, stable);
+                    lastBounds = bounds.toShortString();
                     if (stable >= UI_STABILITY_SAMPLES) {
                         if (!device.click(bounds.centerX(), bounds.centerY())) {
                             throw new IllegalStateException("ANDROID_UI_TAP_FAILED");
@@ -938,7 +950,19 @@ public final class NativeUiHostedProfileTest {
             }
             Thread.sleep(POLL_MILLIS);
         }
-        throw new IllegalStateException("ANDROID_UI_CONTROL_TIMEOUT");
+        String diagnosticLabel = "Settings".equals(label)
+                || "Back".equals(label)
+                || "Connection configuration".equals(label)
+                || CONNECTION_ACTION_LABEL.equals(label)
+                ? label
+                : "other";
+        throw new IllegalStateException("ANDROID_UI_CONTROL_TIMEOUT: label=" + diagnosticLabel
+                + ", attempts=" + attempts
+                + ", enabledVisibleMatches=" + enabledVisibleMatches
+                + ", emptyBounds=" + emptyBounds
+                + ", changedBounds=" + changedBounds
+                + ", maxStableSamples=" + maxStableSamples
+                + ", lastBounds=" + lastBounds);
     }
 
     private void ensureUiSurface(long timeout) throws Exception {
