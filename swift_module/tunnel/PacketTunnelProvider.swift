@@ -87,7 +87,7 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
 
     func saveSourceURL(_ value: String?) -> Bool {
         guard let value else { return false }
-        DobbyConfigsRepositoryImpl.shared.setConnectionURL(connectionURL: value)
+        return DobbyConfigsRepositoryImpl.shared.setConnectionURL(connectionURL: value)
     }
 
     func clearSourceURL() -> Bool {

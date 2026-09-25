@@ -103,7 +103,7 @@ jobs:
           set -euo pipefail
           chmod +x runtime/services/linux-amd64/dobbyvpn-backend runtime/services/linux-amd64/dobby-cli
           chmod +x runtime/services/macos-arm64/dobbyvpn-backend runtime/services/macos-arm64/dobby-cli runtime/services/macos-arm64/DobbyVPNMacApp
-          chmod +x runtime/services/macos-amd64/dobbyvpn-backend runtime/services/macos-amd64/dobby-cli runtime/services/macos-amd64/DobbyVPNMacApp
+          chmod +x runtime/services/macos-amd64/dobbyvpn-backend runtime/services/macos-amd64/dobby-cli runtime/services/macos-amd64/DobbyVPNMacApp runtime/services/macos-amd64/trusttunnel_client
           python3 .github/scripts/desktop_build.py app --skip-libs --require-all-services
 
       - name: Assemble native desktop archives
