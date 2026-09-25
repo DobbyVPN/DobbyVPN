@@ -96,7 +96,6 @@ public final class NativeUiHostedProfileTest {
     private static final long DEFAULT_TIMEOUT_MILLIS = 60_000L;
     private static final long NETWORK_RECOVERY_TIMEOUT_MILLIS = 10_000L;
     private static final long ACTIVITY_RESUME_TIMEOUT_MILLIS = 15_000L;
-    private static final int UI_STABILITY_SAMPLES = 10;
     private static final int STABILITY_SAMPLES = 5;
     private static final String FALLBACK_ERROR_CODE = "ANDROID_HOSTED_DRIVER_FAILED";
     private static final String[] FIXED_ERROR_CODES = new String[]{
@@ -888,41 +887,31 @@ public final class NativeUiHostedProfileTest {
     private void tapUiControl(String label, long timeout) throws Exception {
         UiDevice device = uiDevice();
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
-        Rect previous = null;
-        int stable = 0;
         int attempts = 0;
-        int visibleMatches = 0;
+        int visibleSamples = 0;
         int emptyBounds = 0;
-        int changedBounds = 0;
-        int maxStableSamples = 0;
+        int staleObjects = 0;
         String lastBounds = "none";
         while (System.currentTimeMillis() < deadline) {
             attempts++;
             UiObject2 value = findUiObject(label);
             if (value != null) {
-                visibleMatches++;
-                Rect bounds = value.getVisibleBounds();
-                if (bounds.isEmpty()) {
-                    emptyBounds++;
-                    previous = null;
-                    stable = 0;
-                } else {
-                    if (bounds.equals(previous)) {
-                        stable++;
+                visibleSamples++;
+                try {
+                    Rect bounds = value.getVisibleBounds();
+                    if (bounds.isEmpty()) {
+                        emptyBounds++;
                     } else {
-                        if (previous != null) changedBounds++;
-                        previous = new Rect(bounds);
-                        stable = 0;
-                    }
-                    maxStableSamples = Math.max(maxStableSamples, stable);
-                    lastBounds = bounds.toShortString();
-                    if (stable >= UI_STABILITY_SAMPLES) {
+                        lastBounds = bounds.toShortString();
                         if (!device.click(bounds.centerX(), bounds.centerY())) {
                             throw new IllegalStateException("ANDROID_UI_TAP_FAILED");
                         }
                         waitForIdleBounded(device, deadline);
                         return;
                     }
+                } catch (StaleObjectException ignored) {
+                    // Retry if Compose replaced the visible node after lookup.
+                    staleObjects++;
                 }
             }
             Thread.sleep(POLL_MILLIS);
@@ -935,10 +924,9 @@ public final class NativeUiHostedProfileTest {
                 : "other";
         throw new IllegalStateException("ANDROID_UI_CONTROL_TIMEOUT: label=" + diagnosticLabel
                 + ", attempts=" + attempts
-                + ", visibleMatches=" + visibleMatches
+                + ", visibleSamples=" + visibleSamples
                 + ", emptyBounds=" + emptyBounds
-                + ", changedBounds=" + changedBounds
-                + ", maxStableSamples=" + maxStableSamples
+                + ", staleObjects=" + staleObjects
                 + ", lastBounds=" + lastBounds);
     }
 
