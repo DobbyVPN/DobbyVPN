@@ -96,6 +96,7 @@ public final class NativeUiHostedProfileTest {
     private static final long DEFAULT_TIMEOUT_MILLIS = 60_000L;
     private static final long NETWORK_RECOVERY_TIMEOUT_MILLIS = 10_000L;
     private static final long ACTIVITY_RESUME_TIMEOUT_MILLIS = 15_000L;
+    private static final int UI_STABILITY_SAMPLES = 10;
     private static final int STABILITY_SAMPLES = 5;
     private static final String FALLBACK_ERROR_CODE = "ANDROID_HOSTED_DRIVER_FAILED";
     private static final String[] FIXED_ERROR_CODES = new String[]{
