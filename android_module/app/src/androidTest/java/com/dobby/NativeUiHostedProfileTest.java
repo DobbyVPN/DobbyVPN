@@ -859,29 +859,6 @@ public final class NativeUiHostedProfileTest {
                 device.findObjects(By.text(label).pkg(context.getPackageName())));
     }
 
-    private UiObject2 findEnabledUiObject(String label) {
-        UiDevice device = uiDevice();
-        UiObject2 value = findEnabledVisibleUiObject(
-                device.findObjects(By.desc(label).pkg(context.getPackageName())));
-        if (value != null) return value;
-        return findEnabledVisibleUiObject(
-                device.findObjects(By.text(label).pkg(context.getPackageName())));
-    }
-
-    private UiObject2 findEnabledVisibleUiObject(List<UiObject2> candidates) {
-        for (UiObject2 candidate : candidates) {
-            try {
-                // A label can match a noninteractive semantics node before its button.
-                if (candidate.isEnabled() && !candidate.getVisibleBounds().isEmpty()) {
-                    return candidate;
-                }
-            } catch (StaleObjectException ignored) {
-                // The Compose tree can replace a matching semantics node mid-query.
-            }
-        }
-        return null;
-    }
-
     private UiObject2 findVisibleUiObject(List<UiObject2> candidates) {
         for (UiObject2 candidate : candidates) {
             try {
@@ -901,7 +878,7 @@ public final class NativeUiHostedProfileTest {
     private UiObject2 waitForUiControl(String label, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
-            UiObject2 value = findEnabledUiObject(label);
+            UiObject2 value = findUiObject(label);
             if (value != null) return value;
             Thread.sleep(POLL_MILLIS);
         }
@@ -914,16 +891,16 @@ public final class NativeUiHostedProfileTest {
         Rect previous = null;
         int stable = 0;
         int attempts = 0;
-        int enabledVisibleMatches = 0;
+        int visibleMatches = 0;
         int emptyBounds = 0;
         int changedBounds = 0;
         int maxStableSamples = 0;
         String lastBounds = "none";
         while (System.currentTimeMillis() < deadline) {
             attempts++;
-            UiObject2 value = findEnabledUiObject(label);
+            UiObject2 value = findUiObject(label);
             if (value != null) {
-                enabledVisibleMatches++;
+                visibleMatches++;
                 Rect bounds = value.getVisibleBounds();
                 if (bounds.isEmpty()) {
                     emptyBounds++;
@@ -958,7 +935,7 @@ public final class NativeUiHostedProfileTest {
                 : "other";
         throw new IllegalStateException("ANDROID_UI_CONTROL_TIMEOUT: label=" + diagnosticLabel
                 + ", attempts=" + attempts
-                + ", enabledVisibleMatches=" + enabledVisibleMatches
+                + ", visibleMatches=" + visibleMatches
                 + ", emptyBounds=" + emptyBounds
                 + ", changedBounds=" + changedBounds
                 + ", maxStableSamples=" + maxStableSamples
