@@ -17,6 +17,7 @@ from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioE
 from torturer_contract.functional.scenarios import ScenarioStep
 
 from .cli import (
+    CommandResult,
     CommandRunner,
     HostedAdapterError,
     HostedCLIAdapter,
@@ -147,6 +148,16 @@ def _linux_process_tree(
         tree.append(record)
         pending.extend(children.get(pid, ()))
     return tuple(tree)
+
+
+def _process_stat_is_absent(result: CommandResult, pid: int) -> bool:
+    if result.returncode != 2 or result.stdout_text.strip() != "service_probe_absent":
+        return False
+    diagnostic = result.stderr.strip()
+    if not diagnostic:
+        return True
+    expected = f"cat: /proc/{pid}/stat: No such file or directory".encode()
+    return diagnostic == expected
 
 
 class LinuxServiceProcessController:
@@ -349,13 +360,9 @@ class LinuxServiceProcessController:
         if result.timed_out:
             raise ScenarioExecutionError("SERVICE_TREE_PROBE_FAILED")
         if result.returncode != 0:
-            # The helper emits an explicit absence marker.  Empty output or
-            # any other marker is a failed probe, never evidence of exit.
-            if (
-                result.returncode == 2
-                and result.stdout_text.strip() == "service_probe_absent"
-                and not result.stderr.strip()
-            ):
+            # Preserve cat's complete stderr, but recognize its exact ENOENT
+            # when SIGKILL exits between the shell's existence check and open.
+            if _process_stat_is_absent(result, pid):
                 return None
             raise ScenarioExecutionError("SERVICE_TREE_PROBE_FAILED")
         value = result.stdout_text.strip()
