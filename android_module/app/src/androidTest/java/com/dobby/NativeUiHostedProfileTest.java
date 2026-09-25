@@ -850,11 +850,13 @@ public final class NativeUiHostedProfileTest {
 
     private UiObject2 findUiObject(String label) {
         UiDevice device = uiDevice();
+        // A rendered profile can make the editable text node large. Prefer
+        // stable accessibility descriptions when locating visible controls.
         UiObject2 value = findVisibleUiObject(
-                device.findObjects(By.text(label).pkg(context.getPackageName())));
+                device.findObjects(By.desc(label).pkg(context.getPackageName())));
         if (value != null) return value;
         return findVisibleUiObject(
-                device.findObjects(By.desc(label).pkg(context.getPackageName())));
+                device.findObjects(By.text(label).pkg(context.getPackageName())));
     }
 
     private UiObject2 findVisibleUiObject(List<UiObject2> candidates) {

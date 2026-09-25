@@ -399,7 +399,10 @@ private fun ConnectionScreen(controller: SessionController) {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(onClick = { controller.show("logs") }) { Text("Logs") }
-            OutlinedButton(onClick = { controller.show("settings") }) { Text("Settings") }
+            OutlinedButton(
+                onClick = { controller.show("settings") },
+                modifier = Modifier.semantics { contentDescription = "Settings" },
+            ) { Text("Settings") }
         }
     }
 }
