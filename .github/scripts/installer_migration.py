@@ -66,6 +66,20 @@ def _emit_command_streams(label: str, stdout: object, stderr: object) -> None:
         print(f"[installer {label} {name} end]", file=sys.stderr)
 
 
+def _emit_msi_log(label: str, path: Path) -> None:
+    """Forward the complete verbose MSI log before its temporary directory is removed."""
+    print(f"[installer {label} MSI log begin]", file=sys.stderr)
+    try:
+        payload = Path(path).read_bytes()
+    except OSError as error:
+        print(f"[installer {label} MSI log collection error] {error}", file=sys.stderr)
+        print(f"[installer {label} MSI log end]", file=sys.stderr)
+        return
+    rendered = _render_stream(payload)
+    print(rendered, end="" if rendered.endswith("\n") else "\n", file=sys.stderr)
+    print(f"[installer {label} MSI log end]", file=sys.stderr)
+
+
 @dataclass(frozen=True)
 class RollbackAsset:
     platform: str
@@ -186,6 +200,11 @@ class CommandRunner:
         environment: Mapping[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        msi_log_path = (
+            self.log_dir / f"{label}.msi.log"
+            if any(str(argument).lower() == "/l*v" for argument in command)
+            else None
+        )
         stdout_path = self.log_dir / f"{label}.stdout.log"
         stderr_path = self.log_dir / f"{label}.stderr.log"
         try:
@@ -205,8 +224,12 @@ class CommandRunner:
             )
             stdout_path.write_bytes(stdout)
             stderr_path.write_bytes(stderr)
+            if msi_log_path is not None:
+                _emit_msi_log(label, msi_log_path)
             raise _error(f"{label} failed to execute: {error}") from error
         except OSError as error:
+            if msi_log_path is not None:
+                _emit_msi_log(label, msi_log_path)
             raise _error(f"{label} failed to execute: {error}") from error
         _emit_command_streams(label, completed.stdout, completed.stderr)
         stdout = _stream_bytes(completed.stdout)
@@ -214,6 +237,8 @@ class CommandRunner:
         stdout_path.write_bytes(stdout)
         stderr_path.write_bytes(stderr)
         if completed.returncode not in accepted_codes:
+            if msi_log_path is not None:
+                _emit_msi_log(label, msi_log_path)
             raise _error(f"{label} exited with code {completed.returncode}")
         return subprocess.CompletedProcess(
             completed.args,
@@ -292,11 +317,24 @@ $entries = @(
 if ($entries.Count -ne 1) { throw "expected one DobbyVPN ARP entry" }
 if ([string]$entries[0].DisplayVersion -ne $env:DOBBYVPN_EXPECTED_VERSION) { throw "unexpected installed version" }
 $root = Join-Path ${env:ProgramFiles} 'DobbyVPN'
-foreach ($name in @('bin\DobbyVPN.exe', 'bin\dobby-cli.exe', 'bin\dobbyvpn-backend.exe')) {
+if ($env:DOBBYVPN_EXPECTED_VERSION -eq '1.5.0') {
+  $requiredFiles = @('bin\Dobby Vpn.exe', 'bin\dobby-cli.exe', 'bin\windows_grpcvpnserver.exe')
+  $serviceName = 'DobbyVPN Server'
+} else {
+  $requiredFiles = @(
+    'bin\DobbyVPN.exe',
+    'bin\dobby-cli.exe',
+    'bin\dobbyvpn-backend.exe',
+    'bin\dobby_bridge.dll',
+    'bin\wintun.dll'
+  )
+  $serviceName = 'DobbyVPN Go backend'
+}
+foreach ($name in $requiredFiles) {
   if (-not (Test-Path (Join-Path $root $name) -PathType Leaf)) { throw "missing installed file $name" }
 }
-$service = Get-Service -Name 'DobbyVPN Go backend' -ErrorAction Stop
-if ($service.Status -ne 'Running') { throw "DobbyVPN Go backend is not running" }
+$service = Get-Service -Name $serviceName -ErrorAction Stop
+if ($service.Status -ne 'Running') { throw "$serviceName is not running" }
 '''
         environment = {**os.environ, "DOBBYVPN_EXPECTED_VERSION": expected_version}
         self.runner.run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], label=label, environment=environment)
@@ -326,18 +364,20 @@ $entries = @(
 )
 if ($entries.Count -ne 0) { throw "DobbyVPN remains registered after uninstall" }
 if (Test-Path (Join-Path ${env:ProgramFiles} 'DobbyVPN')) { throw "DobbyVPN install directory remains" }
-$service = $null
-try {
-  $service = Get-Service -Name 'DobbyVPN Go backend' -ErrorAction Stop
-} catch {
-  $detail = $_ | Out-String
-  if ($detail -match 'Cannot find any service|cannot find|does not exist') {
-    [Console]::Error.WriteLine($detail)
-  } else {
-    throw
+foreach ($name in @('DobbyVPN Server', 'DobbyVPN Go backend')) {
+  $service = $null
+  try {
+    $service = Get-Service -Name $name -ErrorAction Stop
+  } catch {
+    $detail = $_ | Out-String
+    if ($detail -match 'Cannot find any service|cannot find|does not exist') {
+      [Console]::Error.WriteLine($detail)
+    } else {
+      throw
+    }
   }
+  if ($null -ne $service) { throw "$name remains registered" }
 }
-if ($null -ne $service) { throw "DobbyVPN Go backend remains registered" }
 '''
         self.runner.run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], label=label)
 
@@ -385,10 +425,12 @@ cat "$package_info"
 test "$package_status" -eq 0
 version="$(awk '/^version:/{print $2}' "$package_info")"
 test "$version" = "$EXPECTED_VERSION"
-test -x "/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend"
-test -x "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
 test -f "/Library/LaunchDaemons/com.dobby.vpnservice.plist"
-if [ "$EXPECTED_VERSION" = "1.5.1" ]; then
+if [ "$EXPECTED_VERSION" = "1.5.0" ]; then
+  test -x "/Applications/Dobby VPN.app/Contents/Resources/macos_grpcvpnserver"
+else
+  test -x "/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend"
+  test -x "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
   test -x "/usr/local/libexec/dobbyvpn-uninstall"
 fi
 launchctl print system/com.dobby.vpnservice
