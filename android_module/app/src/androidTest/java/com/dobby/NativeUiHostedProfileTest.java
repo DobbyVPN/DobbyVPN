@@ -859,6 +859,29 @@ public final class NativeUiHostedProfileTest {
                 device.findObjects(By.text(label).pkg(context.getPackageName())));
     }
 
+    private UiObject2 findEnabledUiObject(String label) {
+        UiDevice device = uiDevice();
+        UiObject2 value = findEnabledVisibleUiObject(
+                device.findObjects(By.desc(label).pkg(context.getPackageName())));
+        if (value != null) return value;
+        return findEnabledVisibleUiObject(
+                device.findObjects(By.text(label).pkg(context.getPackageName())));
+    }
+
+    private UiObject2 findEnabledVisibleUiObject(List<UiObject2> candidates) {
+        for (UiObject2 candidate : candidates) {
+            try {
+                // A label can match a noninteractive semantics node before its button.
+                if (candidate.isEnabled() && !candidate.getVisibleBounds().isEmpty()) {
+                    return candidate;
+                }
+            } catch (StaleObjectException ignored) {
+                // The Compose tree can replace a matching semantics node mid-query.
+            }
+        }
+        return null;
+    }
+
     private UiObject2 findVisibleUiObject(List<UiObject2> candidates) {
         for (UiObject2 candidate : candidates) {
             try {
@@ -878,10 +901,8 @@ public final class NativeUiHostedProfileTest {
     private UiObject2 waitForUiControl(String label, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
-            UiObject2 value = findUiObject(label);
-            if (value != null && value.isEnabled() && !value.getVisibleBounds().isEmpty()) {
-                return value;
-            }
+            UiObject2 value = findEnabledUiObject(label);
+            if (value != null) return value;
             Thread.sleep(POLL_MILLIS);
         }
         throw new IllegalStateException("ANDROID_UI_CONTROL_TIMEOUT");
@@ -893,10 +914,13 @@ public final class NativeUiHostedProfileTest {
         Rect previous = null;
         int stable = 0;
         while (System.currentTimeMillis() < deadline) {
-            UiObject2 value = findUiObject(label);
-            if (value != null && value.isEnabled()) {
+            UiObject2 value = findEnabledUiObject(label);
+            if (value != null) {
                 Rect bounds = value.getVisibleBounds();
-                if (!bounds.isEmpty()) {
+                if (bounds.isEmpty()) {
+                    previous = null;
+                    stable = 0;
+                } else {
                     if (bounds.equals(previous)) {
                         stable++;
                     } else {
