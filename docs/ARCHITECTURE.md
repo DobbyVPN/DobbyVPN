@@ -51,9 +51,8 @@ Downloaded and inline configurations are limited to 1 MiB. Configuration
 parsing and profile decisions remain in Go.
 
 Native frontends read fixed local diagnostic files directly and display their
-contents as written. Product logs are not sanitized. The private Harness and
-hosted workflows still redact credentials and private profile values when
-forwarding command output.
+contents as written. Product logs, command output, and screenshots are not
+sanitized by the private Harness or hosted workflows.
 
 ## Build and test ownership
 

@@ -71,10 +71,11 @@ prove recovery: a new working session must be observed.
 
 ## Diagnostics and cleanup
 
-Product log files are read and displayed as written; the product does not
-sanitize their contents. When test tooling forwards command output, it redacts
-credentials and private profile values while preserving the surrounding
-diagnostic content.
+Product log files are read and displayed as written. The product, private
+Harness, and hosted test tooling do not sanitize logs, command output, or
+screenshots. Preserve their complete contents, including any private profile
+values a command emits. Hosted output follows the repository's normal GitHub
+workflow-log and artifact access and retention.
 
 The invoking process receives complete stdout and stderr from repository-owned
 commands, including failures, timeouts, original exceptions, and cleanup
@@ -82,10 +83,10 @@ errors. Output is not truncated, reduced to selected lines, or replaced by a
 status code or byte count. Collection failures are reported alongside the
 test failure. Test cleanup runs after pass, failure, and timeout.
 
-Required UI screenshots are kept with the current disposable run. Captures
-are limited to the target window. Only private profile values are redacted
-when output policy requires it; other diagnostic content remains intact. A
-failed capture or transfer fails the check.
+Required UI screenshots are kept with the current disposable run. Desktop
+captures contain the target app window; Android instrumentation captures the
+device frame. Captures preserve their pixels without masks. A failed capture
+or transfer fails the check.
 The test Harness creates no separate log or evidence archive. The owner
 workspace retains only the latest completed run under its storage rules.
 

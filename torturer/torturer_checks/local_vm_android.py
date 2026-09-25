@@ -317,7 +317,7 @@ def _collect_rendered_screenshots(
     timeout: float,
     environment: dict[str, str],
 ) -> None:
-    """Pull required redacted UI frames and validate complete PNG integrity."""
+    """Pull required captured UI frames and validate complete PNG integrity."""
 
     matches = list(_SCREENSHOT_MARKER.finditer(instrumentation_stdout))
     if not matches:

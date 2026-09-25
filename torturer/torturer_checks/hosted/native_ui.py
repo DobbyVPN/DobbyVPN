@@ -24,7 +24,6 @@ import time
 from typing import Any
 
 from torturer_contract.functional.scenarios import ScenarioStep
-from torturer_checks.diagnostics import StreamingRedactor, redact_text
 
 from .cli import SubprocessRunner, _ensure_directory
 from .factory import adapter_for_platform
@@ -172,18 +171,10 @@ class _NativeUIProcess:
         self._lock = threading.Lock()
         self._diagnostic_lock = threading.Lock()
         self._diagnostic_started: set[str] = set()
+        self._diagnostic_has_output: set[str] = set()
+        self._diagnostic_ends_newline: dict[str, bool] = {}
         self._operation = "start"
         self._stage = "launching-driver"
-        try:
-            profile_bytes = profile.read_bytes()
-        except OSError:
-            profile_bytes = b""
-        self._sensitive_values: tuple[bytes | str, ...] = (profile_bytes,)
-        if profile_bytes:
-            try:
-                self._sensitive_values += (profile_bytes.decode("utf-8"),)
-            except UnicodeDecodeError:
-                pass
 
     def _error(self, message: str) -> NativeUIJourneyError:
         operation = self._operation
@@ -210,29 +201,39 @@ class _NativeUIProcess:
     def _diagnostic_chunk(
         self,
         name: str,
-        redactor: StreamingRedactor,
         payload: bytes | str | None = None,
         *,
         finish: bool = False,
     ) -> None:
-        """Forward one complete redacted stream with explicit boundaries."""
-
+        """Forward raw bytes with boundaries while preserving protocol output."""
         with self._diagnostic_lock:
+            binary = getattr(sys.stderr, "buffer", None)
+
+            def write(value: bytes) -> None:
+                if binary is not None:
+                    binary.write(value)
+                else:
+                    sys.stderr.write(value.decode("utf-8", errors="backslashreplace"))
+
             if name not in self._diagnostic_started:
-                sys.stderr.write(f"[native-ui {name} begin]\n")
+                write(f"[native-ui {name} begin]\n".encode("utf-8"))
                 self._diagnostic_started.add(name)
             if payload:
-                safe = redactor.feed(payload)
-                if safe:
-                    sys.stderr.write(safe)
+                raw = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+                write(raw)
+                self._diagnostic_has_output.add(name)
+                self._diagnostic_ends_newline[name] = raw.endswith(b"\n")
             if finish:
-                tail = redactor.finish()
-                if tail:
-                    sys.stderr.write(tail)
-                    if not tail.endswith("\n"):
-                        sys.stderr.write("\n")
-                sys.stderr.write(f"[native-ui {name} end]\n")
-            sys.stderr.flush()
+                if (
+                    name in self._diagnostic_has_output
+                    and not self._diagnostic_ends_newline.get(name, False)
+                ):
+                    write(b"\n")
+                write(f"[native-ui {name} end]\n".encode("utf-8"))
+            if binary is not None:
+                binary.flush()
+            else:
+                sys.stderr.flush()
 
     def start(self) -> None:
         if self.process is not None:
@@ -254,7 +255,7 @@ class _NativeUIProcess:
             stdout=subprocess.PIPE,
             # JSON responses on stdout are the protocol. Native-driver stderr
             # is drained separately and both complete streams are forwarded to
-            # the invoking process after byte-safe redaction.
+            # the invoking process unchanged.
             stderr=subprocess.PIPE,
             text=False,
             bufsize=0,
@@ -269,13 +270,12 @@ class _NativeUIProcess:
                 self._responses.put(None)
                 self._stdout_done.set()
                 return
-            redactor = StreamingRedactor(self._sensitive_values)
             try:
                 for line in process.stdout:
-                    self._diagnostic_chunk("stdout", redactor, line)
+                    self._diagnostic_chunk("stdout", line)
                     self._responses.put(line)
             finally:
-                self._diagnostic_chunk("stdout", redactor, finish=True)
+                self._diagnostic_chunk("stdout", finish=True)
                 self._responses.put(None)
                 self._stdout_done.set()
 
@@ -285,13 +285,12 @@ class _NativeUIProcess:
         def read_stderr() -> None:
             process = self.process
             stderr = None if process is None else process.stderr
-            redactor = StreamingRedactor(self._sensitive_values)
             try:
                 if stderr is not None:
                     for chunk in stderr:
-                        self._diagnostic_chunk("stderr", redactor, chunk)
+                        self._diagnostic_chunk("stderr", chunk)
             finally:
-                self._diagnostic_chunk("stderr", redactor, finish=True)
+                self._diagnostic_chunk("stderr", finish=True)
                 self._stderr_done.set()
 
         self._stderr_reader = threading.Thread(
@@ -684,17 +683,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run_journey(args)
     except Exception as error:
-        sensitive_values: tuple[bytes | str, ...] = ()
-        try:
-            sensitive_values = (args.profile.read_bytes(),)
-        except OSError as profile_error:
-            error.add_note(
-                "native_ui_failure_redaction_profile_error="
-                f"{type(profile_error).__name__}: {profile_error}"
-            )
-        rendered_error = redact_text(
-            f"{type(error).__name__}: {error}", sensitive_values
-        )
+        rendered_error = f"{type(error).__name__}: {error}"
         if args.output is not None:
             operation = getattr(error, "operation", None)
             stage = getattr(error, "stage", None)
@@ -704,10 +693,7 @@ def main(argv: list[str] | None = None) -> int:
                 "platform": args.platform,
                 "complete": False,
                 "error": rendered_error,
-                "notes": [
-                    redact_text(note, sensitive_values)
-                    for note in getattr(error, "__notes__", ())
-                ],
+                "notes": list(getattr(error, "__notes__", ())),
             }
             if isinstance(operation, str) and operation:
                 failure["operation"] = operation
@@ -724,7 +710,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"native-ui-journey failed: {rendered_error}", file=sys.stderr)
         for note in getattr(error, "__notes__", ()):
             print(
-                "native-ui-journey note: " + redact_text(note, sensitive_values),
+                "native-ui-journey note: " + note,
                 file=sys.stderr,
             )
         return 1

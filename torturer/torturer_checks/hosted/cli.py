@@ -33,7 +33,6 @@ from torturer_checks.diagnostics import (
     add_exception_notes,
     add_stream_notes,
     emit_streams,
-    register_sensitive_values,
 )
 from torturer_checks.windows_job import (
     WindowsJobError,
@@ -118,8 +117,6 @@ def _parse_external_ip(raw: str) -> str:
 def _append_command_result_notes(
     error: BaseException,
     result: CommandResult,
-    *,
-    sensitive_values: Sequence[bytes | str] | None = None,
 ) -> None:
     """Attach command metadata and forward both complete output streams.
 
@@ -135,14 +132,12 @@ def _append_command_result_notes(
         "command",
         result.stdout,
         result.stderr,
-        sensitive_values=sensitive_values,
     )
     add_stream_notes(
         error,
         "command",
         result.stdout,
         result.stderr,
-        sensitive_values=sensitive_values,
     )
 
 
@@ -297,21 +292,12 @@ class SubprocessRunner:
         self.environment = dict(os.environ)
         if environment is not None:
             self.environment.update(environment)
-        self._sensitive_values: set[bytes | str] = set()
-
-    def register_sensitive_values(self, *values: bytes | str | None) -> None:
-        """Register exact profile/private values for stream redaction."""
-
-        for value in values:
-            if value:
-                self._sensitive_values.add(value)
 
     def _emit_result(self, stage: str, result: CommandResult) -> None:
         emit_streams(
             stage,
             result.stdout,
             result.stderr,
-            sensitive_values=self._sensitive_values,
         )
 
     def run(
@@ -391,7 +377,6 @@ class SubprocessRunner:
                     "command",
                     result.stdout,
                     result.stderr,
-                    sensitive_values=self._sensitive_values,
                 )
                 self._emit_result("hosted-cli-command", result)
                 raise primary from None
@@ -411,7 +396,6 @@ class SubprocessRunner:
                     "command",
                     result.stdout,
                     result.stderr,
-                    sensitive_values=self._sensitive_values,
                 )
                 self._emit_result("hosted-cli-command", result)
                 raise primary from None
@@ -429,7 +413,6 @@ class SubprocessRunner:
                 "command",
                 result.stdout,
                 result.stderr,
-                sensitive_values=self._sensitive_values,
             )
             self._emit_result("hosted-cli-command", result)
             raise primary from None
@@ -446,7 +429,6 @@ class SubprocessRunner:
                 "command",
                 stdout,
                 stderr,
-                sensitive_values=self._sensitive_values,
             )
             self._emit_result("hosted-cli-command", result)
             raise primary from None
@@ -506,7 +488,6 @@ class SubprocessRunner:
                     "command",
                     result.stdout,
                     result.stderr,
-                    sensitive_values=self._sensitive_values,
                 )
                 self._emit_result("hosted-detached-command", result)
                 raise primary from None
@@ -526,7 +507,6 @@ class SubprocessRunner:
                 "command",
                 stdout,
                 stderr,
-                sensitive_values=self._sensitive_values,
             )
             self._emit_result("hosted-detached-command", result)
             raise primary from None
@@ -761,6 +741,11 @@ class HostedServiceProcessController:
 def _profile_file(path: Path) -> None:
     if not path.is_file():
         raise HostedAdapterError("PROFILE_INVALID")
+    try:
+        with path.open("rb"):
+            pass
+    except OSError as error:
+        raise HostedAdapterError("PROFILE_INVALID") from error
 
 
 def _executable_file(path: Path, code: str) -> None:
@@ -836,7 +821,6 @@ class RoutingProofMixin:
             _append_command_result_notes(
                 failure,
                 result,
-                sensitive_values=getattr(self, "_sensitive_values", None),
             )
             raise failure
         return _parse_external_ip(result.stdout_text)
@@ -1037,16 +1021,6 @@ class HostedCLIAdapter:
         self.cli = cli
         self.profile = profile
         self.runner = runner
-        try:
-            profile_bytes = profile.read_bytes()
-        except OSError as error:
-            raise HostedAdapterError("PROFILE_INVALID") from error
-        self._sensitive_values: tuple[bytes | str, ...] = (profile_bytes,)
-        try:
-            self._sensitive_values += (profile_bytes.decode("utf-8"),)
-        except UnicodeDecodeError:
-            pass
-        register_sensitive_values(runner, *self._sensitive_values)
         self.identity_url = (
             _https_endpoint(identity_url, "identity_url")
             if identity_url is not None
@@ -1280,20 +1254,15 @@ class HostedCLIAdapter:
                 failure_error,
                 "command",
                 error,
-                sensitive_values=self._sensitive_values,
             )
             raise failure_error from error
         if result.timed_out:
             failure_error = ScenarioExecutionError("COMMAND_TIMEOUT")
-            _append_command_result_notes(
-                failure_error, result, sensitive_values=self._sensitive_values
-            )
+            _append_command_result_notes(failure_error, result)
             raise failure_error
         if result.returncode != 0:
             failure_error = ScenarioExecutionError(failure)
-            _append_command_result_notes(
-                failure_error, result, sensitive_values=self._sensitive_values
-            )
+            _append_command_result_notes(failure_error, result)
             raise failure_error
         return result
 
@@ -1412,7 +1381,6 @@ class HostedCLIAdapter:
                 _append_command_result_notes(
                     failure,
                     result,
-                    sensitive_values=self._sensitive_values,
                 )
                 raise failure
         return _parse_external_ip(result.stdout_text)

@@ -10,9 +10,6 @@ import android.graphics.Rect;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
@@ -966,7 +963,7 @@ public final class NativeUiHostedProfileTest {
             if ("Connected".equals(expected)
                     && (findUiObject("Error") != null || findUiObject("Failed") != null)) {
                 // The rendered error state can appear before its Details
-                // category node. Poll only the fixed redacted vocabulary and
+                // category node. Poll only the fixed phase vocabulary and
                 // retain the operation deadline; never expose the visible
                 // error text or any profile content in the failure code.
                 String category = visibleErrorCategory(
@@ -1952,7 +1949,7 @@ public final class NativeUiHostedProfileTest {
         }
     }
 
-    /** Publish one redacted UI phase and its required rendered artifact. */
+    /** Publish one UI phase and its required rendered artifact. */
     private void markProgress(String operation, String stage, String state) throws Exception {
         progressOperation = operation;
         progressStage = stage;
@@ -1994,11 +1991,9 @@ public final class NativeUiHostedProfileTest {
     }
 
     /**
-     * Capture selected rendered milestones as required, redacted PNGs. The
-     * profile/editor and diagnostics regions are painted black before the
-     * frame leaves the instrumentation cache. A screenshot remains an extra
-     * artifact and never replaces the complete instrumentation streams or
-     * observation JSON.
+     * Capture selected rendered milestones as complete PNG artifacts. A
+     * screenshot remains an extra artifact and never replaces the complete
+     * instrumentation streams or observation JSON.
      */
     private RenderedScreenshot captureRenderedScreenshot(
             String operation, String stage, String state) throws Exception {
@@ -2013,45 +2008,14 @@ public final class NativeUiHostedProfileTest {
             return null;
         }
         Bitmap sourceBitmap = null;
-        Bitmap bitmap = null;
         File output = null;
         try {
             dismissNativeInputIfVisible();
-            List<Rect> masks = new ArrayList<>();
-            Rect configurationBounds = stableInputBoundsOrNull();
-            if (configurationBounds != null) masks.add(configurationBounds);
-            for (String label : new String[]{
-                    "Active profile", "Connection logs"}) {
-                // These Compose regions can contain private profile values.
-                // A region absent from the current screen needs no masking.
-                Rect bounds = stableRenderedBoundsOrNull(label);
-                if (bounds != null) masks.add(bounds);
-            }
             sourceBitmap = InstrumentationRegistry.getInstrumentation()
                     .getUiAutomation().takeScreenshot();
             if (sourceBitmap == null
                     || sourceBitmap.getWidth() <= 0 || sourceBitmap.getHeight() <= 0) {
                 throw new IllegalStateException("ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY");
-            }
-            // UiAutomation.takeScreenshot() returns an immutable bitmap on
-            // current Android images. Copy it before applying redaction.
-            bitmap = sourceBitmap.copy(Bitmap.Config.ARGB_8888, true);
-            if (bitmap == null) {
-                throw new IllegalStateException("ANDROID_UI_SCREENSHOT_COPY_FAILED");
-            }
-            sourceBitmap.recycle();
-            sourceBitmap = null;
-            Canvas canvas = new Canvas(bitmap);
-            Paint paint = new Paint();
-            paint.setColor(Color.BLACK);
-            paint.setStyle(Paint.Style.FILL);
-            for (Rect mask : masks) {
-                Rect clipped = new Rect(0, 0, bitmap.getWidth(), bitmap.getHeight());
-                if (!clipped.intersect(mask) || clipped.isEmpty()) {
-                    throw new IllegalStateException(
-                            "ANDROID_UI_SCREENSHOT_MASK_OUTSIDE_FRAME");
-                }
-                canvas.drawRect(clipped, paint);
             }
             if (!screenshotDirectory.exists() && !screenshotDirectory.mkdirs()) {
                 throw new IOException("ANDROID_UI_SCREENSHOT_DIRECTORY_FAILED");
@@ -2065,7 +2029,7 @@ public final class NativeUiHostedProfileTest {
                 throw new IOException("ANDROID_UI_SCREENSHOT_DUPLICATE_LABEL:" + output.getName());
             }
             try (FileOutputStream stream = new FileOutputStream(output, false)) {
-                if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                if (!sourceBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
                     throw new IOException("ANDROID_UI_SCREENSHOT_PNG_ENCODE_FAILED");
                 }
             }
@@ -2075,7 +2039,7 @@ public final class NativeUiHostedProfileTest {
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inJustDecodeBounds = true;
             BitmapFactory.decodeFile(output.getAbsolutePath(), options);
-            if (options.outWidth != bitmap.getWidth() || options.outHeight != bitmap.getHeight()) {
+            if (options.outWidth != sourceBitmap.getWidth() || options.outHeight != sourceBitmap.getHeight()) {
                 throw new IOException("ANDROID_UI_SCREENSHOT_DIMENSIONS_INVALID");
             }
             return new RenderedScreenshot(
@@ -2094,7 +2058,6 @@ public final class NativeUiHostedProfileTest {
             }
             throw failure;
         } finally {
-            if (bitmap != null) bitmap.recycle();
             if (sourceBitmap != null) sourceBitmap.recycle();
         }
     }
@@ -2133,86 +2096,6 @@ public final class NativeUiHostedProfileTest {
             encoded.append(String.format(Locale.ROOT, "%02x", item & 0xff));
         }
         return encoded.toString();
-    }
-
-    private UiObject2 findRenderedObject(String label) {
-        UiDevice device = uiDevice();
-        UiObject2 object = device.findObject(By.text(label).pkg(context.getPackageName()));
-        if (object == null) {
-            object = device.findObject(By.desc(label).pkg(context.getPackageName()));
-        }
-        return object;
-    }
-
-    private Rect stableRenderedBounds(String label) throws Exception {
-        return stableRenderedBounds(label, () -> findRenderedObject(label));
-    }
-
-    private Rect stableRenderedBounds(
-            String label, java.util.function.Supplier<UiObject2> objectLookup) throws Exception {
-        long deadline = System.currentTimeMillis() + 3_000L;
-        Rect previous = null;
-        int stableSamples = 0;
-        boolean staleNodeObserved = false;
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                UiObject2 object = objectLookup.get();
-                Rect current = object == null ? null : object.getVisibleBounds();
-                if (current != null && !current.isEmpty()) {
-                    if (current.equals(previous)) {
-                        stableSamples++;
-                        if (stableSamples >= UI_STABILITY_SAMPLES) {
-                            return new Rect(current);
-                        }
-                    } else {
-                        previous = new Rect(current);
-                        stableSamples = 0;
-                    }
-                } else {
-                    previous = null;
-                    stableSamples = 0;
-                }
-            } catch (StaleObjectException stale) {
-                // Android may replace an accessibility node between lookup
-                // and bounds access while the rendered status changes.
-                // Retry within the bounded stability window; if the node
-                // never settles, fail closed rather than capture an
-                // unredacted screenshot.
-                staleNodeObserved = true;
-                previous = null;
-                stableSamples = 0;
-            }
-            Thread.sleep(POLL_MILLIS);
-        }
-        if (staleNodeObserved) {
-            throw new IllegalStateException("ANDROID_UI_SCREENSHOT_MASK_STALE:" + label);
-        }
-        throw new IllegalStateException("ANDROID_UI_SCREENSHOT_MASK_MISSING:" + label);
-    }
-
-    private Rect stableRenderedBoundsOrNull(String label) throws Exception {
-        try {
-            return stableRenderedBounds(label);
-        } catch (IllegalStateException error) {
-            if (error.getMessage() != null
-                    && error.getMessage().startsWith("ANDROID_UI_SCREENSHOT_MASK_MISSING:")) {
-                return null;
-            }
-            throw error;
-        }
-    }
-
-    private Rect stableInputBoundsOrNull() throws Exception {
-        try {
-            return stableRenderedBounds("Connection configuration", () -> uiDevice().findObject(
-                    By.clazz("android.widget.EditText").pkg(context.getPackageName())));
-        } catch (IllegalStateException error) {
-            if (error.getMessage() != null
-                    && error.getMessage().startsWith("ANDROID_UI_SCREENSHOT_MASK_MISSING:")) {
-                return null;
-            }
-            throw error;
-        }
     }
 
     /** Send Back only when the Compose keyboard is visible. */

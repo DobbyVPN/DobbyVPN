@@ -17,7 +17,6 @@ from urllib.parse import urlsplit
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioStep
-from torturer_checks.diagnostics import redact_text
 
 from .cli import (
     CommandRunner,
@@ -492,7 +491,6 @@ class WindowsServiceProcessController(HostedServiceProcessController):
     def _forward_replacement_output(self, process: object) -> None:
         """Drain the long-lived replacement's streams without retaining logs."""
 
-        sensitive_values = getattr(self.runner, "_sensitive_values", ())
         threads: list[threading.Thread] = []
         for name in ("stdout", "stderr"):
             stream = getattr(process, name, None)
@@ -506,7 +504,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                         chunk = stream.readline()
                         if not chunk:
                             break
-                        sys.stderr.write(redact_text(chunk, sensitive_values))
+                        sys.stderr.write(chunk)
                         sys.stderr.flush()
                 except (OSError, ValueError) as error:
                     self._record_service_diagnostics(

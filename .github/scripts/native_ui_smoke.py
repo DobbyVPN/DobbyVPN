@@ -49,141 +49,59 @@ class NativeUIScreenshotError(NativeUISmokeError):
     """A native-window screenshot could not be captured or validated."""
 
 
-try:
-    # The hosted runner exposes this shared helper through PYTHONPATH.  Keep a
-    # tiny fallback for direct invocation from a checked-out source tree where
-    # the torturer package is not importable yet.
-    from torturer_checks.diagnostics import redact_text as _shared_redact_text
-except ImportError:  # pragma: no cover - exercised only by direct script use
-    _torturer_root = Path(__file__).resolve().parents[2] / "torturer"
-    if _torturer_root.is_dir():
-        sys.path.insert(0, str(_torturer_root))
-    try:
-        from torturer_checks.diagnostics import redact_text as _shared_redact_text
-    except ImportError:
-        _FALLBACK_PRIVATE_ASSIGNMENT = re.compile(
-            r"(?i)(?:^|[,{ \t])['\"]?[\w.-]*(?:"
-            r"password|passphrase|secret|token|private[_-]?key|credential|"
-            r"access[_-]?key|username|server|address|url"
-            r")[\w.-]*['\"]?[ \t]*[:=][ \t]*['\"]?"
-            r"([^'\"\r\n,}\]]+)"
-        )
-
-        def _shared_redact_text(
-            value: bytes | str | None,
-            sensitive_values: object = None,
-        ) -> str:
-            if value is None:
-                return ""
-            if isinstance(value, bytes):
-                rendered = value.decode("utf-8", errors="backslashreplace")
-            else:
-                rendered = str(value)
-            if sensitive_values is None:
-                return rendered
-            values = (
-                (sensitive_values,)
-                if isinstance(sensitive_values, (bytes, str))
-                else sensitive_values
-            )
-            normalized: list[str] = []
-            for secret in values:
-                if secret is None:
-                    continue
-                if isinstance(secret, bytes):
-                    secret = secret.decode("utf-8", errors="backslashreplace")
-                secret_text = str(secret)
-                if not secret_text:
-                    continue
-                normalized.append(secret_text)
-                for match in _FALLBACK_PRIVATE_ASSIGNMENT.finditer(secret_text):
-                    field_value = match.group(1).strip()
-                    if field_value:
-                        normalized.append(field_value)
-            for secret in sorted(set(normalized), key=len, reverse=True):
-                if len(secret) >= 4:
-                    rendered = rendered.replace(secret, "[REDACTED]")
-                    continue
-                if rendered.strip() == secret:
-                    rendered = rendered.replace(secret, "[REDACTED]")
-                    continue
-                contextual = re.compile(
-                    r"(?i)((?:password|passphrase|secret|token|private[_-]?key|"
-                    r"credential|access[_-]?key|username|server|address|url)"
-                    r"[\w.-]*[ \t]*[:=][ \t]*['\"]?)"
-                    + re.escape(secret)
-                    + r"(?=['\"]?(?:[ \t\r\n,;}]|$))"
-                )
-                rendered = contextual.sub(r"\1[REDACTED]", rendered)
-            return rendered
+def _diagnostic_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="backslashreplace")
+    if isinstance(value, bytearray):
+        return bytes(value).decode("utf-8", errors="backslashreplace")
+    return str(value)
 
 
-def _subprocess_streams(
-    result: subprocess.CompletedProcess[object],
-    *,
-    sensitive_values: object = None,
-    redact_stdout: bool = False,
-) -> str:
+def _write_diagnostic(payload: bytes) -> None:
+    binary = getattr(sys.stderr, "buffer", None)
+    if binary is not None:
+        binary.write(payload)
+        binary.flush()
+    else:
+        sys.stderr.write(payload.decode("utf-8", errors="backslashreplace"))
+        sys.stderr.flush()
+
+
+def _subprocess_streams(result: subprocess.CompletedProcess[object]) -> str:
     """Render both complete streams from a captured native subprocess result."""
-
-    stdout = _redact_native_text(result.stdout, sensitive_values)
-    stderr = _redact_native_text(result.stderr, sensitive_values)
-    if redact_stdout and stdout:
-        stdout = "[REDACTED sensitive clipboard payload]"
-    return f"stdout:\n{stdout}stderr:\n{stderr}"
+    return f"stdout:\n{_diagnostic_text(result.stdout)}stderr:\n{_diagnostic_text(result.stderr)}"
 
 
-def _redact_native_text(value: object, sensitive_values: object = None) -> str:
-    """Use shared contextual redaction plus exact registered values."""
-
-    return _shared_redact_text(value, sensitive_values)
-
-
-def _emit_native_streams(
-    label: str,
-    stdout: object,
-    stderr: object,
-    *,
-    sensitive_values: object = None,
-    redact_stdout: bool = False,
-) -> None:
-    """Forward every captured native stream with explicit boundaries.
-
-    Native stdout is often a machine-readable response, so diagnostics go to
-    this process's stderr.  Clipboard snapshots are the one intentional
-    exception to literal stream forwarding: their stdout is the opaque
-    clipboard payload, not a diagnostic, and is represented by an explicit
-    redaction marker while stderr and all surrounding output remain complete.
-    """
-
+def _emit_native_streams(label: str, stdout: object, stderr: object) -> None:
+    """Forward every captured native stream byte with explicit boundaries."""
     for name, value in (("stdout", stdout), ("stderr", stderr)):
-        rendered = _redact_native_text(value, sensitive_values)
-        if redact_stdout and name == "stdout" and rendered:
-            rendered = "[REDACTED sensitive clipboard payload]"
-        sys.stderr.write(f"[native subprocess {label} {name} begin]\n")
-        sys.stderr.write(rendered)
-        if rendered and not rendered.endswith("\n"):
-            sys.stderr.write("\n")
-        sys.stderr.write(f"[native subprocess {label} {name} end]\n")
-    sys.stderr.flush()
+        if value is None:
+            payload = b""
+        elif isinstance(value, bytes):
+            payload = value
+        elif isinstance(value, bytearray):
+            payload = bytes(value)
+        else:
+            payload = str(value).encode("utf-8")
+        _write_diagnostic(f"[native subprocess {label} {name} begin]\n".encode("utf-8"))
+        _write_diagnostic(payload)
+        if payload and not payload.endswith(b"\n"):
+            _write_diagnostic(b"\n")
+        _write_diagnostic(f"[native subprocess {label} {name} end]\n".encode("utf-8"))
 
 
 def _native_run(
     command: object,
     *args: object,
     stream_label: str | None = None,
-    sensitive_values: object = None,
-    redact_stdout: bool = False,
     **kwargs: object,
 ) -> subprocess.CompletedProcess[object]:
-    """Run one captured native command and emit both complete streams first."""
-
+    """Run a captured native command and forward both complete streams first."""
     if stream_label is not None:
         label = stream_label
     elif isinstance(command, (list, tuple)):
-        # Do not put a full PowerShell/AppleScript program in the boundary
-        # label. It can contain newlines and would make the stream framing
-        # ambiguous; the complete program output remains in the streams.
         label = str(command[0]) if command else "native-command"
     else:
         label = str(command)
@@ -194,33 +112,18 @@ def _native_run(
             label,
             getattr(error, "stdout", None),
             getattr(error, "stderr", None),
-            sensitive_values=sensitive_values,
-            redact_stdout=redact_stdout,
         )
         raise
-    _emit_native_streams(
-        label,
-        result.stdout,
-        result.stderr,
-        sensitive_values=sensitive_values,
-        redact_stdout=redact_stdout,
-    )
+    _emit_native_streams(label, result.stdout, result.stderr)
     return result
 
 
 def _subprocess_failure(
     label: str,
     result: subprocess.CompletedProcess[object],
-    *,
-    sensitive_values: object = None,
-    redact_stdout: bool = False,
 ) -> str:
     """Include status and complete captured output in a native failure."""
-
-    return (
-        f"{label} (exit={result.returncode})\n"
-        f"{_subprocess_streams(result, sensitive_values=sensitive_values, redact_stdout=redact_stdout)}"
-    )
+    return f"{label} (exit={result.returncode})\n{_subprocess_streams(result)}"
 
 
 _T = TypeVar("_T")
@@ -245,17 +148,6 @@ _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if (visible of process "Finder") is false then error "Finder is not visible"
     return "Finder"
 end tell'''
-
-
-def _png_chunk(kind: bytes, payload: bytes) -> bytes:
-    """Encode one metadata-free PNG chunk."""
-
-    return (
-        struct.pack(">I", len(payload))
-        + kind
-        + payload
-        + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
-    )
 
 
 def _png_unfilter(raw: bytes, width: int, height: int, bytes_per_pixel: int) -> bytes:
@@ -362,39 +254,6 @@ def _read_png(path: Path) -> tuple[int, int, bytearray]:
     return width, height, rgba
 
 
-def _write_png(path: Path, width: int, height: int, rgba: bytes | bytearray) -> None:
-    if width <= 0 or height <= 0 or width * height > _PNG_MAX_PIXELS or len(rgba) != width * height * 4:
-        raise NativeUIScreenshotError("cannot write an invalid screenshot image")
-    scanlines = bytearray()
-    row_size = width * 4
-    for row in range(height):
-        scanlines.append(0)
-        start = row * row_size
-        scanlines.extend(rgba[start:start + row_size])
-    payload = (
-        _PNG_SIGNATURE
-        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
-        + _png_chunk(b"IDAT", zlib.compress(bytes(scanlines), level=6))
-        + _png_chunk(b"IEND", b"")
-    )
-    try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        no_follow = getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags | no_follow, 0o600)
-        try:
-            fchmod = getattr(os, "fchmod", None)
-            if callable(fchmod):
-                fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "wb") as stream:
-                descriptor = -1
-                stream.write(payload)
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-    except OSError as error:
-        raise NativeUIScreenshotError(f"could not write screenshot {path}: {error}") from error
-
-
 def _validate_nonblank_png(path: Path) -> tuple[int, int]:
     width, height, rgba = _read_png(path)
     first_color: bytes | None = None
@@ -417,32 +276,6 @@ def _validate_nonblank_png(path: Path) -> tuple[int, int]:
         raise NativeUIScreenshotError(f"screenshot {path} is uniformly blank")
     if not has_visible_pixel:
         raise NativeUIScreenshotError(f"screenshot {path} has no visible pixels")
-    return width, height
-
-
-def _mask_png(
-    path: Path,
-    source_rect: tuple[int, int, int, int],
-    masks: list[tuple[int, int, int, int]],
-) -> tuple[int, int]:
-    """Mask known sensitive screen regions and strip any source metadata."""
-
-    width, height, rgba = _read_png(path)
-    source_width = source_rect[2] - source_rect[0]
-    source_height = source_rect[3] - source_rect[1]
-    if source_width <= 0 or source_height <= 0:
-        raise NativeUIScreenshotError("screenshot source bounds are invalid")
-    for left, top, right, bottom in masks:
-        start_x = max(0, math.floor((left - source_rect[0]) * width / source_width))
-        start_y = max(0, math.floor((top - source_rect[1]) * height / source_height))
-        end_x = min(width, math.ceil((right - source_rect[0]) * width / source_width))
-        end_y = min(height, math.ceil((bottom - source_rect[1]) * height / source_height))
-        for y in range(start_y, end_y):
-            for x in range(start_x, end_x):
-                index = (y * width + x) * 4
-                rgba[index:index + 4] = b"\x80\x80\x80\xff"
-    _write_png(path, width, height, rgba)
-    _validate_nonblank_png(path)
     return width, height
 
 
@@ -521,9 +354,7 @@ def _macos_capture_window(window_id: int, path: Path) -> tuple[int, int]:
     return _validate_nonblank_png(path)
 
 
-def _windows_capture_rect(
-    rect: tuple[int, int, int, int], path: Path, masks: list[tuple[int, int, int, int]],
-) -> tuple[int, int]:
+def _windows_capture_rect(rect: tuple[int, int, int, int], path: Path) -> tuple[int, int]:
     left, top, right, bottom = rect
     width, height = right - left, bottom - top
     if width <= 0 or height <= 0:
@@ -531,7 +362,6 @@ def _windows_capture_rect(
     powershell = shutil.which("powershell") or shutil.which("pwsh")
     if not powershell:
         raise NativeUIScreenshotError("PowerShell is required for Windows screen capture")
-    mask_json = json.dumps(masks, separators=(",", ":"))
     command = r'''
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
@@ -543,17 +373,6 @@ $bitmap = New-Object System.Drawing.Bitmap($width, $height)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 try {
     $graphics.CopyFromScreen($left, $top, 0, 0, $bitmap.Size)
-    $masks = ConvertFrom-Json $env:DOBBY_SCREEN_MASKS
-    $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255,128,128,128))
-    try {
-        foreach ($mask in $masks) {
-            $x = [int][Math]::Floor(([double]$mask[0] - $left) * $width / $env:DOBBY_SCREEN_SOURCE_WIDTH)
-            $y = [int][Math]::Floor(([double]$mask[1] - $top) * $height / $env:DOBBY_SCREEN_SOURCE_HEIGHT)
-            $w = [int][Math]::Ceiling(([double]$mask[2] - $mask[0]) * $width / $env:DOBBY_SCREEN_SOURCE_WIDTH)
-            $h = [int][Math]::Ceiling(([double]$mask[3] - $mask[1]) * $height / $env:DOBBY_SCREEN_SOURCE_HEIGHT)
-            if ($w -gt 0 -and $h -gt 0) { $graphics.FillRectangle($brush, $x, $y, $w, $h) }
-        }
-    } finally { $brush.Dispose() }
     $bitmap.Save($env:DOBBY_SCREEN_PATH, [System.Drawing.Imaging.ImageFormat]::Png)
 } finally { $graphics.Dispose(); $bitmap.Dispose() }
 '''
@@ -561,8 +380,7 @@ try {
     environment.update({
         "DOBBY_SCREEN_LEFT": str(left), "DOBBY_SCREEN_TOP": str(top),
         "DOBBY_SCREEN_WIDTH": str(width), "DOBBY_SCREEN_HEIGHT": str(height),
-        "DOBBY_SCREEN_SOURCE_WIDTH": str(width), "DOBBY_SCREEN_SOURCE_HEIGHT": str(height),
-        "DOBBY_SCREEN_MASKS": mask_json, "DOBBY_SCREEN_PATH": str(path),
+        "DOBBY_SCREEN_PATH": str(path),
     })
     try:
         result = _native_run(
@@ -1326,6 +1144,29 @@ Write-Output ("{0},{1},{2},{3}" -f $rect.Left, $rect.Top, $rect.Right, $rect.Bot
     return values  # type: ignore[return-value]
 
 
+def _clipboard_payload(command: list[str], label: str, timeout: float) -> tuple[subprocess.CompletedProcess[bytes], bytes]:
+    """Read clipboard bytes into a private temporary file, outside diagnostics."""
+    with tempfile.TemporaryFile(mode="w+b") as payload_file:
+        try:
+            result = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=payload_file,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout,
+            )
+        except BaseException as error:
+            _emit_native_streams(label, None, getattr(error, "stderr", None))
+            raise
+        # stdout is the actual clipboard contents, not command diagnostics.
+        # It stays in the automatically deleted temporary file; stderr remains
+        # complete diagnostic output and is forwarded unchanged.
+        _emit_native_streams(label, None, result.stderr)
+        payload_file.seek(0)
+        return result, payload_file.read()
+
+
 def _windows_clipboard_snapshot(powershell: str) -> str | None:
     """Snapshot plain text so native input can restore the disposable VM."""
     command = r'''
@@ -1340,13 +1181,10 @@ try {
 }
 '''
     try:
-        result = _native_run(
+        result, clipboard_payload = _clipboard_payload(
             [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=10,
-            redact_stdout=True,
+            "Windows clipboard snapshot",
+            10,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"Windows clipboard snapshot failed: {error}") from error
@@ -1355,17 +1193,17 @@ try {
     if result.returncode != 0:
         print(
             _subprocess_failure(
-                "Windows clipboard snapshot unavailable", result, redact_stdout=True,
+                "Windows clipboard snapshot unavailable", result,
             ),
             file=sys.stderr,
         )
         return None
     try:
-        return base64.b64decode(result.stdout.strip(), validate=True).decode("utf-8")
+        return base64.b64decode(clipboard_payload.strip(), validate=True).decode("utf-8")
     except (UnicodeDecodeError, ValueError) as error:
         raise NativeUISmokeError(
             "Windows clipboard snapshot returned invalid base64\n"
-            + _subprocess_streams(result, redact_stdout=True)
+            + _subprocess_streams(result)
         ) from error
 
 
@@ -1396,7 +1234,6 @@ Add-Type -AssemblyName System.Windows.Forms
             capture_output=True,
             timeout=10,
             stream_label="Windows clipboard setup",
-            sensitive_values=(value,),
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"Windows clipboard setup failed: {error}") from error
@@ -1584,7 +1421,6 @@ $observedLineFeeds = [regex]::Matches($observed, "`n").Count
             env=environment,
             timeout=20,
             stream_label="Windows configuration input",
-            sensitive_values=(value,),
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"Windows configuration verification failed: {error}") from error
@@ -1592,13 +1428,12 @@ $observedLineFeeds = [regex]::Matches($observed, "`n").Count
         if result.returncode == 3:
             raise NativeUIElementNotFound(
                 f"Windows accessibility element {name!r} was not found\n"
-                + _subprocess_streams(result, sensitive_values=(value,))
+                + _subprocess_streams(result)
             )
         raise NativeUISmokeError(
             _subprocess_failure(
                 "Windows configuration verification failed",
                 result,
-                sensitive_values=(value,),
             )
         )
     try:
@@ -1614,7 +1449,7 @@ $observedLineFeeds = [regex]::Matches($observed, "`n").Count
     except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise NativeUISmokeError(
             "Windows configuration verification returned invalid data\n"
-            + _subprocess_streams(result, sensitive_values=(value,))
+            + _subprocess_streams(result)
         ) from error
     if not exact_match:
         raise NativeUISmokeError(
@@ -2249,24 +2084,23 @@ def _macos_allowlisted_state_labels(process_pid: int) -> tuple[str, ...]:
 
 def _macos_clipboard_snapshot() -> bytes | None:
     try:
-        result = _native_run(
-            ["pbpaste"], check=False, capture_output=True, timeout=10,
-            stream_label="macOS clipboard snapshot", redact_stdout=True,
+        result, clipboard_payload = _clipboard_payload(
+            ["pbpaste"], "macOS clipboard snapshot", 10,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"macOS clipboard snapshot failed: {error}") from error
     if result.returncode != 0:
         raise NativeUISmokeError(
-            _subprocess_failure("macOS clipboard snapshot failed", result, redact_stdout=True)
+            _subprocess_failure("macOS clipboard snapshot failed", result)
         )
-    return result.stdout
+    return clipboard_payload
 
 
 def _macos_set_clipboard(value: bytes) -> None:
     try:
         result = _native_run(
             ["pbcopy"], input=value, check=False, capture_output=True, timeout=10,
-            stream_label="macOS clipboard setup", sensitive_values=(value,),
+            stream_label="macOS clipboard setup",
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(f"macOS clipboard setup failed: {error}") from error
@@ -2811,55 +2645,8 @@ class NativeUIController:
                 "Windows native UI window is stale or is not owned by the launched process"
             )
 
-    def _screenshot_masks(
-        self,
-        window: tuple[int, int, int, int],
-        *,
-        require_configuration: bool,
-    ) -> list[tuple[int, int, int, int]]:
-        """Find only known sensitive regions through the existing UI APIs."""
-
-        masks: list[tuple[int, int, int, int]] = []
-        names = (
-            ("Connection configuration", False, require_configuration),
-            ("Details", True, False),
-            ("Diagnostics", True, False),
-            ("Logs", True, False),
-            ("Error details", True, False),
-        )
-        for name, prefix, required in names:
-            try:
-                if self.platform == "windows":
-                    self._windows_validate_window()
-                    bounds = _windows_accessibility_rect(self.hwnd, name, prefix=prefix)
-                else:
-                    bounds = _macos_accessibility_rect(
-                        self._macos_pid_or_error(), name, 2.0, prefix=prefix
-                    )
-            except NativeUIElementNotFound:
-                if required:
-                    raise NativeUIScreenshotError(
-                        f"could not identify sensitive screenshot region {name!r}"
-                    )
-                # A known-absent optional surface is safe to omit.  Other
-                # lookup failures are not: an unavailable accessibility tree
-                # must never silently turn a potentially sensitive capture
-                # into an unmasked image.
-                continue
-            except NativeUISmokeError as error:
-                raise NativeUIScreenshotError(
-                    f"could not inspect sensitive screenshot region {name!r}: {error}"
-                ) from error
-            if _macos_bounds_contained(window, bounds):
-                masks.append(bounds)
-            elif required:
-                raise NativeUIScreenshotError(
-                    f"sensitive screenshot region {name!r} is outside the exact window"
-                )
-        return masks
-
     def capture(self, milestone: str, *, required: bool = False) -> dict[str, object]:
-        """Capture one exact native window with masked sensitive regions."""
+        """Capture one exact native window without changing the captured pixels."""
 
         if self.screenshot_dir is None:
             return {"screenshot_skipped": "no screenshot directory configured"}
@@ -2883,11 +2670,10 @@ class NativeUIController:
                 "macOS renderer window is unexpectedly small "
                 f"({window[2] - window[0]}x{window[3] - window[1]})"
             )
-        masks = self._screenshot_masks(window, require_configuration=required)
         path = _screenshot_path(self.screenshot_dir, milestone, process_pid)
         try:
             if self.platform == "windows":
-                _windows_capture_rect(window, path, masks)
+                dimensions = _windows_capture_rect(window, path)
                 self._windows_validate_window()
                 obstructions = _windows_window_obstructions(self.hwnd, process_pid)
             else:
@@ -2915,8 +2701,7 @@ class NativeUIController:
                         "macOS native screenshot target is obstructed: "
                         + json.dumps(obstructions, sort_keys=True, separators=(",", ":"))
                     )
-                _macos_capture_window(target_window_id, path)
-                _mask_png(path, exact_window, masks)
+                dimensions = _macos_capture_window(target_window_id, path)
                 target_after, obstructions = _macos_window_info(
                     process_pid, min(3.0, self.timeout)
                 )
@@ -2936,9 +2721,8 @@ class NativeUIController:
             ) from error
         result: dict[str, object] = {
             "screenshot_path": str(path),
-            "screenshot_width": _read_png(path)[0],
-            "screenshot_height": _read_png(path)[1],
-            "masked_regions": len(masks),
+            "screenshot_width": dimensions[0],
+            "screenshot_height": dimensions[1],
             "obstructions": obstructions,
         }
         if obstructions:
@@ -3800,7 +3584,7 @@ def serve_native_ui(
                 # example, a native input mismatch).  Keep this error
                 # response bounded and preserve the primary failure verbatim;
                 # the complete child stderr stream remains available through
-                # the normal redacted run output.
+                # the normal run output.
                 response = {"ok": False, "error": str(error)}
                 if operation != "close":
                     try:
@@ -3858,7 +3642,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--screenshot-dir",
         type=Path,
-        help="disposable directory for masked native-window screenshots",
+        help="disposable directory for native-window screenshots",
     )
     parser.add_argument(
         "--serve",

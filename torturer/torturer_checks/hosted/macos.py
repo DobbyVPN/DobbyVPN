@@ -603,7 +603,6 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                             primary,
                             "network_uplink_restoration",
                             error,
-                            sensitive_values=getattr(self, "_sensitive_values", None),
                         )
             try:
                 self._discard_network_repair_scratch((state, stdout, stderr))

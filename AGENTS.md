@@ -24,8 +24,7 @@ the backend directly, not a subprocess per UI action.
 The Go backend owns and preserves an accepted configuration URL and returns it
 in `Snapshot`. Existing desktop saved URLs are migrated into the backend-owned
 store. Native frontends read fixed local diagnostic files directly; product
-logs are not sanitized. Development and qualification output is still redacted
-under the diagnostic rule below.
+logs and development or qualification output are not sanitized.
 Keep the retired Fyne UI and gRPC desktop control stack removed. Preserve
 current VPN behavior unless a behavior change is separately decided.
 
@@ -69,12 +68,12 @@ endpoints, raw operational logs, or generated packages in commits.
 
 Preserve complete command stdout and stderr, original exceptions, and cleanup
 errors on every outcome, including timeouts. Never suppress output, replace it
-with byte counts or status codes, or truncate it to a tail, size limit, or a
-selection of supposedly useful lines. Redact credentials and private profile
-values without removing surrounding diagnostic content. Forward output before
-cleaning up disposable files; diagnostic preservation does not require a
-separate log or evidence archive. Report collection failures explicitly and
-cleanup failures alongside the original failure.
+with byte counts or status codes, truncate it, or sanitize diagnostic content.
+Preserve the exact output bytes, including private profile values if a command
+emits them. Forward output before cleaning up disposable files; diagnostic
+preservation does not require a separate log or evidence archive. Report
+collection failures explicitly and cleanup failures alongside the original
+failure.
 
 ## Simplicity
 

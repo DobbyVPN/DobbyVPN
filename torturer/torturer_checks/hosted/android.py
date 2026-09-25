@@ -25,7 +25,7 @@ from torturer_checks.android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
 )
-from torturer_checks.diagnostics import add_exception_notes, register_sensitive_values
+from torturer_checks.diagnostics import add_exception_notes
 from torturer_checks.screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
@@ -305,16 +305,6 @@ class AndroidHostedAdapter:
             raise HostedAdapterError("ENDPOINTS_REQUIRED")
         self.runner = runner
         self.profile = profile
-        try:
-            profile_bytes = profile.read_bytes()
-        except OSError as error:
-            raise HostedAdapterError("PROFILE_INVALID") from error
-        self._sensitive_values: tuple[bytes | str, ...] = (profile_bytes,)
-        try:
-            self._sensitive_values += (profile_bytes.decode("utf-8"),)
-        except UnicodeDecodeError:
-            pass
-        register_sensitive_values(runner, *self._sensitive_values)
         self.adb = adb
         self.source_sha = source_sha
         self.ui_mode = ui_mode
@@ -813,7 +803,7 @@ class AndroidHostedAdapter:
         highest_progress_sequence = -1
 
         def poll_ui_progress() -> None:
-            """Forward only the driver's redacted phase marker.
+            """Forward only the driver's fixed phase marker.
 
             The hosted Java driver never writes profile text, endpoint values,
             or exception details to this file.  Validate the small value
@@ -1331,7 +1321,7 @@ class AndroidHostedAdapter:
         expected_width: int,
         expected_height: int,
     ) -> Path:
-        """Pull one already-redacted frame and validate its full PNG."""
+        """Pull one complete captured frame and validate its full PNG."""
 
         raw_directory = getattr(self.runner, "raw_directory", None)
         if not isinstance(raw_directory, Path):
@@ -2462,7 +2452,6 @@ exit 0
                 failure,
                 "android-command",
                 error,
-                sensitive_values=self._sensitive_values,
             )
             raise failure from error
         token = uuid.uuid4().hex

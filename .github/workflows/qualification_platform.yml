@@ -606,7 +606,7 @@ jobs:
                  ;;
              esac'
 
-      - name: Make system-service log readable for redacted diagnostics
+      - name: Make system-service log readable for diagnostics
         if: always() && env.RUN_DIR != ''
         shell: bash
         run: |
@@ -622,13 +622,12 @@ jobs:
           sudo chown "$(id -u):$(id -g)" "$service_log"
           test -r "$service_log"
 
-      - name: Collect complete redacted qualification diagnostics
+      - name: Collect complete qualification diagnostics
         if: always() && env.RUN_DIR != ''
         shell: bash
         run: |
           set -euo pipefail
           python3 .github/scripts/collect_diagnostics.py \
-            --profile "$GITHUB_WORKSPACE/render/profile.toml" \
             --source "$RESULT_DIR" \
             --source "$RUN_DIR" \
             --output "$ARTIFACT_DIR"
