@@ -81,11 +81,12 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         stateHandler(sessionID, generation, state, failureCode)
     }
 
-    func loadSourceURL() -> String? {
+    func loadSourceURL() -> String {
         DobbyConfigsRepositoryImpl.shared.getConnectionURL()
     }
 
-    func saveSourceURL(_ value: String) -> Bool {
+    func saveSourceURL(_ value: String?) -> Bool {
+        guard let value else { return false }
         DobbyConfigsRepositoryImpl.shared.setConnectionURL(connectionURL: value)
     }
 
