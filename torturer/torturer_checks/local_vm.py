@@ -1009,6 +1009,43 @@ def _release_state(run_dir: Path, manifest: dict[str, Any], package: Path, archi
     return release
 
 
+def _windows_control_pipe_sid(run_dir: Path, logs: Path, timeout: float) -> str:
+    """Resolve the configured interactive user SID for an MSI run as SYSTEM."""
+
+    user = os.environ.get("DOBBYVPN_CONTROL_PIPE_USER", "").strip()
+    if not user:
+        raise LocalVMError("configured Windows desktop user is unavailable")
+    environment = os.environ.copy()
+    environment["DOBBYVPN_CONTROL_PIPE_USER"] = user
+    script = r'''$ErrorActionPreference = "Stop"
+$account = [string]$env:DOBBYVPN_CONTROL_PIPE_USER
+try {
+  $sid = (New-Object -TypeName System.Security.Principal.NTAccount -ArgumentList $account).Translate([System.Security.Principal.SecurityIdentifier]).Value
+} catch {
+  [Console]::Error.WriteLine("configured Windows desktop user could not be resolved")
+  exit 1
+}
+[Console]::Out.WriteLine($sid)
+'''
+    result = _run_logged(
+        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        cwd=run_dir,
+        logs=logs,
+        label="release-control-user-sid",
+        timeout=timeout,
+        environment=environment,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise LocalVMError(
+            f"configured Windows desktop user SID lookup exited {result.returncode}"
+        )
+    sid = result.stdout.decode("ascii", errors="strict").strip()
+    if not re.fullmatch(r"S-1-(?:[0-9]+-)*[0-9]+", sid) or sid == "S-1-5-18":
+        raise LocalVMError("configured Windows desktop user SID is invalid")
+    return sid
+
+
 def _install_windows_release(
     run_dir: Path, manifest: dict[str, Any], artifacts: dict[tuple[str, str], Path],
     logs: Path, timeout: float,
@@ -1022,9 +1059,11 @@ def _install_windows_release(
     _write_json(run_dir / "platform.json", state)
     package_log = run_dir / "logs" / "windows-install.log"
     try:
+        control_pipe_sid = _windows_control_pipe_sid(run_dir, logs, timeout)
         result = _run_logged(
             [
                 "msiexec.exe", "/i", str(package), "/qn", "/norestart",
+                f"DOBBYVPN_CONTROL_PIPE_SID={control_pipe_sid}",
                 "/L*v", str(package_log),
             ],
             cwd=run_dir, logs=logs, label="release-install", timeout=timeout,

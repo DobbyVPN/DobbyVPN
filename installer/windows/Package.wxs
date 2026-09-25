@@ -14,6 +14,13 @@
 		<Property Id="DISABLEADVTSHORTCUTS" Value="yes" />
 		<Property Id="MSIDISABLERMRESTART" Value="1" />
 		<Property Id="MSIRMSHUTDOWN" Value="1" />
+		<Property Id="DOBBYVPN_CONTROL_PIPE_SID" Secure="yes" />
+		<SetProperty
+			Id="DOBBYVPN_CONTROL_PIPE_SID"
+			Value="[UserSID]"
+			Before="CostFinalize"
+			Sequence="both"
+			Condition="NOT DOBBYVPN_CONTROL_PIPE_SID" />
 
 		<MediaTemplate EmbedCab="yes" />
 

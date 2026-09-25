@@ -13,12 +13,15 @@ LOG_ROOT="${DOBBY_LOG_ROOT:-$(dirname "$LOG_PATH")}"
 
 CONSOLE_UID="${DOBBYVPN_CONTROL_PEER_UID:-}"
 if [ -z "$CONSOLE_UID" ]; then
-    CONSOLE_USER="$(stat -f '%Su' /dev/console)"
-    if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
-        echo "Unable to identify the installed desktop user" >&2
-        exit 1
-    fi
-    CONSOLE_UID="$(id -u "$CONSOLE_USER")"
+    CONSOLE_STATE="$(/usr/sbin/scutil <<'EOF'
+show State:/Users/ConsoleUser
+EOF
+)"
+    CONSOLE_UID="$(printf '%s\n' "$CONSOLE_STATE" | /usr/bin/awk '/kCGSSessionUserIDKey[[:space:]]*:/ { sub(/.*:[[:space:]]*/, ""); print; exit }')"
+fi
+if ! [[ "$CONSOLE_UID" =~ ^[0-9]+$ ]] || [ "$CONSOLE_UID" -eq 0 ]; then
+    echo "Unable to identify the installed desktop user" >&2
+    exit 1
 fi
 
 chmod +x "$RESOURCES/dobbyvpn-backend"

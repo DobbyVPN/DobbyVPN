@@ -52,13 +52,13 @@
 					ServiceName="DobbyVPN Go backend"
 					OnInstall="yes"
 					ServiceSid="unrestricted" />
-			<!-- USERNAME may be empty in quiet installs; store the installer's SID. -->
+			<!-- Default to the installer SID; test installs may supply the interactive account SID. -->
 			<RegistryValue
 					Root="HKLM"
 				Key="SYSTEM\CurrentControlSet\Services\DobbyVPN Go backend"
 					Name="Environment"
 					Type="multiString">
-				<MultiStringValue Value="DOBBYVPN_CONTROL_PIPE_SID=[UserSID]" />
+				<MultiStringValue Value="DOBBYVPN_CONTROL_PIPE_SID=[DOBBYVPN_CONTROL_PIPE_SID]" />
 			</RegistryValue>
 		</Component>
 		
