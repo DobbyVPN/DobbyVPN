@@ -962,8 +962,8 @@ def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
     helper = GO_MODULE_DIR / "trusttunnel_client"
     if not helper.exists():
         fail("official TrustTunnelClient helper is unavailable")
-    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    staged = SERVICES_DIR / "trusttunnel_client"
+    staged = service_target_path_for_arch("macos", "amd64").with_name("trusttunnel_client")
+    staged.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(helper, staged)
     staged.chmod(0o755)
     log(f"Staged pinned TrustTunnelClient helper beside Intel macOS service: {staged}")
