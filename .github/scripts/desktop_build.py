@@ -750,8 +750,8 @@ def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
     if not bridge.is_file() or sha256_file(bridge) != release.member_sha256:
         fail("TrustTunnel Linux bridge archive did not contain the expected shared library")
 
-    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
-    staged = SERVICES_DIR / bridge.name
+    staged = service_target_path_for_arch("linux", "amd64").parent / bridge.name
+    staged.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(bridge, staged)
     staged.chmod(0o755)
     log(f"Staged checksum-pinned TrustTunnel Linux bridge: {staged}")
@@ -811,12 +811,13 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
     if runtime is None:
         fail("Workspace-local LLVM runtime bootstrap did not produce required files")
 
-    SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+    linux_services = service_target_path_for_arch("linux", "amd64").parent
+    linux_services.mkdir(parents=True, exist_ok=True)
     for name in ("libc++.so.1", "libc++abi.so.1"):
         source = runtime / name
         if not source.exists():
             fail(f"Workspace-local LLVM runtime is missing {name}")
-        for directory in (GO_MODULE_DIR, SERVICES_DIR):
+        for directory in (GO_MODULE_DIR, linux_services):
             target = directory / name
             shutil.copyfile(source.resolve(), target)
             target.chmod(0o755)
