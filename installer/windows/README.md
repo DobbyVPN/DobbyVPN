@@ -19,7 +19,8 @@ Build from this directory on Windows with WiX 5 installed:
 
 The service is installed as DobbyVPN Go backend. The frontend sends JSON
 requests to the fixed DobbyVPN.Control named pipe. The pipe access list grants
-local access to the installed service user and rejects remote clients.
+local access to the account that installed the MSI, using its SID, and rejects
+remote clients.
 
 The build produces the amd64 MSI under bin/amd64. APP_MAJOR_VERSION,
 APP_MINOR_VERSION, and APP_MAINTENANCE_VERSION provide the product version.

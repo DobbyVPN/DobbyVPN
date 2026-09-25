@@ -8,7 +8,6 @@ import (
 	"net"
 
 	winio "github.com/Microsoft/go-winio"
-	"golang.org/x/sys/windows"
 )
 
 const desktopControlPipeName = `\\.\pipe\DobbyVPN.Control`
@@ -23,20 +22,9 @@ func DialDesktopControl(ctx context.Context) (net.Conn, error) {
 }
 
 func ListenDesktopControlPipe() (net.Listener, error) {
-	account, err := installedControlUser()
+	userSID, err := installedControlUserSID()
 	if err != nil {
 		return nil, err
-	}
-	userSID, _, _, err := windows.LookupSID("", account)
-	if err != nil {
-		return nil, fmt.Errorf("resolve installed-user SID for desktop control: %w", err)
-	}
-	systemSID, err := windows.StringToSid("S-1-5-18")
-	if err != nil {
-		return nil, err
-	}
-	if userSID.Equals(systemSID) {
-		return nil, fmt.Errorf("installed desktop user cannot be SYSTEM")
 	}
 	sddl := fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GRGW;;;%s)", userSID.String())
 	// go-winio sets PIPE_REJECT_REMOTE_CLIENTS on every pipe instance.
