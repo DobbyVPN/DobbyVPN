@@ -971,6 +971,11 @@ public final class NativeUiHostedProfileTest {
                                 ERROR_CATEGORY_TIMEOUT_MILLIS,
                                 remainingTimeout(
                                         deadline, "ANDROID_UI_CONNECT_TIMEOUT")));
+                // The visible error can be the previous consent-boundary
+                // state while Android applies the grant and the retry starts.
+                // That bounded category poll gives the connection time to
+                // advance, so check the expected state again before failing.
+                if (findUiObject(expected) != null) return;
                 throw new IllegalStateException("ANDROID_UI_CONNECT_FAILED");
             }
             if ("Disconnected".equals(expected)
