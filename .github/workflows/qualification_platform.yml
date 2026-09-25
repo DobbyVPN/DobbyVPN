@@ -124,7 +124,7 @@ jobs:
               mapfile -t service_matches < <(find /opt/dobbyvpn -xdev -type f -name dobbyvpn-backend -perm -0100)
               test "${#cli_matches[@]}" -eq 1; test "${#service_matches[@]}" -eq 1
               printf 'CLI=%s\nSERVICE=%s\nSERVICE_SOCKET=%s\nSERVICE_LIBRARY_PATH=%s\n' \
-                "${cli_matches[0]}" "${service_matches[0]}" "$CONTROL_DIR/control.sock" /opt/dobbyvpn/lib/runtime >> "$GITHUB_ENV"
+                "${cli_matches[0]}" "${service_matches[0]}" "$CONTROL_DIR/control.sock" /opt/dobbyvpn/lib >> "$GITHUB_ENV"
               ;;
             windows)
               package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
