@@ -197,10 +197,7 @@ class LinuxServiceProcessController:
         # Harness invocation.
         self._supervised_request = supervised_request
         _ensure_directory(self.raw_directory)
-        # The product service still requires a regular log file on Linux, but
-        # it is a run-local scratch stream, never a retained qualification
-        # artifact.  Ignore caller-supplied paths so a hosted lane cannot
-        # accidentally write into a persistent log directory.
+        # The restarted service writes to a run-local regular log file.
         del service_log
         self.service_log = self.raw_directory / f".service-{os.getpid()}-{pid}.log"
         self._restart_number = 0
@@ -685,8 +682,6 @@ class LinuxServiceProcessController:
         self._start(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
 
     def cleanup_scratch(self) -> None:
-        """Remove the service's ephemeral log after process cleanup."""
-
         try:
             self.service_log.unlink(missing_ok=True)
         except OSError:

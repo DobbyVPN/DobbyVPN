@@ -73,9 +73,6 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
         try {
             return request(argument);
         } catch (Throwable failure) {
-            // Only fixed vocabulary crosses the provider boundary. In
-            // particular, never expose endpoint text, exception details, or
-            // response data from a failed request.
             return failureResult();
         }
     }

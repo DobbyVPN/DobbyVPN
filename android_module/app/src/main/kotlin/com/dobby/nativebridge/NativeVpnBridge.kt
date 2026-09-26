@@ -45,9 +45,8 @@ object NativeVpnBridge {
     private var service: DobbyVpnService? = null
     private val serviceLock = Object()
 
-    // This state is intentionally a fixed vocabulary. It is read only by the
-    // Android hosted test companion after a consent timeout; production Go
-    // code receives only prepare's existing integer result.
+    // This tracks consent launch state for the Android hosted test companion.
+    // Production Go code receives prepare's integer result.
     @Volatile
     private var consentLaunchState = CONSENT_LAUNCH_NOT_REQUESTED
 

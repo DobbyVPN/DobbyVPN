@@ -214,8 +214,8 @@ def _scenario_deadlines(
 
     The canonical engine measures the complete adapter call against the
     scenario bound, so cleanup is reserved inside that bound. Command output
-    remains in memory for parsing and assertions; no VPN or device logs are
-    retained by the functional lane.
+    remains in memory for parsing and assertions; the caller owns diagnostic
+    collection.
     """
     if scenario_seconds <= 0:
         raise ScenarioExecutionError("SCENARIO_TIMEOUT_INVALID")
@@ -259,7 +259,7 @@ def _observation_error_code(error: AndroidObservationError) -> str:
 
 
 def _failure_code(error: BaseException) -> str:
-    """Return a stable code without serializing exception text."""
+    """Map an exception to a scenario result code."""
 
     for attribute in ("reason_code", "code"):
         value = getattr(error, attribute, None)

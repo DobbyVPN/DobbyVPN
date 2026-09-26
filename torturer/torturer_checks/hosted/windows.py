@@ -481,7 +481,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         )
 
     def _record_service_diagnostics(self, *diagnostics: str) -> None:
-        """Keep only fixed, in-memory service status for the current result."""
+        """Record service status for the current result."""
 
         values = tuple(value for value in diagnostics if value)
         if not values:
@@ -489,7 +489,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         self._service_diagnostics.extend(values)
 
     def _forward_replacement_output(self, process: object) -> None:
-        """Drain the long-lived replacement's streams without retaining logs."""
+        """Forward the replacement process streams to the invoking stderr."""
 
         threads: list[threading.Thread] = []
         for name in ("stdout", "stderr"):

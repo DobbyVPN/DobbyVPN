@@ -98,7 +98,7 @@ def _probe(
     timeout: float,
     input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run one short, logged platform probe without exposing its output."""
+    """Run one short platform probe through the logged command runner."""
 
     try:
         kwargs: dict[str, Any] = {
@@ -156,7 +156,7 @@ def preflight_native_ui_capabilities(
 
 
 def _parse_console_user_state(stdout: bytes) -> tuple[str, int] | None:
-    """Extract the ConsoleUser name and UID without exposing raw state."""
+    """Extract the ConsoleUser name and UID from logged platform state."""
 
     user: str | None = None
     uid: int | None = None

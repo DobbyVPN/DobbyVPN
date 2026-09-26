@@ -13,8 +13,8 @@ architecture.
 
 ## Implementation sequence
 
-1. Add configuration parsing and a safe profile summary in Go. Keep credentials
-   and raw configuration out of diagnostics and committed fixtures.
+1. Add configuration parsing and a profile summary in Go. Use synthetic
+   committed fixtures.
 2. Implement the protocol device lifecycle, including cancellation, startup
    failure, and reverse-order cleanup.
 3. Register the protocol factory in the Go runtime and expose it through the

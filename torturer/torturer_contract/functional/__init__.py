@@ -1,7 +1,7 @@
 """Canonical cross-platform functional-test contract.
 
-This package contains only public scenario semantics and safe result
-metadata. Platform commands, credentials, and evidence storage belong to
+This package contains scenario semantics and result metadata. Platform
+commands, credentials, and evidence storage belong to
 the adapters and callers that execute it.
 """
 

@@ -1,9 +1,8 @@
 """A narrow adapter around DobbyVPN's public CLI.
 
 The adapter executes validated command vectors and keeps their output in
-memory for parsing and assertions.  Functional runs do not retain command
-lines or command streams on disk; the result document is the only persisted
-run output.
+memory for parsing and assertions. The caller owns command diagnostics and
+scenario result storage.
 """
 
 from __future__ import annotations

@@ -31,8 +31,7 @@ from .factory import adapter_for_platform
 
 # The hosted journey waits for the smoke driver's response. Keep a small
 # explicit reserve inside that response deadline so cleanup can complete
-# before the caller's task deadline. The result JSON is the only retained
-# native-UI output.
+# before the caller's task deadline. The result JSON records the journey.
 _REQUEST_TIMEOUT = 300.0
 _SMOKE_DIAGNOSTIC_RESERVE_SECONDS = 30.0
 _CONTEXT_VALUE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -41,10 +40,8 @@ _CONTEXT_VALUE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 class NativeUIJourneyError(RuntimeError):
     """A native UI or base-adapter journey failure.
 
-    ``operation`` and ``stage`` are deliberately short, fixed vocabulary
-    values supplied by the harness.  They make a bounded timeout actionable
-    without ever including the profile, command line, or another private
-    value in the retained failure record.
+    ``operation`` and ``stage`` identify the failed step within a bounded
+    timeout.
     """
 
     def __init__(

@@ -45,9 +45,7 @@ type DefaultConfigLoader struct {
 	Client  *http.Client
 }
 
-// configLoaderCause keeps an inspectable cause while preventing net/http errors
-// from copying a subscription URL, credentials, or server response details
-// into the public failure string.
+// configLoaderCause retains the underlying fetch error for inspection.
 type configLoaderCause struct {
 	cause error
 }

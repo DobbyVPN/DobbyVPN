@@ -1,4 +1,4 @@
-"""Build and exercise the public Dobby iOS Simulator app without secrets."""
+"""Build and exercise the public Dobby iOS Simulator app."""
 
 from __future__ import annotations
 

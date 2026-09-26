@@ -701,19 +701,16 @@ public final class NativeUiHostedProfileTest {
                 CONNECTION_ACTION_LABEL,
                 remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
         markProgress(operation, "connect-control", "completed");
-        // Record only the small, non-sensitive status vocabulary after the
-        // rendered tap.  If Android never shows consent, this distinguishes a
-        // swallowed touch (still Disconnected) from profile rejection
-        // (Error/Failed) without exposing the entered configuration.
+        // Observe the rendered state after the tap to distinguish a missed
+        // action from a rendered failure while awaiting consent.
         String postTapState = awaitVisibleConnectionState(
                 Math.min(2_000L,
                         remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT")));
         String postTapErrorCategory = "";
         if ("Error".equals(postTapState) || "Failed".equals(postTapState)) {
             // Error becomes accessible before its Details/category node on
-            // some Android frames. Give the fixed category
-            // vocabulary a short bounded poll, still owned by the command's
-            // overall deadline, before classifying the rendered failure.
+            // some Android frames. Poll for that category within the
+            // command's overall deadline before classifying the failure.
             postTapErrorCategory = visibleErrorCategory(
                     Math.min(
                             ERROR_CATEGORY_TIMEOUT_MILLIS,
@@ -963,9 +960,8 @@ public final class NativeUiHostedProfileTest {
             if ("Connected".equals(expected)
                     && (findUiObject("Error") != null || findUiObject("Failed") != null)) {
                 // The rendered error state can appear before its Details
-                // category node. Poll only the fixed phase vocabulary and
-                // retain the operation deadline; never expose the visible
-                // error text or any profile content in the failure code.
+                // category node. Poll for the category within the operation
+                // deadline.
                 String category = visibleErrorCategory(
                         Math.min(
                                 ERROR_CATEGORY_TIMEOUT_MILLIS,
@@ -1246,10 +1242,8 @@ public final class NativeUiHostedProfileTest {
     }
 
     /**
-     * Record only fixed vocabulary at the consent boundary.  This is used to
-     * distinguish an absent/foreign system window from a disabled standard
-     * action and a pre-bridge rendered failure without retaining a hierarchy,
-     * button text, profile, or raw system output.
+     * Record consent state at timeout to distinguish an absent or foreign
+     * system window, a disabled standard action, and a rendered failure.
      */
     private void markConsentTimeoutDiagnostic(UiDevice device) throws Exception {
         consentTimeoutDiagnosed = true;

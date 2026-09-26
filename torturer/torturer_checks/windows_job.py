@@ -177,7 +177,7 @@ def _last_error() -> int:
 
 
 def _exception_error_code(error: BaseException) -> int:
-    """Return a native-looking numeric code without exposing exception text."""
+    """Extract a native numeric error code from an exception."""
 
     for name in ("winerror", "errno"):
         value = getattr(error, name, None)

@@ -2060,12 +2060,10 @@ def _macos_has_element(
 
 
 def _macos_allowlisted_state_labels(process_pid: int) -> tuple[str, ...]:
-    """Report safe native state labels after an activation timeout.
+    """Report native state labels after an activation timeout.
 
-    This diagnostic deliberately asks for a short allowlist rather than
-    dumping the accessibility tree.  It distinguishes a presentation
-    publication problem (native state/action labels are missing) from a
-    missing/incorrect AX root without exposing profile text.
+    This diagnostic distinguishes missing native state/action labels from a
+    missing or incorrect accessibility root.
     A diagnostic lookup must never replace the original activation timeout.
     """
 
@@ -2961,7 +2959,7 @@ class NativeUIController:
         }
 
     def _macos_action_state(self, process_pid: int) -> str | None:
-        """Return the first current post-activation state, without secrets."""
+        """Return the first current post-activation state."""
 
         for name in ("Connecting", "Connected", "Error", "Failed"):
             if _macos_has_status(process_pid, name):
