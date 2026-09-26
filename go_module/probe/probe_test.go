@@ -171,7 +171,7 @@ func startAuthenticatedSOCKS5TestServer(t *testing.T, username, password string,
 			return (&net.Dialer{Timeout: time.Second, KeepAlive: -1}).DialContext(ctx, network, address)
 		}),
 	)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
