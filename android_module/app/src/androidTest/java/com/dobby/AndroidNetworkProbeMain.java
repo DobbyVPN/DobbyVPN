@@ -11,6 +11,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Base64;
@@ -169,15 +171,22 @@ public final class AndroidNetworkProbeMain {
                 .put("elapsed_ms", (System.nanoTime() - started) / 1_000_000.0);
     }
 
-    private static JSONObject failureResult(Throwable failure) {
+    static JSONObject failureResult(Throwable failure) {
         try {
             return new JSONObject()
                     .put("network_binding", "default")
                     .put("probe_uid", Process.myUid())
-                    .put("error_code", "ANDROID_NETWORK_REQUEST_FAILED");
+                    .put("error_code", "ANDROID_NETWORK_REQUEST_FAILED")
+                    .put("error_detail", throwableDetail(failure));
         } catch (JSONException impossible) {
             throw new AssertionError(impossible);
         }
+    }
+
+    private static String throwableDetail(Throwable failure) {
+        StringWriter detail = new StringWriter();
+        failure.printStackTrace(new PrintWriter(detail));
+        return detail.toString();
     }
 
     private static final class Body {

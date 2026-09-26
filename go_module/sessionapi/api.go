@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -298,7 +299,7 @@ func NewManager(options ManagerOptions) *Manager {
 	if options.SourceStore != nil {
 		saved, err := options.SourceStore.Load(context.Background())
 		if err != nil {
-			sourceError = "saved configuration URL could not be read"
+			sourceError = fmt.Sprintf("saved configuration URL could not be read: %v", err)
 		} else if len(saved) > 0 {
 			sourceURL = strings.TrimSpace(string(saved))
 			if sourceURL != "" {
@@ -334,7 +335,7 @@ func (m *Manager) AttachSourceStore(ctx context.Context, store SourceStore) erro
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
-		s.sourceError = "saved configuration URL could not be read"
+		s.sourceError = fmt.Sprintf("saved configuration URL could not be read: %v", err)
 	} else if !s.configured && s.sourceURL == "" && len(saved) > 0 {
 		s.sourceURL = strings.TrimSpace(string(saved))
 		if s.sourceURL != "" {
@@ -363,34 +364,28 @@ func (m *Manager) loadConfig(ctx context.Context, rawConfig []byte) (LoadedConfi
 	if err != nil {
 		var domain *Error
 		if errors.As(err, &domain) {
-			if domain.Cause != nil {
-				return LoadedConfig{}, parsedConfig{}, failure(domain.Code, domain.Message)
-			}
 			return LoadedConfig{}, parsedConfig{}, err
 		}
-		return LoadedConfig{}, parsedConfig{}, failure(FailureMalformedConfig, "configuration is malformed")
+		return LoadedConfig{}, parsedConfig{}, failureWithCause(FailureMalformedConfig, "configuration is malformed", err)
 	}
 	return loaded, parsed, nil
 }
 
 func safeConfigError(raw []byte, err error) error {
 	if errors.Is(err, context.Canceled) {
-		return failure(FailureCanceled, "configuration loading was canceled")
+		return failureWithCause(FailureCanceled, "configuration loading was canceled", err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return failure(FailureCanceled, "configuration loading timed out")
+		return failureWithCause(FailureCanceled, "configuration loading timed out", err)
 	}
 	var domain *Error
 	if errors.As(err, &domain) {
-		if domain.Cause != nil {
-			return failure(domain.Code, domain.Message)
-		}
 		return err
 	}
 	if sourceSchemeRE.MatchString(strings.TrimSpace(string(raw))) {
-		return failure(FailureInvalidArgument, "configuration URL could not be fetched")
+		return failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
-	return failure(FailureInvalidArgument, "configuration could not be loaded")
+	return failureWithCause(FailureInvalidArgument, "configuration could not be loaded", err)
 }
 
 func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSequence uint64, rawConfig []byte) (ConfigureResult, error) {

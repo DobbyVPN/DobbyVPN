@@ -51,6 +51,12 @@ Go fetches URL configurations only over HTTPS, including across redirects.
 Downloaded and inline configurations are limited to 1 MiB. Configuration
 parsing and profile decisions remain in Go.
 
+Failure responses keep their stable code and include the underlying fetch,
+parse, storage, or desktop-control error in the existing message field. The
+message can contain values supplied by the failing component. Native platform
+exceptions are written to the existing app diagnostic files, which the UI
+exports without filtering.
+
 Native frontends read fixed local diagnostic files directly and display their
 contents as written. Product logs, command output, and screenshots are not
 sanitized by the private Harness or hosted workflows.

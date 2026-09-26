@@ -3,6 +3,7 @@ package mobilebinding
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,23 @@ Server = "vpn.example.invalid"
 Port = 443
 Password = "super-secret-token"
 `
+
+func TestFailureEnvelopeRetainsOriginalCause(t *testing.T) {
+	original := errors.New("native-adapter-error-sentinel")
+	response := failed(&sessionapi.Error{
+		Code: sessionapi.FailurePlatform, Message: "platform preparation failed", Cause: original,
+	})
+	var decoded struct {
+		Error envelopeError `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(response), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Error.Code != string(sessionapi.FailurePlatform) ||
+		!strings.Contains(decoded.Error.Message, original.Error()) {
+		t.Fatalf("failure envelope lost cause: %s", response)
+	}
+}
 
 func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
 	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))

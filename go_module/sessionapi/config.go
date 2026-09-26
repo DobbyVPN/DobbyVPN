@@ -78,7 +78,7 @@ func decodeConfig(raw []byte) (configRoot, [][]string, error) {
 	var root configRoot
 	metadata, err := toml.Decode(text, &root)
 	if err != nil {
-		return configRoot{}, nil, failure(FailureMalformedConfig, "TOML could not be parsed")
+		return configRoot{}, nil, failureWithCause(FailureMalformedConfig, "TOML could not be parsed", err)
 	}
 	if err := validateRootKeys(metadata.Keys()); err != nil {
 		return configRoot{}, nil, err

@@ -124,16 +124,16 @@ public final class IOSSessionShell: NSObject {
             do {
                 response = try IOSProviderPayload.decode(providerResponse.payload)
             } catch let error as IOSProviderPayloadError {
-                if case let .invalidUTF8(hex) = error {
-                    logs.writeLog(
-                        log: "iOS session provider response contained invalid UTF-8 bytes_hex=\(hex)"
-                    )
-                }
+                logs.writeLog(
+                    log: "iOS session provider payload decoding failed; reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n\(diagnosticErrorDescription(error))"
+                )
                 return (failure("INTERNAL", message: "iOS session provider response was not valid UTF-8"), false)
             }
             return (response, providerResponse.kind == .go)
         } catch {
-            logs.writeLog(log: "iOS session bridge failed operation=\(operation.rawValue)")
+            logs.writeLog(
+                log: "iOS session bridge failed operation=\(operation.rawValue):\n\(diagnosticErrorDescription(error))"
+            )
             return (failure("INTERNAL", message: "iOS session provider request failed"), false)
         }
     }

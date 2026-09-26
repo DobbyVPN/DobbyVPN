@@ -21,6 +21,7 @@ from torturer_contract.functional.scenarios import (
     suite_set,
     validate_suite,
 )
+from torturer_checks.diagnostics import add_exception_notes
 
 from .cli import (
     HostedAdapterError,
@@ -191,6 +192,33 @@ def _finalize_adapter(adapter, deadline: float | None) -> None:
     finalize(timeout_seconds=timeout_seconds, deadline=deadline)
 
 
+def _finalize_adapter_with_progress(adapter, deadline: float | None) -> None:
+    started = time.monotonic()
+    _emit_progress_event(
+        "finalization-start",
+        {"timeout_seconds": _FINALIZE_TIMEOUT_SECONDS},
+    )
+    try:
+        _finalize_adapter(adapter, deadline)
+    except BaseException as error:
+        _emit_progress_event(
+            "finalization-finish",
+            {
+                "duration_seconds": time.monotonic() - started,
+                "error": f"{type(error).__name__}: {error}",
+                "finalized": False,
+            },
+        )
+        raise
+    _emit_progress_event(
+        "finalization-finish",
+        {
+            "duration_seconds": time.monotonic() - started,
+            "finalized": True,
+        },
+    )
+
+
 def _run_scenarios(
     engine,
     scenarios,
@@ -254,6 +282,10 @@ def _run_scenarios(
                 "scenario-cleanup-finish",
                 {
                     "connection_index": connection.index,
+                    "error": (
+                        f"{type(reset_error).__name__}: {reset_error}"
+                        if reset_error is not None else None
+                    ),
                     "protocol": connection.protocol,
                     "reset": reset_error is None,
                     "scenario": scenario.id,
@@ -278,9 +310,18 @@ def _run_scenarios(
             try:
                 cleanup_scenario()
             except BaseException as cleanup_error:
-                primary_error.add_note(
-                    f"scenario_cleanup_error={type(cleanup_error).__name__}"
-                )
+                add_exception_notes(primary_error, "scenario_cleanup", cleanup_error)
+            _emit_progress_event(
+                "scenario-finish",
+                {
+                    "connection_index": connection.index,
+                    "duration_seconds": time.monotonic() - started,
+                    "error": f"{type(primary_error).__name__}: {primary_error}",
+                    "outcome": "error",
+                    "protocol": connection.protocol,
+                    "scenario": scenario.id,
+                },
+            )
             raise
         payload = result.to_dict()
         results.append(payload)
@@ -381,27 +422,16 @@ def _execute_lane(
             connections,
             deadline=deadline,
         )
-        finalization_started = time.monotonic()
-        _emit_progress_event(
-            "finalization-start",
-            {"timeout_seconds": _FINALIZE_TIMEOUT_SECONDS},
-        )
         finalization_attempted = True
-        _finalize_adapter(adapter, deadline)
-        _emit_progress_event(
-            "finalization-finish",
-            {"duration_seconds": time.monotonic() - finalization_started},
-        )
+        _finalize_adapter_with_progress(adapter, deadline)
         return connections, results
-    except Exception as error:
+    except BaseException as error:
         if not finalization_attempted:
             finalization_attempted = True
             try:
-                _finalize_adapter(adapter, deadline)
-            except Exception as finalization_error:
-                error.add_note(
-                    f"adapter_finalization_error={type(finalization_error).__name__}"
-                )
+                _finalize_adapter_with_progress(adapter, deadline)
+            except BaseException as finalization_error:
+                add_exception_notes(error, "adapter_finalization", finalization_error)
         raise
 
 
@@ -553,15 +583,13 @@ def main(argv: list[str] | None = None) -> int:
             f"coverage={coverage['status']}"
         )
         return _qualification_exit_code(coverage)
-    except Exception as error:
+    except BaseException as error:
         if adapter is not None and not finalization_attempted:
             finalization_attempted = True
             try:
-                _finalize_adapter(adapter, lane_deadline)
-            except Exception as finalization_error:
-                error.add_note(
-                    f"adapter_finalization_error={type(finalization_error).__name__}"
-                )
+                _finalize_adapter_with_progress(adapter, lane_deadline)
+            except BaseException as finalization_error:
+                add_exception_notes(error, "adapter_finalization", finalization_error)
         raise
 
 

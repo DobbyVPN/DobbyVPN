@@ -196,6 +196,8 @@ public final class NativeUiHostedProfileTest {
     private long progressSequence;
     private boolean consentTimeoutDiagnosed;
     private final JSONArray screenshotHistory = new JSONArray();
+    private final JSONArray commandOutputDiagnostics = new JSONArray();
+    private final JSONArray consentDiagnosticFailures = new JSONArray();
     private String expectedRenderedSource = "";
     private final File screenshotDirectory = new File(
             // Instrumentation executes in the target application's UID. The
@@ -222,6 +224,8 @@ public final class NativeUiHostedProfileTest {
             throw new IllegalStateException("ANDROID_UI_SCREENSHOT_DIRECTORY_NOT_EMPTY");
         }
         while (screenshotHistory.length() > 0) screenshotHistory.remove(0);
+        while (commandOutputDiagnostics.length() > 0) commandOutputDiagnostics.remove(0);
+        while (consentDiagnosticFailures.length() > 0) consentDiagnosticFailures.remove(0);
     }
 
     @Test
@@ -492,21 +496,33 @@ public final class NativeUiHostedProfileTest {
                         "ANDROID_COMPLETE_THROWABLE_REPORT_FAILED", reportError));
             }
         } finally {
+            if (commandOutputDiagnostics.length() > 0) {
+                observation.put("command_output", commandOutputDiagnostics);
+            }
+            if (consentDiagnosticFailures.length() > 0) {
+                observation.put("consent_diagnostic_errors", consentDiagnosticFailures);
+            }
             String cleanupError = null;
+            JSONArray cleanupDetails = new JSONArray();
             try {
                 deleteIfPresent(commandFile);
-            } catch (Throwable error) {
+            } catch (Throwable failure) {
                 cleanupError = "ANDROID_COMMAND_FILE_CLEANUP_FAILED";
+                cleanupDetails.put(cleanupError + "\n"
+                        + CompleteThrowableReporter.format(failure));
             }
             try {
                 deleteIfPresent(profileFile);
-            } catch (Throwable error) {
+            } catch (Throwable failure) {
                 cleanupError = cleanupError == null
                         ? "ANDROID_PROFILE_FILE_CLEANUP_FAILED"
                         : cleanupError + ",ANDROID_PROFILE_FILE_CLEANUP_FAILED";
+                cleanupDetails.put("ANDROID_PROFILE_FILE_CLEANUP_FAILED\n"
+                        + CompleteThrowableReporter.format(failure));
             }
             if (cleanupError != null) {
                 observation.put("cleanup_error", cleanupError);
+                observation.put("cleanup_error_detail", cleanupDetails);
                 if (!observation.has("error_code")) {
                     observation.put("error_code", "ANDROID_CONTROL_CLEANUP_FAILED");
                 }
@@ -1254,6 +1270,9 @@ public final class NativeUiHostedProfileTest {
                 .put("state", "observed")
                 .put("sequence", progressSequence)
                 .put("consent_diagnostic", diagnosis);
+        if (consentDiagnosticFailures.length() > 0) {
+            diagnosis.put("errors", consentDiagnosticFailures);
+        }
         RenderedScreenshot screenshot = captureRenderedScreenshot(
                 progressOperation, progressStage, "observed");
         if (screenshot != null) {
@@ -1317,7 +1336,8 @@ public final class NativeUiHostedProfileTest {
             if (context.getPackageName().equals(packageValue)) return "PRODUCT";
             if (packageValue.isEmpty()) return "NONE";
             return "OTHER";
-        } catch (Throwable ignored) {
+        } catch (Throwable failure) {
+            recordConsentDiagnosticFailure("foreground_category", failure);
             return "NONE";
         }
     }
@@ -1327,7 +1347,8 @@ public final class NativeUiHostedProfileTest {
             UiObject2 button = device.findObject(By.res("android:id/button1"));
             if (button == null) return "ABSENT";
             return button.isEnabled() ? "ENABLED" : "DISABLED";
-        } catch (Throwable ignored) {
+        } catch (Throwable failure) {
+            recordConsentDiagnosticFailure("consent_button_state", failure);
             return "UNAVAILABLE";
         }
     }
@@ -1335,8 +1356,22 @@ public final class NativeUiHostedProfileTest {
     private String vpnPermissionState() {
         try {
             return VpnService.prepare(context) == null ? "GRANTED" : "PENDING";
-        } catch (Throwable ignored) {
+        } catch (Throwable failure) {
+            recordConsentDiagnosticFailure("vpn_permission_state", failure);
             return "UNAVAILABLE";
+        }
+    }
+
+    private void recordConsentDiagnosticFailure(String check, Throwable failure) {
+        try {
+            consentDiagnosticFailures.put(new JSONObject()
+                    .put("check", check)
+                    .put("detail", CompleteThrowableReporter.format(failure)));
+        } catch (org.json.JSONException ignored) {
+            // Keep the original diagnostic exception available to the complete
+            // throwable report if the small JSON record cannot be constructed.
+            failure.addSuppressed(ignored);
+            consentDiagnosticFailures.put(CompleteThrowableReporter.format(failure));
         }
     }
 
@@ -1472,7 +1507,9 @@ public final class NativeUiHostedProfileTest {
                 if (!"ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN".equals(errorCode)) {
                     throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
                 }
-                throw new IOException(errorCode);
+                String detail = response.getString(
+                        AndroidRoutingProbeProvider.KEY_ERROR_DETAIL, "");
+                throw new IOException(errorCode + (detail.isEmpty() ? "" : ": " + detail));
             }
             if (!"vpn".equals(transport)) {
                 throw new IOException("ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN");
@@ -1498,9 +1535,9 @@ public final class NativeUiHostedProfileTest {
                     endpoint,
                     null);
         } catch (SecurityException failure) {
-            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED");
+            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED", failure);
         } catch (Throwable failure) {
-            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_FAILED");
+            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_FAILED", failure);
         }
         if (response == null) {
             return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
@@ -1531,7 +1568,9 @@ public final class NativeUiHostedProfileTest {
                         || "ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN".equals(errorCode))) {
                     return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
                 }
-                return result.put("error_code", errorCode);
+                return result.put("error_code", errorCode).put(
+                        "error_detail",
+                        response.getString(AndroidRoutingProbeProvider.KEY_ERROR_DETAIL, ""));
             }
             if (!response.containsKey(AndroidRoutingProbeProvider.KEY_STATUS)
                     || !response.containsKey(AndroidRoutingProbeProvider.KEY_BODY)) {
@@ -1539,14 +1578,21 @@ public final class NativeUiHostedProfileTest {
             }
             return result
                     .put("status", response.getInt(AndroidRoutingProbeProvider.KEY_STATUS))
-                    .put("body", response.getString(AndroidRoutingProbeProvider.KEY_BODY, ""));
+                    .put("body", response.getString(AndroidRoutingProbeProvider.KEY_BODY, ""))
+                    .put("error_detail", response.getString(
+                            AndroidRoutingProbeProvider.KEY_ERROR_DETAIL, ""));
         } catch (Throwable failure) {
-            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID");
+            return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID", failure);
         }
     }
 
     private JSONObject routingProviderFailure(String code) throws Exception {
         return new JSONObject().put("error_code", code);
+    }
+
+    private JSONObject routingProviderFailure(String code, Throwable failure) throws Exception {
+        return new JSONObject().put("error_code", code)
+                .put("error_detail", CompleteThrowableReporter.format(failure));
     }
 
     /**
@@ -1676,7 +1722,7 @@ public final class NativeUiHostedProfileTest {
                     .put("status", status)
                     .put("body", body);
         } catch (Throwable failure) {
-            JSONObject detail = networkRequestFailure();
+            JSONObject detail = networkRequestFailure(failure);
             if (required) {
                 throw new IOException("ANDROID_NETWORK_REQUEST_FAILED", failure);
             }
@@ -1690,12 +1736,17 @@ public final class NativeUiHostedProfileTest {
         return new JSONObject().put("error_code", "ANDROID_NETWORK_REQUEST_FAILED");
     }
 
+    private JSONObject networkRequestFailure(Throwable failure) throws Exception {
+        return new JSONObject()
+                .put("error_code", "ANDROID_NETWORK_REQUEST_FAILED")
+                .put("error_detail", CompleteThrowableReporter.format(failure));
+    }
+
     private JSONObject shellNetworkRequest(String operation, String endpoint, int value)
             throws Exception {
         ApplicationInfo probeApplication = InstrumentationRegistry.getInstrumentation()
                 .getContext().getApplicationInfo();
-        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
-        String shellUid = device.executeShellCommand("su 2000 id -u").trim();
+        String shellUid = shellCommand("su 2000 id -u").stdoutText().trim();
         if (!"2000".equals(shellUid)) {
             throw new IOException("ANDROID_NETWORK_PROBE_SHELL_UID_INVALID");
         }
@@ -1703,6 +1754,7 @@ public final class NativeUiHostedProfileTest {
                 + android.os.Process.myPid() + "-" + System.nanoTime();
         String outputPath = probeRoot + "/result.json";
         String output = "";
+        Throwable operationFailure = null;
         try {
             // A raw APK class path exposes only its primary classes.dex to a
             // standalone app_process. The Android test companion is
@@ -1722,14 +1774,25 @@ public final class NativeUiHostedProfileTest {
                     + " " + encodedEndpoint
                     + " " + value
                     + " " + outputPath;
-            String launchOutput = device.executeShellCommand(command).trim();
-            output = device.executeShellCommand("cat " + outputPath).trim();
+            String launchOutput = shellCommand(command).stdoutText().trim();
+            output = shellCommand("cat " + outputPath).stdoutText().trim();
             if (output.isEmpty() && launchOutput.startsWith("{")) output = launchOutput;
             if (output.isEmpty()) {
                 throw new IOException("ANDROID_NETWORK_PROBE_OUTPUT_INVALID");
             }
+        } catch (Exception | Error failure) {
+            operationFailure = failure;
+            throw failure;
         } finally {
-            device.executeShellCommand("rm -rf " + probeRoot);
+            try {
+                shellCommand("rm -rf " + probeRoot);
+            } catch (Exception cleanupFailure) {
+                if (operationFailure != null) {
+                    operationFailure.addSuppressed(cleanupFailure);
+                } else {
+                    throw cleanupFailure;
+                }
+            }
         }
         JSONObject result;
         try {
@@ -1795,8 +1858,50 @@ public final class NativeUiHostedProfileTest {
     }
 
     private String automationShell(UiAutomation automation, String command) throws IOException {
-        ParcelFileDescriptor descriptor = automation.executeShellCommand(command);
-        return readStream(new ParcelFileDescriptor.AutoCloseInputStream(descriptor));
+        return shellCommand(automation, command).stdoutText();
+    }
+
+    private ShellCommandResult shellCommand(String command) throws IOException {
+        return shellCommand(
+                InstrumentationRegistry.getInstrumentation().getUiAutomation(), command);
+    }
+
+    private ShellCommandResult shellCommand(UiAutomation automation, String command)
+            throws IOException {
+        ParcelFileDescriptor[] descriptors = automation.executeShellCommandRwe(command);
+        if (descriptors == null || descriptors.length != 3) {
+            throw new IOException("ANDROID_NETWORK_PROBE_PIPE_FAILED");
+        }
+        try (OutputStream input = new ParcelFileDescriptor.AutoCloseOutputStream(descriptors[1])) {
+            // All shell probes are noninteractive; closing stdin lets the shell
+            // command observe EOF before its output streams are collected.
+        }
+        PipeCapture stdoutCapture = new PipeCapture(
+                new ParcelFileDescriptor.AutoCloseInputStream(descriptors[0]));
+        PipeCapture stderrCapture = new PipeCapture(
+                new ParcelFileDescriptor.AutoCloseInputStream(descriptors[2]));
+        Thread stdoutReader = new Thread(stdoutCapture, "dobby-android-shell-stdout");
+        Thread stderrReader = new Thread(stderrCapture, "dobby-android-shell-stderr");
+        stdoutReader.start();
+        stderrReader.start();
+        IOException diagnosticFailure = joinPipeReaders(stdoutReader, stderrReader);
+        if (stdoutCapture.failure != null) {
+            diagnosticFailure = appendFailure(diagnosticFailure, stdoutCapture.failure);
+        }
+        if (stderrCapture.failure != null) {
+            diagnosticFailure = appendFailure(diagnosticFailure, stderrCapture.failure);
+        }
+        ShellCommandResult result = new ShellCommandResult(
+                stdoutCapture.bytes, stderrCapture.bytes);
+        try {
+            recordCommandOutput(result);
+        } catch (IOException failure) {
+            diagnosticFailure = appendFailure(diagnosticFailure, failure);
+        }
+        if (diagnosticFailure != null) {
+            throw new IOException("ANDROID_NETWORK_PROBE_PIPE_FAILED", diagnosticFailure);
+        }
+        return result;
     }
 
     private void writeShellFile(
@@ -1809,6 +1914,12 @@ public final class NativeUiHostedProfileTest {
         }
         InputStream commandOutput = new ParcelFileDescriptor.AutoCloseInputStream(descriptors[0]);
         InputStream commandError = new ParcelFileDescriptor.AutoCloseInputStream(descriptors[2]);
+        PipeCapture stdoutCapture = new PipeCapture(commandOutput);
+        PipeCapture stderrCapture = new PipeCapture(commandError);
+        Thread stdoutReader = new Thread(stdoutCapture, "dobby-android-dd-stdout");
+        Thread stderrReader = new Thread(stderrCapture, "dobby-android-dd-stderr");
+        stdoutReader.start();
+        stderrReader.start();
         IOException writeFailure = null;
         try {
             try (OutputStream destination =
@@ -1822,10 +1933,26 @@ public final class NativeUiHostedProfileTest {
         } catch (IOException failure) {
             writeFailure = failure;
         }
-        readStream(commandOutput);
-        readStream(commandError);
+        IOException diagnosticFailure = joinPipeReaders(stdoutReader, stderrReader);
+        if (stdoutCapture.failure != null) {
+            diagnosticFailure = appendFailure(diagnosticFailure, stdoutCapture.failure);
+        }
+        if (stderrCapture.failure != null) {
+            diagnosticFailure = appendFailure(diagnosticFailure, stderrCapture.failure);
+        }
+        try {
+            recordCommandOutput(new ShellCommandResult(
+                    stdoutCapture.bytes, stderrCapture.bytes));
+        } catch (IOException failure) {
+            if (diagnosticFailure == null) diagnosticFailure = failure;
+            else diagnosticFailure.addSuppressed(failure);
+        }
         if (writeFailure != null) {
+            if (diagnosticFailure != null) writeFailure.addSuppressed(diagnosticFailure);
             throw new IOException("ANDROID_NETWORK_PROBE_STAGE_FAILED", writeFailure);
+        }
+        if (diagnosticFailure != null) {
+            throw new IOException("ANDROID_NETWORK_PROBE_PIPE_FAILED", diagnosticFailure);
         }
         String stagedBytes = automationShell(automation, "stat -c %s " + path).trim();
         if (!Long.toString(expectedBytes).equals(stagedBytes)) {
@@ -1833,11 +1960,37 @@ public final class NativeUiHostedProfileTest {
         }
     }
 
+    private IOException joinPipeReaders(Thread stdoutReader, Thread stderrReader) {
+        InterruptedException interruption = null;
+        while (stdoutReader.isAlive() || stderrReader.isAlive()) {
+            try {
+                stdoutReader.join();
+                stderrReader.join();
+            } catch (InterruptedException failure) {
+                if (interruption == null) interruption = failure;
+                else interruption.addSuppressed(failure);
+            }
+        }
+        if (interruption != null) {
+            Thread.currentThread().interrupt();
+            return new IOException("ANDROID_NETWORK_PROBE_PIPE_FAILED", interruption);
+        }
+        return null;
+    }
+
+    private IOException appendFailure(IOException primary, IOException additional) {
+        if (primary == null) return additional;
+        if (primary != additional) primary.addSuppressed(additional);
+        return primary;
+    }
+
     private JSONObject requiredShellNetworkRequest(String operation, String endpoint, int value)
             throws Exception {
         JSONObject result = shellNetworkRequest(operation, endpoint, value);
         if (result.has("error_code")) {
-            throw new IOException("ANDROID_NETWORK_PROBE_FAILED");
+            String detail = result.optString("error_detail", "");
+            throw new IOException("ANDROID_NETWORK_PROBE_FAILED"
+                    + (detail.isEmpty() ? "" : ": " + detail));
         }
         return result;
     }
@@ -1926,6 +2079,62 @@ public final class NativeUiHostedProfileTest {
             int count;
             while ((count = source.read(buffer)) >= 0) output.write(buffer, 0, count);
             return output.toString("UTF-8");
+        }
+    }
+
+    private void recordCommandOutput(ShellCommandResult result) throws IOException {
+        try {
+            commandOutputDiagnostics.put(shellOutputJson(result.stdout, result.stderr));
+        } catch (org.json.JSONException failure) {
+            throw new IOException("ANDROID_NETWORK_PROBE_OUTPUT_INVALID", failure);
+        }
+    }
+
+    static JSONObject shellOutputJson(byte[] stdout, byte[] stderr) throws IOException {
+        try {
+            return new JSONObject()
+                    .put("stdout_base64", Base64.getEncoder().encodeToString(stdout))
+                    .put("stderr_base64", Base64.getEncoder().encodeToString(stderr));
+        } catch (org.json.JSONException failure) {
+            throw new IOException("ANDROID_NETWORK_PROBE_OUTPUT_INVALID", failure);
+        }
+    }
+
+    private static final class ShellCommandResult {
+        final byte[] stdout;
+        final byte[] stderr;
+
+        ShellCommandResult(byte[] stdout, byte[] stderr) {
+            this.stdout = stdout;
+            this.stderr = stderr;
+        }
+
+        String stdoutText() {
+            return new String(stdout, StandardCharsets.UTF_8);
+        }
+    }
+
+    private static final class PipeCapture implements Runnable {
+        final InputStream input;
+        volatile byte[] bytes = new byte[0];
+        volatile IOException failure;
+
+        PipeCapture(InputStream input) {
+            this.input = input;
+        }
+
+        @Override
+        public void run() {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            try (InputStream source = input) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = source.read(buffer)) >= 0) output.write(buffer, 0, count);
+            } catch (IOException readFailure) {
+                failure = readFailure;
+            } finally {
+                bytes = output.toByteArray();
+            }
         }
     }
 

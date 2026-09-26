@@ -45,17 +45,87 @@ static void dobby_clear_exception(JNIEnv *env) {
 	if (env != NULL && (*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
 }
 
+static void dobby_describe_exception(JNIEnv *env) {
+	if (env != NULL && (*env)->ExceptionCheck(env)) {
+		(*env)->ExceptionDescribe(env);
+		(*env)->ExceptionClear(env);
+	}
+}
+
+// Record a JNI boundary failure in the app-owned native diagnostic file before
+// clearing the pending exception. Callers hold dobby_bridge_lock.
+static void dobby_record_jni_failure(JNIEnv *env, const char *event) {
+	if (env == NULL || dobby_bridge == NULL || dobby_context == NULL) {
+		dobby_describe_exception(env);
+		return;
+	}
+	jthrowable failure = NULL;
+	if ((*env)->ExceptionCheck(env)) {
+		failure = (*env)->ExceptionOccurred(env);
+		(*env)->ExceptionClear(env);
+	}
+	if (failure == NULL) {
+		jclass exceptionClass = (*env)->FindClass(env, "java/lang/IllegalStateException");
+		if (exceptionClass != NULL) {
+			jmethodID constructor = (*env)->GetMethodID(env, exceptionClass, "<init>", "(Ljava/lang/String;)V");
+			jstring message = NULL;
+			if (constructor != NULL && !(*env)->ExceptionCheck(env)) {
+				message = (*env)->NewStringUTF(env, event == NULL ? "JNI bridge failed" : event);
+			}
+			if (constructor != NULL && message != NULL && !(*env)->ExceptionCheck(env)) {
+				failure = (jthrowable)(*env)->NewObject(env, exceptionClass, constructor, message);
+			}
+			if (message != NULL) (*env)->DeleteLocalRef(env, message);
+			(*env)->DeleteLocalRef(env, exceptionClass);
+		}
+	}
+	if (failure == NULL || (*env)->ExceptionCheck(env)) {
+		dobby_describe_exception(env);
+		if (failure != NULL) {
+			(*env)->Throw(env, failure);
+			dobby_describe_exception(env);
+			(*env)->DeleteLocalRef(env, failure);
+		}
+		return;
+	}
+	jmethodID method = (*env)->GetStaticMethodID(
+		env, dobby_bridge, "recordNativeFailure",
+		"(Landroid/content/Context;Ljava/lang/String;Ljava/lang/Throwable;)V"
+	);
+	if (method == NULL || (*env)->ExceptionCheck(env)) {
+		dobby_describe_exception(env);
+		(*env)->Throw(env, failure);
+		dobby_describe_exception(env);
+		(*env)->DeleteLocalRef(env, failure);
+		return;
+	}
+	jstring eventValue = (*env)->NewStringUTF(env, event == NULL ? "jni.bridge_failed" : event);
+	bool recorded = false;
+	if (eventValue != NULL && !(*env)->ExceptionCheck(env)) {
+		(*env)->CallStaticVoidMethod(env, dobby_bridge, method, dobby_context, eventValue, failure);
+		recorded = !(*env)->ExceptionCheck(env);
+	}
+	if (!recorded) {
+		dobby_describe_exception(env);
+		(*env)->Throw(env, failure);
+		dobby_describe_exception(env);
+	}
+	if (eventValue != NULL) (*env)->DeleteLocalRef(env, eventValue);
+	(*env)->DeleteLocalRef(env, failure);
+	dobby_clear_exception(env);
+}
+
 // FindClass on a thread attached from Go uses the system class loader on
 // Android and may not see application classes. Resolve the bridge through the
 // Context's loader instead, then retain only the global reference.
 static jclass dobby_load_bridge(JNIEnv *env, jobject context) {
 	if (env == NULL || context == NULL) return NULL;
 	jclass contextClass = (*env)->GetObjectClass(env, context);
-	if (contextClass == NULL) { dobby_clear_exception(env); return NULL; }
+	if (contextClass == NULL) { dobby_describe_exception(env); return NULL; }
 	jmethodID getClass = (*env)->GetMethodID(env, contextClass, "getClass", "()Ljava/lang/Class;");
 	jobject runtimeClass = getClass == NULL ? NULL : (*env)->CallObjectMethod(env, context, getClass);
 	if (runtimeClass == NULL) {
-		dobby_clear_exception(env);
+		dobby_describe_exception(env);
 		(*env)->DeleteLocalRef(env, contextClass);
 		return NULL;
 	}
@@ -70,7 +140,10 @@ static jclass dobby_load_bridge(JNIEnv *env, jobject context) {
 		jmethodID loadClass = loaderClass == NULL ? NULL : (*env)->GetMethodID(
 			env, loaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;"
 		);
-		jstring name = (*env)->NewStringUTF(env, "com.dobby.nativebridge.NativeVpnBridge");
+		jstring name = NULL;
+		if (loadClass != NULL && !(*env)->ExceptionCheck(env)) {
+			name = (*env)->NewStringUTF(env, "com.dobby.nativebridge.NativeVpnBridge");
+		}
 		if (loadClass != NULL && name != NULL) {
 			bridge = (jclass)(*env)->CallObjectMethod(env, loader, loadClass, name);
 		}
@@ -80,7 +153,7 @@ static jclass dobby_load_bridge(JNIEnv *env, jobject context) {
 	if (bridge == NULL) {
 		// The direct lookup still works when this function is reached through a
 		// Java native method, and is a useful fallback for unusual class loaders.
-		dobby_clear_exception(env);
+		dobby_describe_exception(env);
 		bridge = (*env)->FindClass(env, "com/dobby/nativebridge/NativeVpnBridge");
 	}
 	jclass global = NULL;
@@ -92,7 +165,7 @@ static jclass dobby_load_bridge(JNIEnv *env, jobject context) {
 	if (classClass != NULL) (*env)->DeleteLocalRef(env, classClass);
 	(*env)->DeleteLocalRef(env, runtimeClass);
 	(*env)->DeleteLocalRef(env, contextClass);
-	dobby_clear_exception(env);
+	if (global == NULL || (*env)->ExceptionCheck(env)) dobby_describe_exception(env);
 	return global;
 }
 
@@ -108,13 +181,13 @@ static int dobby_call_prepare(void) {
 	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "prepare", "(Landroid/content/Context;)I");
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.prepare_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return -1;
 	}
 	jint result = (*env)->CallStaticIntMethod(env, dobby_bridge, method, dobby_context);
-	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); result = -1; }
+	if ((*env)->ExceptionCheck(env)) { dobby_record_jni_failure(env, "jni.prepare_failed"); result = -1; }
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return (int)result;
@@ -131,21 +204,24 @@ static int32_t dobby_call_acquire(const char *session, int64_t generation) {
 	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "acquireTunnel", "(Ljava/lang/String;J)I");
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.acquire_tunnel_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return -1;
 	}
 	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
 	if (id == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.acquire_tunnel_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return -1;
 	}
 	jint result = (*env)->CallStaticIntMethod(env, dobby_bridge, method, id, (jlong)generation);
 	(*env)->DeleteLocalRef(env, id);
-	dobby_clear_exception(env);
+	if ((*env)->ExceptionCheck(env)) {
+		dobby_record_jni_failure(env, "jni.acquire_tunnel_failed");
+		result = -1;
+	}
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return (int32_t)result;
@@ -162,21 +238,24 @@ static bool dobby_call_release(const char *session, int64_t generation, int32_t 
 	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "releaseTunnel", "(Ljava/lang/String;JI)Z");
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.release_tunnel_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return false;
 	}
 	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
 	if (id == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.release_tunnel_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return false;
 	}
 	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, id, (jlong)generation, (jint)fd);
 	(*env)->DeleteLocalRef(env, id);
-	dobby_clear_exception(env);
+	if ((*env)->ExceptionCheck(env)) {
+		dobby_record_jni_failure(env, "jni.release_tunnel_failed");
+		result = JNI_FALSE;
+	}
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return result == JNI_TRUE;
@@ -193,21 +272,24 @@ static bool dobby_call_protect(const char *session, int64_t generation, int32_t 
 	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "protectSocket", "(Ljava/lang/String;JI)Z");
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.protect_socket_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return false;
 	}
 	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
 	if (id == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.protect_socket_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return false;
 	}
 	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, id, (jlong)generation, (jint)fd);
 	(*env)->DeleteLocalRef(env, id);
-	dobby_clear_exception(env);
+	if ((*env)->ExceptionCheck(env)) {
+		dobby_record_jni_failure(env, "jni.protect_socket_failed");
+		result = JNI_FALSE;
+	}
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return result == JNI_TRUE;
@@ -224,7 +306,7 @@ static void dobby_call_publish(const char *session, int64_t generation, const ch
 	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "publishState", "(Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;)V");
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.publish_state_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return;
@@ -236,7 +318,7 @@ static void dobby_call_publish(const char *session, int64_t generation, const ch
 		if (id != NULL) (*env)->DeleteLocalRef(env, id);
 		if (stateValue != NULL) (*env)->DeleteLocalRef(env, stateValue);
 		if (failureValue != NULL) (*env)->DeleteLocalRef(env, failureValue);
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.publish_state_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return;
@@ -245,7 +327,7 @@ static void dobby_call_publish(const char *session, int64_t generation, const ch
 	(*env)->DeleteLocalRef(env, id);
 	(*env)->DeleteLocalRef(env, stateValue);
 	(*env)->DeleteLocalRef(env, failureValue);
-	dobby_clear_exception(env);
+	if ((*env)->ExceptionCheck(env)) dobby_record_jni_failure(env, "jni.publish_state_failed");
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 }
@@ -265,14 +347,14 @@ static bool dobby_call_export_logs(const unsigned char *logs, int length) {
 		env, dobby_bridge, "exportLogs", "(Landroid/content/Context;[B)Z"
 	);
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.export_logs_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return false;
 	}
 	jbyteArray payload = (*env)->NewByteArray(env, (jsize)length);
 	if (payload == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.export_logs_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return false;
@@ -280,7 +362,7 @@ static bool dobby_call_export_logs(const unsigned char *logs, int length) {
 	if (length > 0) {
 		(*env)->SetByteArrayRegion(env, payload, 0, (jsize)length, (const jbyte *)logs);
 		if ((*env)->ExceptionCheck(env)) {
-			(*env)->ExceptionClear(env); (*env)->DeleteLocalRef(env, payload);
+			dobby_record_jni_failure(env, "jni.export_logs_failed"); (*env)->DeleteLocalRef(env, payload);
 			pthread_mutex_unlock(&dobby_bridge_lock);
 			dobby_detach(attached); return false;
 		}
@@ -288,7 +370,7 @@ static bool dobby_call_export_logs(const unsigned char *logs, int length) {
 	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, dobby_context, payload);
 	(*env)->DeleteLocalRef(env, payload);
 	if ((*env)->ExceptionCheck(env)) {
-		(*env)->ExceptionDescribe(env); (*env)->ExceptionClear(env); result = JNI_FALSE;
+		dobby_record_jni_failure(env, "jni.export_logs_failed"); result = JNI_FALSE;
 	}
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
@@ -311,14 +393,14 @@ static char *dobby_call_diagnostic_paths(void) {
 		env, dobby_bridge, "diagnosticPaths", "(Landroid/content/Context;)Ljava/lang/String;"
 	);
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.diagnostic_paths_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return NULL;
 	}
 	jobject value = (*env)->CallStaticObjectMethod(env, dobby_bridge, method, dobby_context);
 	if ((*env)->ExceptionCheck(env)) {
-		(*env)->ExceptionClear(env);
+		dobby_record_jni_failure(env, "jni.diagnostic_paths_failed");
 		value = NULL;
 	}
 	char *copy = dobby_jstring_utf8(env, (jstring)value);
@@ -339,13 +421,13 @@ static char *dobby_call_load_source_url(void) {
 	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "loadSourceURL", "(Landroid/content/Context;)Ljava/lang/String;");
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.saved_source_load_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return NULL;
 	}
 	jobject value = (*env)->CallStaticObjectMethod(env, dobby_bridge, method, dobby_context);
-	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); value = NULL; }
+	if ((*env)->ExceptionCheck(env)) { dobby_record_jni_failure(env, "jni.saved_source_load_failed"); value = NULL; }
 	char *copy = dobby_jstring_utf8(env, (jstring)value);
 	if (value != NULL) (*env)->DeleteLocalRef(env, value);
 	pthread_mutex_unlock(&dobby_bridge_lock);
@@ -365,7 +447,7 @@ static bool dobby_call_save_source_url(const char *source) {
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "saveSourceURL", "(Landroid/content/Context;Ljava/lang/String;)Z");
 	jstring value = (*env)->NewStringUTF(env, source);
 	if (method == NULL || value == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.saved_source_save_failed");
 		if (value != NULL) (*env)->DeleteLocalRef(env, value);
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
@@ -373,7 +455,7 @@ static bool dobby_call_save_source_url(const char *source) {
 	}
 	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, dobby_context, value);
 	(*env)->DeleteLocalRef(env, value);
-	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = JNI_FALSE; }
+	if ((*env)->ExceptionCheck(env)) { dobby_record_jni_failure(env, "jni.saved_source_save_failed"); result = JNI_FALSE; }
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return result == JNI_TRUE;
@@ -390,13 +472,13 @@ static bool dobby_call_clear_source_url(void) {
 	}
 	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "clearSourceURL", "(Landroid/content/Context;)Z");
 	if (method == NULL) {
-		dobby_clear_exception(env);
+		dobby_record_jni_failure(env, "jni.saved_source_clear_failed");
 		pthread_mutex_unlock(&dobby_bridge_lock);
 		dobby_detach(attached);
 		return false;
 	}
 	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, dobby_context);
-	if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = JNI_FALSE; }
+	if ((*env)->ExceptionCheck(env)) { dobby_record_jni_failure(env, "jni.saved_source_clear_failed"); result = JNI_FALSE; }
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
 	return result == JNI_TRUE;
@@ -409,10 +491,11 @@ static void dobby_set_android_context(uintptr_t vm, uintptr_t envPointer, uintpt
 	dobby_vm = (JavaVM *)vm;
 	if (dobby_context != NULL) (*env)->DeleteGlobalRef(env, dobby_context);
 	dobby_context = (*env)->NewGlobalRef(env, (jobject)context);
-	if (dobby_context == NULL) dobby_clear_exception(env);
+	if (dobby_context == NULL) dobby_record_jni_failure(env, "jni.context_attach_failed");
 	if (dobby_bridge == NULL) {
 		dobby_bridge = dobby_load_bridge(env, (jobject)context);
 	}
+	if (dobby_bridge == NULL) dobby_record_jni_failure(env, "jni.bridge_load_failed");
 	pthread_mutex_unlock(&dobby_bridge_lock);
 }
 

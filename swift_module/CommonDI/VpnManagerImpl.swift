@@ -66,7 +66,7 @@ public final class VpnManagerImpl: NSObject {
         do {
             return try sendOnce(messageData, timeout: timeout)
         } catch {
-            logs.writeLog(log: "[provider] sendProviderMessage failed")
+            logs.writeLog(log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
@@ -84,7 +84,7 @@ public final class VpnManagerImpl: NSObject {
             return try JSONSerialization.data(withJSONObject: value)
         } catch {
             IOSAppCompositionRoot.logsRepository.writeLog(
-                log: "[provider] transport failure encoding failed"
+                log: "[provider] transport failure encoding failed:\n\(diagnosticErrorDescription(error))"
             )
             // No valid response can be encoded. Return no decodable bytes so
             // the caller observes a transport failure rather than success.
@@ -102,7 +102,7 @@ public final class VpnManagerImpl: NSObject {
             )
             return try envelope.encoded()
         } catch {
-            logs.writeLog(log: "[provider] transport failure response encoding failed")
+            logs.writeLog(log: "[provider] transport failure response encoding failed:\n\(diagnosticErrorDescription(error))")
             return Self.transportFailure("INTERNAL", message: "provider request failed")
         }
     }
@@ -192,7 +192,7 @@ public final class VpnManagerImpl: NSObject {
         let status = current?.connection.status ?? .invalid
         condition.unlock()
         if let loadError {
-            logs.writeLog(log: "[provider] NetworkExtension preference save/load failed: \(String(reflecting: loadError))")
+            logs.writeLog(log: "[provider] NetworkExtension preference save/load failed:\n\(diagnosticErrorDescription(loadError))")
             return String(reflecting: loadError)
         }
         guard let current else {
@@ -218,7 +218,7 @@ public final class VpnManagerImpl: NSObject {
             do {
                 try current.connection.startVPNTunnel(options: nil)
             } catch {
-                logs.writeLog(log: "[provider] control-mode start failed: \(String(reflecting: error))")
+                logs.writeLog(log: "[provider] control-mode start failed:\n\(diagnosticErrorDescription(error))")
                 return String(reflecting: error)
             }
             if waitForReady(until: deadline) { return nil }
@@ -263,7 +263,7 @@ public final class VpnManagerImpl: NSObject {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { completion(nil, error); return }
             if let error {
-                self.logs.writeLog(log: "[provider] preference load failed: \(String(reflecting: error))")
+                self.logs.writeLog(log: "[provider] preference load failed:\n\(diagnosticErrorDescription(error))")
                 completion(nil, error)
                 return
             }
@@ -294,7 +294,7 @@ public final class VpnManagerImpl: NSObject {
                 self.reloadSavedManager(completion: completion)
                 return
             }
-            self.logs.writeLog(log: "[provider] preference save failed: \(String(reflecting: saveError))")
+            self.logs.writeLog(log: "[provider] preference save failed:\n\(diagnosticErrorDescription(saveError))")
             completion(nil, saveError)
         }
     }
@@ -305,7 +305,7 @@ public final class VpnManagerImpl: NSObject {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
             guard let self else { completion(nil, loadError); return }
             if let loadError {
-                self.logs.writeLog(log: "[provider] preference reload failed: \(String(reflecting: loadError))")
+                self.logs.writeLog(log: "[provider] preference reload failed:\n\(diagnosticErrorDescription(loadError))")
                 completion(nil, loadError)
                 return
             }

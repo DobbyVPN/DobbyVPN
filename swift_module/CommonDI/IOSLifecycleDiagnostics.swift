@@ -27,3 +27,37 @@ internal func reversibleDiagnosticText(_ data: Data) -> String {
     let hex = data.map { String(format: "%02x", $0) }.joined()
     return "[invalid-utf8-hex:\(hex)]"
 }
+
+/// Render the complete NSError details and its underlying cause chain for the
+/// exported native diagnostic log. `localizedDescription` alone often drops
+/// the domain, code, and NetworkExtension's underlying failure information.
+internal func diagnosticErrorDescription(_ error: Error) -> String {
+    var visited = Set<ObjectIdentifier>()
+
+    func describe(_ error: Error, indentation: String) -> String {
+        let nsError = error as NSError
+        let identity = ObjectIdentifier(nsError)
+        guard visited.insert(identity).inserted else {
+            return "\(indentation)[underlying error cycle: \(nsError.domain)(\(nsError.code))]"
+        }
+
+        var lines = [
+            "\(indentation)error=\(String(reflecting: error))",
+            "\(indentation)domain=\(nsError.domain)",
+            "\(indentation)code=\(nsError.code)",
+            "\(indentation)localizedDescription=\(nsError.localizedDescription)",
+        ]
+        for key in nsError.userInfo.keys.sorted() where key != NSUnderlyingErrorKey {
+            if let value = nsError.userInfo[key] {
+                lines.append("\(indentation)userInfo[\(key)]=\(String(reflecting: value))")
+            }
+        }
+        if let cause = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            lines.append("\(indentation)underlying:")
+            lines.append(describe(cause, indentation: indentation + "  "))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    return describe(error, indentation: "")
+}

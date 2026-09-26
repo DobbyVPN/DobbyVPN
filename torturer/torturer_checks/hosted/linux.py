@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_checks.diagnostics import add_exception_notes, emit_streams
 
 from .cli import (
     CommandResult,
@@ -682,10 +683,31 @@ class LinuxServiceProcessController:
         self._start(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
 
     def cleanup_scratch(self) -> None:
+        collection_error: BaseException | None = None
+        collection_cause: BaseException | None = None
+        if self._restart_number:
+            try:
+                # Forward the complete log while it is still available.  The
+                # diagnostics helper writes bytes directly when stderr has a
+                # binary stream, preserving arbitrary service output exactly.
+                emit_streams("restarted-service", self.service_log.read_bytes(), b"")
+            except BaseException as error:
+                collection_cause = error
+                collection_error = ScenarioExecutionError(
+                    "SERVICE_LOG_COLLECTION_FAILED"
+                )
+                add_exception_notes(collection_error, "service_log_collection", error)
         try:
             self.service_log.unlink(missing_ok=True)
-        except OSError:
-            raise ScenarioExecutionError("SERVICE_SCRATCH_CLEANUP_FAILED") from None
+        except OSError as error:
+            cleanup_error = ScenarioExecutionError("SERVICE_SCRATCH_CLEANUP_FAILED")
+            add_exception_notes(cleanup_error, "service_log_cleanup", error)
+            if collection_error is not None:
+                add_exception_notes(collection_error, "service_scratch_cleanup", cleanup_error)
+            else:
+                raise cleanup_error from error
+        if collection_error is not None:
+            raise collection_error from collection_cause
 
     def stop_restarted_service(
         self, timeout: float, *, deadline: float | None = None

@@ -175,4 +175,32 @@ final class IOSLifecycleCoreTests: XCTestCase {
             "[invalid-utf8-hex:6fff006b]"
         )
     }
+
+    func testDiagnosticErrorDescriptionPreservesNSErrorDetailsAndCause() {
+        let cause = NSError(
+            domain: "DiagnosticCauseDomain",
+            code: 73,
+            userInfo: [NSLocalizedDescriptionKey: "underlying cause sentinel"]
+        )
+        let error = NSError(
+            domain: "DiagnosticTopDomain",
+            code: 41,
+            userInfo: [
+                NSLocalizedDescriptionKey: "top level failure",
+                "diagnostic-sentinel": "user info sentinel",
+                NSUnderlyingErrorKey: cause,
+            ]
+        )
+
+        let description = diagnosticErrorDescription(error)
+
+        XCTAssertTrue(description.contains("DiagnosticTopDomain"))
+        XCTAssertTrue(description.contains("code=41"))
+        XCTAssertTrue(description.contains("top level failure"))
+        XCTAssertTrue(description.contains("diagnostic-sentinel"))
+        XCTAssertTrue(description.contains("user info sentinel"))
+        XCTAssertTrue(description.contains("DiagnosticCauseDomain"))
+        XCTAssertTrue(description.contains("code=73"))
+        XCTAssertTrue(description.contains("underlying cause sentinel"))
+    }
 }

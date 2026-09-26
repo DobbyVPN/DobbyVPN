@@ -1,14 +1,13 @@
 // Package mobilebinding exposes the session API through gomobile-safe values.
 //
-// It serializes only public state DTOs. Configuration bytes are accepted at
-// the edge but are never returned in a result or callback.
+// It serializes public state DTOs and complete failure messages. Configuration
+// bytes are accepted at the edge and never returned on a successful result.
 package mobilebinding
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 
 	"go_module/sessionapi"
 )
@@ -86,10 +85,12 @@ type envelopeError struct {
 
 func success(value interface{}) string { return encode(envelope{OK: true, Result: value}) }
 func failed(err error) string {
-	message := "internal session error"
-	var domain *sessionapi.Error
-	if errors.As(err, &domain) {
+	message := err.Error()
+	if domain, ok := err.(*sessionapi.Error); ok {
 		message = domain.Message
+		if domain.Cause != nil {
+			message += ": " + domain.Cause.Error()
+		}
 	}
 	return encode(envelope{OK: false, Error: &envelopeError{Code: string(sessionapi.CodeOf(err)), Message: message}})
 }
@@ -203,7 +204,7 @@ func (b *Binding) CallJSON(ctx context.Context, method string, params json.RawMe
 		decoder := json.NewDecoder(bytes.NewReader(params))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&value); err != nil {
-			return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "command parameters are invalid"})
+			return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "command parameters are invalid", Cause: err})
 		}
 	}
 	switch method {

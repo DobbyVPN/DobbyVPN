@@ -25,7 +25,7 @@ from torturer_checks.android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
 )
-from torturer_checks.diagnostics import add_exception_notes
+from torturer_checks.diagnostics import add_exception_notes, emit_streams
 from torturer_checks.screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
@@ -523,20 +523,17 @@ class AndroidHostedAdapter:
             cleanup_error = self._cleanup_device(tuple(device_files), cleanup_deadline)
             scratch_error = self._cleanup_local_scratch()
             self._active_controls = ()
-            if cleanup_error is not None:
-                if execution_error is not None:
-                    execution_error.add_note(
-                        f"android_cleanup_error={_failure_code(cleanup_error)}"
-                    )
-                else:
-                    raise cleanup_error
-            if scratch_error is not None:
-                if execution_error is not None:
-                    execution_error.add_note(
-                        f"android_scratch_cleanup_error={_failure_code(scratch_error)}"
-                    )
-                elif cleanup_error is None:
-                    raise scratch_error
+            if execution_error is not None:
+                if cleanup_error is not None:
+                    add_exception_notes(execution_error, "android_cleanup", cleanup_error)
+                if scratch_error is not None:
+                    add_exception_notes(execution_error, "android_scratch_cleanup", scratch_error)
+            elif cleanup_error is not None:
+                if scratch_error is not None:
+                    add_exception_notes(cleanup_error, "android_scratch_cleanup", scratch_error)
+                raise cleanup_error
+            elif scratch_error is not None:
+                raise scratch_error
 
     def _execute_phase(
         self,
@@ -605,7 +602,21 @@ class AndroidHostedAdapter:
         if (
             not _instrumentation_succeeded(instrument)
         ):
-            raise _instrumentation_failure(instrument)
+            failure = _instrumentation_failure(instrument)
+            try:
+                output = self._adb(
+                    ("shell", "-T", "cat", f"{_APP_FILES}/{output_name}"),
+                    _remaining(deadline, "ANDROID_OBSERVATION_TIMEOUT"),
+                    "ANDROID_OBSERVATION_UNAVAILABLE",
+                )
+                emit_streams("android-observation", output.stdout, output.stderr)
+            except BaseException as collection_error:
+                add_exception_notes(
+                    failure,
+                    "android_observation_collection",
+                    collection_error,
+                )
+            raise failure
         output = self._adb(
             ("shell", "-T", "cat", f"{_APP_FILES}/{output_name}"),
             _remaining(deadline, "ANDROID_OBSERVATION_TIMEOUT"),

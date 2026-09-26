@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 
 	"go_module/sessionapi"
@@ -72,6 +73,42 @@ func TestUnknownMethodReturnsTypedFailure(t *testing.T) {
 	}
 	if response.OK || response.Error.Code != "INVALID_ARGUMENT" {
 		t.Fatalf("unknown command response = %s", line)
+	}
+	_ = client.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMalformedRequestReportsJSONCause(t *testing.T) {
+	request := []byte(`{"method":?}`)
+	var ignored Request
+	parseErr := json.Unmarshal(request, &ignored)
+	if parseErr == nil {
+		t.Fatal("fixture is valid JSON")
+	}
+	client, server := net.Pipe()
+	handler := Handler{Binding: mobilebinding.NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))}
+	done := make(chan error, 1)
+	go func() { done <- handler.ServeConn(server) }()
+	if _, err := client.Write(append(request, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(client).ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(line, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "INVALID_ARGUMENT" || !strings.Contains(response.Error.Message, parseErr.Error()) {
+		t.Fatalf("request error lost JSON cause: %s", line)
 	}
 	_ = client.Close()
 	if err := <-done; err != nil {

@@ -14,6 +14,8 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStreamWriter
 import java.io.FileOutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -77,24 +79,39 @@ object NativeVpnBridge {
                     context.startActivity(permission.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
             }
-            val launched = launchConsentOnMainThread(launchConsent)
+            val launched = launchConsentOnMainThread(context, launchConsent)
             if (!launched) {
-                recordDiagnostic(context, "vpn.prepare_failed", "Android VPN consent could not be scheduled")
+                recordDiagnostic(
+                    context,
+                    "vpn.prepare_failed",
+                    "Android VPN consent could not be scheduled",
+                    IllegalStateException("main thread rejected or failed to launch consent; state=$consentLaunchState"),
+                )
                 return -1
             }
             recordDiagnostic(context, "vpn.permission", "Android VPN consent is required")
             return 0
         }
-        val intent = Intent(context, DobbyVpnService::class.java)
-            .setAction(DobbyVpnService.ACTION_PREPARE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        val ready = try {
+            val intent = Intent(context, DobbyVpnService::class.java)
+                .setAction(DobbyVpnService.ACTION_PREPARE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            awaitService(context)
+        } catch (error: Exception) {
+            recordDiagnostic(context, "vpn.prepare_failed", "Android VPN service could not be started", error)
+            false
         }
-        val ready = awaitService()
         if (!ready) {
-            recordDiagnostic(context, "vpn.prepare_failed", "Android VPN service did not become ready")
+            recordDiagnostic(
+                context,
+                "vpn.prepare_failed",
+                "Android VPN service did not become ready",
+                IllegalStateException("service readiness wait expired or was interrupted"),
+            )
         }
         return if (ready) 1 else -1
     }
@@ -106,7 +123,7 @@ object NativeVpnBridge {
      * permission UI on Android's main thread without waiting for the Activity
      * result; the foreground screen handles that result and retries start.
      */
-    private fun launchConsentOnMainThread(launch: Runnable): Boolean {
+    private fun launchConsentOnMainThread(context: Context, launch: Runnable): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             consentLaunchState = CONSENT_LAUNCH_STARTED
             return try {
@@ -116,6 +133,7 @@ object NativeVpnBridge {
             } catch (error: RuntimeException) {
                 consentLaunchState = CONSENT_LAUNCH_FAILED
                 Log.e("DobbyVPN", "Android VPN consent launch failed", error)
+                recordDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
                 false
             }
         }
@@ -130,6 +148,7 @@ object NativeVpnBridge {
             } catch (error: RuntimeException) {
                 consentLaunchState = CONSENT_LAUNCH_FAILED
                 Log.e("DobbyVPN", "Android VPN consent launch failed", error)
+                recordDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
             }
         }
         if (!posted) consentLaunchState = CONSENT_LAUNCH_FAILED
@@ -149,7 +168,7 @@ object NativeVpnBridge {
         }
     }
 
-    private fun awaitService(): Boolean {
+    private fun awaitService(context: Context): Boolean {
         synchronized(serviceLock) {
             if (service != null) return true
             val deadline = System.nanoTime() + 2_000_000_000L
@@ -160,8 +179,14 @@ object NativeVpnBridge {
                 val nanos = (remaining % 1_000_000L).toInt()
                 try {
                     serviceLock.wait(millis, nanos)
-                } catch (_: InterruptedException) {
+                } catch (failure: InterruptedException) {
                     Thread.currentThread().interrupt()
+                    recordDiagnostic(
+                        context,
+                        "vpn.prepare_failed",
+                        "Interrupted while waiting for the VPN service",
+                        failure,
+                    )
                     return false
                 }
             }
@@ -184,6 +209,11 @@ object NativeVpnBridge {
     @JvmStatic
     fun publishState(sessionID: String, generation: Long, state: String, failureCode: String) {
         service?.publishState(sessionID, generation, state, failureCode)
+    }
+
+    @JvmStatic
+    fun recordNativeFailure(context: Context, event: String, failure: Throwable) {
+        recordDiagnostic(context, event, "Android native bridge operation failed", failure)
     }
 
     /** Compress diagnostics and open Android's explicit share chooser. */
@@ -233,13 +263,14 @@ object NativeVpnBridge {
             } catch (cleanup: Exception) {
                 cleanup
             }
-            recordDiagnostic(context, "logs.export_failed", "Diagnostic export chooser failed")
+            recordDiagnostic(context, "logs.export_failed", "Diagnostic export chooser failed", error)
             Log.e("DobbyVPN", "Log export failed", error)
             if (cleanupError != null) {
                 recordDiagnostic(
                     context,
                     "logs.export_cleanup_failed",
                     "Partial diagnostic archive cleanup failed",
+                    cleanupError,
                 )
                 Log.e("DobbyVPN", "Partial diagnostic archive cleanup failed", cleanupError)
             }
@@ -270,6 +301,7 @@ object NativeVpnBridge {
             .orEmpty()
     } catch (error: IOException) {
         Log.e("DobbyVPN", "Saved configuration URL could not be read", error)
+        recordDiagnostic(context, "source_url.load_failed", "Saved configuration URL could not be read", error)
         ""
     }
 
@@ -277,12 +309,17 @@ object NativeVpnBridge {
     fun saveSourceURL(context: Context, value: String): Boolean {
         if (value.isBlank()) return false
         val directory = File(context.filesDir, SAVED_SOURCE_DIRECTORY)
-        if (!directory.exists() && !directory.mkdirs()) return false
+        if (!directory.exists() && !directory.mkdirs()) {
+            val error = IOException("saved configuration directory could not be created: ${directory.absolutePath}")
+            recordDiagnostic(context, "source_url.save_failed", "Saved configuration URL could not be saved", error)
+            return false
+        }
         val destination = File(directory, SAVED_SOURCE_FILE)
         val temporary = try {
             File.createTempFile("dobby-source-", ".tmp", directory)
         } catch (error: IOException) {
             Log.e("DobbyVPN", "Saved configuration URL temporary file could not be created", error)
+            recordDiagnostic(context, "source_url.save_failed", "Saved configuration URL temporary file could not be created", error)
             return false
         }
         return try {
@@ -294,6 +331,7 @@ object NativeVpnBridge {
             true
         } catch (error: Exception) {
             Log.e("DobbyVPN", "Saved configuration URL could not be written", error)
+            recordDiagnostic(context, "source_url.save_failed", "Saved configuration URL could not be written", error)
             false
         } finally {
             if (temporary.exists()) temporary.delete()
@@ -303,9 +341,19 @@ object NativeVpnBridge {
     @JvmStatic
     fun clearSourceURL(context: Context): Boolean = try {
         val file = File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE)
-        !file.exists() || file.delete()
+        val cleared = !file.exists() || file.delete()
+        if (!cleared) {
+            recordDiagnostic(
+                context,
+                "source_url.clear_failed",
+                "Saved configuration URL could not be cleared",
+                IOException("saved configuration URL file could not be deleted: ${file.absolutePath}"),
+            )
+        }
+        cleared
     } catch (error: SecurityException) {
         Log.e("DobbyVPN", "Saved configuration URL could not be cleared", error)
+        recordDiagnostic(context, "source_url.clear_failed", "Saved configuration URL could not be cleared", error)
         false
     }
 
@@ -313,13 +361,20 @@ object NativeVpnBridge {
         File(context.applicationContext.filesDir, DIAGNOSTIC_DIRECTORY).also { it.mkdirs() }
 
     private fun recordDiagnostic(context: Context, event: String, message: String) {
+        recordDiagnostic(context, event, message, null)
+    }
+
+    private fun recordDiagnostic(context: Context, event: String, message: String, failure: Throwable?) {
         val record = JSONObject()
             .put("schema", "dobby.log/v1")
             .put("timestamp", isoTimestamp())
-            .put("level", "INFO")
+            .put("level", if (failure == null) "INFO" else "ERROR")
             .put("source", "android-native")
             .put("event", event)
             .put("message", message)
+            .apply {
+                if (failure != null) put("error_detail", stackTrace(failure))
+            }
             .toString()
         synchronized(diagnosticLock) {
             val file = File(diagnosticsDirectory(context), NATIVE_DIAGNOSTIC_FILE)
@@ -332,6 +387,10 @@ object NativeVpnBridge {
             }
         }
     }
+
+    private fun stackTrace(failure: Throwable): String = StringWriter().also { writer ->
+        failure.printStackTrace(PrintWriter(writer))
+    }.toString()
 
     private fun isoTimestamp(): String =
         SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply {

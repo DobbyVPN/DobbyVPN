@@ -15,6 +15,8 @@ import android.os.SystemClock;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.URL;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +44,7 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
     public static final String KEY_NETWORK_BINDING = "network_binding";
     public static final String KEY_NETWORK_TRANSPORT = "network_transport";
     public static final String KEY_ERROR_CODE = "error_code";
+    public static final String KEY_ERROR_DETAIL = "error_detail";
 
     private static final String NETWORK_BINDING_DEFAULT = "default";
     private static final String NETWORK_TRANSPORT_VPN = "vpn";
@@ -64,7 +67,7 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
             try {
                 return awaitDefaultVpn(extras);
             } catch (Throwable failure) {
-                return failureResult(DEFAULT_NOT_VPN_ERROR_CODE, defaultNetworkTransport());
+                return failureResult(DEFAULT_NOT_VPN_ERROR_CODE, defaultNetworkTransport(), failure);
             }
         }
         if (!METHOD_PROBE.equals(method)) {
@@ -73,7 +76,7 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
         try {
             return request(argument);
         } catch (Throwable failure) {
-            return failureResult();
+            return failureResult(REQUEST_ERROR_CODE, defaultNetworkTransport(), failure);
         }
     }
 
@@ -250,6 +253,19 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
 
     private Bundle failureResult() {
         return failureResult(REQUEST_ERROR_CODE, defaultNetworkTransport());
+    }
+
+    private static Bundle failureResult(
+            String errorCode, String defaultTransport, Throwable failure) {
+        Bundle result = failureResult(errorCode, defaultTransport);
+        result.putString(KEY_ERROR_DETAIL, throwableDetail(failure));
+        return result;
+    }
+
+    private static String throwableDetail(Throwable failure) {
+        StringWriter detail = new StringWriter();
+        failure.printStackTrace(new PrintWriter(detail));
+        return detail.toString();
     }
 
     private static Bundle failureResult(String errorCode, String defaultTransport) {

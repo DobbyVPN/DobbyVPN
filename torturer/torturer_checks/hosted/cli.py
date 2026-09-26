@@ -1473,17 +1473,18 @@ class HostedCLIAdapter:
         }
 
     def _curl_metric(self, url: str, timeout: float, *, upload: bool) -> tuple[float, float]:
+        metric_marker = b"\nDOBBYVPN_CURL_METRIC\t"
         if upload:
             payload = self._upload_payload()
             transfer_args = (
                 "--request", "POST", "--upload-file", str(payload),
-                "--output", os.devnull,
-                "--write-out", "%{time_total}\t%{size_upload}\t%{http_code}",
+                "--write-out",
+                "\\nDOBBYVPN_CURL_METRIC\\t%{time_total}\\t%{size_upload}\\t%{http_code}",
             )
         else:
             transfer_args = (
-                "--output", os.devnull,
-                "--write-out", "%{time_total}\t%{size_download}\t%{http_code}",
+                "--write-out",
+                "\\nDOBBYVPN_CURL_METRIC\\t%{time_total}\\t%{size_download}\\t%{http_code}",
             )
         try:
             result = self.runner.run(
@@ -1494,19 +1495,30 @@ class HostedCLIAdapter:
                 timeout_seconds=timeout,
             )
         except HostedAdapterError as error:
-            raise ScenarioExecutionError(error.code) from error
+            failure = ScenarioExecutionError(error.code)
+            add_exception_notes(failure, "measurement_command", error)
+            raise failure from error
         if result.timed_out or result.returncode != 0:
-            raise ScenarioExecutionError("THROUGHPUT_FAILED")
+            failure = ScenarioExecutionError("THROUGHPUT_FAILED")
+            _append_command_result_notes(failure, result)
+            raise failure
         try:
-            seconds_text, bytes_text, status = result.stdout_text.strip().split("\t", 2)
+            _body, metric = result.stdout.rsplit(metric_marker, 1)
+            seconds_text, bytes_text, status = metric.decode("ascii").strip().split("\t", 2)
             seconds = float(seconds_text)
             bytes_count = float(bytes_text)
         except (ValueError, TypeError) as error:
-            raise ScenarioExecutionError("THROUGHPUT_INVALID") from error
+            failure = ScenarioExecutionError("THROUGHPUT_INVALID")
+            _append_command_result_notes(failure, result)
+            raise failure from error
         if not status.startswith("2"):
-            raise ScenarioExecutionError("MEASUREMENT_SERVICE_UNAVAILABLE")
+            failure = ScenarioExecutionError("MEASUREMENT_SERVICE_UNAVAILABLE")
+            _append_command_result_notes(failure, result)
+            raise failure
         if seconds <= 0 or bytes_count <= 0:
-            raise ScenarioExecutionError("THROUGHPUT_INVALID")
+            failure = ScenarioExecutionError("THROUGHPUT_INVALID")
+            _append_command_result_notes(failure, result)
+            raise failure
         return seconds * 1000.0, bytes_count * 8.0 / seconds / 1_000_000.0
 
     def _upload_payload(self) -> Path:

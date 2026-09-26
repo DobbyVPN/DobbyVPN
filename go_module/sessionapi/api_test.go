@@ -174,12 +174,35 @@ func TestSourceStoreFailureLeavesConfigurationUnchanged(t *testing.T) {
 	}
 }
 
+func TestSourceStoreReadFailureReachesSnapshot(t *testing.T) {
+	original := errors.New("source-read-error-sentinel")
+	store := &managerTestSourceStore{loadErr: original}
+	manager := NewManager(ManagerOptions{SourceStore: store})
+	initial := snapshotForTest(t, manager, "")
+	if !strings.Contains(initial.SourceError, original.Error()) {
+		t.Fatalf("initial snapshot lost source error: %#v", initial)
+	}
+
+	attached := NewManager(ManagerOptions{})
+	if err := attached.AttachSourceStore(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotForTest(t, attached, "")
+	if !strings.Contains(snapshot.SourceError, original.Error()) {
+		t.Fatalf("attached snapshot lost source error: %#v", snapshot)
+	}
+}
+
 type managerTestSourceStore struct {
 	value   []byte
+	loadErr error
 	saveErr error
 }
 
 func (s *managerTestSourceStore) Load(context.Context) ([]byte, error) {
+	if s.loadErr != nil {
+		return nil, s.loadErr
+	}
 	return append([]byte(nil), s.value...), nil
 }
 
@@ -197,6 +220,27 @@ func (s *managerTestSourceStore) Clear(context.Context) error {
 }
 
 type acceptedSourceURLLoader struct{}
+
+type failingSourceURLLoader struct{ cause error }
+
+func (l failingSourceURLLoader) Load(context.Context, []byte) (LoadedConfig, error) {
+	return LoadedConfig{}, l.cause
+}
+
+func TestConfigurationFailuresRetainOriginalCauses(t *testing.T) {
+	original := errors.New("source-fetch-error-sentinel")
+	manager := NewManager(ManagerOptions{Loader: failingSourceURLLoader{cause: original}})
+	_, err := manager.ValidateConfig(context.Background(), []byte("https://configs.invalid/private"))
+	if CodeOf(err) != FailureInvalidArgument || !errors.Is(err, original) ||
+		!strings.Contains(err.Error(), original.Error()) {
+		t.Fatalf("configuration fetch lost original cause: %v", err)
+	}
+
+	_, err = NewManager(ManagerOptions{}).ValidateConfig(context.Background(), []byte("[[Outline]"))
+	if CodeOf(err) != FailureMalformedConfig || errors.Unwrap(err) == nil {
+		t.Fatalf("TOML parse lost original cause: %v", err)
+	}
+}
 
 func (acceptedSourceURLLoader) Load(_ context.Context, source []byte) (LoadedConfig, error) {
 	value := string(source)

@@ -45,12 +45,12 @@ type DefaultConfigLoader struct {
 	Client  *http.Client
 }
 
-// configLoaderCause retains the underlying fetch error for inspection.
+// configLoaderCause retains and reports the underlying fetch error.
 type configLoaderCause struct {
 	cause error
 }
 
-func (c configLoaderCause) Error() string { return "configuration fetch failed" }
+func (c configLoaderCause) Error() string { return c.cause.Error() }
 func (c configLoaderCause) Unwrap() error { return c.cause }
 
 func (l DefaultConfigLoader) Load(ctx context.Context, source []byte) (LoadedConfig, error) {

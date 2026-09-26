@@ -24,21 +24,27 @@ type Request struct {
 
 type Handler struct{ Binding *mobilebinding.Binding }
 
-func (h Handler) ServeConn(conn net.Conn) error {
+func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 	if h.Binding == nil {
 		return errors.New("desktop control binding is unavailable")
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("close desktop control connection: %w", closeErr))
+		}
+	}()
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Minute)); err != nil {
+		return fmt.Errorf("set desktop control deadline: %w", err)
+	}
 
 	reader := bufio.NewReaderSize(conn, 4096)
 	requestBytes, err := readLineBounded(reader, maxRequestBytes)
 	if err != nil {
-		return writeFailure(conn, "INVALID_ARGUMENT", "command request is missing or too large")
+		return writeFailureWithCause(conn, "INVALID_ARGUMENT", "command request could not be read: "+err.Error(), err)
 	}
 	var request Request
 	if err := json.Unmarshal(requestBytes, &request); err != nil {
-		return writeFailure(conn, "INVALID_ARGUMENT", "command request is invalid")
+		return writeFailureWithCause(conn, "INVALID_ARGUMENT", "command request is invalid: "+err.Error(), err)
 	}
 	if request.Method == "" || len(request.Params) == 0 || string(request.Params) == "null" {
 		return writeFailure(conn, "INVALID_ARGUMENT", "command method and parameters are required")
@@ -46,11 +52,19 @@ func (h Handler) ServeConn(conn net.Conn) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	response := json.RawMessage(h.Binding.CallJSON(ctx, request.Method, request.Params))
-	if !json.Valid(response) {
-		return writeFailure(conn, "INTERNAL", "desktop control returned an invalid response")
+	var checked json.RawMessage
+	if err := json.Unmarshal(response, &checked); err != nil {
+		return writeFailureWithCause(conn, "INTERNAL", "desktop control returned an invalid response: "+err.Error(), err)
 	}
 	_, err = conn.Write(append(response, '\n'))
 	return err
+}
+
+func writeFailureWithCause(conn net.Conn, code, message string, cause error) error {
+	if writeErr := writeFailure(conn, code, message); writeErr != nil {
+		return errors.Join(cause, writeErr)
+	}
+	return nil
 }
 
 func readLineBounded(reader *bufio.Reader, limit int) ([]byte, error) {
