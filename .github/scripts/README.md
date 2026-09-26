@@ -48,8 +48,9 @@ NDK toolchains. The main release build is:
 The build packages the Go backend and TrustTunnel's native bridge for both
 arm64-v8a and x86_64. CI checks the bridge symbols in both APK ABIs and rejects
 unresolved C++ runtime imports, including the symbol implicated in the 1.5.0
-Android startup crash. A separate hosted ARM64 job runs the selected Go runtime
-tests on a native ARM64 Linux runner.
+Android startup crash. The Go shared library statically links the pinned NDK's
+C++ runtime to satisfy the bridge imports. A separate hosted ARM64 job runs the
+selected Go runtime tests on a native ARM64 Linux runner.
 
 The local Harness builds the app and its Android instrumentation tests from the
 same selected worktree. Android mini runs on an emulator and checks rendered

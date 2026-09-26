@@ -167,7 +167,8 @@ val buildGoBackend by tasks.registering {
             check(compiler.isFile) { "Android NDK compiler is unavailable: $compiler" }
             val command = listOf(
                 goBinary.get(), "build", "-buildmode=c-shared", "-tags=android,accessibility,static",
-                "-trimpath", "-ldflags=-buildid= -s -w", "-o", output.absolutePath, "./cmd/dobbyandroid"
+                "-trimpath", "-ldflags=-buildid= -s -w -extldflags=-static-libstdc++",
+                "-o", output.absolutePath, "./cmd/dobbyandroid"
             )
             // Gradle's Exec task is intentionally one process per ABI. Running
             // the same Go command sequentially keeps generated c-shared

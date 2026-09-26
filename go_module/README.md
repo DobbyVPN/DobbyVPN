@@ -53,7 +53,8 @@ release app from android_module with the pinned Go compiler:
 
 The Go runtime and TrustTunnel bridge are packaged for arm64-v8a and x86_64.
 Both Android ABIs use the same Go protocol implementation and static native
-bridge.
+bridge. The Go shared library statically links the pinned NDK's C++ runtime so
+the bridge has no runtime C++ symbol dependencies outside that library.
 
 ## iOS runtime
 
