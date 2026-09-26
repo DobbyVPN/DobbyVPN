@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioStep
-from torturer_checks.diagnostics import add_exception_notes
+from torturer_checks.diagnostics import add_exception_notes, emit_streams
 
 from .cli import (
     CommandRunner,
@@ -546,9 +546,38 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             raise ScenarioExecutionError("NETWORK_INTERFACE_STATE_INVALID")
         return "UP" in match.group(1).split(",")
 
-    def _discard_network_repair_scratch(self, paths: tuple[Path, Path, Path]) -> None:
+    def _discard_network_repair_scratch(self, paths: tuple[Path, ...]) -> None:
         for path in paths:
             _discard_scratch_file(path)
+
+    def _forward_network_repair_streams(
+        self, stdout: Path, stderr: Path
+    ) -> Exception | None:
+        streams: dict[str, bytes] = {}
+        failures: list[str] = []
+        for name, path in (("stdout", stdout), ("stderr", stderr)):
+            try:
+                streams[name] = path.read_bytes()
+            except OSError as error:
+                failures.append(
+                    f"network_repair_{name}_read_error={type(error).__name__}: {error}"
+                )
+        try:
+            emit_streams(
+                "macos-network-repair-restore",
+                streams.get("stdout", b""),
+                streams.get("stderr", b""),
+            )
+        except Exception as error:
+            failures.append(
+                f"network_repair_stream_forward_error={type(error).__name__}: {error}"
+            )
+        if not failures:
+            return None
+        failure = ScenarioExecutionError("NETWORK_REPAIR_DIAGNOSTIC_COLLECTION_FAILED")
+        for detail in failures:
+            failure.add_note(detail)
+        return failure
 
     def _network_transition(self, timeout: float) -> dict[str, object]:
         if (
@@ -604,16 +633,33 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                             "network_uplink_restoration",
                             error,
                         )
+            collection_error = self._forward_network_repair_streams(stdout, stderr)
+            if collection_error is not None:
+                if primary is None:
+                    primary = collection_error
+                else:
+                    add_exception_notes(
+                        primary,
+                        "network_repair_diagnostic_collection",
+                        collection_error,
+                    )
+            retained_streams = collection_error is not None
             try:
-                self._discard_network_repair_scratch((state, stdout, stderr))
+                scratch_paths = (state,) if retained_streams else (state, stdout, stderr)
+                self._discard_network_repair_scratch(scratch_paths)
             except Exception as error:
                 if primary is None:
                     primary = error
                 else:
                     primary.add_note(
                         "Network repair scratch cleanup also failed: "
-                        + type(error).__name__
+                        + f"{type(error).__name__}: {error}"
                     )
+            if retained_streams and primary is not None:
+                primary.add_note(
+                    f"Network repair streams retained after collection failure: "
+                    f"stdout={stdout} stderr={stderr}"
+                )
         if primary is not None:
             raise primary
         while not self._interface_is_up(

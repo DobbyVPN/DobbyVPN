@@ -184,13 +184,24 @@ func TestInitialReadinessFailureRollsBackLIFO(t *testing.T) {
 	o := options(record)
 	o.ReadinessAttempts = 2
 	o.ReadinessRetryInterval = time.Nanosecond
+	attempts := 0
 	o.InitialReadiness = func(context.Context, sessionapi.SessionRef, string) error {
+		attempts++
 		record.add("ready")
-		return errors.New("not ready")
+		if attempts == 1 {
+			return errors.New("socket unavailable")
+		}
+		return errors.New("response timed out")
 	}
 
 	if _, err := New(o).Start(context.Background(), sessionapi.SessionRef{Generation: 2}, profile()); err == nil {
 		t.Fatal("Start succeeded without tunnel readiness")
+	} else {
+		for _, want := range []string{"socket unavailable", "response timed out"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("readiness failure lost %q: %v", want, err)
+			}
+		}
 	}
 	want := []string{"inputs", "device", "connect", "ready", "ready", "core-stop", "inputs-stop"}
 	if got := record.got(); !same(got, want) {
@@ -201,24 +212,30 @@ func TestInitialReadinessFailureRollsBackLIFO(t *testing.T) {
 func TestInitialReadinessCancellationRollsBackLIFO(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
-	entered := make(chan struct{})
-	o.InitialReadiness = func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
-		close(entered)
-		<-ctx.Done()
-		return ctx.Err()
-	}
+	o.ReadinessAttempts = 2
+	o.ReadinessRetryInterval = time.Nanosecond
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	o.InitialReadiness = func(_ context.Context, _ sessionapi.SessionRef, _ string) error {
+		attempts++
+		record.add("ready")
+		if attempts == 1 {
+			return errors.New("first readiness detail")
+		}
+		cancel()
+		return context.Canceled
+	}
 	result := make(chan error, 1)
 	go func() {
 		_, err := New(o).Start(ctx, sessionapi.SessionRef{Generation: 3}, profile())
 		result <- err
 	}()
-	<-entered
-	cancel()
-	if err := <-result; !errors.Is(err, context.Canceled) {
-		t.Fatalf("err=%v, want cancellation", err)
+	err := <-result
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "first readiness detail") {
+		t.Fatalf("err=%v, want cancellation and prior readiness detail", err)
 	}
-	want := []string{"inputs", "device", "connect", "core-stop", "inputs-stop"}
+	want := []string{"inputs", "device", "connect", "ready", "ready", "core-stop", "inputs-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("order=%v, want=%v", got, want)
 	}
@@ -414,7 +431,12 @@ func TestConnectedHealthMonitorAppliesThresholdWithoutSleeping(t *testing.T) {
 	<-entered
 	checks <- errors.New("second failed check")
 	select {
-	case <-monitored.HealthFailures():
+	case cause := <-monitored.HealthFailures():
+		for _, want := range []string{"first failed check", "second failed check"} {
+			if cause == nil || !strings.Contains(cause.Error(), want) {
+				t.Fatalf("health failure cause=%v, missing %q", cause, want)
+			}
+		}
 	case <-time.After(time.Second):
 		t.Fatal("health monitor did not reach its failure threshold")
 	}
@@ -720,7 +742,7 @@ func TestProbeRetriesTransientReadinessFailureWithinOneLease(t *testing.T) {
 		proxyAddresses = append(proxyAddresses, proxyAddr)
 		record.add("probe")
 		if attempts < 3 {
-			return -1, nil
+			return 0, errors.New("endpoint not ready")
 		}
 		return 11, nil
 	}
@@ -750,11 +772,11 @@ func TestProbeExhaustsReadinessRetriesAndCleansUp(t *testing.T) {
 	o.ReadinessRetryInterval = time.Nanosecond
 	o.Probe = func(context.Context, string) (int64, error) {
 		record.add("probe")
-		return -1, nil
+		return 0, errors.New("endpoint reset")
 	}
 
 	result, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 8}, profile())
-	if err == nil || err.Error() != "runtime health probe did not reach quorum" {
+	if err == nil || !strings.Contains(err.Error(), "runtime health probe did not reach quorum") || !strings.Contains(err.Error(), "endpoint reset") {
 		t.Fatalf("Probe error=%v", err)
 	}
 	if result != (sessionapi.ProbeResult{}) {
@@ -766,12 +788,15 @@ func TestProbeExhaustsReadinessRetriesAndCleansUp(t *testing.T) {
 	}
 }
 
-func TestProbeReturnsRealErrorWithoutRetry(t *testing.T) {
+func TestProbeRetriesAndPreservesRealError(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
 	o.ReadinessAttempts = 3
+	o.ReadinessRetryInterval = time.Nanosecond
 	want := errors.New("probe transport failed")
+	attempts := 0
 	o.Probe = func(context.Context, string) (int64, error) {
+		attempts++
 		record.add("probe")
 		return 0, want
 	}
@@ -780,7 +805,10 @@ func TestProbeReturnsRealErrorWithoutRetry(t *testing.T) {
 	if !errors.Is(err, want) {
 		t.Fatalf("Probe error=%v, want %v", err, want)
 	}
-	wantOrder := []string{"inputs", "device", "connect", "probe", "core-stop", "inputs-stop"}
+	if attempts != 3 || !strings.Contains(err.Error(), "attempt 3/3") {
+		t.Fatalf("attempts=%d error=%v, want all three causes", attempts, err)
+	}
+	wantOrder := []string{"inputs", "device", "connect", "probe", "probe", "probe", "core-stop", "inputs-stop"}
 	if got := record.got(); !same(got, wantOrder) {
 		t.Fatalf("probe order=%v, want=%v", got, wantOrder)
 	}
@@ -795,7 +823,7 @@ func TestProbeCancellationDuringRetryWaitCleansUp(t *testing.T) {
 	o.Probe = func(context.Context, string) (int64, error) {
 		record.add("probe")
 		close(first)
-		return -1, nil
+		return 0, errors.New("endpoint unavailable")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -805,10 +833,38 @@ func TestProbeCancellationDuringRetryWaitCleansUp(t *testing.T) {
 	}()
 	<-first
 	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("Probe error=%v, want cancellation", err)
+	if err := <-done; !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "endpoint unavailable") {
+		t.Fatalf("Probe error=%v, want cancellation and prior probe detail", err)
 	}
 	want := []string{"inputs", "device", "connect", "probe", "core-stop", "inputs-stop"}
+	if got := record.got(); !same(got, want) {
+		t.Fatalf("probe order=%v, want=%v", got, want)
+	}
+}
+
+func TestProbeCancellationDuringAttemptPreservesEarlierFailures(t *testing.T) {
+	record := &recorded{}
+	o := options(record)
+	o.ReadinessAttempts = 2
+	o.ReadinessRetryInterval = time.Nanosecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	o.Probe = func(context.Context, string) (int64, error) {
+		attempts++
+		record.add("probe")
+		if attempts == 1 {
+			return 0, errors.New("first endpoint failure")
+		}
+		cancel()
+		return 0, errors.New("second endpoint failure")
+	}
+
+	_, err := New(o).Probe(ctx, sessionapi.SessionRef{Generation: 12}, profile())
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "first endpoint failure") || !strings.Contains(err.Error(), "second endpoint failure") {
+		t.Fatalf("Probe error=%v, want cancellation and both probe failures", err)
+	}
+	want := []string{"inputs", "device", "connect", "probe", "probe", "core-stop", "inputs-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("probe order=%v, want=%v", got, want)
 	}
@@ -825,7 +881,7 @@ func TestProbeDeadlineDuringRetryWaitCleansUp(t *testing.T) {
 	o.ReadinessRetryInterval = time.Hour
 	o.Probe = func(context.Context, string) (int64, error) {
 		record.add("probe")
-		return -1, nil
+		return 0, errors.New("endpoint unavailable")
 	}
 
 	_, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 11}, profile())
@@ -868,7 +924,7 @@ func TestProbeReportsCleanupFailure(t *testing.T) {
 	o.Probe = func(context.Context, string) (int64, error) {
 		attempts++
 		if attempts == 1 {
-			return -1, nil
+			return 0, errors.New("endpoint unavailable")
 		}
 		return 7, nil
 	}

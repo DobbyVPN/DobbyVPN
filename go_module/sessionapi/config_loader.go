@@ -45,14 +45,6 @@ type DefaultConfigLoader struct {
 	Client  *http.Client
 }
 
-// configLoaderCause retains and reports the underlying fetch error.
-type configLoaderCause struct {
-	cause error
-}
-
-func (c configLoaderCause) Error() string { return c.cause.Error() }
-func (c configLoaderCause) Unwrap() error { return c.cause }
-
 func (l DefaultConfigLoader) Load(ctx context.Context, source []byte) (LoadedConfig, error) {
 	if len(source) == 0 {
 		return LoadedConfig{}, failure(FailureInvalidArgument, "configuration source is empty")
@@ -74,7 +66,7 @@ func (l DefaultConfigLoader) Load(ctx context.Context, source []byte) (LoadedCon
 func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (LoadedConfig, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, http.NoBody)
 	if err != nil {
-		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL is invalid", configLoaderCause{cause: err})
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL is invalid", err)
 	}
 	requestCtx, cancel := context.WithTimeout(request.Context(), configFetchTimeout)
 	defer cancel()
@@ -108,14 +100,14 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	request.Header.Set("User-Agent", "DobbyVPN/"+versionOrDev(l.Version))
 	response, err := client.Do(request)
 	if err != nil {
-		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", configLoaderCause{cause: err})
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		closeErr := response.Body.Close()
 		return LoadedConfig{}, failureWithCause(
 			FailureInvalidArgument,
 			"configuration URL returned a non-success response",
-			configLoaderCause{cause: errors.Join(fmt.Errorf("configuration URL returned HTTP %d", response.StatusCode), closeErr)},
+			errors.Join(fmt.Errorf("configuration URL returned HTTP %d", response.StatusCode), closeErr),
 		)
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxConfigBytes+1))
@@ -124,14 +116,14 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		return LoadedConfig{}, failureWithCause(
 			FailureInvalidArgument,
 			"configuration URL response exceeds the 1 MiB size limit",
-			configLoaderCause{cause: errors.Join(errors.New("configuration response exceeded the size limit"), readErr, closeErr)},
+			errors.Join(errors.New("configuration response exceeded the size limit"), readErr, closeErr),
 		)
 	}
 	if readErr != nil {
-		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be read", configLoaderCause{cause: errors.Join(readErr, closeErr)})
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be read", errors.Join(readErr, closeErr))
 	}
 	if closeErr != nil {
-		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be closed", configLoaderCause{cause: closeErr})
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be closed", closeErr)
 	}
 	return LoadedConfig{Raw: body, Kind: ConfigSourceURL, SourceURL: source}, nil
 }

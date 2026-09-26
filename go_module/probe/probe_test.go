@@ -2,9 +2,11 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,8 +29,11 @@ func TestTunnelProbeContextCancelsEveryEndpointRequest(t *testing.T) {
 	t.Cleanup(func() { httpProbeURLs = original })
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan int64, 1)
-	go func() { done <- measureTunnelProbe(ctx, 10*time.Second, testDialContext(10*time.Second)) }()
+	done := make(chan error, 1)
+	go func() {
+		_, err := measureTunnelProbe(ctx, 10*time.Second, testDialContext(10*time.Second))
+		done <- err
+	}()
 	for range 3 {
 		select {
 		case <-started:
@@ -38,9 +43,9 @@ func TestTunnelProbeContextCancelsEveryEndpointRequest(t *testing.T) {
 	}
 	cancel()
 	select {
-	case got := <-done:
-		if got != probeFailureResult {
-			t.Fatalf("probe result=%d, want failure", got)
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("probe error=%v, want cancellation", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("probe did not return after context cancellation")
@@ -69,8 +74,8 @@ func TestTunnelProbeContextDeadlineOverridesEndpointTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 	startedAt := time.Now()
-	if got := measureTunnelProbe(ctx, 10*time.Second, testDialContext(10*time.Second)); got != probeFailureResult {
-		t.Fatalf("probe result=%d, want failure", got)
+	if _, err := measureTunnelProbe(ctx, 10*time.Second, testDialContext(10*time.Second)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("probe error=%v, want deadline", err)
 	}
 	if elapsed := time.Since(startedAt); elapsed > time.Second {
 		t.Fatalf("probe ignored context deadline: elapsed=%s", elapsed)
@@ -120,8 +125,8 @@ func TestTunnelProbeRequiresAndUsesAuthenticatedLocalSOCKSEndpoint(t *testing.T)
 	httpProbeURLs = []string{server.URL, server.URL, server.URL}
 	t.Cleanup(func() { httpProbeURLs = original })
 
-	if got := MeasureTunnelProbeAverageLatencyMillisWithContext(context.Background(), 2_000, ""); got != probeFailureResult {
-		t.Fatalf("probe without local SOCKS endpoint=%d, want failure", got)
+	if _, err := MeasureTunnelProbeAverageLatencyMillisWithContext(context.Background(), 2_000, ""); err == nil {
+		t.Fatal("probe without local SOCKS endpoint succeeded")
 	}
 	if requests.Load() != 0 {
 		t.Fatalf("probe without local SOCKS endpoint reached public target %d times", requests.Load())
@@ -129,19 +134,35 @@ func TestTunnelProbeRequiresAndUsesAuthenticatedLocalSOCKSEndpoint(t *testing.T)
 
 	var proxyDialAttempts atomic.Int32
 	proxyAddr := startAuthenticatedSOCKS5TestServer(t, "local-user", "local-password", &proxyDialAttempts)
-	got := MeasureTunnelProbeAverageLatencyMillisWithContext(
+	got, err := MeasureTunnelProbeAverageLatencyMillisWithContext(
 		context.Background(),
 		2_000,
 		"local-user:local-password@"+proxyAddr,
 	)
-	if got < 0 {
-		t.Fatal("probe through authenticated local SOCKS endpoint failed")
+	if err != nil || got < 0 {
+		t.Fatalf("probe through authenticated local SOCKS endpoint: latency=%d err=%v", got, err)
 	}
 	if requests.Load() != 3 {
 		t.Fatalf("target received %d probe requests, want 3", requests.Load())
 	}
 	if proxyDialAttempts.Load() != 3 {
 		t.Fatalf("local SOCKS server dialed the target %d times, want 3", proxyDialAttempts.Load())
+	}
+}
+
+func TestTunnelProbeReturnsEndpointCausesWhenQuorumFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	original := httpProbeURLs
+	httpProbeURLs = []string{server.URL}
+	t.Cleanup(func() { httpProbeURLs = original })
+
+	_, err := measureTunnelProbe(context.Background(), time.Second, testDialContext(time.Second))
+	if err == nil || !strings.Contains(err.Error(), "status=503") || !strings.Contains(err.Error(), "unexpected status 503") {
+		t.Fatalf("failed quorum error = %v, want endpoint status and cause", err)
 	}
 }
 

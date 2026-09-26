@@ -117,13 +117,14 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 
 	log.Debugf(Category, "[Darwin][Protocol] opening protocol SOCKS bridge")
+	// Open may partially allocate protocol resources before returning an error.
+	protocolOpened = true
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, ifaceName)
 	if err != nil {
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	protocolOpened = true
 	log.Debugf(Category, "[Darwin][Protocol] protocol SOCKS bridge ready")
 
 	log.Debugf(Category, "[Darwin][Tunnel] starting tun2socks engine")

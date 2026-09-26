@@ -194,7 +194,12 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	record := slog.NewRecord(occurredAt, level, fmt.Sprintf("[%s] %s", category, message), 0)
 	record.AddAttrs(attrs...)
 	if err := logger.Handler().Handle(ctx, record); err != nil {
-		fmt.Fprintf(os.Stderr, "write structured log: %v\n", err)
+		fmt.Fprintf(os.Stderr, "write structured log failed: %v; ", err)
+		fallback := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug - 4})
+		if fallbackErr := fallback.Handle(ctx, record.Clone()); fallbackErr != nil {
+			fmt.Fprintf(os.Stderr, "write fallback log failed: %v; event=%q category=%q message=%q arguments=%v\n",
+				fallbackErr, event, category, message, arguments)
+		}
 	}
 }
 

@@ -216,9 +216,10 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 
 	d.command, d.stdout, d.stderr = cmd, stdout, stderr
 	d.done = make(chan error, 1)
-	d.streamProcessOutputLocked("stdout", stdout)
-	d.streamProcessOutputLocked("stderr", stderr)
-	go d.waitForProcess(cmd, d.done, d.label)
+	stdoutDone, stderrDone := make(chan struct{}), make(chan struct{})
+	d.streamProcessOutputLocked("stdout", stdout, stdoutDone)
+	d.streamProcessOutputLocked("stderr", stderr, stderrDone)
+	go d.waitForProcess(cmd, d.done, d.label, stdoutDone, stderrDone)
 
 	if err := d.waitForSOCKSLocked(); err != nil {
 		return errors.Join(err, d.closeLocked())
@@ -271,9 +272,10 @@ func (d *TrustTunnelDevice) writeConfigLocked(config string) error {
 	return nil
 }
 
-func (d *TrustTunnelDevice) streamProcessOutputLocked(stream string, reader io.ReadCloser) {
+func (d *TrustTunnelDevice) streamProcessOutputLocked(stream string, reader io.ReadCloser, done chan<- struct{}) {
 	label := d.label
 	go func() {
+		defer close(done)
 		buffered := bufio.NewReader(reader)
 		for {
 			line, err := buffered.ReadString('\n')
@@ -290,8 +292,10 @@ func (d *TrustTunnelDevice) streamProcessOutputLocked(stream string, reader io.R
 		}
 	}()
 }
-
-func (d *TrustTunnelDevice) waitForProcess(cmd *exec.Cmd, done chan<- error, label string) {
+func (d *TrustTunnelDevice) waitForProcess(cmd *exec.Cmd, done chan<- error, label string, stdoutDone, stderrDone <-chan struct{}) {
+	// StdoutPipe/StderrPipe require reads to finish before Wait closes the pipes.
+	<-stdoutDone
+	<-stderrDone
 	err := cmd.Wait()
 	if err != nil {
 		log.Warnf("trusttunnel", "[Intel macOS][TrustTunnel] process=%s exited unsuccessfully error_type=%T error=%v", label, err, err)

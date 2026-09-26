@@ -756,8 +756,8 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 f"api=CloseHandle error={type(error).__name__} detail=replacement-job",
             )
             raise ScenarioExecutionError("SERVICE_JOB_CLOSE_FAILED") from error
-        self._record_service_diagnostics(*close_diagnostics)
-        if close_diagnostics or windows_job_for(process) is not None:
+        self._record_service_diagnostics(*close_diagnostics.diagnostics)
+        if close_diagnostics.failed or windows_job_for(process) is not None:
             self._record_service_diagnostics(
                 "api=CloseHandle winerror=6 detail=replacement-job-still-attached",
             )

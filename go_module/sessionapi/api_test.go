@@ -609,7 +609,7 @@ func TestStopReportsCleanupFailureAndBlocksRestart(t *testing.T) {
 }
 
 func TestStopAcknowledgesAlreadyCleanedTerminalGeneration(t *testing.T) {
-	failures := make(chan struct{}, 1)
+	failures := make(chan error, 1)
 	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 2)}
 	platform := &eventPlatform{events: make(chan StateChange, 32)}
 	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
@@ -619,9 +619,9 @@ func TestStopAcknowledgesAlreadyCleanedTerminalGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, m, id, StateConnected)
-	failures <- struct{}{}
+	failures <- errors.New("connected health probe: endpoint unavailable")
 	snapshot := waitState(t, m, id, StateFailed)
-	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureRuntime {
+	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureRuntime || !strings.Contains(snapshot.LastFailureMessage, "endpoint unavailable") {
 		t.Fatalf("health-failure snapshot=%#v", snapshot)
 	}
 	if _, err := m.Stop(context.Background(), id, start.Generation); err != nil {
@@ -645,6 +645,45 @@ func TestPlatformAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *test
 	snapshot := waitState(t, m, id, StateFailed)
 	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
 		t.Fatalf("cleanup snapshot=%#v", snapshot)
+	}
+}
+
+func TestAutoSelectProbeLeaseCleanupPreservesBothCauses(t *testing.T) {
+	probeErr := errors.New("prior profile probe failed")
+	prepareErr := errors.New("probe platform setup failed")
+	releaseErr := errors.New("probe platform rollback failed")
+	m := NewManager(ManagerOptions{
+		Runtime:  probeFailureRuntime{err: probeErr},
+		Platform: &failingSecondProbePlatform{prepareErr: prepareErr, releaseErr: releaseErr},
+	})
+	id := configured(t, m)
+	if _, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	for _, cause := range []string{probeErr.Error(), prepareErr.Error(), releaseErr.Error()} {
+		if !strings.Contains(snapshot.LastFailureMessage, cause) {
+			t.Fatalf("failure snapshot lost %q: %#v", cause, snapshot)
+		}
+	}
+	if snapshot.LastFailure != FailurePlatform || !snapshot.CleanupComplete {
+		t.Fatalf("probe platform failure snapshot=%#v", snapshot)
+	}
+}
+
+func TestAutoSelectProbeCauseSurvivesInSnapshot(t *testing.T) {
+	const exact = "endpoint probe returned HTTP 502: upstream unavailable"
+	m := NewManager(ManagerOptions{
+		Runtime:  probeFailureRuntime{err: errors.New(exact)},
+		Platform: &fakePlatform{},
+	})
+	id := configured(t, m)
+	if _, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if snapshot.LastFailure != FailureProbe || !strings.Contains(snapshot.LastFailureMessage, exact) {
+		t.Fatalf("probe failure snapshot lost endpoint cause: %#v", snapshot)
 	}
 }
 
@@ -783,7 +822,7 @@ func TestCleanupIsLIFOAndRunsBeforeRestart(t *testing.T) {
 }
 
 func TestRuntimeOwnedHealthFailureCleansUpBeforeAutoFailover(t *testing.T) {
-	failures := make(chan struct{}, 1)
+	failures := make(chan error, 1)
 	defer close(failures)
 	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 2)}
 	platform := &eventPlatform{events: make(chan StateChange, 32)}
@@ -800,7 +839,7 @@ func TestRuntimeOwnedHealthFailureCleansUpBeforeAutoFailover(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForEvent(t, platform.events, first.Generation, StateConnected)
-	failures <- struct{}{}
+	failures <- errors.New("synthetic health check failure")
 	waitForEvent(t, platform.events, first.Generation, StateStopping)
 	waitForEvent(t, platform.events, first.Generation, StateIdle)
 	if stopped := <-runtime.stopped; stopped != first.Generation {
@@ -810,11 +849,14 @@ func TestRuntimeOwnedHealthFailureCleansUpBeforeAutoFailover(t *testing.T) {
 	if second.Generation != first.Generation+1 {
 		t.Fatalf("failover generation = %d, want %d", second.Generation, first.Generation+1)
 	}
+	if second.Failure != FailureRuntime {
+		t.Fatalf("recovery probe event lost health failure code: %#v", second)
+	}
 	waitForEvent(t, platform.events, first.Generation+1, StateConnected)
 }
 
 func TestRuntimeOwnedHealthFailureDoesNotReplaceExplicitProfile(t *testing.T) {
-	failures := make(chan struct{}, 1)
+	failures := make(chan error, 1)
 	defer close(failures)
 	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 2)}
 	platform := &eventPlatform{events: make(chan StateChange, 32)}
@@ -831,7 +873,7 @@ func TestRuntimeOwnedHealthFailureDoesNotReplaceExplicitProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForEvent(t, platform.events, first.Generation, StateConnected)
-	failures <- struct{}{}
+	failures <- errors.New("synthetic health check failure")
 	waitForEvent(t, platform.events, first.Generation, StateStopping)
 	failed := waitForEvent(t, platform.events, first.Generation, StateFailed)
 	if failed.Failure != FailureRuntime {
@@ -1069,6 +1111,15 @@ func (r *startErrorRuntime) Start(context.Context, SessionRef, RuntimeProfile) (
 	return nil, r.err
 }
 
+type probeFailureRuntime struct{ err error }
+
+func (r probeFailureRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
+	return ProbeResult{}, r.err
+}
+func (probeFailureRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
+	return fakeRuntimeLease{}, nil
+}
+
 type countingRuntime struct {
 	probeCalls int
 	startCalls int
@@ -1144,7 +1195,7 @@ func (r errorWithLeaseRuntime) Start(context.Context, SessionRef, RuntimeProfile
 }
 
 type monitoringRuntime struct {
-	failures <-chan struct{}
+	failures <-chan error
 	stopped  chan uint64
 }
 
@@ -1157,12 +1208,12 @@ func (r *monitoringRuntime) Start(_ context.Context, ref SessionRef, _ RuntimePr
 
 type monitoringRuntimeLease struct {
 	generation uint64
-	failures   <-chan struct{}
+	failures   <-chan error
 	stopped    chan uint64
 }
 
 func (l monitoringRuntimeLease) Stop(context.Context) error      { l.stopped <- l.generation; return nil }
-func (l monitoringRuntimeLease) HealthFailures() <-chan struct{} { return l.failures }
+func (l monitoringRuntimeLease) HealthFailures() <-chan error { return l.failures }
 
 type eventPlatform struct{ events chan StateChange }
 
@@ -1221,6 +1272,22 @@ type errorWithLeasePlatform struct {
 	prepareErr error
 	releaseErr error
 }
+
+type failingSecondProbePlatform struct {
+	prepareCalls int
+	prepareErr   error
+	releaseErr   error
+}
+
+func (p *failingSecondProbePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
+	p.prepareCalls++
+	if p.prepareCalls == 1 {
+		return noopLease{}, nil
+	}
+	return cleanupErrorPlatformLease{err: p.releaseErr}, p.prepareErr
+}
+func (*failingSecondProbePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
+func (*failingSecondProbePlatform) PublishState(context.Context, StateChange)            {}
 
 func (p errorWithLeasePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
 	return cleanupErrorPlatformLease{err: p.releaseErr}, p.prepareErr

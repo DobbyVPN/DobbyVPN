@@ -2,6 +2,8 @@ package sessionapi
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,7 +42,7 @@ func waitGenerationState(t *testing.T, manager *Manager, id string, minimumGener
 }
 
 func TestAutoRecoveryStopsAfterThreeUnstableRecoveries(t *testing.T) {
-	failures := make(chan struct{}, 1)
+	failures := make(chan error, 1)
 	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 8)}
 	manager, id := newRecoveryTestManager(t, runtime, time.Now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
@@ -51,7 +53,7 @@ func TestAutoRecoveryStopsAfterThreeUnstableRecoveries(t *testing.T) {
 
 	currentGeneration := started.Generation
 	for retry := 1; retry <= autoRecoveryLimit; retry++ {
-		failures <- struct{}{}
+		failures <- errors.New("synthetic health failure")
 		snapshot := waitGenerationState(t, manager, id, currentGeneration+1, StateConnected)
 		if !snapshot.Configured || snapshot.Recovering {
 			t.Fatalf("recovered snapshot has invalid state: %#v", snapshot)
@@ -59,9 +61,9 @@ func TestAutoRecoveryStopsAfterThreeUnstableRecoveries(t *testing.T) {
 		currentGeneration = snapshot.Generation
 	}
 
-	failures <- struct{}{}
+	failures <- errors.New("synthetic health failure")
 	failed := waitGenerationState(t, manager, id, currentGeneration, StateFailed)
-	if failed.Generation != currentGeneration || failed.LastFailure != FailureRuntime || failed.LastFailureMessage != autoRecoveryMessage || failed.Recovering {
+	if failed.Generation != currentGeneration || failed.LastFailure != FailureRuntime || !strings.Contains(failed.LastFailureMessage, autoRecoveryMessage) || !strings.Contains(failed.LastFailureMessage, "synthetic health failure") || failed.Recovering {
 		t.Fatalf("retry exhaustion snapshot = %#v", failed)
 	}
 	if again, snapshotErr := manager.Snapshot(context.Background(), id); snapshotErr != nil || again.Generation != currentGeneration {
@@ -75,14 +77,14 @@ func TestAutoRecoveryStopsAfterThreeUnstableRecoveries(t *testing.T) {
 	}
 	currentGeneration = waitGenerationState(t, manager, id, started.Generation, StateConnected).Generation
 	for retry := 1; retry <= autoRecoveryLimit; retry++ {
-		failures <- struct{}{}
+		failures <- errors.New("synthetic health failure")
 		snapshot := waitGenerationState(t, manager, id, currentGeneration+1, StateConnected)
 		currentGeneration = snapshot.Generation
 	}
 }
 
 func TestAutoRecoveryBudgetResetsAfterFiveStableMinutes(t *testing.T) {
-	failures := make(chan struct{}, 1)
+	failures := make(chan error, 1)
 	runtime := &monitoringRuntime{failures: failures, stopped: make(chan uint64, 12)}
 	var nowValue atomic.Pointer[time.Time]
 	initial := time.Time{}
@@ -95,7 +97,7 @@ func TestAutoRecoveryBudgetResetsAfterFiveStableMinutes(t *testing.T) {
 	}
 	current := waitGenerationState(t, manager, id, started.Generation, StateConnected)
 	for i := 0; i < autoRecoveryLimit; i++ {
-		failures <- struct{}{}
+		failures <- errors.New("synthetic health failure")
 		current = waitGenerationState(t, manager, id, current.Generation+1, StateConnected)
 	}
 
@@ -103,21 +105,21 @@ func TestAutoRecoveryBudgetResetsAfterFiveStableMinutes(t *testing.T) {
 	// next health failure.
 	afterStable := initial.Add(autoRecoveryStable)
 	nowValue.Store(&afterStable)
-	failures <- struct{}{}
+	failures <- errors.New("synthetic health failure")
 	current = waitGenerationState(t, manager, id, current.Generation+1, StateConnected)
 	for i := 0; i < autoRecoveryLimit-1; i++ {
-		failures <- struct{}{}
+		failures <- errors.New("synthetic health failure")
 		current = waitGenerationState(t, manager, id, current.Generation+1, StateConnected)
 	}
-	failures <- struct{}{}
+		failures <- errors.New("synthetic health failure")
 	failed := waitGenerationState(t, manager, id, current.Generation, StateFailed)
-	if failed.LastFailure != FailureRuntime || failed.LastFailureMessage != autoRecoveryMessage {
+	if failed.LastFailure != FailureRuntime || !strings.Contains(failed.LastFailureMessage, autoRecoveryMessage) || !strings.Contains(failed.LastFailureMessage, "synthetic health failure") {
 		t.Fatalf("post-reset retry exhaustion = %#v", failed)
 	}
 }
 
 type blockedRecoveryRuntime struct {
-	failures     chan struct{}
+	failures     chan error
 	probeEntered chan struct{}
 }
 
@@ -138,14 +140,14 @@ func (r *blockedRecoveryRuntime) Start(_ context.Context, ref SessionRef, _ Runt
 }
 
 func TestStopFromRecoverySnapshotCancelsReservedGeneration(t *testing.T) {
-	runtime := &blockedRecoveryRuntime{failures: make(chan struct{}, 1), probeEntered: make(chan struct{}, 1)}
+	runtime := &blockedRecoveryRuntime{failures: make(chan error, 1), probeEntered: make(chan struct{}, 1)}
 	manager, id := newRecoveryTestManager(t, runtime, time.Now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitGenerationState(t, manager, id, started.Generation, StateConnected)
-	runtime.failures <- struct{}{}
+	runtime.failures <- errors.New("synthetic health failure")
 	select {
 	case <-runtime.probeEntered:
 	case <-time.After(2 * time.Second):
@@ -200,7 +202,7 @@ func TestStopFromRecoveryIdleCancelsReservedGeneration(t *testing.T) {
 }
 
 type recoveryOriginRuntime struct {
-	failures              chan struct{}
+	failures              chan error
 	blockedStopGeneration uint64
 	stopEntered           chan uint64
 	releaseStop           chan struct{}
@@ -219,7 +221,7 @@ type recoveryOriginLease struct {
 	runtime    *recoveryOriginRuntime
 }
 
-func (l recoveryOriginLease) HealthFailures() <-chan struct{} { return l.runtime.failures }
+func (l recoveryOriginLease) HealthFailures() <-chan error { return l.runtime.failures }
 
 func (l recoveryOriginLease) Stop(context.Context) error {
 	if l.generation == l.runtime.blockedStopGeneration {
@@ -231,7 +233,7 @@ func (l recoveryOriginLease) Stop(context.Context) error {
 
 func TestStopFromEarlierRecoveryCycleCannotStopLaterCycle(t *testing.T) {
 	runtime := &recoveryOriginRuntime{
-		failures:              make(chan struct{}, 1),
+		failures:              make(chan error, 1),
 		blockedStopGeneration: 2,
 		stopEntered:           make(chan uint64, 1),
 		releaseStop:           make(chan struct{}, 1),
@@ -248,10 +250,10 @@ func TestStopFromEarlierRecoveryCycleCannotStopLaterCycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitGenerationState(t, manager, id, started.Generation, StateConnected)
-	runtime.failures <- struct{}{}
+	runtime.failures <- errors.New("synthetic health failure")
 	recovered := waitGenerationState(t, manager, id, started.Generation+1, StateConnected)
 
-	runtime.failures <- struct{}{}
+	runtime.failures <- errors.New("synthetic health failure")
 	select {
 	case generation := <-runtime.stopEntered:
 		if generation != recovered.Generation {
@@ -268,7 +270,7 @@ func TestStopFromEarlierRecoveryCycleCannotStopLaterCycle(t *testing.T) {
 }
 
 type blockingHealthLeaseRuntime struct {
-	failures    chan struct{}
+	failures    chan error
 	stopEntered chan uint64
 	releaseStop chan struct{}
 }
@@ -286,7 +288,7 @@ type blockingHealthLease struct {
 	runtime    *blockingHealthLeaseRuntime
 }
 
-func (l blockingHealthLease) HealthFailures() <-chan struct{} { return l.runtime.failures }
+func (l blockingHealthLease) HealthFailures() <-chan error { return l.runtime.failures }
 
 func (l blockingHealthLease) Stop(context.Context) error {
 	l.runtime.stopEntered <- l.generation
@@ -296,7 +298,7 @@ func (l blockingHealthLease) Stop(context.Context) error {
 
 func TestStopDuringHealthTeardownCancelsQueuedRecovery(t *testing.T) {
 	runtime := &blockingHealthLeaseRuntime{
-		failures:    make(chan struct{}, 1),
+		failures:    make(chan error, 1),
 		stopEntered: make(chan uint64, 1),
 		releaseStop: make(chan struct{}),
 	}
@@ -306,7 +308,7 @@ func TestStopDuringHealthTeardownCancelsQueuedRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitGenerationState(t, manager, id, started.Generation, StateConnected)
-	runtime.failures <- struct{}{}
+	runtime.failures <- errors.New("synthetic health failure")
 	select {
 	case generation := <-runtime.stopEntered:
 		if generation != started.Generation {
@@ -316,7 +318,7 @@ func TestStopDuringHealthTeardownCancelsQueuedRecovery(t *testing.T) {
 		t.Fatal("health failure did not begin teardown")
 	}
 	stopping := waitGenerationState(t, manager, id, started.Generation, StateStopping)
-	if !stopping.Recovering {
+	if !stopping.Recovering || stopping.LastFailure != FailureRuntime || !strings.Contains(stopping.LastFailureMessage, "synthetic health failure") {
 		t.Fatalf("health teardown lost recovery indication: %#v", stopping)
 	}
 	if _, err := manager.Stop(context.Background(), id, started.Generation); err != nil {
@@ -324,7 +326,7 @@ func TestStopDuringHealthTeardownCancelsQueuedRecovery(t *testing.T) {
 	}
 	close(runtime.releaseStop)
 	idle := waitGenerationState(t, manager, id, started.Generation, StateIdle)
-	if idle.Recovering {
+	if idle.Recovering || !strings.Contains(idle.LastFailureMessage, "synthetic health failure") {
 		t.Fatalf("user stop left recovery pending: %#v", idle)
 	}
 	if again, err := manager.Snapshot(context.Background(), id); err != nil || again.Generation != started.Generation {

@@ -618,6 +618,7 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         _require_complete_checks(checks)
     except BaseException as error:
         primary = error
+        error.native_ui_checks = dict(checks)
         raise
     finally:
         cleanup_errors: list[str] = []
@@ -637,7 +638,11 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             for value in cleanup_errors:
                 primary.add_note(value)
         elif cleanup_errors:
-            raise NativeUIJourneyError("native journey cleanup failed: " + "; ".join(cleanup_errors))
+            failure = NativeUIJourneyError(
+                "native journey cleanup failed: " + "; ".join(cleanup_errors)
+            )
+            failure.native_ui_checks = dict(checks)
+            raise failure
     return {"platform": args.platform, "checks": checks, "complete": True}
 
 
@@ -692,6 +697,9 @@ def main(argv: list[str] | None = None) -> int:
                 "error": rendered_error,
                 "notes": list(getattr(error, "__notes__", ())),
             }
+            checks = getattr(error, "native_ui_checks", None)
+            if isinstance(checks, dict):
+                failure["checks"] = checks
             if isinstance(operation, str) and operation:
                 failure["operation"] = operation
             if isinstance(stage, str) and stage:

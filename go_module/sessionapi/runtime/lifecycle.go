@@ -283,28 +283,33 @@ func probeUntilReady(
 	attempts int,
 	retryInterval time.Duration,
 ) (int64, error) {
+	var attemptErrors []error
+	if attempts < 1 {
+		return 0, errors.New("runtime health probe has no attempts configured")
+	}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return 0, err
+			return 0, errors.Join(err, errors.Join(attemptErrors...))
 		}
 		startedAt := time.Now()
 		latency, err := probeFn(ctx, proxyAddr)
-		if err != nil {
-			return 0, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if err != nil {
+				err = fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err)
+			}
+			return 0, errors.Join(ctxErr, err, errors.Join(attemptErrors...))
 		}
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		if latency >= 0 {
+		if err == nil && latency >= 0 {
 			log.Debugf(category, "runtime probe readiness succeeded generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
 			return latency, nil
 		}
-		log.Debugf(category, "runtime probe readiness failed generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return 0, ctxErr
+		if err == nil {
+			err = fmt.Errorf("probe returned invalid latency %d", latency)
 		}
+		attemptErrors = append(attemptErrors, fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err))
+		log.Debugf(category, "runtime probe readiness failed generation=%d attempt=%d/%d elapsed=%s error=%v", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond), err)
 		if attempt == attempts {
-			return 0, errors.New("runtime health probe did not reach quorum")
+			return 0, fmt.Errorf("runtime health probe did not reach quorum: %w", errors.Join(attemptErrors...))
 		}
 		timer := time.NewTimer(retryInterval)
 		select {
@@ -312,11 +317,11 @@ func probeUntilReady(
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return 0, ctx.Err()
+			return 0, errors.Join(ctx.Err(), errors.Join(attemptErrors...))
 		case <-timer.C:
 		}
 	}
-	return 0, errors.New("runtime health probe did not reach quorum")
+	return 0, fmt.Errorf("runtime health probe did not reach quorum: %w", errors.Join(attemptErrors...))
 }
 
 func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (*lease, error) {
@@ -409,10 +414,13 @@ func waitForInitialReadiness(
 	attemptTimeout time.Duration,
 	retryInterval time.Duration,
 ) error {
-	var lastErr error
+	var attemptErrors []error
+	if attempts < 1 {
+		return errors.New("initial readiness has no attempts configured")
+	}
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return errors.Join(err, errors.Join(attemptErrors...))
 		}
 		startedAt := time.Now()
 		log.Debugf(category, "initial readiness attempt begin generation=%d attempt=%d/%d timeout=%s", ref.Generation, attempt, attempts, attemptTimeout)
@@ -429,11 +437,11 @@ func waitForInitialReadiness(
 		} else if errors.Is(err, context.Canceled) {
 			outcome = "canceled"
 		}
-		log.Debugf(category, "initial readiness attempt failed generation=%d attempt=%d/%d outcome=%s elapsed=%s", ref.Generation, attempt, attempts, outcome, time.Since(startedAt).Truncate(time.Millisecond))
+		log.Debugf(category, "initial readiness attempt failed generation=%d attempt=%d/%d outcome=%s elapsed=%s error=%v", ref.Generation, attempt, attempts, outcome, time.Since(startedAt).Truncate(time.Millisecond), err)
+		attemptErrors = append(attemptErrors, fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err))
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			return errors.Join(ctxErr, errors.Join(attemptErrors...))
 		}
-		lastErr = err
 		if attempt == attempts {
 			break
 		}
@@ -443,11 +451,11 @@ func waitForInitialReadiness(
 			if !timer.Stop() {
 				<-timer.C
 			}
-			return ctx.Err()
+			return errors.Join(ctx.Err(), errors.Join(attemptErrors...))
 		case <-timer.C:
 		}
 	}
-	return fmt.Errorf("readiness failed after %d attempts: %w", attempts, lastErr)
+	return fmt.Errorf("readiness failed after %d attempts: %w", attempts, errors.Join(attemptErrors...))
 }
 
 func connectContext(ctx context.Context, client sessionCore) error {
@@ -489,7 +497,7 @@ type lease struct {
 	cleanupErr   error
 	healthCancel context.CancelFunc
 	healthDone   chan struct{}
-	healthFailed chan struct{}
+	healthFailed chan error
 }
 
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
@@ -497,29 +505,30 @@ func (l *lease) setOnDone(fn func())                 { l.onDone = fn }
 
 // HealthFailures implements HealthMonitoringLease. It is closed after the
 // lease has stopped, so the manager watcher cannot outlive its runtime lease.
-func (l *lease) HealthFailures() <-chan struct{} { return l.healthFailed }
+func (l *lease) HealthFailures() <-chan error { return l.healthFailed }
 
 func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.SessionRef, proxyAddr string, check ConnectedHealthFunc, interval time.Duration, threshold int) {
 	ctx, cancel := context.WithCancel(parent)
 	l.healthCancel = cancel
 	l.healthDone = make(chan struct{})
-	l.healthFailed = make(chan struct{}, 1)
+	l.healthFailed = make(chan error, 1)
 	go func() {
 		defer close(l.healthDone)
 		defer close(l.healthFailed)
-		failures := 0
+		var failures []error
 		for {
 			if err := check(ctx, ref, proxyAddr); err != nil {
-				failures++
-				if failures >= threshold {
+				failures = append(failures, err)
+				if len(failures) >= threshold {
+					cause := errors.Join(failures...)
 					select {
-					case l.healthFailed <- struct{}{}:
+					case l.healthFailed <- cause:
 					case <-ctx.Done():
 					}
 					return
 				}
 			} else {
-				failures = 0
+				failures = nil
 			}
 			if interval <= 0 {
 				select {
@@ -590,11 +599,8 @@ func defaultProbe(ctx context.Context, proxyAddr string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	latency := probe.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond), proxyAddr)
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	return latency, nil
+	latency, probeErr := probe.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond), proxyAddr)
+	return latency, errors.Join(probeErr, ctx.Err())
 }
 
 func probeTimeout(ctx context.Context) (time.Duration, error) {
@@ -614,12 +620,6 @@ func probeTimeout(ctx context.Context) (time.Duration, error) {
 }
 
 func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
-	latency, err := defaultProbe(ctx, proxyAddr)
-	if err != nil {
-		return err
-	}
-	if latency < 0 {
-		return errors.New("runtime connected health check did not reach quorum")
-	}
-	return nil
+	_, err := defaultProbe(ctx, proxyAddr)
+	return err
 }

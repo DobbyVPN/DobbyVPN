@@ -14,8 +14,6 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStreamWriter
 import java.io.FileOutputStream
-import java.io.PrintWriter
-import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -388,9 +386,7 @@ object NativeVpnBridge {
         }
     }
 
-    private fun stackTrace(failure: Throwable): String = StringWriter().also { writer ->
-        failure.printStackTrace(PrintWriter(writer))
-    }.toString()
+    private fun stackTrace(failure: Throwable): String = failure.stackTraceToString()
 
     private fun isoTimestamp(): String =
         SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).apply {

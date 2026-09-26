@@ -2,7 +2,10 @@ package log
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -175,6 +178,42 @@ func TestTraceLevelIsStableAndReadable(t *testing.T) {
 		t.Fatalf("trace event lost stable vocabulary: %#v", event)
 	}
 }
+
+func TestStructuredSinkFailureFallsBackWithOriginalRecord(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	previousStderr := os.Stderr
+	os.Stderr = file
+	defer func() { os.Stderr = previousStderr }()
+
+	emit(slog.New(failingHandler{err: errors.New("disk write failed")}), slog.LevelError,
+		"tunnel.connect", "TUNNEL", "connection failed", map[string]any{"endpoint": "edge.example:443"})
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"disk write failed", "tunnel.connect", "TUNNEL", "connection failed", "edge.example:443"} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("fallback lost %q: %s", want, output)
+		}
+	}
+}
+
+type failingHandler struct{ err error }
+
+func (f failingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (f failingHandler) Handle(context.Context, slog.Record) error { return f.err }
+func (f failingHandler) WithAttrs([]slog.Attr) slog.Handler { return f }
+func (f failingHandler) WithGroup(string) slog.Handler { return f }
 
 func TestActiveLogIsNotTruncated(t *testing.T) {
 	initMu.Lock()

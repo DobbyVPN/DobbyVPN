@@ -120,8 +120,12 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 
 	if err := d.xrayInstance.Start(); err != nil {
-		_ = d.xrayInstance.Close()
-		return fmt.Errorf("failed to start xray: %w", err)
+		closeErr := d.xrayInstance.Close()
+		startErr := fmt.Errorf("failed to start xray: %w", err)
+		if closeErr != nil {
+			startErr = errors.Join(startErr, fmt.Errorf("failed to close xray after start failure: %w", closeErr))
+		}
+		return startErr
 	}
 
 	return nil

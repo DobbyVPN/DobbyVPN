@@ -32,6 +32,7 @@ from torturer_checks.diagnostics import (
     add_exception_notes,
     add_stream_notes,
     emit_streams,
+    merge_output,
 )
 from torturer_checks.windows_job import (
     WindowsJobError,
@@ -180,14 +181,6 @@ def _output_bytes(value: bytes | str | None) -> bytes:
     return b""
 
 
-def _merge_output(first: bytes, second: bytes) -> bytes:
-    if not first:
-        return second
-    if not second or second.startswith(first) or first.startswith(second):
-        return second if len(second) >= len(first) else first
-    return first + second
-
-
 def _append_error_notes(error: BaseException, errors: Sequence[tuple[str, BaseException]]) -> None:
     for label, secondary in errors:
         add_exception_notes(error, label, secondary)
@@ -198,7 +191,7 @@ def _terminate_process(
     *,
     deadline: float,
     stage: str,
-) -> tuple[bytes, ...]:
+) -> tuple[str, ...]:
     """Terminate only the command boundary and return native diagnostics."""
 
     if os.name == "nt":
@@ -224,16 +217,16 @@ def _close_process_boundary(
     *,
     deadline: float,
     stage: str,
-) -> tuple[bytes, ...]:
+) -> tuple[str, ...]:
     if os.name != "nt" or windows_job_for(process) is None:
         return ()
     diagnostics = close_windows_job(process, stage=stage, deadline=deadline)
-    if bool(diagnostics):
+    if diagnostics.failed:
         error = HostedAdapterError("PROCESS_CLEANUP_FAILED")
-        if diagnostics:
-            error.add_note("; ".join(diagnostics))
+        if diagnostics.diagnostics:
+            error.add_note("; ".join(diagnostics.diagnostics))
         raise error
-    return tuple(diagnostics)
+    return diagnostics.diagnostics
 
 
 def _drain_after_termination(
@@ -256,22 +249,22 @@ def _drain_after_termination(
                 timeout=_remaining_until(deadline),
             )
         return (
-            _merge_output(stdout, recovered_stdout),
-            _merge_output(stderr, recovered_stderr),
+            merge_output(stdout, recovered_stdout),
+            merge_output(stderr, recovered_stderr),
             errors,
         )
     except subprocess.TimeoutExpired as error:
         errors.append(("output_drain", error))
         return (
-            _merge_output(stdout, _output_bytes(error.output)),
-            _merge_output(stderr, _output_bytes(error.stderr)),
+            merge_output(stdout, _output_bytes(error.output)),
+            merge_output(stderr, _output_bytes(error.stderr)),
             errors,
         )
     except OSError as error:
         errors.append(("output_drain", error))
         return (
-            _merge_output(stdout, _output_bytes(getattr(error, "stdout", None))),
-            _merge_output(stderr, _output_bytes(getattr(error, "stderr", None))),
+            merge_output(stdout, _output_bytes(getattr(error, "stdout", None))),
+            merge_output(stderr, _output_bytes(getattr(error, "stderr", None))),
             errors,
         )
 

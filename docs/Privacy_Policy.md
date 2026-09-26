@@ -22,11 +22,12 @@ third-party services as part of normal operation:
   address from `api.ipify.org`, then tries `ifconfig.me/ip` if the first
   service is unavailable. Those services can observe the request and the
   network address from which it arrives.
-- Diagnostic logs are stored locally. On Android and iOS, exporting logs
-  creates a compressed file and opens the platform share sheet; on desktop, it
-  opens a save dialog. DobbyVPN does not transmit logs automatically. If the
-  user chooses another app or service as the destination, that recipient gets
-  the exported file.
+- Diagnostic logs are stored locally. On Android, exporting logs creates a
+  compressed file and opens the platform share sheet. On iOS and macOS, export
+  creates a plain-text file and opens the share sheet. On Windows, export copies
+  the logs to the clipboard. DobbyVPN does not transmit logs automatically. If
+  the user chooses another app or service as the destination, that recipient
+  gets the exported logs.
 
 `ExcludeIPs` deliberately routes the listed destinations outside the VPN or
 proxy path. This behavior can expose those connections to the network they use.

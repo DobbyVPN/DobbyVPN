@@ -19,7 +19,6 @@ import (
 const (
 	probeTimeout          = 2 * time.Second
 	httpProbeMinSuccesses = 2
-	probeFailureResult    = int64(-1)
 )
 
 var httpProbeURLs = []string{
@@ -53,16 +52,14 @@ const (
 // active protocol device's local SOCKS endpoint. It fails closed when that
 // endpoint is missing or invalid. Every request uses a fresh transport with
 // keep-alives disabled so latency cannot be inherited from another session.
-func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, timeoutMillis int64, proxyAddr string) int64 {
+func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, timeoutMillis int64, proxyAddr string) (int64, error) {
 	timeout := time.Duration(timeoutMillis) * time.Millisecond
 	if timeout <= 0 {
-		log.Warnf("PROBE", "Tunnel probe timeout is invalid timeoutMs=%d", timeoutMillis)
-		return probeFailureResult
+		return 0, fmt.Errorf("tunnel probe timeout must be positive: %dms", timeoutMillis)
 	}
 	dialContext, err := socks5DialContext(proxyAddr, timeout)
 	if err != nil {
-		log.Warnf("PROBE", "Tunnel probe local SOCKS endpoint is unavailable errorClass=%s", probeErrorClass(err))
-		return probeFailureResult
+		return 0, fmt.Errorf("tunnel probe local SOCKS endpoint is unavailable: %w", err)
 	}
 	return measureTunnelProbe(ctx, timeout, dialContext)
 }
@@ -86,7 +83,7 @@ func socks5DialContext(proxyAddr string, timeout time.Duration) (func(context.Co
 	}
 	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(parsed.Hostname(), port), credentials, &net.Dialer{Timeout: timeout, KeepAlive: -1})
 	if err != nil {
-		return nil, errors.New("create SOCKS dialer")
+		return nil, fmt.Errorf("create SOCKS dialer: %w", err)
 	}
 	contextDialer, ok := dialer.(proxy.ContextDialer)
 	if !ok {
@@ -95,7 +92,7 @@ func socks5DialContext(proxyAddr string, timeout time.Duration) (func(context.Co
 	return contextDialer.DialContext, nil
 }
 
-func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) int64 {
+func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) (int64, error) {
 	log.Debugf("PROBE", "Tunnel probe begin endpoints=%d timeout=%s", len(httpProbeURLs), timeout)
 
 	results := make([]probeEndpointResult, len(httpProbeURLs))
@@ -111,14 +108,26 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 
 	var sum int64
 	successes := 0
+	var endpointErrors []error
 	for index, result := range results {
 		if result.err != nil {
-			log.Warnf(
-				"PROBE",
-				"Tunnel probe target failed targetOrdinal=%d stage=%s errorClass=%s",
+			endpointErr := fmt.Errorf(
+				"endpoint %d failed at %s (status=%d, error_class=%s): %w",
 				index,
 				result.failureStage,
+				result.status,
 				result.errorClass,
+				result.err,
+			)
+			endpointErrors = append(endpointErrors, endpointErr)
+			log.Warnf(
+				"PROBE",
+				"Tunnel probe target failed targetOrdinal=%d stage=%s status=%d errorClass=%s error=%v",
+				index,
+				result.failureStage,
+				result.status,
+				result.errorClass,
+				result.err,
 			)
 			continue
 		}
@@ -139,7 +148,13 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 	log.Debugf("PROBE", "Tunnel probe latency samples successful=%d/%d required=%d", successes, len(httpProbeURLs), requiredSuccesses)
 	if successes < requiredSuccesses {
 		log.Warnf("PROBE", "Tunnel probe failed: not enough latency endpoints succeeded passed=%d required=%d total=%d", successes, requiredSuccesses, len(httpProbeURLs))
-		return probeFailureResult
+		return 0, fmt.Errorf(
+			"tunnel probe reached %d/%d successful endpoints; %d required: %w",
+			successes,
+			len(httpProbeURLs),
+			requiredSuccesses,
+			errors.Join(endpointErrors...),
+		)
 	}
 	if successes != len(httpProbeURLs) {
 		log.Warnf("PROBE", "Tunnel probe continuing with partial latency quorum passed=%d total=%d", successes, len(httpProbeURLs))
@@ -147,7 +162,7 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 
 	avg := sum / int64(successes)
 	log.Debugf("PROBE", "Tunnel probe finished averageLatencyMs=%d", avg)
-	return avg
+	return avg, nil
 }
 
 func probeEndpoint(parent context.Context, endpointURL string, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) probeEndpointResult {

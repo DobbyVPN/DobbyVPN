@@ -255,10 +255,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // The provider first starts in control mode. No routes, DNS settings,
         // or Go session are installed here, so configure cannot black-hole
         // traffic and NetworkExtension status cannot become product state.
-        _ = settingsQueue.sync {
+        let settingsCleared = settingsQueue.sync {
             runSettingsOperation {
                 try await self.setTunnelNetworkSettings(nil)
             }
+        }
+        guard settingsCleared else {
+            throw sessionError("NETWORK_SETTINGS_CLEAR_FAILED")
         }
         DobbyvpnRegisterSessionPlatform(callbackBridge)
         logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for session command")
@@ -559,7 +562,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return false
         }
         if let error = result.error {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation failed: \(String(reflecting: error))")
+            let nsError = error as NSError
+            logs.writeLog(
+                log: "[tunnel:\(tunnelId)] NetworkExtension settings operation failed: " +
+                    "\(String(reflecting: error)) domain=\(nsError.domain) code=\(nsError.code) " +
+                    "userInfo=\(String(reflecting: nsError.userInfo))"
+            )
         }
         return result.succeeded
     }

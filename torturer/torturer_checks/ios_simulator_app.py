@@ -20,6 +20,7 @@ from torturer_checks.diagnostics import (
     add_exception_notes,
     add_stream_notes,
     emit_streams,
+    merge_output,
 )
 from torturer_checks.ios_simulator import (
     IOSSimulatorContractError,
@@ -179,7 +180,7 @@ class CommandRunner(Protocol):
         cwd: Path | None = None,
         timeout_seconds: float | None = None,
     ) -> CommandResult:
-        """Execute one argument-vector command without a shell."""
+        """Run shell-free and forward each captured stream exactly once."""
 
 
 def _signal_process_group(process: subprocess.Popen[bytes], sig: int) -> None:
@@ -204,11 +205,16 @@ def _stop_process_group(process: subprocess.Popen[bytes], grace_seconds: float) 
         try:
             stdout, stderr = process.communicate(timeout=max(1.0, grace_seconds))
         except subprocess.TimeoutExpired as error:
+            captured_stdout = error.output or error.stdout or b""
+            captured_stderr = error.stderr or b""
             process.kill()
             stdout, stderr = process.communicate()
-            raise IOSSimulatorAppContractError(
+            failure = IOSSimulatorAppContractError(
                 "iOS command pipes remained open after process-group cleanup"
-            ) from error
+            )
+            failure.stdout = merge_output(captured_stdout, stdout or b"")
+            failure.stderr = merge_output(captured_stderr, stderr or b"")
+            raise failure from error
     # The parent may have exited while a background command still shares its
     # process group but not its pipes. Reap that group as part of timeout cleanup.
     _signal_process_group(process, signal.SIGKILL)
@@ -259,22 +265,34 @@ class SubprocessCommandRunner:
                     min(COMMAND_TERMINATION_GRACE_SECONDS, max(1.0, timeout)),
                 )
             except IOSSimulatorAppContractError as cleanup_failure:
-                stdout, stderr = partial_stdout, partial_stderr
+                stdout = merge_output(
+                    partial_stdout,
+                    getattr(cleanup_failure, "stdout", b""),
+                )
+                stderr = merge_output(
+                    partial_stderr,
+                    getattr(cleanup_failure, "stderr", b""),
+                )
                 cleanup_error = cleanup_failure
             failure = IOSSimulatorAppContractError(
                 f"iOS command timed out after {timeout:g}s"
             )
             add_stream_notes(failure, "command", stdout, stderr)
-            emit_streams("ios-command", stdout, stderr)
+            _emit_command_streams("ios-command", stdout, stderr, failure)
             if cleanup_error is not None:
-                add_exception_notes(failure, "cleanup", cleanup_error)
+                add_exception_notes(
+                    failure,
+                    "cleanup",
+                    cleanup_error,
+                    include_streams=False,
+                )
             raise failure from None
         result = CommandResult(
             returncode=process.returncode if process.returncode is not None else -1,
             stdout=_decode(stdout or b""),
             stderr=_decode(stderr or b""),
         )
-        emit_streams("ios-command", result.stdout, result.stderr)
+        _emit_command_streams("ios-command", stdout or b"", stderr or b"")
         return result
 
 
@@ -283,6 +301,33 @@ def _decode(payload: bytes) -> str:
     # original byte stream remains attached to failures by diagnostics.py;
     # replacement decoding would silently collapse distinct diagnostics.
     return payload.decode("utf-8", errors="backslashreplace")
+
+
+def _emit_command_streams(
+    label: str,
+    stdout: bytes,
+    stderr: bytes,
+    failure: BaseException | None = None,
+) -> None:
+    try:
+        emit_streams(label, stdout, stderr)
+    except Exception as forwarding_error:
+        if failure is None:
+            failure = IOSSimulatorAppContractError("iOS command output could not be forwarded")
+            add_stream_notes(failure, "command", stdout, stderr)
+            raise_failure = True
+        else:
+            raise_failure = False
+        failure.stdout = stdout
+        failure.stderr = stderr
+        add_exception_notes(
+            failure,
+            "output forwarding",
+            forwarding_error,
+            include_streams=False,
+        )
+        if raise_failure:
+            raise failure from forwarding_error
 
 
 @dataclass(frozen=True)
@@ -482,7 +527,6 @@ def _require_success(
             f"exit code {result.returncode}",
             timeout_seconds=effective_timeout,
         )
-        emit_streams(f"ios-{stage}", result.stdout, result.stderr)
         add_stream_notes(failure, "command", result.stdout, result.stderr)
         raise failure
     return result
@@ -796,7 +840,6 @@ def _terminate_app(
             f"exit code {result.returncode}",
             timeout_seconds=timeout,
         )
-        emit_streams("ios-terminate", result.stdout, result.stderr)
         add_stream_notes(failure, "command", result.stdout, result.stderr)
         raise failure
 
@@ -877,7 +920,6 @@ def _disable_simulator_hardware_keyboard(
             f"exit code {read.returncode}",
             timeout_seconds=read_timeout,
         )
-        emit_streams("ios-read-hardware-keyboard", read.stdout, read.stderr)
         add_stream_notes(failure, "command", read.stdout, read.stderr)
         raise failure
     if previous not in {None, "0", "1"}:
@@ -1092,7 +1134,6 @@ def run_ios_simulator_app_contract(
                 f"exit code {boot.returncode}",
                 timeout_seconds=boot_timeout,
             )
-            emit_streams("ios-boot", boot.stdout, boot.stderr)
             add_stream_notes(failure, "command", boot.stdout, boot.stderr)
             raise failure
         _require_success(

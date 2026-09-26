@@ -201,7 +201,7 @@ type RuntimeLease interface{ Stop(context.Context) error }
 // Runtimes without connected-health checks return a plain RuntimeLease.
 type HealthMonitoringLease interface {
 	RuntimeLease
-	HealthFailures() <-chan struct{}
+	HealthFailures() <-chan error
 }
 
 // PlatformAdapter owns only platform concerns.  PrepareTunnel must allocate a
@@ -230,6 +230,7 @@ type Manager struct {
 	loader      ConfigLoader
 	sourceStore SourceStore
 	now         func() time.Time
+	initErr     error
 	session     *session
 }
 
@@ -292,7 +293,7 @@ func NewManager(options ManagerOptions) *Manager {
 	if now == nil {
 		now = time.Now
 	}
-	id := randomID()
+	id, initErr := randomID()
 	sourceURL := ""
 	sourceKind := ConfigSourceKind("")
 	sourceError := ""
@@ -308,7 +309,7 @@ func NewManager(options ManagerOptions) *Manager {
 		}
 	}
 	return &Manager{
-		runtime: r, platform: p, loader: loader, sourceStore: options.SourceStore, now: now,
+		runtime: r, platform: p, loader: loader, sourceStore: options.SourceStore, now: now, initErr: initErr,
 		session: &session{
 			id: id, state: StateIdle, cleanupDone: true, sequence: 1, sourceURL: sourceURL,
 			sourceKind: sourceKind, sourceError: sourceError,
@@ -592,13 +593,16 @@ func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loo
 
 // reportHealthFailure cleans up a failed connected generation before
 // AUTO_SELECT failover. PROFILE_INDEX fails without changing profile identity.
-func (m *Manager) reportHealthFailure(s *session, generation uint64) {
+func (m *Manager) reportHealthFailure(s *session, generation uint64, cause error) {
+	if cause == nil {
+		cause = errors.New("connected health check failed")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if generation == 0 || generation != s.generation || s.state != StateConnected {
 		return
 	}
-	m.prepareHealthRecoveryLocked(s, generation)
+	m.prepareHealthRecoveryLocked(s, generation, cause)
 	s.state = StateStopping
 	m.appendLocked(s)
 	if s.cancel != nil {
@@ -607,17 +611,24 @@ func (m *Manager) reportHealthFailure(s *session, generation uint64) {
 	done := s.workerDone
 	go func() {
 		<-done
-		m.finishAfterStop(s, generation, failure(FailureCanceled, "health check requested failover"))
+		m.finishAfterStop(s, generation, failureWithCause(FailureCanceled, "health check requested failover", cause))
 	}()
 }
 
-func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64) {
+func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cause error) {
 	if s.activeTarget.Mode != AutoSelect {
 		s.failureAfterCleanup = FailureRuntime
+		s.failureMessageAfterCleanup = fmt.Sprintf("connected health check failed: %v", cause)
 		s.recovering = false
 		s.recoveryOriginGeneration = 0
 		return
 	}
+	healthFailure := fmt.Sprintf("connected health check failed: %v", cause)
+	if s.recovering && s.lastFailureMessage != "" {
+		healthFailure = s.lastFailureMessage + "; " + healthFailure
+	}
+	s.lastFailure = FailureRuntime
+	s.lastFailureMessage = healthFailure
 	if s.hasConnectedAt && m.now().Sub(s.lastConnectedAt) >= autoRecoveryStable {
 		s.recoveryCount = 0
 		s.recoveryOriginGeneration = 0
@@ -632,7 +643,7 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64) {
 		return
 	}
 	s.failureAfterCleanup = FailureRuntime
-	s.failureMessageAfterCleanup = autoRecoveryMessage
+	s.failureMessageAfterCleanup = fmt.Sprintf("%s: %s", autoRecoveryMessage, healthFailure)
 	s.recovering = false
 	s.recoveryOriginGeneration = 0
 }
@@ -787,9 +798,11 @@ func (m *Manager) watchRuntimeHealth(s *session, generation uint64, lease Health
 	if failures == nil {
 		return
 	}
-	for range failures {
-		m.reportHealthFailure(s, generation)
-		return
+	for cause := range failures {
+		if cause != nil {
+			m.reportHealthFailure(s, generation, cause)
+			return
+		}
 	}
 }
 
@@ -813,9 +826,10 @@ func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint
 		latency int64
 	}
 	var best *candidate
+	var probeErrors []error
 	for _, profile := range profiles {
-		if ctx.Err() != nil {
-			return RuntimeProfile{}, failure(FailureCanceled, "start was canceled")
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return RuntimeProfile{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(probeErrors...)))
 		}
 		ref := SessionRef{s.id, generation}
 		// A probe is a complete, isolated tunnel attempt. In particular, mobile
@@ -825,18 +839,23 @@ func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint
 			prepareErr = failure(FailurePlatform, "platform returned an empty tunnel lease for probe")
 		}
 		if prepareErr != nil {
+			prepareErr = errors.Join(errors.Join(probeErrors...), prepareErr)
+			if platformLease != nil {
+				prepareErr = errors.Join(prepareErr, platformLease.Release(context.Background()))
+			}
 			return RuntimeProfile{}, wrapFailure(FailurePlatform, prepareErr)
 		}
 		result, probeErr := m.runtime.Probe(ctx, ref, profile)
 		releaseErr := platformLease.Release(context.Background())
 		if releaseErr != nil {
-			return RuntimeProfile{}, wrapFailure(FailurePlatform, releaseErr)
+			return RuntimeProfile{}, wrapFailure(FailurePlatform, errors.Join(errors.Join(probeErrors...), probeErr, releaseErr))
 		}
-		err := probeErr
-		if err != nil {
+		if probeErr != nil {
+			probeErrors = append(probeErrors, fmt.Errorf("profile %d (%s): %w", profile.Summary.Index, profile.Summary.Protocol, probeErr))
 			continue
 		}
 		if result.LatencyMillis < 0 {
+			probeErrors = append(probeErrors, fmt.Errorf("profile %d (%s): probe returned invalid latency %d", profile.Summary.Index, profile.Summary.Protocol, result.LatencyMillis))
 			continue
 		}
 		if best == nil || result.LatencyMillis < best.latency || (result.LatencyMillis == best.latency && profile.Summary.Index < best.profile.Summary.Index) {
@@ -845,10 +864,10 @@ func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint
 		}
 	}
 	if best == nil {
-		if ctx.Err() != nil {
-			return RuntimeProfile{}, failure(FailureCanceled, "start was canceled")
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return RuntimeProfile{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(probeErrors...)))
 		}
-		return RuntimeProfile{}, failure(FailureProbe, "no configured profile passed its probe")
+		return RuntimeProfile{}, failureWithCause(FailureProbe, "no configured profile passed its probe", errors.Join(probeErrors...))
 	}
 	return best.profile, nil
 }
@@ -863,6 +882,7 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 	if state == StateConnected {
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
+		s.lastFailure, s.lastFailureMessage = "", ""
 		s.recovering = false
 		s.recoveryOriginGeneration = 0
 	}
@@ -928,7 +948,7 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error, a
 			m.appendLocked(s)
 			return
 		}
-		s.state, s.active, s.lastFailure, s.lastFailureMessage = StateIdle, nil, "", ""
+		s.state, s.active = StateIdle, nil
 		m.appendLocked(s)
 		if restart {
 			go m.startFailover(s, generation)
@@ -938,6 +958,9 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error, a
 		return
 	}
 	message := errorMessage(cause)
+	if s.recovering && s.lastFailureMessage != "" {
+		message = s.lastFailureMessage + "; automatic recovery failed: " + message
+	}
 	s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, CodeOf(cause), message
 	s.recovering, s.recoveryOriginGeneration = false, 0
 	m.appendLocked(s)
@@ -952,7 +975,7 @@ func (m *Manager) startFailover(s *session, expectedGeneration uint64) {
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, make(chan struct{}), false, false, nil, "", ""
+	s.cancel, s.ledger, s.workerDone, s.cleanupDone, s.cleanupFailed, s.active = cancel, &ledger{}, make(chan struct{}), false, false, nil
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = StartTarget{Mode: AutoSelect}, false, ""
 	s.failureMessageAfterCleanup = ""
 	s.state = StateProbing
@@ -971,7 +994,7 @@ func (m *Manager) appendLocked(s *session) {
 func (m *Manager) get(id string) (*session, error) {
 	s := m.session
 	if s == nil || s.id == "" {
-		return nil, failure(FailureInternal, "could not allocate a session ID")
+		return nil, failureWithCause(FailureInternal, "could not allocate a session ID", m.initErr)
 	}
 	if id != "" && id != s.id {
 		return nil, failure(FailureNotFound, "session owner has restarted")
@@ -1025,12 +1048,12 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
-func randomID() string {
+func randomID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return ""
+		return "", fmt.Errorf("generate session ID: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 type ledger struct{ closers []func(context.Context) error }

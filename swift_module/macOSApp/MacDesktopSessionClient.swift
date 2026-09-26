@@ -35,9 +35,18 @@ final class MacDesktopSessionClient: DobbySessionClient {
             payload.append(0x0A)
             return try exchange(payload)
         } catch {
-            let message = error.localizedDescription.replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-            return "{\"ok\":false,\"error\":{\"code\":\"PLATFORM_FAILED\",\"message\":\"\(message)\"}}"
+            let envelope: [String: Any] = [
+                "ok": false,
+                "error": [
+                    "code": "PLATFORM_FAILED",
+                    "message": error.localizedDescription,
+                ],
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: envelope),
+                  let response = String(data: data, encoding: .utf8) else {
+                return #"{"ok":false,"error":{"code":"PLATFORM_FAILED","message":"Platform operation failed"}}"#
+            }
+            return response
         }
     }
 

@@ -19,6 +19,8 @@ import subprocess
 import time
 from typing import Any, Callable
 
+from torturer_checks.diagnostics import merge_output
+
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -63,23 +65,12 @@ class WindowsJobCleanup:
     diagnostics: tuple[str, ...] = ()
 
 
-class WindowsJobCloseDiagnostics(tuple):
-    """Close diagnostics with a fatal outcome flag."""
+@dataclass(frozen=True)
+class WindowsJobCloseResult:
+    """The diagnostics and outcome of closing one Job Object."""
 
-    failed: bool
-
-    def __new__(
-        cls,
-        values: tuple[str, ...] | list[str] = (),
-        *,
-        failed: bool = False,
-    ) -> "WindowsJobCloseDiagnostics":
-        result = super().__new__(cls, values)
-        result.failed = bool(failed)
-        return result
-
-    def __bool__(self) -> bool:
-        return self.failed
+    diagnostics: tuple[str, ...] = ()
+    failed: bool = False
 
 
 class _JobObjectBasicAccountingInformation(ctypes.Structure):
@@ -322,7 +313,7 @@ class WindowsJob:
                 stage=stage,
                 deadline=deadline,
             )
-            diagnostics.extend(close_diagnostics)
+            diagnostics.extend(close_diagnostics.diagnostics)
             raise WindowsJobError(stage, tuple(diagnostics))
         try:
             configured = _set_kill_on_close(
@@ -342,7 +333,7 @@ class WindowsJob:
                 stage=stage,
                 deadline=deadline,
             )
-            diagnostics.extend(close_diagnostics)
+            diagnostics.extend(close_diagnostics.diagnostics)
             raise WindowsJobError(stage, tuple(diagnostics))
         return job
 
@@ -483,7 +474,7 @@ def _close_job(
     *,
     stage: str,
     deadline: float | None = None,
-) -> WindowsJobCloseDiagnostics:
+) -> WindowsJobCloseResult:
     """Close one Job Object once and retain the native result."""
 
     before = len(job.diagnostics)
@@ -498,8 +489,8 @@ def _close_job(
         diagnostics.append(
             f"stage={stage} api=CloseHandle winerror=6 detail=job-still-attached"
         )
-    return WindowsJobCloseDiagnostics(
-        diagnostics,
+    return WindowsJobCloseResult(
+        diagnostics=tuple(diagnostics),
         failed=not job.closed or deadline_unproven,
     )
 
@@ -798,7 +789,7 @@ def attach_and_resume(
             stage=stage,
             deadline=deadline,
         )
-        diagnostics.extend(close_diagnostics)
+        diagnostics.extend(close_diagnostics.diagnostics)
         if job.closed:
             try:
                 delattr(process, "_torturer_windows_job")
@@ -839,13 +830,13 @@ def popen_with_windows_job(
         try:
             captured = process.communicate(timeout=wait_timeout)
             if isinstance(captured, tuple) and len(captured) == 2:
-                captured_stdout = _merge_output(captured_stdout, _output_bytes(captured[0]))
-                captured_stderr = _merge_output(captured_stderr, _output_bytes(captured[1]))
+                captured_stdout = merge_output(captured_stdout, _output_bytes(captured[0]))
+                captured_stderr = merge_output(captured_stderr, _output_bytes(captured[1]))
             else:
                 diagnostics.append("api=ProcessCommunicate winerror=0 detail=invalid-result")
         except subprocess.TimeoutExpired as wait_error:
-            captured_stdout = _merge_output(captured_stdout, _output_bytes(getattr(wait_error, "output", None)))
-            captured_stderr = _merge_output(captured_stderr, _output_bytes(getattr(wait_error, "stderr", None)))
+            captured_stdout = merge_output(captured_stdout, _output_bytes(getattr(wait_error, "output", None)))
+            captured_stderr = merge_output(captured_stderr, _output_bytes(getattr(wait_error, "stderr", None)))
             diagnostics.append(f"api=ProcessWait winerror={ERROR_TIMEOUT} detail=setup-failure")
             diagnostics.append(f"api=ProcessCommunicate winerror={ERROR_TIMEOUT} detail=setup-failure")
             diagnostics.append("EVIDENCE_INCOMPLETE=1 reason=setup-communicate-timeout")
@@ -854,14 +845,14 @@ def popen_with_windows_job(
             # failure on either ``output`` or ``stdout``.  Keep the partial
             # buffers on the native error so the hosted adapter can retain
             # them before classifying the setup failure.
-            captured_stdout = _merge_output(
+            captured_stdout = merge_output(
                 captured_stdout,
-                _merge_output(
+                merge_output(
                     _output_bytes(getattr(wait_error, "output", None)),
                     _output_bytes(getattr(wait_error, "stdout", None)),
                 ),
             )
-            captured_stderr = _merge_output(
+            captured_stderr = merge_output(
                 captured_stderr,
                 _output_bytes(getattr(wait_error, "stderr", None)),
             )
@@ -943,10 +934,10 @@ def close_for(
     *,
     stage: str,
     deadline: float | None = None,
-) -> WindowsJobCloseDiagnostics:
+) -> WindowsJobCloseResult:
     job = job_for(process)
     if job is None:
-        return WindowsJobCloseDiagnostics()
+        return WindowsJobCloseResult()
     diagnostics = _close_job(
         job,
         stage=stage,
@@ -957,8 +948,8 @@ def close_for(
             delattr(process, "_torturer_windows_job")
         except AttributeError:
             pass
-    return WindowsJobCloseDiagnostics(
-        tuple(f"stage={stage} {item}" for item in diagnostics),
+    return WindowsJobCloseResult(
+        diagnostics=tuple(f"stage={stage} {item}" for item in diagnostics.diagnostics),
         failed=diagnostics.failed,
     )
 
@@ -969,11 +960,3 @@ def _output_bytes(value: Any) -> bytes:
     if isinstance(value, str):
         return value.encode("utf-8", errors="replace")
     return b""
-
-
-def _merge_output(partial: bytes, recovered: bytes) -> bytes:
-    if not partial:
-        return recovered
-    if not recovered or recovered.startswith(partial) or partial.startswith(recovered):
-        return recovered if len(recovered) >= len(partial) else partial
-    return partial + recovered

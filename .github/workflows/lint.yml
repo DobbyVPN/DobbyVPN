@@ -131,5 +131,6 @@ jobs:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: swift_module
         run: |
+          set -o pipefail
           swiftlint lint --config .swiftlint.yml --reporter checkstyle | \
             reviewdog -f=checkstyle -name="SwiftLint" -reporter=github-pr-review -level=warning

@@ -65,7 +65,9 @@ func startPlatformEngine(cfg interface{}) error {
 	startedAt := time.Now()
 	c := cfg.(EngineConfig)
 	uplinkIface := c.UplinkIface
-	resetWindowsState()
+	if err := prepareWindowsStateForStart(); err != nil {
+		return fmt.Errorf("restore prior Windows session state: %w", err)
+	}
 	log.Debugf(Category, "[Engine][Windows] proxy_ready=true uplink_iface=%s", uplinkIface)
 	if routing.IsTunnelInterfaceName(uplinkIface) {
 		return fmt.Errorf("refusing to use tunnel interface %q as Windows uplink", uplinkIface)
@@ -185,12 +187,39 @@ func stopPlatformEngine(stopDevice func()) error {
 	configurationErr := cleanupWindowsState()
 	stopDevice()
 	removalErr := waitForWindowsAdapterRemoval(adapterName, windowsAdapterRemovalTimeout)
-	resetWindowsState()
 	err := errors.Join(configurationErr, removalErr)
 	if err != nil {
 		log.Debugf(Category, "[Engine][Windows][ERROR] platform cleanup: %v", err)
 	}
+	// DNS, DAD, and the tunnel address belong to this uniquely named adapter.
+	// Once Windows removes it, failed per-adapter restoration no longer needs a retry.
+	if removalErr == nil {
+		resetWindowsState()
+	}
 	return err
+}
+
+func prepareWindowsStateForStart() error {
+	if ownedAdapterName != "" {
+		present, err := windowsAdapterPresent(ownedAdapterName)
+		if err != nil {
+			return fmt.Errorf("check prior owned Windows adapter: %w", err)
+		}
+		if !present {
+			resetWindowsState()
+			return nil
+		}
+	}
+	if err := cleanupWindowsState(); err != nil {
+		return err
+	}
+	if ownedAdapterName != "" {
+		if err := waitForWindowsAdapterRemoval(ownedAdapterName, windowsAdapterRemovalTimeout); err != nil {
+			return fmt.Errorf("remove prior owned Windows adapter: %w", err)
+		}
+	}
+	resetWindowsState()
+	return nil
 }
 
 func cleanupWindowsState() error {
@@ -202,28 +231,44 @@ func cleanupWindowsState() error {
 
 	log.Debugf(Category, "[Engine][Windows] Restoring DNS. static=%v DNS=%v", prevDNSStatic, prevDNS)
 
-	if dnsMutated && dnsKnown && !prevDNSStatic {
-		cmd := fmt.Sprintf(
-			"netsh interface ipv4 set dnsservers name=\"%s\" dhcp",
-			lastIface,
-		)
-		if err := execAndLog(cmd, "restore DNS (DHCP)"); err != nil {
-			errs = append(errs, fmt.Errorf("restore DHCP DNS: %w", err))
-		}
-	} else if dnsMutated && dnsKnown {
-		if err := restoreStaticDNS(lastIface, prevDNS); err != nil {
-			errs = append(errs, err)
+	if dnsMutated {
+		if !dnsKnown {
+			errs = append(errs, errors.New("cannot restore DNS because its previous state was not captured"))
+		} else {
+			var err error
+			if !prevDNSStatic {
+				cmd := fmt.Sprintf(
+					"netsh interface ipv4 set dnsservers name=\"%s\" dhcp",
+					lastIface,
+				)
+				err = execAndLog(cmd, "restore DNS (DHCP)")
+			} else {
+				err = restoreStaticDNS(lastIface, prevDNS)
+			}
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				dnsMutated = false
+				dnsKnown = false
+				prevDNS = nil
+				prevDNSStatic = false
+			}
 		}
 	}
 	if ipv4Mutated && luidKnown {
 		if err := lastLUID.DeleteIPAddress(tunnelIPv4); err != nil {
 			errs = append(errs, fmt.Errorf("remove owned Wintun IPv4 address: %w", err))
+		} else {
+			ipv4Mutated = false
 		}
 	}
 	if dadMutated {
 		log.Debugf(Category, "[Engine][Windows] restoring DAD transmits iface=%s count=%d", lastIface, prevDAD)
 		if err := setInterfaceDADTransmits(lastIface, prevDAD); err != nil {
 			errs = append(errs, fmt.Errorf("restore DAD transmits: %w", err))
+		} else {
+			dadMutated = false
+			prevDAD = 0
 		}
 	}
 	return errors.Join(errs...)
@@ -262,6 +307,19 @@ func waitForWintun(name string, timeout time.Duration) (string, error) {
 
 var listWindowsInterfaces = net.Interfaces
 
+func windowsAdapterPresent(name string) (bool, error) {
+	interfaces, err := listWindowsInterfaces()
+	if err != nil {
+		return false, err
+	}
+	for _, iface := range interfaces {
+		if iface.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func waitForWindowsAdapterRemoval(name string, timeout time.Duration) error {
 	if name == "" {
 		return nil
@@ -269,15 +327,8 @@ func waitForWindowsAdapterRemoval(name string, timeout time.Duration) error {
 	startedAt := time.Now()
 	deadline := startedAt.Add(timeout)
 	for {
-		interfaces, err := listWindowsInterfaces()
+		present, err := windowsAdapterPresent(name)
 		if err == nil {
-			present := false
-			for _, iface := range interfaces {
-				if iface.Name == name {
-					present = true
-					break
-				}
-			}
 			if !present {
 				log.Debugf(Category, "[Engine][Windows] owned adapter removed elapsed=%s", time.Since(startedAt).Truncate(time.Millisecond))
 				return nil

@@ -2709,10 +2709,11 @@ def _composite_failure(
 ) -> None:
     """Raise one error while retaining every Android lane failure.
 
-    Discovery and finalization are aggregate lifecycle operations.  Calling
+    Discovery and finalization are aggregate lifecycle operations. Calling
     only the first lane that fails would make the other lane silently absent
-    from the result (or leave it unfinalized), so the composite records a
-    bounded error type/code for each attempted child before raising.
+    from the result (or leave it unfinalized), so the composite preserves each
+    child message and contextual note while leaving already-emitted streams in
+    their raw command logs.
     """
 
     if not failures:
@@ -2723,9 +2724,25 @@ def _composite_failure(
         if not isinstance(code, str):
             code = getattr(failure, "code", None)
         suffix = f" code={code}" if isinstance(code, str) else ""
+        detail = str(failure)
+        detail_suffix = f" detail={detail}" if detail and detail != code else ""
         aggregate.add_note(
-            f"{lane} {operation} failure={type(failure).__name__}{suffix}"
+            f"{lane} {operation} failure={type(failure).__name__}"
+            f"{suffix}{detail_suffix}"
         )
+        cause = failure.__cause__ or failure.__context__
+        if cause is not None:
+            aggregate.add_note(
+                f"{lane} {operation} cause={type(cause).__name__}: {cause}"
+            )
+        for note in getattr(failure, "__notes__", ()):
+            heading = note.partition("\n")[0]
+            if heading.endswith(("_stdout:", "_stderr:")):
+                # Command streams were already emitted and retained by the
+                # child runner. Keep the other contextual notes without
+                # copying large output into the aggregate result a second time.
+                continue
+            aggregate.add_note(f"{lane} {operation} {note}")
     raise aggregate
 
 

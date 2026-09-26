@@ -298,9 +298,9 @@ func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
 	}
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("fail to execute a command route print: %v", err)
+		return "", fmt.Errorf("execute route print: %w: %s", err, output)
 	}
 
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
@@ -321,12 +321,15 @@ func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
 			}
 		}
 	}
-
-	if !foundGateway {
-		return "", fmt.Errorf("gateway %s is not found in the table", gatewayIP)
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read route print output: %w: %s", err, output)
 	}
 
-	return "", fmt.Errorf("no interface %s", gatewayIP)
+	if !foundGateway {
+		return "", fmt.Errorf("gateway %s is not found in the table: %s", gatewayIP, output)
+	}
+
+	return "", fmt.Errorf("no interface %s: %s", gatewayIP, output)
 }
 
 func IsTunnelInterfaceName(name string) bool {
@@ -369,6 +372,7 @@ func waitForInterfaceChange(timeout time.Duration, label string, match func() (*
 	}
 
 	startedAt := time.Now()
+	lastErr := err
 	ch := make(chan struct{}, 1)
 	id := nextInterfaceWaiterID()
 
@@ -385,7 +389,11 @@ func waitForInterfaceChange(timeout time.Duration, label string, match func() (*
 	err = windows.NotifyIpInterfaceChange(windows.AF_UNSPEC, interfaceChangeCallback, unsafe.Pointer(id), true, &notificationHandle)
 	if err != nil {
 		log.Debugf(Category, "Outline/routing: interface event wait unavailable label=%s err=%v; using short fallback polling", label, err)
-		return waitForInterfacePolling(timeout, label, match)
+		iface, pollErr := waitForInterfacePolling(timeout, label, match)
+		if pollErr != nil {
+			return nil, errors.Join(fmt.Errorf("register interface change notification: %w", err), pollErr)
+		}
+		return iface, nil
 	}
 	defer func() {
 		if notificationHandle != 0 {
@@ -406,13 +414,15 @@ func waitForInterfaceChange(timeout time.Duration, label string, match func() (*
 				log.Debugf(Category, "Outline/routing: interface event wait OK label=%s iface=%s elapsed=%s", label, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
 				return iface, nil
 			}
+			lastErr = err
 		case <-timer.C:
 			iface, err := match()
 			if err == nil {
 				log.Debugf(Category, "Outline/routing: interface event wait OK on timeout check label=%s iface=%s elapsed=%s", label, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
 				return iface, nil
 			}
-			return nil, fmt.Errorf("%s not found after %s", label, time.Since(startedAt).Truncate(time.Millisecond))
+			lastErr = err
+			return nil, fmt.Errorf("%s not found after %s: %w", label, time.Since(startedAt).Truncate(time.Millisecond), lastErr)
 		}
 	}
 }
@@ -420,15 +430,20 @@ func waitForInterfaceChange(timeout time.Duration, label string, match func() (*
 func waitForInterfacePolling(timeout time.Duration, label string, match func() (*net.Interface, error)) (*net.Interface, error) {
 	startedAt := time.Now()
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	var lastErr error
+	for {
 		iface, err := match()
 		if err == nil {
 			log.Debugf(Category, "Outline/routing: interface polling wait OK label=%s iface=%s elapsed=%s", label, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
 			return iface, nil
 		}
+		lastErr = err
+		if !time.Now().Before(deadline) {
+			break
+		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return nil, fmt.Errorf("%s not found after %s", label, time.Since(startedAt).Truncate(time.Millisecond))
+	return nil, fmt.Errorf("%s not found after %s: %w", label, time.Since(startedAt).Truncate(time.Millisecond), lastErr)
 }
 
 // WaitForInterfaceName waits for the one adapter owned by the caller. It does

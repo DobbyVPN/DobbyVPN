@@ -15,6 +15,15 @@ def output_text(value: bytes | str | None) -> str:
     return value
 
 
+def merge_output(first: bytes, second: bytes) -> bytes:
+    """Merge repeated captures when one contains the other."""
+    if not first:
+        return second
+    if not second or second.startswith(first) or first.startswith(second):
+        return second if len(second) >= len(first) else first
+    return first + second
+
+
 def _write_payload(destination: TextIO, payload: bytes | str) -> None:
     binary = getattr(destination, "buffer", None)
     if binary is not None:
@@ -61,20 +70,24 @@ def add_exception_notes(
     error: BaseException,
     label: str,
     secondary: BaseException,
+    *,
+    include_streams: bool = True,
 ) -> None:
     """Retain a secondary exception and any complete streams it carries."""
     error.add_note(f"{label}_error={type(secondary).__name__}: {secondary}")
     for note in getattr(secondary, "__notes__", ()):
         error.add_note(f"{label}_{note}")
-    secondary_stdout = getattr(secondary, "stdout", None)
-    secondary_stderr = getattr(secondary, "stderr", None)
-    if secondary_stdout is not None or secondary_stderr is not None:
-        add_stream_notes(error, label, secondary_stdout, secondary_stderr)
+    if include_streams:
+        secondary_stdout = getattr(secondary, "stdout", None)
+        secondary_stderr = getattr(secondary, "stderr", None)
+        if secondary_stdout is not None or secondary_stderr is not None:
+            add_stream_notes(error, label, secondary_stdout, secondary_stderr)
 
 
 __all__ = [
     "add_exception_notes",
     "add_stream_notes",
     "emit_streams",
+    "merge_output",
     "output_text",
 ]

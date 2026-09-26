@@ -1066,8 +1066,15 @@ public final class NativeUiHostedProfileTest {
             latest = snapshotResult(sessionID);
             String state = latest.optString("state");
             if (expected.equals(state)) return latest;
-            if ("FAILED".equals(state)) throw new IllegalStateException(
-                    "ANDROID_SESSION_FAILED");
+            if ("FAILED".equals(state)) {
+                JSONObject failure = latest.optJSONObject("last_failure");
+                String code = failure == null ? "" : failure.optString("code", "");
+                String message = failure == null ? "" : failure.optString("message", "");
+                String details = code.isEmpty() && message.isEmpty()
+                        ? ""
+                        : ": backend_code=" + code + " message=" + message;
+                throw new IllegalStateException("ANDROID_SESSION_FAILED" + details);
+            }
             Thread.sleep(POLL_MILLIS);
         }
         throw new IllegalStateException("ANDROID_SESSION_STATE_TIMEOUT");
@@ -2048,11 +2055,16 @@ public final class NativeUiHostedProfileTest {
     private JSONObject requireOK(String encoded) throws Exception {
         JSONObject value = new JSONObject(encoded);
         if (!value.optBoolean("ok", false)) {
-            String code = value.optJSONObject("error") == null
+            JSONObject error = value.optJSONObject("error");
+            String code = error == null
                     ? "ANDROID_GO_OPERATION_FAILED"
-                    : value.getJSONObject("error").optString(
-                            "code", "ANDROID_GO_OPERATION_FAILED");
-            throw new IllegalStateException(fixedFailureCode(code));
+                    : error.optString("code", "ANDROID_GO_OPERATION_FAILED");
+            String message = error == null ? "" : error.optString("message", "");
+            String details = message.isEmpty() ? "" : ": " + message;
+            if (!code.equals(fixedFailureCode(code))) {
+                details += " [backend_code=" + code + "]";
+            }
+            throw new IllegalStateException(fixedFailureCode(code) + details);
         }
         return value;
     }
