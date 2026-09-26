@@ -34,10 +34,12 @@ with JDK 17, Android SDK, and the pinned NDK:
     cd android_module
     ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease
 
-The Test workflow also installs the release-shaped app and instrumentation
-APK on its Android emulator and runs the rendered UI and functional checks.
-The Go backend is packaged for arm64-v8a and x86_64. TrustTunnel is available
-only on arm64-v8a.
+The Test workflow builds both APK ABIs and verifies that each includes the
+TrustTunnel bridge symbols with no unresolved C++ runtime symbols. A separate
+hosted ARM64 Linux runner executes the selected Go runtime tests natively. These
+checks catch ABI and link regressions; they do not execute the Android app on an
+ARM64 Android device. Physical-device Android VPN qualification remains
+deferred.
 
 ## iOS
 
@@ -45,10 +47,11 @@ Run the Swift lifecycle tests on a Mac:
 
     swift test --enable-code-coverage --package-path swift_module
 
-The Test workflow builds the Go NetworkExtension runtime XCFramework, packages
-the SwiftUI Simulator app, and runs its XCTest UI check. This checks app
-rendering and lifecycle behavior; it does not claim physical-device VPN
-traffic. Physical-device full coverage requires a device runner.
+The Test workflow builds the Go NetworkExtension runtime for iOS Simulator with
+the TrustTunnel bridge, packages the SwiftUI Simulator app, and runs its XCTest
+UI check. This verifies Go/native linking and app rendering; it does not claim
+physical-device VPN traffic. Physical-device full coverage requires a device
+runner.
 
 ## Desktop
 

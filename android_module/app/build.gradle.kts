@@ -126,7 +126,7 @@ val downloadGoModules by tasks.registering(Exec::class) {
 val buildGoBackend by tasks.registering {
     val ndkHome = nonBlankEnvironment("ANDROID_NDK_HOME")
         .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
-        .orElse(androidSdkRoot.map { File(it, "ndk/27.3.13750724").absolutePath })
+        .orElse(androidSdkRoot.map { File(it, "ndk/28.1.13356709").absolutePath })
         .orElse("")
     val api = providers.gradleProperty("android.ndk.api").orElse("26")
     val abis = mapOf(

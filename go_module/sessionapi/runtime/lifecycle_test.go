@@ -137,11 +137,11 @@ func options(record *recorded) Options {
 		NewCore: func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
 			return fakeCore{record: record}
 		},
-		Probe: func(context.Context) (int64, error) { record.add("probe"); return 7, nil },
-		InitialReadiness: func(context.Context, sessionapi.SessionRef) error {
+		Probe: func(context.Context, string) (int64, error) { record.add("probe"); return 7, nil },
+		InitialReadiness: func(context.Context, sessionapi.SessionRef, string) error {
 			return nil
 		},
-		ConnectedHealth: func(ctx context.Context, _ sessionapi.SessionRef) error {
+		ConnectedHealth: func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
 			<-ctx.Done()
 			return ctx.Err()
 		},
@@ -154,7 +154,7 @@ func TestStartWaitsForInitialReadinessAndRetries(t *testing.T) {
 	o.ReadinessAttempts = 3
 	o.ReadinessRetryInterval = time.Nanosecond
 	attempts := 0
-	o.InitialReadiness = func(context.Context, sessionapi.SessionRef) error {
+	o.InitialReadiness = func(context.Context, sessionapi.SessionRef, string) error {
 		attempts++
 		record.add("ready")
 		if attempts < 3 {
@@ -184,7 +184,7 @@ func TestInitialReadinessFailureRollsBackLIFO(t *testing.T) {
 	o := options(record)
 	o.ReadinessAttempts = 2
 	o.ReadinessRetryInterval = time.Nanosecond
-	o.InitialReadiness = func(context.Context, sessionapi.SessionRef) error {
+	o.InitialReadiness = func(context.Context, sessionapi.SessionRef, string) error {
 		record.add("ready")
 		return errors.New("not ready")
 	}
@@ -202,7 +202,7 @@ func TestInitialReadinessCancellationRollsBackLIFO(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
 	entered := make(chan struct{})
-	o.InitialReadiness = func(ctx context.Context, _ sessionapi.SessionRef) error {
+	o.InitialReadiness = func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
 		close(entered)
 		<-ctx.Done()
 		return ctx.Err()
@@ -306,7 +306,7 @@ func TestInitialReadinessAttemptTimeoutIsBounded(t *testing.T) {
 	o := options(record)
 	o.ReadinessAttempts = 1
 	o.ReadinessAttemptTimeout = time.Millisecond
-	o.InitialReadiness = func(ctx context.Context, _ sessionapi.SessionRef) error {
+	o.InitialReadiness = func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -330,7 +330,7 @@ func TestSecondStartWaitsUntilReadinessRollbackCleanupCompletes(t *testing.T) {
 	cleanupEntered := make(chan struct{}, 1)
 	o := options(record)
 	o.ReadinessAttempts = 1
-	o.InitialReadiness = func(_ context.Context, ref sessionapi.SessionRef) error {
+	o.InitialReadiness = func(_ context.Context, ref sessionapi.SessionRef, _ string) error {
 		if ref.Generation == 1 {
 			return errors.New("not ready")
 		}
@@ -387,7 +387,7 @@ func TestConnectedHealthMonitorAppliesThresholdWithoutSleeping(t *testing.T) {
 	o := options(record)
 	o.HealthInterval = time.Nanosecond
 	o.HealthFailureThreshold = 2
-	o.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef) error {
+	o.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
 		select {
 		case entered <- struct{}{}:
 		case <-ctx.Done():
@@ -430,7 +430,7 @@ func TestConnectedHealthMonitorSupportsThreeFailureThreshold(t *testing.T) {
 	o := options(record)
 	o.HealthInterval = time.Nanosecond
 	o.HealthFailureThreshold = 3
-	o.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef) error {
+	o.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
 		select {
 		case entered <- struct{}{}:
 		case <-ctx.Done():
@@ -509,7 +509,7 @@ func TestLegacyHarnessHealthFaultVariableIsIgnored(t *testing.T) {
 	t.Setenv(legacyName, "1")
 	checks := 0
 	o := options(&recorded{})
-	o.ConnectedHealth = func(context.Context, sessionapi.SessionRef) error {
+	o.ConnectedHealth = func(context.Context, sessionapi.SessionRef, string) error {
 		checks++
 		return nil
 	}
@@ -517,7 +517,7 @@ func TestLegacyHarnessHealthFaultVariableIsIgnored(t *testing.T) {
 	if r.options.HealthInterval != 10*time.Second || r.options.HealthFailureThreshold != 3 {
 		t.Fatalf("legacy environment changed product defaults: interval=%s threshold=%d", r.options.HealthInterval, r.options.HealthFailureThreshold)
 	}
-	if err := r.options.ConnectedHealth(context.Background(), sessionapi.SessionRef{Generation: 1}); err != nil {
+	if err := r.options.ConnectedHealth(context.Background(), sessionapi.SessionRef{Generation: 1}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 1 {
@@ -528,12 +528,12 @@ func TestLegacyHarnessHealthFaultVariableIsIgnored(t *testing.T) {
 func TestExplicitHealthFaultSeamLeavesInitialReadinessUntouched(t *testing.T) {
 	o := options(&recorded{})
 	initialCalls := 0
-	o.InitialReadiness = func(context.Context, sessionapi.SessionRef) error {
+	o.InitialReadiness = func(context.Context, sessionapi.SessionRef, string) error {
 		initialCalls++
 		return nil
 	}
 	healthCalls := 0
-	o.ConnectedHealth = func(context.Context, sessionapi.SessionRef) error {
+	o.ConnectedHealth = func(context.Context, sessionapi.SessionRef, string) error {
 		healthCalls++
 		if healthCalls > 1 {
 			return errors.New("test health fault after 1 successful check")
@@ -544,16 +544,16 @@ func TestExplicitHealthFaultSeamLeavesInitialReadinessUntouched(t *testing.T) {
 	o.HealthFailureThreshold = 1
 	r := New(o).(*runtime)
 
-	if err := r.options.InitialReadiness(context.Background(), sessionapi.SessionRef{Generation: 1}); err != nil {
+	if err := r.options.InitialReadiness(context.Background(), sessionapi.SessionRef{Generation: 1}, ""); err != nil {
 		t.Fatalf("initial readiness was faulted: %v", err)
 	}
 	if initialCalls != 1 {
 		t.Fatalf("initial readiness calls=%d, want 1", initialCalls)
 	}
-	if err := r.options.ConnectedHealth(context.Background(), sessionapi.SessionRef{Generation: 1}); err != nil {
+	if err := r.options.ConnectedHealth(context.Background(), sessionapi.SessionRef{Generation: 1}, ""); err != nil {
 		t.Fatalf("first monitored check failed: %v", err)
 	}
-	if err := r.options.ConnectedHealth(context.Background(), sessionapi.SessionRef{Generation: 1}); err == nil {
+	if err := r.options.ConnectedHealth(context.Background(), sessionapi.SessionRef{Generation: 1}, ""); err == nil {
 		t.Fatal("second monitored check unexpectedly succeeded")
 	}
 	if healthCalls != 2 {
@@ -569,7 +569,7 @@ func TestConnectedHealthMonitorStopsWithRuntimeLease(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	canceled := make(chan struct{}, 1)
 	o := options(record)
-	o.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef) error {
+	o.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
 		entered <- struct{}{}
 		<-ctx.Done()
 		canceled <- struct{}{}
@@ -677,7 +677,7 @@ func TestProbeOwnsTemporaryResourcesAndRuntimeDoesNotOverlap(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
 	readinessChecks := 0
-	o.InitialReadiness = func(context.Context, sessionapi.SessionRef) error {
+	o.InitialReadiness = func(context.Context, sessionapi.SessionRef, string) error {
 		readinessChecks++
 		return nil
 	}
@@ -714,8 +714,10 @@ func TestProbeRetriesTransientReadinessFailureWithinOneLease(t *testing.T) {
 	o.ReadinessAttempts = 3
 	o.ReadinessRetryInterval = time.Nanosecond
 	attempts := 0
-	o.Probe = func(context.Context) (int64, error) {
+	var proxyAddresses []string
+	o.Probe = func(_ context.Context, proxyAddr string) (int64, error) {
 		attempts++
+		proxyAddresses = append(proxyAddresses, proxyAddr)
 		record.add("probe")
 		if attempts < 3 {
 			return -1, nil
@@ -730,6 +732,11 @@ func TestProbeRetriesTransientReadinessFailureWithinOneLease(t *testing.T) {
 	if attempts != 3 {
 		t.Fatalf("probe attempts=%d, want 3", attempts)
 	}
+	for _, proxyAddr := range proxyAddresses {
+		if proxyAddr != "127.0.0.1:1" {
+			t.Fatalf("probe received SOCKS endpoint %q, want device endpoint", proxyAddr)
+		}
+	}
 	want := []string{"inputs", "device", "connect", "probe", "probe", "probe", "core-stop", "inputs-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("probe order=%v, want=%v", got, want)
@@ -741,7 +748,7 @@ func TestProbeExhaustsReadinessRetriesAndCleansUp(t *testing.T) {
 	o := options(record)
 	o.ReadinessAttempts = 2
 	o.ReadinessRetryInterval = time.Nanosecond
-	o.Probe = func(context.Context) (int64, error) {
+	o.Probe = func(context.Context, string) (int64, error) {
 		record.add("probe")
 		return -1, nil
 	}
@@ -764,7 +771,7 @@ func TestProbeReturnsRealErrorWithoutRetry(t *testing.T) {
 	o := options(record)
 	o.ReadinessAttempts = 3
 	want := errors.New("probe transport failed")
-	o.Probe = func(context.Context) (int64, error) {
+	o.Probe = func(context.Context, string) (int64, error) {
 		record.add("probe")
 		return 0, want
 	}
@@ -785,7 +792,7 @@ func TestProbeCancellationDuringRetryWaitCleansUp(t *testing.T) {
 	o.ReadinessAttempts = 3
 	o.ReadinessRetryInterval = time.Hour
 	first := make(chan struct{})
-	o.Probe = func(context.Context) (int64, error) {
+	o.Probe = func(context.Context, string) (int64, error) {
 		record.add("probe")
 		close(first)
 		return -1, nil
@@ -816,7 +823,7 @@ func TestProbeDeadlineDuringRetryWaitCleansUp(t *testing.T) {
 	o.ProbeTimeout = 100 * time.Millisecond
 	o.ReadinessAttempts = 3
 	o.ReadinessRetryInterval = time.Hour
-	o.Probe = func(context.Context) (int64, error) {
+	o.Probe = func(context.Context, string) (int64, error) {
 		record.add("probe")
 		return -1, nil
 	}
@@ -835,7 +842,7 @@ func TestProbeRejectsLatePositiveResultAfterDeadline(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
 	o.ProbeTimeout = 100 * time.Millisecond
-	o.Probe = func(ctx context.Context) (int64, error) {
+	o.Probe = func(ctx context.Context, _ string) (int64, error) {
 		record.add("probe")
 		<-ctx.Done()
 		return 7, nil
@@ -858,7 +865,7 @@ func TestProbeReportsCleanupFailure(t *testing.T) {
 	o.ReadinessAttempts = 2
 	o.ReadinessRetryInterval = time.Nanosecond
 	attempts := 0
-	o.Probe = func(context.Context) (int64, error) {
+	o.Probe = func(context.Context, string) (int64, error) {
 		attempts++
 		if attempts == 1 {
 			return -1, nil
@@ -922,7 +929,7 @@ func TestRuntimeRejectsStartUntilPriorCleanupFinishes(t *testing.T) {
 func TestProbeCancellationIsDeterministicAndCleansUp(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
-	o.Probe = func(ctx context.Context) (int64, error) { <-ctx.Done(); return 0, ctx.Err() }
+	o.Probe = func(ctx context.Context, _ string) (int64, error) { <-ctx.Done(); return 0, ctx.Err() }
 	o.ProbeTimeout = time.Millisecond
 	_, err := New(o).Probe(context.Background(), sessionapi.SessionRef{}, profile())
 	if !errors.Is(err, context.DeadlineExceeded) {

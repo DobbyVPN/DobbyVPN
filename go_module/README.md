@@ -51,8 +51,9 @@ release app from android_module with the pinned Go compiler:
     cd android_module
     ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
 
-The Go runtime is packaged for arm64-v8a and x86_64. TrustTunnel is available
-only on arm64-v8a; x86_64 returns the typed unsupported-protocol result.
+The Go runtime and TrustTunnel bridge are packaged for arm64-v8a and x86_64.
+Both Android ABIs use the same Go protocol implementation and static native
+bridge.
 
 ## iOS runtime
 
@@ -60,8 +61,9 @@ The Go NetworkExtension runtime is built as an XCFramework. The visible iOS UI
 is SwiftUI in swift_module, and the tunnel provider uses the Go mobile binding.
 The pinned gomobile and gobind tools are recorded in go.mod.
 
-For a Simulator architecture, use the package build script on macOS with the
-pinned Go toolchain and mobile tools installed:
+The Simulator framework includes TrustTunnel for both arm64 and x86_64. Use the
+package build script on macOS with the pinned Go toolchain and mobile tools
+installed:
 
     ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
 

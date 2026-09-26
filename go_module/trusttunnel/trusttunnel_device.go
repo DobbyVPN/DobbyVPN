@@ -1,9 +1,7 @@
-// The bundled TrustTunnel native bridge is available only for supported
-// physical-device ABIs. Keep the in-process implementation out of Android
-// x86_64 and explicitly tagged iOS Simulator gomobile builds: importing its
-// CGO manager there would leave bridge callbacks unresolved and prevent the
-// whole app from loading.
-//go:build !simulator && !(darwin && amd64) && (!android || arm64)
+// Keep the Intel macOS helper separate from the in-process native bridge.
+// Android arm64/x86_64 and both iOS Simulator architectures link their own
+// static bridge archives through the manager package.
+//go:build !(darwin && amd64 && !simulator)
 
 package trusttunnel
 

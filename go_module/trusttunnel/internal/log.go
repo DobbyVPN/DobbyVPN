@@ -1,4 +1,7 @@
-//go:build !(darwin && amd64)
+//go:build !(darwin && amd64 && !simulator)
+
+// Keep the host-specific Intel macOS device separate while allowing the
+// shared TrustTunnel implementation to compile for Intel iOS Simulator.
 
 package internal
 

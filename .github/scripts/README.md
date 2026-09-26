@@ -45,8 +45,11 @@ NDK toolchains. The main release build is:
     cd android_module
     ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
 
-The build packages the Go backend for arm64-v8a and x86_64. TrustTunnel's
-native bridge is available only on arm64-v8a.
+The build packages the Go backend and TrustTunnel's native bridge for both
+arm64-v8a and x86_64. CI checks the bridge symbols in both APK ABIs and rejects
+unresolved C++ runtime imports, including the symbol implicated in the 1.5.0
+Android startup crash. A separate hosted ARM64 job runs the selected Go runtime
+tests on a native ARM64 Linux runner.
 
 The local Harness builds the app and its Android instrumentation tests from the
 same selected worktree. Android mini runs on an emulator and checks rendered
@@ -55,9 +58,10 @@ Compose controls and the VPN service.
 ## iOS
 
 The iOS application uses SwiftUI and embeds the Go NetworkExtension runtime.
-The Test workflow builds the Simulator app and runs the XCTest UI contract.
-The Simulator check covers rendering and lifecycle; physical-device VPN
-traffic requires a physical iOS runner.
+The Test workflow builds the Go NetworkExtension runtime with the TrustTunnel
+Simulator bridge, then builds the Simulator app and runs the XCTest UI contract.
+This checks native linking and UI rendering; it does not claim physical-device
+VPN traffic. That requires a physical iOS runner.
 
 The release workflow builds and signs the physical-device package with the
 configured Apple certificates and provisioning profiles. Swift lifecycle

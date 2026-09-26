@@ -2,7 +2,7 @@ module go_module
 
 go 1.26.8
 
-replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260919065324-bc54923e3c85
+replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260926103853-b4a92748a80c
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -16,6 +16,7 @@ require (
 	github.com/xtls/xray-core v1.260327.0
 	golang.getoutline.org/sdk v0.0.21
 	golang.getoutline.org/sdk/x v0.1.0
+	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
 	golang.zx2c4.com/wireguard/windows v0.5.3
 	trusttunnel-go v0.0.0-00010101000000-000000000000
@@ -54,7 +55,6 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/mod v0.40.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect

@@ -5,8 +5,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	socks5 "github.com/things-go/go-socks5"
 )
 
 func TestTunnelProbeContextCancelsEveryEndpointRequest(t *testing.T) {
@@ -25,7 +28,7 @@ func TestTunnelProbeContextCancelsEveryEndpointRequest(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int64, 1)
-	go func() { done <- MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, 10_000) }()
+	go func() { done <- measureTunnelProbe(ctx, 10*time.Second, testDialContext(10*time.Second)) }()
 	for range 3 {
 		select {
 		case <-started:
@@ -66,7 +69,7 @@ func TestTunnelProbeContextDeadlineOverridesEndpointTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 	startedAt := time.Now()
-	if got := MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, 10_000); got != probeFailureResult {
+	if got := measureTunnelProbe(ctx, 10*time.Second, testDialContext(10*time.Second)); got != probeFailureResult {
 		t.Fatalf("probe result=%d, want failure", got)
 	}
 	if elapsed := time.Since(startedAt); elapsed > time.Second {
@@ -76,7 +79,7 @@ func TestTunnelProbeContextDeadlineOverridesEndpointTimeout(t *testing.T) {
 
 func TestProbeEndpointReportsFailureStages(t *testing.T) {
 	t.Run("connect", func(t *testing.T) {
-		result := probeEndpoint(context.Background(), closedLocalHTTPURL(t), time.Second)
+		result := probeEndpoint(context.Background(), closedLocalHTTPURL(t), time.Second, testDialContext(time.Second))
 		if result.err == nil || result.failureStage != probeStageConnect || result.errorClass != "network" {
 			t.Fatalf("result=%+v, want connect/network failure", result)
 		}
@@ -87,7 +90,7 @@ func TestProbeEndpointReportsFailureStages(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}))
 		defer server.Close()
-		result := probeEndpoint(context.Background(), server.URL, 25*time.Millisecond)
+		result := probeEndpoint(context.Background(), server.URL, 25*time.Millisecond, testDialContext(25*time.Millisecond))
 		if result.err == nil || result.failureStage != probeStageResponse || result.errorClass != "timeout" {
 			t.Fatalf("result=%+v, want response/timeout failure", result)
 		}
@@ -98,11 +101,90 @@ func TestProbeEndpointReportsFailureStages(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
 		defer server.Close()
-		result := probeEndpoint(context.Background(), server.URL, time.Second)
+		result := probeEndpoint(context.Background(), server.URL, time.Second, testDialContext(time.Second))
 		if result.err == nil || result.failureStage != probeStageStatus || result.errorClass != "protocol" {
 			t.Fatalf("result=%+v, want status/protocol failure", result)
 		}
 	})
+}
+
+func TestTunnelProbeRequiresAndUsesAuthenticatedLocalSOCKSEndpoint(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	original := httpProbeURLs
+	httpProbeURLs = []string{server.URL, server.URL, server.URL}
+	t.Cleanup(func() { httpProbeURLs = original })
+
+	if got := MeasureTunnelProbeAverageLatencyMillisWithContext(context.Background(), 2_000, ""); got != probeFailureResult {
+		t.Fatalf("probe without local SOCKS endpoint=%d, want failure", got)
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("probe without local SOCKS endpoint reached public target %d times", requests.Load())
+	}
+
+	var proxyDialAttempts atomic.Int32
+	proxyAddr := startAuthenticatedSOCKS5TestServer(t, "local-user", "local-password", &proxyDialAttempts)
+	got := MeasureTunnelProbeAverageLatencyMillisWithContext(
+		context.Background(),
+		2_000,
+		"local-user:local-password@"+proxyAddr,
+	)
+	if got < 0 {
+		t.Fatal("probe through authenticated local SOCKS endpoint failed")
+	}
+	if requests.Load() != 3 {
+		t.Fatalf("target received %d probe requests, want 3", requests.Load())
+	}
+	if proxyDialAttempts.Load() != 3 {
+		t.Fatalf("local SOCKS server dialed the target %d times, want 3", proxyDialAttempts.Load())
+	}
+}
+
+func TestTunnelProbeRejectsInvalidLocalSOCKSEndpoints(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "missing port", endpoint: "127.0.0.1"},
+		{name: "invalid port", endpoint: "127.0.0.1:not-a-port"},
+		{name: "path", endpoint: "user@127.0.0.1:1080/path"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := socks5DialContext(test.endpoint, time.Second); err == nil {
+				t.Fatalf("socks5DialContext(%q) succeeded, want invalid endpoint error", test.endpoint)
+			}
+		})
+	}
+}
+
+func startAuthenticatedSOCKS5TestServer(t *testing.T, username, password string, dialAttempts *atomic.Int32) string {
+	t.Helper()
+	server := socks5.NewServer(
+		socks5.WithCredential(socks5.StaticCredentials{username: password}),
+		socks5.WithDial(func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialAttempts.Add(1)
+			return (&net.Dialer{Timeout: time.Second, KeepAlive: -1}).DialContext(ctx, network, address)
+		}),
+	)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-done
+	})
+	return listener.Addr().String()
 }
 
 func TestProbeErrorClassUsesOnlyStableCategories(t *testing.T) {
@@ -138,4 +220,9 @@ func closedLocalHTTPURL(t *testing.T) string {
 		t.Fatalf("Close listener failed: %v", err)
 	}
 	return "http://" + addr
+}
+
+func testDialContext(timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: timeout, KeepAlive: -1}
+	return dialer.DialContext
 }

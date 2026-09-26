@@ -13,7 +13,19 @@ from bounded_process import output_text, run_bounded_capture
 
 
 ANDROID_ABIS = ("arm64-v8a", "x86_64")
-TRUSTTUNNEL_ABI = "arm64-v8a"
+CPP_RUNTIME_SYMBOLS = frozenset(
+    {
+        "__cxa_allocate_exception",
+        "__cxa_begin_catch",
+        "__cxa_end_catch",
+        "__cxa_current_exception_type",
+        "__cxa_init_primary_exception",
+        "__cxa_rethrow",
+        "__cxa_throw",
+        "__gxx_personality_v0",
+    }
+)
+CPP_LIBRARY_PREFIXES = ("_ZSt", "_ZNSt", "_ZNKSt", "_ZTIS", "_ZTVSt")
 BRIDGE_SYMBOLS = frozenset(
     {
         "dobby_vpn_set_log_callback",
@@ -100,18 +112,36 @@ def verify_symbol_policy(abi: str, symbols: str) -> None:
         raise NativePayloadError(
             f"libdobby_vpn.so for {abi} has unresolved TrustTunnel bridge symbols: {joined}"
         )
-    if abi == TRUSTTUNNEL_ABI:
-        missing = BRIDGE_SYMBOLS - defined
-        if missing:
-            joined = ", ".join(sorted(missing))
-            raise NativePayloadError(
-                f"libdobby_vpn.so for {abi} is missing TrustTunnel bridge symbols: {joined}"
-            )
-    elif defined:
+    missing = BRIDGE_SYMBOLS - defined
+    if missing:
+        joined = ", ".join(sorted(missing))
         raise NativePayloadError(
-            f"libdobby_vpn.so for {abi} unexpectedly links TrustTunnel; "
-            "update the ABI policy only with a packaged x86_64 bridge"
+            f"libdobby_vpn.so for {abi} is missing TrustTunnel bridge symbols: {joined}"
         )
+    unresolved_cpp = undefined_cpp_runtime_symbols(symbols)
+    if unresolved_cpp:
+        joined = ", ".join(sorted(unresolved_cpp))
+        raise NativePayloadError(
+            f"libdobby_vpn.so for {abi} has unresolved C++ runtime symbols: {joined}"
+        )
+
+
+def undefined_cpp_runtime_symbols(symbols: str) -> set[str]:
+    unresolved: set[str] = set()
+    for line in symbols.splitlines():
+        columns = line.split()
+        if "UND" not in columns:
+            continue
+        undefined_index = columns.index("UND")
+        if undefined_index + 1 >= len(columns):
+            continue
+        # readelf appends a version index such as "(6)" after versioned
+        # names. Select the field immediately after Ndx, rather than the last
+        # field, so versioned C++ imports remain visible to this check.
+        symbol = columns[undefined_index + 1].split("@", 1)[0]
+        if symbol in CPP_RUNTIME_SYMBOLS or symbol.startswith(CPP_LIBRARY_PREFIXES):
+            unresolved.add(symbol)
+    return unresolved
 
 
 def verify(apk: Path, readelf: Path) -> None:

@@ -8,9 +8,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 const (
@@ -46,28 +49,53 @@ const (
 	probeErrorProtocol = "protocol"
 )
 
-// MeasureTunnelProbeAverageLatencyMillis runs protocol-selection probes through
-// the currently installed system VPN route. Every request uses a fresh transport
-// with keep-alives disabled so latency cannot be inherited from a previous
-// protocol's pooled TCP/TLS connection.
-func MeasureTunnelProbeAverageLatencyMillis() int64 {
-	return MeasureTunnelProbeAverageLatencyMillisWithTimeout(int64(probeTimeout / time.Millisecond))
-}
-
-func MeasureTunnelProbeAverageLatencyMillisWithTimeout(timeoutMillis int64) int64 {
-	return MeasureTunnelProbeAverageLatencyMillisWithContext(context.Background(), timeoutMillis)
-}
-
-// MeasureTunnelProbeAverageLatencyMillisWithContext runs the tunnel probe with
-// the supplied cancellation context. The context is propagated to every
-// endpoint request; timeoutMillis remains the per-endpoint upper bound for
-// callers which do not have a tighter deadline.
-func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, timeoutMillis int64) int64 {
+// MeasureTunnelProbeAverageLatencyMillisWithContext runs requests through the
+// active protocol device's local SOCKS endpoint. It fails closed when that
+// endpoint is missing or invalid. Every request uses a fresh transport with
+// keep-alives disabled so latency cannot be inherited from another session.
+func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, timeoutMillis int64, proxyAddr string) int64 {
 	timeout := time.Duration(timeoutMillis) * time.Millisecond
 	if timeout <= 0 {
 		log.Warnf("PROBE", "Tunnel probe timeout is invalid timeoutMs=%d", timeoutMillis)
 		return probeFailureResult
 	}
+	dialContext, err := socks5DialContext(proxyAddr, timeout)
+	if err != nil {
+		log.Warnf("PROBE", "Tunnel probe local SOCKS endpoint is unavailable errorClass=%s", probeErrorClass(err))
+		return probeFailureResult
+	}
+	return measureTunnelProbe(ctx, timeout, dialContext)
+}
+
+func socks5DialContext(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
+	if proxyAddr == "" {
+		return nil, errors.New("empty SOCKS endpoint")
+	}
+	parsed, err := url.Parse("socks5://" + proxyAddr)
+	if err != nil || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("invalid SOCKS endpoint")
+	}
+	port := parsed.Port()
+	if parsed.Hostname() == "" || port == "" {
+		return nil, errors.New("SOCKS endpoint requires host and port")
+	}
+	var credentials *proxy.Auth
+	if parsed.User != nil {
+		credentials = &proxy.Auth{User: parsed.User.Username()}
+		credentials.Password, _ = parsed.User.Password()
+	}
+	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(parsed.Hostname(), port), credentials, &net.Dialer{Timeout: timeout, KeepAlive: -1})
+	if err != nil {
+		return nil, errors.New("create SOCKS dialer")
+	}
+	contextDialer, ok := dialer.(proxy.ContextDialer)
+	if !ok {
+		return nil, errors.New("SOCKS dialer does not support cancellation")
+	}
+	return contextDialer.DialContext, nil
+}
+
+func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) int64 {
 	log.Debugf("PROBE", "Tunnel probe begin endpoints=%d timeout=%s", len(httpProbeURLs), timeout)
 
 	results := make([]probeEndpointResult, len(httpProbeURLs))
@@ -76,7 +104,7 @@ func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, time
 		wg.Add(1)
 		go func(i int, url string) {
 			defer wg.Done()
-			results[i] = probeEndpoint(ctx, url, timeout)
+			results[i] = probeEndpoint(ctx, url, timeout, dialContext)
 		}(i, url)
 	}
 	wg.Wait()
@@ -122,7 +150,7 @@ func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, time
 	return avg
 }
 
-func probeEndpoint(parent context.Context, endpointURL string, timeout time.Duration) probeEndpointResult {
+func probeEndpoint(parent context.Context, endpointURL string, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) probeEndpointResult {
 	startedAt := time.Now()
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -137,7 +165,7 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 	}
 
 	transport := &http.Transport{
-		DialContext:         cachedDialContext(timeout, "session-probe"),
+		DialContext:         dialContext,
 		DisableKeepAlives:   true,
 		ForceAttemptHTTP2:   false,
 		TLSHandshakeTimeout: timeout,

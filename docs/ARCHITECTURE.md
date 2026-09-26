@@ -8,8 +8,9 @@ without a GUI.
 
 The Go backend owns configuration loading and parsing, profile inventory,
 automatic protocol selection and recovery, session and generation state,
-protocol runtimes, probing, and resource cleanup. Outline, Xray, and
-TrustTunnel remain supported. Xray's gRPC transport is part of that VPN
+protocol runtimes, probing, and resource cleanup. Readiness and health probes
+use the active protocol device's local authenticated SOCKS endpoint. Outline,
+Xray, and TrustTunnel remain supported. Xray's gRPC transport is part of that VPN
 protocol support; desktop control uses a separate local JSON interface.
 
 Native code owns presentation and operating-system VPN integration. It does

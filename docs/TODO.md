@@ -3,8 +3,10 @@
 These items are not part of the current passing qualification suites and are
 not accepted unavailable skips:
 
-- Add physical-device Android qualification for the packaged arm64
-  TrustTunnel bridge.
+- Add Android TrustTunnel tunnel-traffic qualification on an arm64 device and
+  x86_64 emulator.
+- Add live-server TrustTunnel qualification with a known-good test profile and
+  verify connect, traffic, disconnect, and cleanup on each supported platform.
 - Add physical-device iOS qualification for NetworkExtension permission,
   tunnel traffic, routing, disconnect, and cleanup.
 - Define suspend/resume recovery checks where the platform lifecycle can be

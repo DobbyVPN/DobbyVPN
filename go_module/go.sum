@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260919065324-bc54923e3c85 h1:HPyPeirqtuC5jXUUh/r3GCuQzDAwd3SdQuq5j9glTYQ=
-github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260919065324-bc54923e3c85/go.mod h1:wHOz/rb9oaA2ykOQ3OuMvUkrZJBQu8C/ck+eVlL6RB4=
+github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260926103853-b4a92748a80c h1:Nu9Yhm2/CnBHSEnGYl9MxsDMqxf9tnfjdmtoLXjyQvQ=
+github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260926103853-b4a92748a80c/go.mod h1:wHOz/rb9oaA2ykOQ3OuMvUkrZJBQu8C/ck+eVlL6RB4=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/ajg/form v1.5.1 h1:t9c7v8JUKu/XxOGBU0yjNpaMloxGEJhUkqFRq0ibGeU=

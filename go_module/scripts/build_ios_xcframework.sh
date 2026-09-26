@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Build the public Go binding for physical iOS and iOS Simulator.
 #
-# TrustTunnel's supplied archive is physical-iOS arm64 only. With no argument,
-# build that slice with the production bridge and a universal Simulator slice,
-# then combine both generated frameworks. A local Simulator-only invocation
-# selects one native architecture and skips the physical build. All other Go
-# session/runtime/protocol code is identical between the builds.
+# TrustTunnel ships a physical-iOS arm64 archive and a universal Simulator
+# archive. With no argument, build both frameworks. A local Simulator-only
+# invocation selects one native architecture and skips the physical build.
 set -euo pipefail
 
 readonly output="DobbyVPNRuntime.xcframework"
@@ -97,6 +95,82 @@ if [[ "$simulator_framework_count" -ne 1 ]]; then
 fi
 simulator_framework="$simulator_framework_output"
 
+module_dir="$(go list -m -f '{{.Dir}}' trusttunnel-go | tee /dev/stderr)"
+simulator_bridge="$module_dir/lib/ios-simulator/libdobby_bridge.a"
+simulator_provenance="$module_dir/lib/static-libraries.provenance.json"
+if [[ ! -f "$simulator_bridge" || ! -f "$simulator_provenance" ]]; then
+  echo "missing iOS Simulator TrustTunnel bridge or provenance" >&2
+  exit 1
+fi
+simulator_arches="$(xcrun lipo -archs "$simulator_bridge" | tee /dev/stderr)"
+required_simulator_arches=(arm64 x86_64)
+if [[ -n "$simulator_architecture" ]]; then
+  selected_simulator_arch=arm64
+  if [[ "$simulator_architecture" == amd64 ]]; then selected_simulator_arch=x86_64; fi
+  required_simulator_arches=("$selected_simulator_arch")
+fi
+for simulator_arch in "${required_simulator_arches[@]}"; do
+  if [[ " $simulator_arches " != *" $simulator_arch "* ]]; then
+    echo "TrustTunnel Simulator bridge is missing architecture $simulator_arch" >&2
+    exit 1
+  fi
+done
+simulator_expected_hash="$(python3 - "$simulator_provenance" <<'PY' | tee /dev/stderr
+import json
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as source:
+        document = json.load(source)
+except (OSError, json.JSONDecodeError) as error:
+    print(f"cannot read TrustTunnel Simulator bridge provenance {path}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+value = document.get("artifacts", {}).get("ios_simulator", {}).get("sha256")
+if document.get("schema") != 2 or not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+    print(f"invalid TrustTunnel Simulator bridge provenance {path}", file=sys.stderr)
+    raise SystemExit(1)
+print(value)
+PY
+)"
+simulator_actual_hash="$(shasum -a 256 "$simulator_bridge" | tee /dev/stderr | awk '{print $1}')"
+if [[ "$simulator_actual_hash" != "$simulator_expected_hash" ]]; then
+  echo "TrustTunnel Simulator bridge SHA-256 verification failed" >&2
+  echo "expected: $simulator_expected_hash" >&2
+  echo "actual:   $simulator_actual_hash" >&2
+  exit 1
+fi
+simulator_library="$simulator_framework/DobbyVPNRuntime"
+if [[ ! -f "$simulator_library" ]]; then
+  echo "missing generated Simulator DobbyVPNRuntime binary" >&2
+  exit 1
+fi
+simulator_merge_arches=(arm64 x86_64)
+if [[ -n "$simulator_architecture" ]]; then
+  selected_simulator_arch=arm64
+  if [[ "$simulator_architecture" == amd64 ]]; then selected_simulator_arch=x86_64; fi
+  simulator_merge_arches=("$selected_simulator_arch")
+fi
+merged_simulator_slices=()
+for simulator_arch in "${simulator_merge_arches[@]}"; do
+  runtime_slice="$workdir/DobbyVPNRuntime-Simulator-$simulator_arch.a"
+  bridge_slice="$workdir/libdobby_bridge-Simulator-$simulator_arch.a"
+  merged_slice="$workdir/DobbyVPNRuntime-Simulator-$simulator_arch-merged.a"
+  xcrun lipo -thin "$simulator_arch" "$simulator_library" -output "$runtime_slice"
+  xcrun lipo -thin "$simulator_arch" "$simulator_bridge" -output "$bridge_slice"
+  libtool -static -D -o "$merged_slice" "$runtime_slice" "$bridge_slice"
+  merged_simulator_slices+=("$merged_slice")
+done
+if [[ "${#merged_simulator_slices[@]}" -eq 1 ]]; then
+  mv "${merged_simulator_slices[0]}" "$simulator_library"
+else
+  merged_simulator_library="$workdir/DobbyVPNRuntime-Simulator-merged.a"
+  xcrun lipo -create "${merged_simulator_slices[@]}" -output "$merged_simulator_library"
+  mv "$merged_simulator_library" "$simulator_library"
+fi
+
 if [[ -z "$simulator_architecture" ]]; then
   device_framework="$device_output/ios-arm64/DobbyVPNRuntime.framework"
   if [[ ! -d "$device_framework" ]]; then
@@ -104,7 +178,6 @@ if [[ -z "$simulator_architecture" ]]; then
     exit 1
   fi
 
-  module_dir="$(go list -m -f '{{.Dir}}' trusttunnel-go | tee /dev/stderr)"
   bridge="$module_dir/lib/ios/libdobby_bridge.a"
   device_library="$device_framework/DobbyVPNRuntime"
 

@@ -23,7 +23,7 @@ GRADLE_SHA256 = "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed7
 GRADLE_VERSION = "8.13"
 JAVA_MAJOR = 17
 ANDROID_BUILD_TOOLS = "36.0.0"
-ANDROID_NDK = "27.3.13750724"
+ANDROID_NDK = "28.1.13356709"
 REPOSITORIES = [
     {"id": "google", "url": "https://dl.google.com/dl/android/maven2/"},
     {"id": "mavenCentral", "url": "https://repo.maven.apache.org/maven2/"},

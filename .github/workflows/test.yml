@@ -113,7 +113,7 @@ jobs:
           packages: >
             platforms;android-35
             build-tools;36.0.0
-            ndk;27.3.13750724
+            ndk;28.1.13356709
 
       - name: Download Go modules for the Android backend
         working-directory: go_module
@@ -122,6 +122,41 @@ jobs:
       - name: Run Android shell tests and build both Go ABIs
         working-directory: android_module
         run: ./gradlew :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease --info --stacktrace
+
+      - name: Verify Android ABI bridge symbols and runtime dependencies
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_verify_android_native_payloads.py' -v
+          ndk="$ANDROID_HOME/ndk/28.1.13356709"
+          toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          python3 .github/scripts/verify_android_native_payloads.py \
+            --apk android_module/app/build/outputs/apk/release/app-release-unsigned.apk \
+            --readelf "$toolchain/llvm-readelf"
+
+  android_arm64_go:
+    name: Native ARM64 Go runtime tests
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Verify native ARM64 runner and pinned Go
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          expected="go$(tr -d '[:space:]' < .go-version)"
+          test "$(go env GOVERSION)" = "$expected"
+
+      - name: Run Go runtime tests on ARM64
+        working-directory: go_module
+        run: go test -v -race ./probe ./sessionapi/runtime ./tunnel/protected_dialer
 
   swift:
     name: iOS production lifecycle policy tests
@@ -193,6 +228,26 @@ jobs:
 
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Set up pinned Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Build TrustTunnel-enabled Go runtime for iOS Simulator
+        working-directory: go_module
+        run: |
+          set -euo pipefail
+          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
+          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
+          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
+          go mod download
+          ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
+          runtime_binary="$(find DobbyVPNRuntime.xcframework -type f -path '*/DobbyVPNRuntime.framework/DobbyVPNRuntime' -print -quit)"
+          test -n "$runtime_binary"
+          runtime_arches="$(xcrun lipo -archs "$runtime_binary" | tee /dev/stderr)"
+          [[ " $runtime_arches " == *" arm64 "* ]]
 
       - name: Build and launch the native SwiftUI app on Simulator
         env:

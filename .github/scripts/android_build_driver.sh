@@ -174,13 +174,13 @@ observed_mobile_version=$(cd "$source_root/go_module" && "$go_bin" list -m -f '{
   exit 2
 }
 [[ -n "${ANDROID_NDK_HOME:-}" && -f "$ANDROID_NDK_HOME/source.properties" ]] || {
-  echo 'Android NDK 27.3.13750724 is required' >&2
+  echo 'Android NDK 28.1.13356709 is required' >&2
   exit 2
 }
 ndk_properties="$(cat "$ANDROID_NDK_HOME/source.properties")"
 printf '%s\n' "$ndk_properties"
-[[ "$ndk_properties" == *'Pkg.Revision = 27.3.13750724'* ]] || {
-  echo 'Android NDK revision is not 27.3.13750724' >&2
+[[ "$ndk_properties" == *'Pkg.Revision = 28.1.13356709'* ]] || {
+  echo 'Android NDK revision is not 28.1.13356709' >&2
   exit 2
 }
 gradle_version=$("$gradle_bin" --version --no-daemon | tee_stderr | awk '/^Gradle / && !seen {version=$2; seen=1} END {if (seen) print version}')
@@ -292,9 +292,8 @@ if [[ -n "$test_companion_output" ]]; then
 fi
 python3 "$source_verifier" "${source_verifier_args[@]}"
 
-# Verify the final Go backend libraries against the ABI policy. TrustTunnel
-# bridge symbols are present only in arm64-v8a; x86_64 must remain a portable
-# backend build with no unresolved native bridge dependency.
+# Verify the final Go backend libraries against the ABI policy. Both packaged
+# ABIs include the TrustTunnel bridge and resolve its native runtime symbols.
 readelf_bin=${ANDROID_READELF:-}
 if [[ -z "$readelf_bin" ]]; then
   mapfile -t ndk_toolchains < <(

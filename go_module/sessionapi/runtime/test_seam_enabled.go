@@ -31,7 +31,7 @@ func configureTestSeams(options *Options) {
 	}
 
 	var successful atomic.Int64
-	options.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef) error {
+	options.ConnectedHealth = func(ctx context.Context, _ sessionapi.SessionRef, _ string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

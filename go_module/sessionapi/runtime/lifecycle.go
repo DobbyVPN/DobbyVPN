@@ -79,12 +79,12 @@ type connectCanceler interface{ CancelConnect() }
 // after Connect has stopped mutating native resources.
 var errConnectCancellationPending = errors.New("native session connect cancellation pending")
 
-type ProbeFunc func(context.Context) (int64, error)
+type ProbeFunc func(context.Context, string) (int64, error)
 
 // ConnectedHealthFunc runs one connected-readiness check for a specific lease.
 // It must return promptly when ctx is canceled; the monitor uses that guarantee
 // to stop before runtime resources are released.
-type ConnectedHealthFunc func(context.Context, sessionapi.SessionRef) error
+type ConnectedHealthFunc func(context.Context, sessionapi.SessionRef, string) error
 
 type Options struct {
 	Tunnel                  TunnelProvider
@@ -191,6 +191,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	if err := waitForInitialReadiness(
 		ctx,
 		ref,
+		lease.proxyAddr,
 		r.options.InitialReadiness,
 		r.options.ReadinessAttempts,
 		r.options.ReadinessAttemptTimeout,
@@ -211,7 +212,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		r.active = false
 		r.mu.Unlock()
 	})
-	lease.startHealthMonitor(ctx, ref, r.options.ConnectedHealth, r.options.HealthInterval, r.options.HealthFailureThreshold)
+	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, r.options.HealthInterval, r.options.HealthFailureThreshold)
 	return lease, nil
 }
 
@@ -258,6 +259,7 @@ func (r *runtime) Probe(ctx context.Context, ref sessionapi.SessionRef, profile 
 	latency, probeErr := probeUntilReady(
 		probeCtx,
 		ref,
+		lease.proxyAddr,
 		r.options.Probe,
 		r.options.ReadinessAttempts,
 		r.options.ReadinessRetryInterval,
@@ -276,6 +278,7 @@ func (r *runtime) Probe(ctx context.Context, ref sessionapi.SessionRef, profile 
 func probeUntilReady(
 	ctx context.Context,
 	ref sessionapi.SessionRef,
+	proxyAddr string,
 	probeFn ProbeFunc,
 	attempts int,
 	retryInterval time.Duration,
@@ -285,7 +288,7 @@ func probeUntilReady(
 			return 0, err
 		}
 		startedAt := time.Now()
-		latency, err := probeFn(ctx)
+		latency, err := probeFn(ctx, proxyAddr)
 		if err != nil {
 			return 0, err
 		}
@@ -360,6 +363,10 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if device == nil {
 		return fail(errors.New("create protocol device returned nil"))
 	}
+	owned.proxyAddr = device.GetProxyAddr()
+	if owned.proxyAddr == "" {
+		return fail(errors.New("protocol device returned an empty local SOCKS address"))
+	}
 
 	var tun TunnelLease
 	if mobileRuntime {
@@ -396,6 +403,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 func waitForInitialReadiness(
 	ctx context.Context,
 	ref sessionapi.SessionRef,
+	proxyAddr string,
 	check ConnectedHealthFunc,
 	attempts int,
 	attemptTimeout time.Duration,
@@ -409,7 +417,7 @@ func waitForInitialReadiness(
 		startedAt := time.Now()
 		log.Debugf(category, "initial readiness attempt begin generation=%d attempt=%d/%d timeout=%s", ref.Generation, attempt, attempts, attemptTimeout)
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
-		err := check(attemptCtx, ref)
+		err := check(attemptCtx, ref, proxyAddr)
 		cancel()
 		if err == nil {
 			log.Debugf(category, "initial readiness attempt succeeded generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
@@ -474,6 +482,7 @@ func connectContext(ctx context.Context, client sessionCore) error {
 }
 
 type lease struct {
+	proxyAddr    string
 	stopOnce     sync.Once
 	undo         []func(context.Context) error
 	onDone       func()
@@ -490,7 +499,7 @@ func (l *lease) setOnDone(fn func())                 { l.onDone = fn }
 // lease has stopped, so the manager watcher cannot outlive its runtime lease.
 func (l *lease) HealthFailures() <-chan struct{} { return l.healthFailed }
 
-func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.SessionRef, check ConnectedHealthFunc, interval time.Duration, threshold int) {
+func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.SessionRef, proxyAddr string, check ConnectedHealthFunc, interval time.Duration, threshold int) {
 	ctx, cancel := context.WithCancel(parent)
 	l.healthCancel = cancel
 	l.healthDone = make(chan struct{})
@@ -500,7 +509,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 		defer close(l.healthFailed)
 		failures := 0
 		for {
-			if err := check(ctx, ref); err != nil {
+			if err := check(ctx, ref, proxyAddr); err != nil {
 				failures++
 				if failures >= threshold {
 					select {
@@ -576,12 +585,12 @@ func unsupportedDevice(_ context.Context, _ sessionapi.SessionRef, _ sessionapi.
 	return nil, errors.New("native protocol device factory is not installed")
 }
 
-func defaultProbe(ctx context.Context) (int64, error) {
+func defaultProbe(ctx context.Context, proxyAddr string) (int64, error) {
 	timeout, err := probeTimeout(ctx)
 	if err != nil {
 		return 0, err
 	}
-	latency := probe.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond))
+	latency := probe.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond), proxyAddr)
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -604,8 +613,8 @@ func probeTimeout(ctx context.Context) (time.Duration, error) {
 	return remaining, nil
 }
 
-func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef) error {
-	latency, err := defaultProbe(ctx)
+func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
+	latency, err := defaultProbe(ctx, proxyAddr)
 	if err != nil {
 		return err
 	}

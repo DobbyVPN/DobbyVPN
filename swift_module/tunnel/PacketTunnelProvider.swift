@@ -60,16 +60,10 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
     }
 
     func protectSocket(_ sessionID: String?, generation: Int64, fd: Int32) -> Bool {
-        var enabled: Int32 = 1
-        return withUnsafePointer(to: &enabled) { value in
-            setsockopt(
-                fd,
-                SOL_SOCKET,
-                0x1101,
-                value,
-                socklen_t(MemoryLayout<Int32>.size)
-            ) == 0
-        }
+        // BSD sockets opened by the packet tunnel provider are excluded from
+        // its own tunnel by NetworkExtension. This callback remains in the
+        // shared platform contract; iOS has no additional socket option.
+        return true
     }
 
     func publishState(
