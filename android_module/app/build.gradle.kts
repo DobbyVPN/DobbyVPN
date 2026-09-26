@@ -9,6 +9,7 @@ plugins {
 
 val repoRoot = rootProject.projectDir.parentFile
 val goModule = repoRoot.resolve("go_module")
+val pinnedAndroidNdkVersion = "28.1.13356709"
 fun nonBlankEnvironment(name: String) =
     providers.environmentVariable(name)
         .map(String::trim)
@@ -124,9 +125,10 @@ val downloadGoModules by tasks.registering(Exec::class) {
 }
 
 val buildGoBackend by tasks.registering {
-    val ndkHome = nonBlankEnvironment("ANDROID_NDK_HOME")
+    val ndkHome = androidSdkRoot
+        .map { File(it, "ndk/$pinnedAndroidNdkVersion").absolutePath }
+        .orElse(nonBlankEnvironment("ANDROID_NDK_HOME"))
         .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
-        .orElse(androidSdkRoot.map { File(it, "ndk/28.1.13356709").absolutePath })
         .orElse("")
     val api = providers.gradleProperty("android.ndk.api").orElse("26")
     val abis = mapOf(
@@ -145,6 +147,15 @@ val buildGoBackend by tasks.registering {
             "ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) is required to build the shared Go Android backend"
         }
         val ndk = File(ndkHome.get())
+        val observedNdkRevision = ndk.resolve("source.properties")
+            .takeIf { it.isFile }
+            ?.readLines()
+            ?.firstOrNull { it.trimStart().startsWith("Pkg.Revision") }
+            ?.substringAfter("=")
+            ?.trim()
+        check(observedNdkRevision == pinnedAndroidNdkVersion) {
+            "Android NDK $pinnedAndroidNdkVersion is required, found ${observedNdkRevision ?: "<missing>"} at $ndk"
+        }
         val toolchain = ndk.resolve("toolchains/llvm/prebuilt")
             .listFiles()?.singleOrNull()
             ?: error("Android NDK LLVM toolchain is unavailable under $ndk")
