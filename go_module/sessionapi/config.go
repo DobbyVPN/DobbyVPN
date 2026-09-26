@@ -173,7 +173,6 @@ func validateRootKeys(keys []toml.Key) error {
 		switch key[0] {
 		case "Outline", "Xray", "TrustTunnel", "ExcludeIPs":
 		default:
-			// Do not include user-controlled key text in public errors.
 			return failure(FailureUnsupported, "configuration contains an unsupported section")
 		}
 	}

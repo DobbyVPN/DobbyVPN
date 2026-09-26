@@ -120,8 +120,7 @@ def _append_command_result_notes(
     """Attach command metadata and forward both complete output streams.
 
     ``CommandResult`` remains available to the caller for the one operation
-    that needs to parse it.  Do not include argv (which can contain profile
-    paths/endpoints) in diagnostics.  Streams are forwarded to the invoking
+    that needs to parse it. Streams are forwarded to the invoking
     process and attached to the exception so a caller that serializes the
     exception still receives the complete command output.
     """

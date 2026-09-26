@@ -49,7 +49,7 @@ func Guard(category, fnName string) func() {
 	}
 }
 
-// GuardErr catches a panic and assigns a safe error to the named result.
+// GuardErr catches a panic and assigns an error to the named result.
 func GuardErr[T errorResultPointer](category, fnName string, errp T) func() {
 	setter := errorResultSetter[T]{target: errp}
 	return func() {

@@ -787,8 +787,7 @@ def _terminate_app(
     if result.returncode:
         output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
         # XCTest can terminate the application itself after a UI-test
-        # failure. In that state cleanup is already complete and simctl uses
-        # exit 3 with this stable message; do not turn it into a second error.
+        # failure. In that state simctl uses exit 3 with this stable message.
         if "found nothing to terminate" in output.lower():
             return
         del output

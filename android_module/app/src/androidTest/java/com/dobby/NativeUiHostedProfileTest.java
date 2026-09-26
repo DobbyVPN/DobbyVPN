@@ -556,12 +556,6 @@ public final class NativeUiHostedProfileTest {
         return output;
     }
 
-    /**
-     * Keep the app-to-host failure boundary deliberately small.  Exception
-     * messages can contain profile text, endpoint values, file names, system
-     * paths, or framework details; only the fixed contract vocabulary crosses
-     * into the observation consumed by the adapter.
-     */
     private String fixedFailureCode(Throwable failure) {
         if (failure == null) return FALLBACK_ERROR_CODE;
         String description = failure.toString();
@@ -614,8 +608,7 @@ public final class NativeUiHostedProfileTest {
     /**
      * Enter one fresh profile through the production Compose text field.
      * UiAutomator supplies the text through the visible control; Connect
-     * still calls the production Go binding. Profile bytes are never included
-     * in diagnostics.
+     * still calls the production Go binding.
      */
     private void configureThroughRenderedUI(byte[] profile, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
@@ -1860,11 +1853,6 @@ public final class NativeUiHostedProfileTest {
             JSONObject sample = requiredShellNetworkRequest("get", endpoint, 0);
             int status = sample.optInt("status", 0);
             if (status < 200 || status >= 300) {
-                // A probe response is only a successful stability sample when
-                // the HTTPS endpoint returned a 2xx response.  The shell
-                // helper already rejects transport/probe failures; keep this
-                // separate fixed code for an HTTP rejection without copying
-                // response text or endpoint details into the test result.
                 throw new IllegalStateException("ANDROID_STABILITY_HTTP_STATUS");
             }
             if (i + 1 < STABILITY_SAMPLES) Thread.sleep(1_000L);

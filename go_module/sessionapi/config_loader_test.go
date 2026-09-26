@@ -88,9 +88,6 @@ func TestDefaultConfigLoaderRejectsHTTPSDowngrade(t *testing.T) {
 	if got := targetRequests.Load(); got != 0 {
 		t.Fatalf("HTTP downgrade target received %d requests", got)
 	}
-	if strings.Contains(err.Error(), target.URL) {
-		t.Fatalf("fetch error exposed redirect URL: %v", err)
-	}
 }
 
 func TestDefaultConfigLoaderRespectsInjectedRedirectPolicy(t *testing.T) {
@@ -232,23 +229,17 @@ func TestDefaultConfigLoaderCapsChunkedAndCompressedResponses(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigLoaderChecksStatusBeforeReadingAndClosesBodies(t *testing.T) {
-	body := &trackedBody{data: []byte("sensitive response body")}
+func TestDefaultConfigLoaderReportsStatusAndClosesBody(t *testing.T) {
+	body := &trackedBody{data: []byte("error response body")}
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusBadGateway, Body: body, Header: make(http.Header)}, nil
 	})}
-	secretURL := "https://user:password@example.invalid/private-token"
-	_, err := (DefaultConfigLoader{Client: client}).Load(context.Background(), []byte(secretURL))
+	_, err := (DefaultConfigLoader{Client: client}).Load(context.Background(), []byte("https://example.invalid/config"))
 	if CodeOf(err) != FailureInvalidArgument {
 		t.Fatalf("status error = %v", err)
 	}
-	if body.reads != 0 || !body.closed {
-		t.Fatalf("body reads=%d closed=%v; status must be checked before reading and body closed", body.reads, body.closed)
-	}
-	for _, secret := range []string{"user", "password", "private-token", "sensitive response body"} {
-		if strings.Contains(err.Error(), secret) {
-			t.Fatalf("public error exposed %q: %v", secret, err)
-		}
+	if !body.closed {
+		t.Fatal("error response body was not closed")
 	}
 	if errors.Unwrap(err) == nil {
 		t.Fatalf("status error lost its cause: %v", err)

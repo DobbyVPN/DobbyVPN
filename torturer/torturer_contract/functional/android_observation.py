@@ -1,4 +1,4 @@
-"""Safe observation contract for a future Android profile test seam."""
+"""Observation contract for Android profile tests."""
 
 from __future__ import annotations
 

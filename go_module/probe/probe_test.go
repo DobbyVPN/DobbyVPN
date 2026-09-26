@@ -187,7 +187,7 @@ func startAuthenticatedSOCKS5TestServer(t *testing.T, username, password string,
 	return listener.Addr().String()
 }
 
-func TestProbeErrorClassUsesOnlyStableCategories(t *testing.T) {
+func TestProbeErrorClassCategorizesErrors(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error

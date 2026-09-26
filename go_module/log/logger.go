@@ -63,8 +63,6 @@ var (
 
 func init() {
 	bridge.Do(func() {
-		// Hooks do not replace Logrus's default output. Suppress that duplicate
-		// path and route every entry into the same structured log.
 		logrus.SetOutput(io.Discard)
 		logrus.AddHook(&logrusToSlogHook{})
 	})

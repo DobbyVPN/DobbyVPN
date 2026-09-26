@@ -803,13 +803,7 @@ class AndroidHostedAdapter:
         highest_progress_sequence = -1
 
         def poll_ui_progress() -> None:
-            """Forward only the driver's fixed phase marker.
-
-            The hosted Java driver never writes profile text, endpoint values,
-            or exception details to this file.  Validate the small value
-            vocabulary here as a second boundary so a malformed candidate
-            record cannot leak arbitrary data into the runner's live output.
-            """
+            """Read and validate the hosted UI progress record."""
 
             nonlocal last_ui_progress, required_screenshot_seen
             nonlocal failed_milestone_seen, highest_progress_sequence

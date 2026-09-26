@@ -10,7 +10,7 @@ and later clean up the exact state recorded in ``platform.json``.
 The run directory is the only state boundary:
 
     source/       complete DobbyVPN checkout
-    profile       private test profile (never copied or printed)
+    profile       private test profile
     logs/          command, product, and functional output
     platform.json platform-owned process/install state
 """

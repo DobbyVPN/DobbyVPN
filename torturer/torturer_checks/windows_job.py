@@ -8,9 +8,6 @@ initial thread resumed.  The job's ``ActiveProcesses`` count is the
 authoritative cleanup observation.  PID/parent census data remains useful
 diagnostic context, but is never used to certify an empty job.
 
-This module deliberately keeps all public diagnostics stage-scoped and
-numeric.  It never includes a command, working directory, environment, or
-handle-bearing object representation in an error string.
 """
 
 from __future__ import annotations

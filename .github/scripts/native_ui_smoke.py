@@ -1145,7 +1145,7 @@ Write-Output ("{0},{1},{2},{3}" -f $rect.Left, $rect.Top, $rect.Right, $rect.Bot
 
 
 def _clipboard_payload(command: list[str], label: str, timeout: float) -> tuple[subprocess.CompletedProcess[bytes], bytes]:
-    """Read clipboard bytes into a private temporary file, outside diagnostics."""
+    """Read clipboard bytes into a private temporary file."""
     with tempfile.TemporaryFile(mode="w+b") as payload_file:
         try:
             result = subprocess.run(
@@ -1802,7 +1802,7 @@ def _macos_window_obstructions(process_pid: int, timeout: float) -> list[dict[st
 
 
 def _macos_startup_diagnostic(process_pid: int) -> str:
-    """Collect bounded, complete diagnostics for a window that never surfaced."""
+    """Collect complete diagnostics for a window that never surfaced."""
 
     commands = [
         ["ps", "-ww", "-p", str(process_pid), "-o", "pid=,ppid=,state=,etime=,command="],

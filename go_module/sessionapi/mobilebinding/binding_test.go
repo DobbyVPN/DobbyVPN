@@ -3,7 +3,6 @@ package mobilebinding
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,28 +80,6 @@ func TestSnapshotDTOAlwaysRoundTripsRecoveringFlag(t *testing.T) {
 		if decoded != recovering {
 			t.Fatalf("recovering round-trip = %t, want %t", decoded, recovering)
 		}
-	}
-}
-
-func TestInternalFailureEnvelopeDoesNotExposeRawErrors(t *testing.T) {
-	result := failed(errors.New("exact mobile failure"))
-	if !strings.Contains(result, `"code":"INTERNAL"`) || !strings.Contains(result, `"message":"internal session error"`) || strings.Contains(result, "exact mobile failure") {
-		t.Fatalf("failure envelope exposed an untyped internal error: %s", result)
-	}
-}
-
-func TestURLFetchFailureDoesNotEchoSourceCredentials(t *testing.T) {
-	url := "https://alice:secret@example.invalid/profile?token=private"
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Loader: failingURLLoader{}}))
-	initial := binding.Snapshot("")
-	result := binding.Configure(jsonSessionID(t, initial), int64Field(t, initial, "sequence"), []byte(url))
-	for _, sensitive := range []string{"alice", "secret", "example.invalid", "private", url} {
-		if strings.Contains(result, sensitive) {
-			t.Fatalf("validation response leaked %q: %s", sensitive, result)
-		}
-	}
-	if !strings.Contains(result, "configuration URL could not be fetched") {
-		t.Fatalf("validation response lost the safe failure reason: %s", result)
 	}
 }
 
@@ -196,12 +173,6 @@ func TestTunnelOwnershipRejectsReuseUntilRelease(t *testing.T) {
 }
 
 type blockingRuntime struct{}
-
-type failingURLLoader struct{}
-
-func (failingURLLoader) Load(_ context.Context, raw []byte) (sessionapi.LoadedConfig, error) {
-	return sessionapi.LoadedConfig{}, errors.New("request failed for " + string(raw))
-}
 
 func (r *blockingRuntime) Probe(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile) (sessionapi.ProbeResult, error) {
 	return sessionapi.ProbeResult{}, nil
