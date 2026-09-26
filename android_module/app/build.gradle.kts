@@ -164,10 +164,16 @@ val buildGoBackend by tasks.registering {
                 .resolve("libdobby_vpn.so")
             output.parentFile.mkdirs()
             val compiler = toolchain.resolve("bin/${triple}${apiLevel}-clang")
+            val linker = toolchain.resolve("bin/${triple}${apiLevel}-clang++")
             check(compiler.isFile) { "Android NDK compiler is unavailable: $compiler" }
+            check(linker.isFile) { "Android NDK C++ linker is unavailable: $linker" }
             val command = listOf(
                 goBinary.get(), "build", "-buildmode=c-shared", "-tags=android,accessibility,static",
-                "-trimpath", "-ldflags=-buildid= -s -w -extldflags=-static-libstdc++",
+                "-trimpath",
+                // The bridge arrives as a static archive, so Go does not
+                // infer a C++ external linker from source files. Select the
+                // NDK C++ driver explicitly so -static-libstdc++ takes effect.
+                "-ldflags=-buildid= -s -w -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
                 "-o", output.absolutePath, "./cmd/dobbyandroid"
             )
             // Gradle's Exec task is intentionally one process per ABI. Running
