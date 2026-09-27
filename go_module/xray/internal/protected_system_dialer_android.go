@@ -2,7 +2,15 @@
 
 package internal
 
-import "github.com/xtls/xray-core/transport/internet"
+import (
+	"go_module/tunnel/protected_dialer"
+
+	"github.com/xtls/xray-core/transport/internet"
+)
+
+func newAndroidProtectedSystemDialer() *protectedSystemDialer {
+	return newProtectedSystemDialer(protected_dialer.ProtectRawConn, applyPlatformOutboundSocketOptions)
+}
 
 func init() {
 	// Install once at Android process startup. The protector callback resolves

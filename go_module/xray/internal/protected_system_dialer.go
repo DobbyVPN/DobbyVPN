@@ -7,8 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	"go_module/tunnel/protected_dialer"
-
 	xrayerrors "github.com/xtls/xray-core/common/errors"
 	xraynet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
@@ -26,14 +24,14 @@ type protectedSystemDialer struct {
 	applyOptions outboundSocketOptions
 }
 
-func newProtectedSystemDialer(protect socketProtector, applyOptions outboundSocketOptions) *protectedSystemDialer {
+func newProtectedSystemDialer(
+	protect socketProtector,
+	applyOptions outboundSocketOptions,
+) *protectedSystemDialer {
 	return &protectedSystemDialer{protect: protect, applyOptions: applyOptions}
 }
 
-func newAndroidProtectedSystemDialer() *protectedSystemDialer {
-	return newProtectedSystemDialer(protected_dialer.ProtectRawConn, applyPlatformOutboundSocketOptions)
-}
-
+//nolint:revive // Required by Xray's internet.SystemDialer interface.
 func (d *protectedSystemDialer) DestIpAddress() net.IP { return nil }
 
 func (d *protectedSystemDialer) Dial(ctx context.Context, source xraynet.Address, destination xraynet.Destination, sockopt *internet.SocketConfig) (net.Conn, error) {
@@ -43,6 +41,8 @@ func (d *protectedSystemDialer) Dial(ctx context.Context, source xraynet.Address
 		return d.dialStream(ctx, source, destination, address, sockopt)
 	case xraynet.Network_UDP:
 		return d.dialPacket(ctx, source, destination, address, sockopt)
+	case xraynet.Network_Unknown, xraynet.Network_UNIX:
+		return nil, fmt.Errorf("protected Android Xray dialer does not support network %q", destination.Network)
 	default:
 		return nil, fmt.Errorf("protected Android Xray dialer does not support network %q", destination.Network)
 	}

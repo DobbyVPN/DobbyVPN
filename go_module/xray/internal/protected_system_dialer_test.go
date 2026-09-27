@@ -27,7 +27,7 @@ func tcpDestination(t *testing.T, address string) xraynet.Destination {
 }
 
 func TestProtectedSystemDialerPreservesSourceAndProtectsBeforeSocketOptions(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestProtectedSystemDialerPreservesSourceAndProtectsBeforeSocketOptions(t *t
 }
 
 func TestProtectedSystemDialerReturnsProtectionErrorBeforeConnect(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,13 +111,16 @@ func TestProtectedSystemDialerReturnsProtectionErrorBeforeConnect(t *testing.T) 
 	if conn, acceptErr := listener.Accept(); acceptErr == nil {
 		_ = conn.Close()
 		t.Fatal("connection reached listener after protection failed")
-	} else if timeout, ok := acceptErr.(net.Error); !ok || !timeout.Timeout() {
-		t.Fatalf("Accept error = %v, want timeout without an incoming connection", acceptErr)
+	} else {
+		var netErr net.Error
+		if !errors.As(acceptErr, &netErr) || !netErr.Timeout() {
+			t.Fatalf("Accept error = %v, want timeout without an incoming connection", acceptErr)
+		}
 	}
 }
 
 func TestProtectedSystemDialerProtectsPacketSocketAndPreservesSource(t *testing.T) {
-	server, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	server, err := (&net.ListenConfig{}).ListenPacket(context.Background(), "udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,11 +155,11 @@ func TestProtectedSystemDialerProtectsPacketSocketAndPreservesSource(t *testing.
 	if protectedNetwork != "udp4" || protectedDestination != destination.NetAddr() {
 		t.Fatalf("protection target = (%q, %q), want (udp4, %q)", protectedNetwork, protectedDestination, destination.NetAddr())
 	}
-	if _, err := conn.Write([]byte("probe")); err != nil {
-		t.Fatal(err)
+	if _, writeErr := conn.Write([]byte("probe")); writeErr != nil {
+		t.Fatal(writeErr)
 	}
-	if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
+	if deadlineErr := server.SetReadDeadline(time.Now().Add(time.Second)); deadlineErr != nil {
+		t.Fatal(deadlineErr)
 	}
 	buffer := make([]byte, 16)
 	n, _, err := server.ReadFrom(buffer)
@@ -169,7 +172,7 @@ func TestProtectedSystemDialerProtectsPacketSocketAndPreservesSource(t *testing.
 }
 
 func TestProtectedSystemDialerUsesCurrentProtectorOnRepeatedSessions(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
