@@ -3,13 +3,89 @@
 package executor
 
 import (
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"go_module/log"
 )
+
+type recordingDesktopListener struct {
+	events *[]string
+}
+
+func (listener *recordingDesktopListener) Accept() (net.Conn, error) {
+	return nil, net.ErrClosed
+}
+
+func (listener *recordingDesktopListener) Close() error {
+	*listener.events = append(*listener.events, "close")
+	return nil
+}
+
+func (listener *recordingDesktopListener) Addr() net.Addr {
+	return &net.TCPAddr{}
+}
+
+func TestPrepareDesktopControlClaimsPipeBeforeRecovery(t *testing.T) {
+	var events []string
+	listener := &recordingDesktopListener{events: &events}
+	prepared, err := prepareDesktopControlWith(
+		func() (net.Listener, error) {
+			events = append(events, "listen")
+			return listener, nil
+		},
+		func() error {
+			events = append(events, "interrupted-state")
+			return nil
+		},
+		func() error {
+			events = append(events, "stale-firewall")
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared != listener {
+		t.Fatal("startup did not return the listener whose pipe it claimed")
+	}
+	want := []string{"listen", "interrupted-state", "stale-firewall"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("startup order=%v, want=%v", events, want)
+	}
+}
+
+func TestPrepareDesktopControlClosesClaimedPipeOnRecoveryFailure(t *testing.T) {
+	var events []string
+	listener := &recordingDesktopListener{events: &events}
+	recoveryErr := errors.New("firewall recovery failed")
+	prepared, err := prepareDesktopControlWith(
+		func() (net.Listener, error) {
+			events = append(events, "listen")
+			return listener, nil
+		},
+		func() error {
+			events = append(events, "interrupted-state")
+			return nil
+		},
+		func() error {
+			events = append(events, "stale-firewall")
+			return recoveryErr
+		},
+	)
+	if prepared != nil || !errors.Is(err, recoveryErr) {
+		t.Fatalf("prepared listener=%v err=%v, want recovery failure", prepared, err)
+	}
+	want := []string{"listen", "interrupted-state", "stale-firewall", "close"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("failure cleanup order=%v, want=%v", events, want)
+	}
+}
 
 func TestExplicitLogPathMustRemainUnderTemporaryRoot(t *testing.T) {
 	root := filepath.Join(`C:\Users\tester\AppData\Local\Temp`, "dobby")

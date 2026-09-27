@@ -3,7 +3,9 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,16 +23,45 @@ import (
 
 type managerService struct{}
 
-func serveDesktopControl() (func() error, <-chan error, error) {
-	listener, err := controlplane.ListenDesktopControlPipe()
+func prepareDesktopControl() (net.Listener, error) {
+	return prepareDesktopControlWith(
+		controlplane.ListenDesktopControlPipe,
+		recoverInterruptedState,
+		platform_engine.RecoverStaleWindowsIPv6FirewallRules,
+	)
+}
+
+func prepareDesktopControlWith(
+	listen func() (net.Listener, error),
+	recoverInterrupted func() error,
+	recoverStaleIPv6Rules func() error,
+) (net.Listener, error) {
+	listener, err := listen()
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("listen for desktop control: %w", err)
 	}
+	if err := recoverInterrupted(); err != nil {
+		return nil, closePipeAfterStartupFailure(listener, fmt.Errorf("recover interrupted product state: %w", err))
+	}
+	if err := recoverStaleIPv6Rules(); err != nil {
+		return nil, closePipeAfterStartupFailure(listener, fmt.Errorf("recover stale Windows IPv6 firewall rules: %w", err))
+	}
+	return listener, nil
+}
+
+func closePipeAfterStartupFailure(listener net.Listener, startupErr error) error {
+	if err := listener.Close(); err != nil {
+		return errors.Join(startupErr, fmt.Errorf("close desktop control pipe after startup failure: %w", err))
+	}
+	return startupErr
+}
+
+func serveDesktopControl(listener net.Listener) (func() error, <-chan error) {
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, nil)
 	}()
-	return listener.Close, serveDone, nil
+	return listener.Close, serveDone
 }
 
 func secureExplicitLogPath(root, requested string) (string, error) {
@@ -105,19 +136,12 @@ func initExplicitLocalLog() error {
 
 func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	changes <- svc.Status{State: svc.StartPending}
-	if err := recoverInterruptedState(); err != nil {
-		log.Debugf(desktopLogCategory, "[ERROR] failed to recover interrupted product state: %v", err)
-		return true, 1
-	}
-	if err := platform_engine.RecoverStaleWindowsResources(); err != nil {
-		log.Debugf(desktopLogCategory, "[ERROR] failed to recover stale Windows VPN resources: %v", err)
-		return true, 1
-	}
-	stopControl, serveDone, err := serveDesktopControl()
+	listener, err := prepareDesktopControl()
 	if err != nil {
-		log.Debugf(desktopLogCategory, "[ERROR] failed to listen for desktop control: %v", err)
+		log.Debugf(desktopLogCategory, "[ERROR] failed to prepare desktop control: %v", err)
 		return true, 1
 	}
+	stopControl, serveDone := serveDesktopControl(listener)
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptSessionChange}
 	for request := range requests {
 		if request.Cmd != svc.Stop {
@@ -143,16 +167,11 @@ func runService() error {
 }
 
 func run() {
-	if err := recoverInterruptedState(); err != nil {
-		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
-	}
-	if err := platform_engine.RecoverStaleWindowsResources(); err != nil {
-		panic(fmt.Sprintf("failed to recover stale Windows VPN resources: %v", err))
-	}
-	stopControl, serveDone, err := serveDesktopControl()
+	listener, err := prepareDesktopControl()
 	if err != nil {
-		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
+		panic(fmt.Sprintf("failed to prepare desktop control: %v", err))
 	}
+	stopControl, serveDone := serveDesktopControl(listener)
 	log.Debugf(desktopLogCategory, "desktop JSON control pipe ready")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

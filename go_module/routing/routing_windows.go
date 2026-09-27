@@ -196,38 +196,6 @@ func releaseWindowsRoute(route windowsRoute, timeout time.Duration) error {
 	}
 }
 
-// CleanupStaleWindowsTunnelRoutes removes only the exact on-link split-default
-// routes associated with a generated DobbyVPN adapter alias. Physical bypass
-// and reserved routes are intentionally outside this recovery path.
-func CleanupStaleWindowsTunnelRoutes(interfaceName string) error {
-	if !IsOwnedWindowsTunnelInterface(interfaceName) {
-		return fmt.Errorf("refusing to clean routes for unowned Windows interface %q", interfaceName)
-	}
-	for _, prefix := range ipv4Subnets {
-		route := windowsRoute{
-			prefix:        prefix,
-			nextHop:       windowsOnLinkNextHop,
-			interfaceName: interfaceName,
-		}
-		if !IsOwnedWindowsTunRedirect(route.prefix, route.nextHop, route.interfaceName) {
-			continue
-		}
-		exists, err := windowsRouteExists(route)
-		if err != nil {
-			return fmt.Errorf("query stale owned route %s on %q: %w", prefix, interfaceName, err)
-		}
-		if !exists {
-			continue
-		}
-		log.Debugf(Category, "Outline/routing: removing stale owned TUN route prefix=%s nexthop=%s interface=%s", route.prefix, route.nextHop, route.interfaceName)
-		if err := releaseWindowsRoute(route, 2*time.Second); err != nil {
-			return fmt.Errorf("remove stale owned route %s on %q: %w", prefix, interfaceName, err)
-		}
-		log.Debugf(Category, "Outline/routing: removed stale owned TUN route prefix=%s nexthop=%s interface=%s", route.prefix, route.nextHop, route.interfaceName)
-	}
-	return nil
-}
-
 const cleanupStaleWindowsIPv6RulesScript = `$ErrorActionPreference = 'Stop'
 $pattern = '^DobbyVPN Block IPv6 windows-[0-9]+-[0-9]+$'
 $displayName = 'DobbyVPN Block IPv6 windows-*'

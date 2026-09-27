@@ -242,61 +242,6 @@ func TestSelectExactInterfaceNeverUsesSubstringMatch(t *testing.T) {
 	}
 }
 
-func TestCleanupStaleWindowsTunnelRoutesDeletesOnlyOwnedSplitDefaults(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	interfaceName := "DobbyVPN-0123456789abcdef0123456789abcdef"
-	state := map[windowsRoute]bool{
-		{prefix: "0.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}:   true,
-		{prefix: "128.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}: true,
-	}
-	windowsRouteExists = func(route windowsRoute) (bool, error) { return state[route], nil }
-	var commands [][]string
-	windowsNetshCommand = func(args ...string) (string, error) {
-		commands = append(commands, append([]string(nil), args...))
-		if len(args) >= 7 && args[2] == "delete" {
-			route := windowsRoute{
-				prefix:        args[4],
-				nextHop:       strings.TrimPrefix(args[5], "nexthop="),
-				interfaceName: strings.TrimPrefix(args[6], "interface="),
-			}
-			delete(state, route)
-		}
-		return "", nil
-	}
-
-	if err := CleanupStaleWindowsTunnelRoutes(interfaceName); err != nil {
-		t.Fatal(err)
-	}
-	want := [][]string{
-		windowsRouteArgs("delete", windowsRoute{prefix: "0.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}),
-		windowsRouteArgs("delete", windowsRoute{prefix: "128.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}),
-	}
-	if !reflect.DeepEqual(commands, want) {
-		t.Fatalf("stale route deletions=%#v, want=%#v", commands, want)
-	}
-}
-
-func TestCleanupStaleWindowsTunnelRoutesRejectsUnownedInterface(t *testing.T) {
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() { windowsNetshCommand = originalCommand })
-	called := false
-	windowsNetshCommand = func(...string) (string, error) {
-		called = true
-		return "", nil
-	}
-	if err := CleanupStaleWindowsTunnelRoutes("Ethernet"); err == nil {
-		t.Fatal("stale route cleanup accepted a physical interface")
-	}
-	if called {
-		t.Fatal("stale route cleanup mutated a physical interface")
-	}
-}
-
 func TestCleanupStaleWindowsIPv6FirewallRulesUsesExactPersistentRuleNames(t *testing.T) {
 	original := windowsPowerShellCommand
 	t.Cleanup(func() { windowsPowerShellCommand = original })
