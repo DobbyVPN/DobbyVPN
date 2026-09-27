@@ -14,7 +14,28 @@ public final class NativeGoSession {
 
     private NativeGoSession() {}
 
-    public static native void attach(Context context);
+    /**
+     * Initializes complete Go diagnostics before attaching platform callbacks.
+     * All UI and instrumentation entry points use this method before issuing
+     * session commands.
+     */
+    public static void attach(Context context) {
+        String logPath = NativeVpnBridge.goDiagnosticPath(context);
+        String failure = initializeLogger(logPath);
+        if (failure == null || !failure.isEmpty()) {
+            IllegalStateException error = new IllegalStateException(
+                "Go backend diagnostics could not be initialized"
+                    + (failure == null ? "" : ": " + failure)
+            );
+            NativeVpnBridge.recordNativeFailure(context, "go.logger_init_failed", error);
+            throw error;
+        }
+        attachNative(context);
+    }
+
+    private static native String initializeLogger(String path);
+
+    private static native void attachNative(Context context);
 
     public static native String configure(String sessionId, long expectedSequence, byte[] rawConfig);
 

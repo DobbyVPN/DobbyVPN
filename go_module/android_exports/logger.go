@@ -3,9 +3,30 @@
 package dobbyvpn
 
 import (
+	"sync"
+
 	"go_module/log"
 )
 
+var (
+	loggerInitMu sync.Mutex
+	loggerReady  bool
+)
+
 func InitLogger(path string) bool {
-	return log.SetPath(path) == nil
+	return initializeLogger(path) == ""
+}
+
+func initializeLogger(path string) string {
+	loggerInitMu.Lock()
+	defer loggerInitMu.Unlock()
+	if loggerReady {
+		return ""
+	}
+	if err := log.SetPath(path); err != nil {
+		return err.Error()
+	}
+	loggerReady = true
+	log.Infof("android_exports", "Go app logger initialized")
+	return ""
 }

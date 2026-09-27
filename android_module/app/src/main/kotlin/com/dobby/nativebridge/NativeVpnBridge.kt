@@ -297,6 +297,10 @@ object NativeVpnBridge {
     }
 
     @JvmStatic
+    fun goDiagnosticPath(context: Context): String =
+        File(diagnosticsDirectory(context), GO_DIAGNOSTIC_FILE).absolutePath
+
+    @JvmStatic
     fun nativeDiagnosticsUnavailable(): Boolean = nativeDiagnosticWriteFailed
 
     @JvmStatic

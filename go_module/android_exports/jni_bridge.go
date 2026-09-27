@@ -633,8 +633,18 @@ func installJNIPlatform(binding *mobilebinding.Binding) {
 // they do not expose the manager or native descriptors to Java. The explicit
 // diagnostic export is the only non-session payload crossing this boundary.
 
-//export Java_com_dobby_nativebridge_NativeGoSession_attach
-func Java_com_dobby_nativebridge_NativeGoSession_attach(env *C.JNIEnv, _ C.jclass, context C.jobject) {
+//export Java_com_dobby_nativebridge_NativeGoSession_initializeLogger
+func Java_com_dobby_nativebridge_NativeGoSession_initializeLogger(
+	env *C.JNIEnv, _ C.jclass, path C.jstring,
+) C.jstring {
+	if env == nil {
+		return nil
+	}
+	return jniResult(env, initializeLogger(jniString(env, path)))
+}
+
+//export Java_com_dobby_nativebridge_NativeGoSession_attachNative
+func Java_com_dobby_nativebridge_NativeGoSession_attachNative(env *C.JNIEnv, _ C.jclass, context C.jobject) {
 	if env == nil || unsafe.Pointer(context) == nil {
 		return
 	}
