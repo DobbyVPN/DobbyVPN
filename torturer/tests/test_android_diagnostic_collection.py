@@ -13,19 +13,27 @@ from torturer_contract.functional.scenarios import select_scenarios, suite_set
 
 
 class AndroidDiagnosticCollectionTests(unittest.TestCase):
-    def test_collects_native_file_and_complete_logcat_bytes(self) -> None:
+    def test_collects_complete_app_logs_and_unfiltered_logcat_bytes(self) -> None:
         native = b'{"event":"native-sentinel"}\n'
-        logcat = b"fallback sentinel\x00\xff\n"
+        go = b'{"source":"go","message":"xray sentinel"}\x00\xff\n'
+        logcat = b"all tags sentinel\x00\xff\n"
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
+            commands: list[list[str]] = []
             results = iter(
                 (
                     subprocess.CompletedProcess(("adb",), 0, native, b""),
+                    subprocess.CompletedProcess(("adb",), 0, go, b""),
                     subprocess.CompletedProcess(("adb",), 0, logcat, b""),
                 )
             )
+
+            def adb_call(_adb, _serial, arguments, **kwargs):
+                commands.append(arguments)
+                return next(results)
+
             with mock.patch.object(
-                local_vm_android, "_adb_call", side_effect=lambda *args, **kwargs: next(results)
+                local_vm_android, "_adb_call", side_effect=adb_call
             ):
                 errors = local_vm_android._collect_android_diagnostics(
                     "adb",
@@ -38,7 +46,9 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
 
             self.assertEqual(errors, [])
             self.assertEqual((root / "android-native-logs.jsonl").read_bytes(), native)
+            self.assertEqual((root / "android-go-app-logs.jsonl").read_bytes(), go)
             self.assertEqual((root / "android-logcat.txt").read_bytes(), logcat)
+            self.assertEqual(commands[-1], ["shell", "logcat", "-d", "-v", "raw"])
 
     def test_collection_failures_fail_without_replacing_instrumentation_result(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -46,6 +56,7 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             results = iter(
                 (
                     subprocess.CompletedProcess(("adb",), 17, b"native out", b"native err"),
+                    subprocess.CompletedProcess(("adb",), 18, b"go out", b"go err"),
                     subprocess.CompletedProcess(("adb",), 19, b"logcat out", b"logcat err"),
                 )
             )
@@ -73,10 +84,13 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
         self.assertEqual(result.stdout, primary.stdout)
         self.assertTrue(result.stderr.startswith(primary.stderr))
         self.assertIn(b"ANDROID_NATIVE_LOG_COLLECTION_FAILED", result.stderr)
+        self.assertIn(b"ANDROID_GO_APP_LOG_COLLECTION_FAILED", result.stderr)
         self.assertIn(b"ANDROID_LOGCAT_COLLECTION_FAILED", result.stderr)
         self.assertIn(b"adb exited 17", result.stderr)
+        self.assertIn(b"adb exited 18", result.stderr)
         self.assertIn(b"adb exited 19", result.stderr)
         self.assertIn(b"native err", result.stderr)
+        self.assertIn(b"go err", result.stderr)
         self.assertIn(b"logcat err", result.stderr)
 
     def test_successful_instrumentation_still_fails_on_collection_error(self) -> None:
@@ -100,6 +114,7 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             primary = local_vm_android._error("android-native-ui: command timed out")
             primary.add_note("android-native-ui_stdout:\npartial instrumentation output")
             native = b'{"event":"timeout-native-sentinel"}\n'
+            go = b'{"event":"timeout-go-sentinel"}\n'
             calls: list[str] = []
             reporter_test_arguments: list[list[str]] = []
 
@@ -115,6 +130,8 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
                     return subprocess.CompletedProcess(("adb",), 0, b"Complete\nStatus: ok\n", b"")
                 if label == "android-native-diagnostics":
                     return subprocess.CompletedProcess(("adb",), 0, native, b"")
+                if label == "android-go-app-diagnostics":
+                    return subprocess.CompletedProcess(("adb",), 0, go, b"")
                 if label == "android-logcat-diagnostics":
                     return subprocess.CompletedProcess(("adb",), 19, b"logcat out", b"logcat err")
                 return subprocess.CompletedProcess(("adb",), 0, b"", b"")
@@ -144,10 +161,11 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             )
             self.assertIn("ANDROID_LOGCAT_COLLECTION_FAILED", caught.exception.__notes__[-1])
             self.assertEqual(
-                calls[-3:],
+                calls[-4:],
                 [
                     "android-native-ui",
                     "android-native-diagnostics",
+                    "android-go-app-diagnostics",
                     "android-logcat-diagnostics",
                 ],
             )
@@ -162,6 +180,7 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
                 ],
             )
             self.assertEqual((logs / "android-native-logs.jsonl").read_bytes(), native)
+            self.assertEqual((logs / "android-go-app-logs.jsonl").read_bytes(), go)
 
 
 class DisabledFunctionalScenarioTests(unittest.TestCase):

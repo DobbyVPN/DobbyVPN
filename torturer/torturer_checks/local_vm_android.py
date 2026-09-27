@@ -31,7 +31,9 @@ _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
 COMPANION_PACKAGE = "com.dobby.vpn.test"
 _MAIN_ACTIVITY = "com.dobby.ui.MainActivity"
-_NATIVE_LOG_PATH = f"/data/user/0/{APP_PACKAGE}/files/diagnostics/native_logs.jsonl"
+_DIAGNOSTICS_DIRECTORY = f"/data/user/0/{APP_PACKAGE}/files/diagnostics"
+_NATIVE_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/native_logs.jsonl"
+_GO_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/go_app_logs.jsonl"
 PROBE_ROOT_GLOB = "/data/local/tmp/dobbyvpn-probe-*"
 _SCREENSHOT_ROOT = "/data/user/0/com.dobby.vpn/cache/dobbyvpn-rendered-screenshots/"
 _SCREENSHOT_MARKER = re.compile(
@@ -367,7 +369,7 @@ def _collect_android_diagnostics(
     timeout: float,
     environment: dict[str, str],
 ) -> list[str]:
-    """Retain the app's native log and its Android system-log fallback."""
+    """Retain complete app-owned logs and the full Android system log."""
 
     errors: list[str] = []
     required_outputs = (
@@ -379,14 +381,22 @@ def _collect_android_diagnostics(
             True,
         ),
         (
+            "ANDROID_GO_APP_LOG_COLLECTION_FAILED",
+            "android-go-app-diagnostics",
+            ["shell", "-T", "cat", _GO_LOG_PATH],
+            logs / "android-go-app-logs.jsonl",
+            True,
+        ),
+        (
             "ANDROID_LOGCAT_COLLECTION_FAILED",
             "android-logcat-diagnostics",
-            ["shell", "logcat", "-d", "-v", "raw", "-s", "DobbyVPN:E"],
+            ["shell", "logcat", "-d", "-v", "raw"],
             logs / "android-logcat.txt",
             False,
         ),
     )
     for code, label, command, destination, nonempty in required_outputs:
+        result: subprocess.CompletedProcess[bytes] | None = None
         try:
             result = _adb_call(
                 adb,
@@ -411,9 +421,18 @@ def _collect_android_diagnostics(
                 )
                 raise failure
             if nonempty and not result.stdout:
-                raise _error(f"{code}: app native log file is empty")
+                raise _error(f"{code}: app diagnostic file is empty")
             destination.write_bytes(result.stdout)
         except Exception as error:
+            if result is not None:
+                error.add_note(
+                    f"{label}_stdout:\n"
+                    + result.stdout.decode("utf-8", errors="backslashreplace")
+                )
+                error.add_note(
+                    f"{label}_stderr:\n"
+                    + result.stderr.decode("utf-8", errors="backslashreplace")
+                )
             errors.append(_render_collection_error(code, error))
     return errors
 

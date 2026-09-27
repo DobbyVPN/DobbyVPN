@@ -25,7 +25,10 @@ from torturer_checks.android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
 )
-from torturer_checks.diagnostics import add_exception_notes, emit_streams
+from torturer_checks.diagnostics import (
+    add_exception_notes,
+    emit_streams,
+)
 from torturer_checks.screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
@@ -61,6 +64,9 @@ _PACKAGE_NAME = "com.dobby.vpn"
 _MAIN_ACTIVITY = "com.dobby.vpn/com.dobby.ui.MainActivity"
 _APP_DATA = "/data/user/0/com.dobby.vpn"
 _APP_FILES = "/data/user/0/com.dobby.vpn/files"
+_APP_DIAGNOSTICS = f"{_APP_FILES}/diagnostics"
+_NATIVE_DIAGNOSTIC_PATH = f"{_APP_DIAGNOSTICS}/native_logs.jsonl"
+_GO_DIAGNOSTIC_PATH = f"{_APP_DIAGNOSTICS}/go_app_logs.jsonl"
 _INSTRUMENTATION_COMPONENT = (
     "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner"
 )
@@ -335,6 +341,7 @@ class AndroidHostedAdapter:
         self._progress_sink: Callable[[str, dict[str, object]], None] | None = None
         self._progress_scenario_id: str | None = None
         self._scratch_files: set[Path] = set()
+        self._diagnostic_collection_sequence = 0
 
     @property
     def coverage_lane(self) -> str:
@@ -520,6 +527,12 @@ class AndroidHostedAdapter:
             execution_error = error
             raise
         finally:
+            if execution_error is not None:
+                self._collect_functional_failure_diagnostics(
+                    execution_error,
+                    scenario.id,
+                    cleanup_deadline,
+                )
             cleanup_error = self._cleanup_device(tuple(device_files), cleanup_deadline)
             scratch_error = self._cleanup_local_scratch()
             self._active_controls = ()
@@ -531,9 +544,108 @@ class AndroidHostedAdapter:
             elif cleanup_error is not None:
                 if scratch_error is not None:
                     add_exception_notes(cleanup_error, "android_scratch_cleanup", scratch_error)
+                self._collect_functional_failure_diagnostics(
+                    cleanup_error,
+                    scenario.id,
+                    cleanup_deadline,
+                )
                 raise cleanup_error
             elif scratch_error is not None:
+                self._collect_functional_failure_diagnostics(
+                    scratch_error,
+                    scenario.id,
+                    cleanup_deadline,
+                )
                 raise scratch_error
+
+    def _collect_functional_failure_diagnostics(
+        self,
+        primary: BaseException,
+        scenario_id: str,
+        deadline: float,
+    ) -> None:
+        """Retain the app-owned logs and full Logcat after a failed scenario."""
+
+        runner = getattr(self, "runner", None)
+        raw_directory = getattr(runner, "raw_directory", None)
+        if not isinstance(raw_directory, (Path, str)):
+            primary.add_note(
+                "ANDROID_DIAGNOSTIC_RETENTION_UNAVAILABLE: runner has no raw directory"
+            )
+            return
+        try:
+            destination = Path(raw_directory)
+            _ensure_directory(destination)
+        except BaseException as error:
+            add_exception_notes(primary, "android_diagnostic_retention", error)
+            return
+
+        self._diagnostic_collection_sequence = (
+            getattr(self, "_diagnostic_collection_sequence", 0) + 1
+        )
+        scenario_token = re.sub(r"[^A-Za-z0-9_-]+", "-", scenario_id).strip("-") or "unknown"
+        connection = getattr(self, "_selected_connection", None)
+        if connection is None:
+            connection_token = "unselected"
+        else:
+            connection_token = (
+                f"c{connection.index}-{re.sub(r'[^A-Za-z0-9_-]+', '-', connection.protocol).strip('-')}"
+            )
+        stem = (
+            f"android-functional-{getattr(self, 'ui_mode', 'unknown')}-"
+            f"{self._diagnostic_collection_sequence:02d}-"
+            f"{connection_token}-{scenario_token}"
+        )
+        sources = (
+            (
+                "go-app-logs",
+                "ANDROID_GO_APP_LOG_COLLECTION_FAILED",
+                ("shell", "-T", "cat", _GO_DIAGNOSTIC_PATH),
+                "go_app_logs.jsonl",
+                True,
+            ),
+            (
+                "native-logs",
+                "ANDROID_NATIVE_LOG_COLLECTION_FAILED",
+                ("shell", "-T", "cat", _NATIVE_DIAGNOSTIC_PATH),
+                "native_logs.jsonl",
+                True,
+            ),
+            (
+                "logcat",
+                "ANDROID_LOGCAT_COLLECTION_FAILED",
+                ("shell", "logcat", "-d", "-v", "raw"),
+                "logcat.txt",
+                False,
+            ),
+        )
+        for label, failure_code, command, filename, nonempty in sources:
+            output_path = destination / f"{stem}-{filename}"
+            stderr_path = output_path.with_name(f"{output_path.name}.stderr.log")
+            try:
+                result = self._adb(
+                    command,
+                    min(_remaining(deadline, "ANDROID_DIAGNOSTIC_TIMEOUT"), 5.0),
+                    failure_code,
+                    allow_nonzero=True,
+                )
+                output_path.write_bytes(result.stdout)
+                stderr_path.write_bytes(result.stderr)
+                if result.returncode != 0:
+                    failure = ScenarioExecutionError(failure_code)
+                    failure.add_note(f"command_returncode={result.returncode}")
+                    failure.stdout = result.stdout
+                    failure.stderr = result.stderr
+                    raise failure
+                if nonempty and not result.stdout:
+                    failure = ScenarioExecutionError(
+                        f"{failure_code}: app diagnostic file is empty"
+                    )
+                    failure.stdout = result.stdout
+                    failure.stderr = result.stderr
+                    raise failure
+            except BaseException as error:
+                add_exception_notes(primary, f"android_{label}_collection", error)
 
     def _execute_phase(
         self,
@@ -2560,13 +2672,20 @@ exit 0
                 input_bytes=input_bytes,
             )
         except HostedAdapterError as error:
-            raise ScenarioExecutionError(error.code) from error
+            failure = ScenarioExecutionError(error.code)
+            failure.stdout = error.stdout
+            failure.stderr = error.stderr
+            raise failure from error
         if result.timed_out:
             failure = ScenarioExecutionError("ANDROID_COMMAND_TIMEOUT")
+            failure.stdout = result.stdout
+            failure.stderr = result.stderr
             _append_command_result_notes(failure, result)
             raise failure
         if result.returncode != 0 and not allow_nonzero:
             failure = ScenarioExecutionError(failure_code)
+            failure.stdout = result.stdout
+            failure.stderr = result.stderr
             _append_command_result_notes(failure, result)
             raise failure
         return result

@@ -87,9 +87,13 @@ errors. Output is not truncated, reduced to selected lines, or replaced by a
 status code or byte count. Collection failures are reported alongside the
 test failure. Test cleanup runs after pass, failure, and timeout.
 
-The local Android rendered run retains the app's native diagnostic JSONL file
-and the `DobbyVPN` error stream from Logcat. Failure to collect either source
-fails the run while preserving the original instrumentation result.
+Android runs retain the app-owned Go and native diagnostic JSONL files and a
+complete, unfiltered Logcat dump in the current run's existing log directory.
+The local rendered lane collects these after instrumentation; the semantic
+functional lane collects them on failure, before app cleanup when the scenario
+behavior itself fails. Each source is kept as its exact output bytes, including
+command stderr. A collection failure is attached to the original test failure,
+and the logs do not count as evidence that a scenario passed.
 
 Required UI screenshots are kept with the current disposable run. Desktop
 captures contain the target app window; Android instrumentation captures the
