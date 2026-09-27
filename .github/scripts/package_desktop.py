@@ -110,8 +110,6 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path) -> Non
         copy_file(source / "DobbyVPNMacApp", executable, executable=True)
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
-        if arch == "amd64":
-            copy_file(source / "trusttunnel_client", resources / "trusttunnel_client", executable=True)
         info = {
             "CFBundleDisplayName": "Dobby VPN",
             "CFBundleExecutable": "DobbyVPNMacApp",

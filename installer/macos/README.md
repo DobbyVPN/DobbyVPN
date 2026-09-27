@@ -8,7 +8,6 @@ the backend through a local JSON control socket.
 ## Inputs
 
 The build consumes matching backend and frontend files for arm64 and amd64.
-The Intel backend package also includes the pinned TrustTunnelClient helper.
 The installer verifies executable architectures before packaging them.
 
 Prepared local builds can supply backend, plist, socket peer user, and log

@@ -36,7 +36,7 @@ The backend runs as the installed Windows Service, launchd daemon on macOS, or
 systemd service on Linux. On Unix systems, the frontend and CLI connect through
 a local socket. Windows uses the fixed DobbyVPN.Control named pipe. The Windows
 pipe ACL restricts access to the installed service user and rejects remote
-clients.
+clients. Both macOS architectures link the in-process TrustTunnel bridge.
 
 The CLI supports connect, connect-profile, check-config, profile-inventory,
 disconnect, status, logs clear, external-ip, and verify-session. It is intended

@@ -26,8 +26,7 @@ APP_MINOR_VERSION, APP_MAINTENANCE_VERSION, GITHUB_SHA, and GITHUB_REPOSITORY.
 ## macOS
 
 The macOS installer consumes one backend for each supported architecture and
-the matching SwiftUI app archive. The Intel package also includes the pinned
-TrustTunnel helper. Build on macOS with Xcode command line tools:
+the matching SwiftUI app archive. Build on macOS with Xcode command line tools:
 
     sh build.sh
 

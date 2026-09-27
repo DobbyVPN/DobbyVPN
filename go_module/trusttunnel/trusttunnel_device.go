@@ -1,8 +1,3 @@
-// Keep the Intel macOS helper separate from the in-process native bridge.
-// Android arm64/x86_64 and both iOS Simulator architectures link their own
-// static bridge archives through the manager package.
-//go:build !(darwin && amd64 && !simulator)
-
 package trusttunnel
 
 import (

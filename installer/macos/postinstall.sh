@@ -25,10 +25,6 @@ if ! [[ "$CONSOLE_UID" =~ ^[0-9]+$ ]] || [ "$CONSOLE_UID" -eq 0 ]; then
 fi
 
 chmod +x "$RESOURCES/dobbyvpn-backend"
-TRUSTTUNNEL_HELPER="$RESOURCES/trusttunnel_client"
-if [ -f "$TRUSTTUNNEL_HELPER" ]; then
-    chmod 755 "$TRUSTTUNNEL_HELPER"
-fi
 
 mkdir -p "/Library/LaunchDaemons"
 mkdir -p "$LOG_ROOT"

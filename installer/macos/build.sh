@@ -28,25 +28,6 @@ install_service() {
   chmod +x "$destination"
 }
 
-install_trusttunnel_helper() {
-  local helper="$1"
-  local destination="$2"
-  local actual_arches
-
-  actual_arches="$(lipo -archs "$helper" | tee /dev/stderr)"
-  local found=false architecture
-  for architecture in $actual_arches; do
-    if [[ "$architecture" == "x86_64" ]]; then found=true; fi
-  done
-  if [[ "$found" != true ]]; then
-    echo "[!] Refusing to package TrustTunnel helper: x86_64 slice is missing ($actual_arches)" >&2
-    exit 1
-  fi
-
-  cp "$helper" "$destination"
-  chmod 755 "$destination"
-}
-
 write_fixed_payload_component_plist() {
   cat >component.plist <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -77,9 +58,6 @@ build_package() {
       "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend"
 
     if [[ "$payload_arch" == "amd64" ]]; then
-      install_trusttunnel_helper \
-        ../../services/amd64/trusttunnel_client \
-        "$APP_BUNDLE/Contents/Resources/trusttunnel_client"
       [[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
         echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
         exit 1

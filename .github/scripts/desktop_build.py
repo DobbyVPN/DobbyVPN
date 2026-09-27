@@ -55,10 +55,6 @@ LLVM_LIBCXX_PACKAGES = (
         "829f02714a9daafac0cc37c81c7d02ae5cb5b63707b524b93e36dcd7e7e5549c",
     ),
 )
-TRUSTTUNNEL_MACOS_VERSION = "1.0.49"
-TRUSTTUNNEL_MACOS_ARCHIVE_SHA256 = "f2dab732d17a885dcc4c81831fa4b263db250f5bea8a151416b518e936979c64"
-
-
 @dataclass(frozen=True)
 class BridgeRelease:
     version: str
@@ -923,53 +919,6 @@ def build_cli(target_platform: str, arch: str | None = None) -> Path:
     return target
 
 
-def install_macos_amd64_trusttunnel_helper(skip_deps: bool) -> None:
-    """Stage the pinned official helper beside the Intel macOS service.
-
-    The in-process bridge remains the arm64 implementation. Intel macOS uses
-    this separate universal executable so it never links the arm64-only
-    go-go-tunnel archive.
-    """
-    if skip_deps:
-        helper = GO_MODULE_DIR / "trusttunnel_client"
-        if not helper.exists():
-            fail("official TrustTunnelClient helper is required for macOS amd64")
-    archive = TOOLS_DIR / "downloads" / f"trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal.tar.gz"
-    if not archive.exists() and not skip_deps:
-        download(
-            "https://github.com/TrustTunnel/TrustTunnelClient/releases/download/"
-            f"v{TRUSTTUNNEL_MACOS_VERSION}/trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal.tar.gz",
-            archive,
-        )
-    if archive.exists():
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if digest != TRUSTTUNNEL_MACOS_ARCHIVE_SHA256:
-            fail("official TrustTunnelClient archive checksum mismatch")
-        with tarfile.open(archive, "r:gz") as tar_file:
-            member_name = f"trusttunnel_client-v{TRUSTTUNNEL_MACOS_VERSION}-macos-universal/trusttunnel_client"
-            try:
-                member = tar_file.getmember(member_name)
-            except KeyError:
-                fail("official TrustTunnelClient archive did not contain the helper")
-            if not member.isfile():
-                fail("official TrustTunnelClient helper archive member is invalid")
-            source = tar_file.extractfile(member)
-            if source is None:
-                fail("official TrustTunnelClient helper could not be extracted")
-            target = GO_MODULE_DIR / "trusttunnel_client"
-            with source, open(target, "wb") as handle:
-                shutil.copyfileobj(source, handle)
-            target.chmod(0o755)
-    helper = GO_MODULE_DIR / "trusttunnel_client"
-    if not helper.exists():
-        fail("official TrustTunnelClient helper is unavailable")
-    staged = service_target_path_for_arch("macos", "amd64").with_name("trusttunnel_client")
-    staged.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(helper, staged)
-    staged.chmod(0o755)
-    log(f"Staged pinned TrustTunnelClient helper beside Intel macOS service: {staged}")
-
-
 def default_service_arch(target_platform: str) -> str:
     if os.environ.get("GITHUB_ACTIONS") == "true":
         return CI_ARCH_BY_PLATFORM[target_platform]
@@ -1044,10 +993,18 @@ def build_service(
                 retain_runtime_dependencies,
             )
         elif target_platform == "macos":
-            # go-go-tunnel's static bridge contains C++ and uses the macOS
-            # SystemConfiguration APIs. cgo does not infer either dependency
-            # from a static archive.
-            append_cgo_ldflags(env, "-lc++", "-framework", "SystemConfiguration")
+            # The in-process bridge is a static C++ archive and uses these
+            # macOS frameworks. cgo does not infer them from the archive.
+            append_cgo_ldflags(
+                env,
+                "-lc++",
+                "-framework", "CoreFoundation",
+                "-framework", "Security",
+                "-framework", "Foundation",
+                "-framework", "Network",
+                "-framework", "NetworkExtension",
+                "-framework", "SystemConfiguration",
+            )
         command = ["go", "build", "-trimpath"]
         if build_tags:
             command.append(f"-tags={','.join(build_tags)}")
@@ -1077,8 +1034,6 @@ def build_service(
         stage_windows_runtime(target)
     if target_platform != "windows":
         target.chmod(target.stat().st_mode | 0o111)
-    if output_path is None and target_platform == "macos" and target_arch == "amd64":
-        install_macos_amd64_trusttunnel_helper(skip_deps)
     log(f"Copied {output.name} to {target}")
     return target
 

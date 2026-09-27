@@ -34,7 +34,7 @@ a JVM.
 
 The Windows backend package includes dobbyvpn-backend.exe, dobby_bridge.dll,
 and wintun.dll. macOS packages include the backend and CLI in the app bundle;
-the Intel package also includes the pinned TrustTunnel helper.
+the Go backend links TrustTunnel's native bridge for both architectures.
 
 ## Android
 
