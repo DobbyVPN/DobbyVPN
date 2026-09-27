@@ -12,6 +12,7 @@ from unittest import mock
 
 from torturer_checks import ios_simulator_app
 from torturer_checks.hosted import android, macos, native_ui
+from torturer_checks.hosted.cli import CommandResult
 from torturer_checks.windows_job import (
     WindowsJobCloseResult,
     _close_job,
@@ -137,6 +138,76 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(stderr.read_bytes(), b"restore stderr\n")
             self.assertIn(str(stdout), "\n".join(caught.exception.__notes__))
             self.assertIn(str(stderr), "\n".join(caught.exception.__notes__))
+
+    def test_macos_missing_socket_retains_service_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            log_payloads = {
+                "service.log": b'backend log\x00\xff\n',
+                "service.stdout.log": b'backend stdout\x01\xfe\n',
+                "service.stderr.log": b'backend stderr\x02\xfd\n',
+            }
+            for filename, payload in log_payloads.items():
+                (root / filename).write_bytes(payload)
+
+            cli_failure = CommandResult(
+                command=("dobby-cli", "status", "--json"),
+                returncode=1,
+                stdout=b"",
+                stderr=(
+                    b"dobby-cli: operation failed error=dial unix "
+                    b"/var/run/dobbyvpn/control.sock: connect: no such file or directory\n"
+                ),
+            )
+            launchd = CommandResult(
+                command=("launchctl", "print", "system/com.dobby.vpnservice"),
+                returncode=0,
+                stdout=b"state = running\nruns = 2\nlast exit code = 15\n",
+                stderr=b"launchd diagnostic stderr\n",
+            )
+            runner = mock.Mock()
+            runner.run.side_effect = (cli_failure, launchd)
+
+            service = object.__new__(macos.MacOSServiceProcessController)
+            service.runner = runner
+            service.raw_directory = root
+            service.control_socket = root / "control.sock"
+            adapter = object.__new__(macos.MacOSHostedAdapter)
+            adapter.cli = Path("dobby-cli")
+            adapter.runner = runner
+            adapter.service = service
+
+            forwarded = BinaryStderr()
+            with redirect_stderr(forwarded):
+                with self.assertRaises(ScenarioExecutionError) as caught:
+                    adapter._command(("status", "--json"), 5.0, "STATUS_FAILED")
+
+            self.assertEqual(caught.exception.reason_code, "STATUS_FAILED")
+            notes = "\n".join(caught.exception.__notes__)
+            self.assertIn("no such file or directory", notes)
+            self.assertIn("macos_launchd_print_returncode=0 timed_out=False", notes)
+            self.assertIn("state = running\nruns = 2", notes)
+            self.assertIn("macos_control_socket_lstat", notes)
+            self.assertIn("exists=false", notes)
+            labels = (
+                "macos_backend_log_stdout",
+                "macos_backend_stdout_stdout",
+                "macos_backend_stderr_stderr",
+            )
+            for label, payload in zip(labels, log_payloads.values()):
+                rendered = payload.decode("utf-8", errors="backslashreplace")
+                self.assertIn(f"{label}:\n{rendered}", notes)
+                self.assertIn(payload, forwarded.buffer.getvalue())
+            self.assertIn(b"launchd diagnostic stderr", notes.encode())
+            self.assertEqual(runner.run.call_count, 2)
+            self.assertEqual(
+                runner.run.call_args_list[1].args[0],
+                macos._MACOS_LAUNCHD_PRINT,
+            )
+            self.assertEqual(
+                runner.run.call_args_list[1].kwargs["timeout_seconds"],
+                macos._MACOS_DIAGNOSTIC_TIMEOUT_SECONDS,
+            )
 
     def test_native_ui_failure_result_keeps_completed_checks(self) -> None:
         with tempfile.TemporaryDirectory() as name:

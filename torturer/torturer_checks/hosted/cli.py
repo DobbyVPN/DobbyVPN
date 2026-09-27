@@ -1465,7 +1465,7 @@ class HostedCLIAdapter:
     def _stability(self, timeout: float) -> dict[str, object]:
         deadline = time.monotonic() + timeout
         completed_samples = 0
-        if self.download_url is None:
+        if self.identity_url is None:
             raise ScenarioExecutionError("STABILITY_ENDPOINT_UNAVAILABLE")
         for index in range(STABILITY_SAMPLE_COUNT):
             remaining = deadline - time.monotonic()
@@ -1481,15 +1481,12 @@ class HostedCLIAdapter:
                     "stability_sample_interval_seconds": STABILITY_SAMPLE_INTERVAL_SECONDS,
                 }
             try:
-                # The status probe remains a useful service-state observation,
-                # but stability is only established by a successful HTTPS
-                # request through the candidate's current route.  Reuse the
-                # throughput request helper so status, transfer bytes, and
-                # bounded request failures have one implementation.
-                self._curl_metric(
-                    self.download_url,
+                # Stability needs repeated tunneled HTTPS traffic, while the
+                # following throughput step measures larger transfers. Keep
+                # each sample small so the five-sample window tests continuity
+                # instead of spending its deadline downloading five MiB.
+                self._external_ip(
                     self._remaining(deadline, "STABILITY_TIMEOUT"),
-                    upload=False,
                 )
             except ScenarioExecutionError as error:
                 error.add_note(

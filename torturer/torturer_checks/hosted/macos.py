@@ -6,6 +6,7 @@ import ipaddress
 import os
 from pathlib import Path
 import re
+import stat
 import time
 from typing import NamedTuple
 from urllib.parse import urlsplit
@@ -13,7 +14,7 @@ from urllib.parse import urlsplit
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioStep
-from torturer_checks.diagnostics import add_exception_notes, emit_streams
+from torturer_checks.diagnostics import add_exception_notes, add_stream_notes, emit_streams
 
 from .cli import (
     CommandRunner,
@@ -34,6 +35,12 @@ _MACOS_LAUNCHD_PRINT = (
 )
 _MACOS_LAUNCHD_KILL = (
     "sudo", "-n", "launchctl", "kill", "SIGKILL", _MACOS_LAUNCHD_LABEL
+)
+_MACOS_DIAGNOSTIC_TIMEOUT_SECONDS = 2.0
+_MACOS_BACKEND_LOGS = (
+    ("macos_backend_log", "service.log", "stdout"),
+    ("macos_backend_stdout", "service.stdout.log", "stdout"),
+    ("macos_backend_stderr", "service.stderr.log", "stderr"),
 )
 _MACOS_INTERFACE = re.compile(r"^[A-Za-z0-9._-]+$")
 _MACOS_SOCKET_PROBE = """import socket
@@ -140,6 +147,80 @@ class MacOSServiceProcessController(HostedServiceProcessController):
             self._initial_job = job
         except ScenarioExecutionError as error:
             raise HostedAdapterError(error.reason_code) from error
+
+    def add_control_failure_diagnostics(self, error: BaseException) -> None:
+        """Attach bounded launchd, socket, and backend logs to a CLI failure."""
+
+        try:
+            result = self.runner.run(
+                _MACOS_LAUNCHD_PRINT,
+                timeout_seconds=_MACOS_DIAGNOSTIC_TIMEOUT_SECONDS,
+            )
+        except BaseException as collection_error:
+            add_exception_notes(error, "macos_launchd_print", collection_error)
+        else:
+            error.add_note(
+                "macos_launchd_print_returncode="
+                f"{result.returncode} timed_out={result.timed_out}"
+            )
+            add_stream_notes(
+                error,
+                "macos_launchd_print",
+                result.stdout,
+                result.stderr,
+            )
+
+        self._add_control_socket_lstat(error)
+        for label, filename, stream in _MACOS_BACKEND_LOGS:
+            self._add_backend_log(error, label, self.raw_directory / filename, stream)
+
+    def _add_control_socket_lstat(self, error: BaseException) -> None:
+        try:
+            info = self.control_socket.lstat()
+        except FileNotFoundError:
+            error.add_note(
+                f"macos_control_socket_lstat path={self.control_socket} exists=false"
+            )
+            return
+        except OSError as collection_error:
+            add_exception_notes(error, "macos_control_socket_lstat", collection_error)
+            return
+
+        mode = info.st_mode
+        kind = (
+            "socket" if stat.S_ISSOCK(mode) else
+            "symlink" if stat.S_ISLNK(mode) else
+            "directory" if stat.S_ISDIR(mode) else
+            "regular" if stat.S_ISREG(mode) else "other"
+        )
+        error.add_note(
+            "macos_control_socket_lstat "
+            f"path={self.control_socket} exists=true kind={kind} "
+            f"mode={stat.S_IMODE(mode):04o} uid={info.st_uid} gid={info.st_gid}"
+        )
+
+    @staticmethod
+    def _add_backend_log(
+        error: BaseException,
+        label: str,
+        path: Path,
+        stream: str,
+    ) -> None:
+        try:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError(f"backend log is not a regular file: {path}")
+            payload = path.read_bytes()
+        except OSError as collection_error:
+            add_exception_notes(error, f"{label}_collection", collection_error)
+            return
+
+        stdout, stderr = (payload, b"") if stream == "stdout" else (b"", payload)
+        add_stream_notes(error, label, stdout, stderr)
+        try:
+            emit_streams(label, stdout, stderr)
+        except BaseException as forwarding_error:
+            add_exception_notes(error, f"{label}_forward", forwarding_error)
 
     def _alive(self, timeout: float) -> bool:
         job = self._launchd_job(timeout)
@@ -401,6 +482,37 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             self._emit_progress("native-state", kind="physical-uplink", state="recovered")
             return result
         return super().execute(step)
+
+    @staticmethod
+    def _is_control_failure(arguments: tuple[str, ...], error: BaseException) -> bool:
+        if arguments[:1] == ("status",):
+            return True
+        if arguments[:1] not in {
+            ("connect",), ("connect-profile",), ("disconnect",), ("verify-session",)
+        }:
+            return False
+        details = "\n".join(getattr(error, "__notes__", ())).lower()
+        return any(
+            marker in details
+            for marker in (
+                "dial unix ",
+                "control socket",
+                "connect: no such file or directory",
+                "connect: connection refused",
+            )
+        )
+
+    def _command(self, arguments, timeout: float, failure: str):
+        try:
+            return super()._command(arguments, timeout, failure)
+        except ScenarioExecutionError as error:
+            service = getattr(self, "service", None)
+            if (
+                service is not None
+                and self._is_control_failure(tuple(arguments), error)
+            ):
+                service.add_control_failure_diagnostics(error)
+            raise
 
     def _resolve_routing_probe(self, timeout: float) -> None:
         if self.identity_url is None:

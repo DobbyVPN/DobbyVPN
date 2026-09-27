@@ -157,6 +157,31 @@ class HostedMeasurementDiagnosticsTests(unittest.TestCase):
         self.assertIn(stderr, emitted)
 
 
+class HostedStabilityTests(unittest.TestCase):
+    def test_stability_uses_five_lightweight_identity_requests(self) -> None:
+        adapter = HostedCLIAdapter.__new__(HostedCLIAdapter)
+        adapter.identity_url = "https://identity.invalid"
+        adapter.download_url = "https://measurement.invalid/down?bytes=1048576"
+        adapter.runner = mock.Mock()
+        adapter.runner.run.return_value = CommandResult(
+            command=("curl",),
+            returncode=0,
+            stdout=b"198.51.100.17",
+        )
+        adapter._connected = mock.Mock(return_value=True)
+
+        with mock.patch("torturer_checks.hosted.cli.time.sleep"):
+            observation = adapter._stability(15)
+
+        self.assertEqual(observation["stability_verified"], True)
+        self.assertEqual(observation["stability_sample_count"], 5)
+        self.assertEqual(adapter.runner.run.call_count, 5)
+        for call in adapter.runner.run.call_args_list:
+            command = call.args[0]
+            self.assertEqual(command[-1], adapter.identity_url)
+            self.assertNotIn(adapter.download_url, command)
+
+
 class HostedSecondaryFailureTests(unittest.TestCase):
     def test_scenario_cleanup_error_is_fully_attached_to_primary(self) -> None:
         primary = RuntimeError("scenario operation failed")
