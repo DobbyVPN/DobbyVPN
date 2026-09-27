@@ -1316,7 +1316,7 @@ def run_ios_simulator_app_contract(
                 xcodebuild_ui_test_command(
                     simulator.udid,
                     project,
-                    work_dir / "ui-tests",
+                    work_dir / "derived-data",
                     result_bundle=result_bundle,
                 ),
                 "xctest-ui",
