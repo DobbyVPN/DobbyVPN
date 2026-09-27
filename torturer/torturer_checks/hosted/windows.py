@@ -14,6 +14,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+from torturer_checks.diagnostics import add_exception_notes
 from torturer_contract.functional.capabilities import Capability
 from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioStep
@@ -1173,19 +1174,25 @@ if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
     def _interface_counters(self, interface: str, timeout: float) -> tuple[int, int]:
         if _WINDOWS_INTERFACE_INDEX.fullmatch(interface) is None:
             raise ScenarioExecutionError("ROUTING_INTERFACE_INVALID")
-        script = r'''$ErrorActionPreference = "Stop"
-$index = [int]$args[0]
-$adapter = Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop
-$stats = $adapter | Get-NetAdapterStatistics -ErrorAction Stop
-[ordered]@{
-  interface_index = [int]$adapter.ifIndex
-  received_bytes = [uint64]$stats.ReceivedBytes
-  sent_bytes = [uint64]$stats.SentBytes
-} | ConvertTo-Json -Compress
-'''
-        result = self._powershell_command(
-            script, timeout, "ROUTING_COUNTERS_UNAVAILABLE", interface
-        )
+        try:
+            result = self.runner.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "torturer_checks.windows_route",
+                    "--counters",
+                    interface,
+                ],
+                timeout_seconds=timeout,
+            )
+        except HostedAdapterError as error:
+            failure = ScenarioExecutionError(error.code)
+            add_exception_notes(failure, "routing_counter_command", error)
+            raise failure from error
+        if result.timed_out or result.returncode != 0:
+            error = ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE")
+            _append_command_result_notes(error, result)
+            raise error
         try:
             value = json.loads(result.stdout_text)
             if str(value["interface_index"]) != interface:
@@ -1193,9 +1200,13 @@ $stats = $adapter | Get-NetAdapterStatistics -ErrorAction Stop
             received = int(value["received_bytes"])
             sent = int(value["sent_bytes"])
         except (KeyError, TypeError, ValueError) as error:
-            raise ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE") from error
+            failure = ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE")
+            _append_command_result_notes(failure, result)
+            raise failure from error
         if received < 0 or sent < 0:
-            raise ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE")
+            error = ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE")
+            _append_command_result_notes(error, result)
+            raise error
         return received, sent
 
     def _network_command(
