@@ -1212,7 +1212,7 @@ type monitoringRuntimeLease struct {
 	stopped    chan uint64
 }
 
-func (l monitoringRuntimeLease) Stop(context.Context) error      { l.stopped <- l.generation; return nil }
+func (l monitoringRuntimeLease) Stop(context.Context) error   { l.stopped <- l.generation; return nil }
 func (l monitoringRuntimeLease) HealthFailures() <-chan error { return l.failures }
 
 type eventPlatform struct{ events chan StateChange }

@@ -117,6 +117,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup reviewdog
+        if: github.event_name == 'pull_request'
         uses: reviewdog/action-setup@e04ffabe3898a0af8d0fb1af00c188831c4b5893 # v1.3.2
         with:
           reviewdog_version: v0.20.3
@@ -126,11 +127,15 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: 1
         run: brew install swiftlint
 
-      - name: Run SwiftLint with reviewdog
+      - name: Run SwiftLint
+        working-directory: swift_module
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        working-directory: swift_module
         run: |
           set -o pipefail
-          swiftlint lint --config .swiftlint.yml --reporter checkstyle | \
-            reviewdog -f=checkstyle -name="SwiftLint" -reporter=github-pr-review -level=warning
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            swiftlint lint --config .swiftlint.yml --reporter checkstyle | \
+              reviewdog -f=checkstyle -name="SwiftLint" -reporter=github-pr-review -level=warning
+          else
+            swiftlint lint --config .swiftlint.yml --reporter xcode
+          fi

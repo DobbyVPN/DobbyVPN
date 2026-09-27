@@ -2095,11 +2095,7 @@ public final class NativeUiHostedProfileTest {
     }
 
     private void recordCommandOutput(ShellCommandResult result) throws IOException {
-        try {
-            commandOutputDiagnostics.put(shellOutputJson(result.stdout, result.stderr));
-        } catch (org.json.JSONException failure) {
-            throw new IOException("ANDROID_NETWORK_PROBE_OUTPUT_INVALID", failure);
-        }
+        commandOutputDiagnostics.put(shellOutputJson(result.stdout, result.stderr));
     }
 
     static JSONObject shellOutputJson(byte[] stdout, byte[] stderr) throws IOException {

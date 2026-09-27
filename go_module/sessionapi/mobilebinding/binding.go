@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 
 	"go_module/sessionapi"
 )
@@ -86,7 +87,8 @@ type envelopeError struct {
 func success(value interface{}) string { return encode(envelope{OK: true, Result: value}) }
 func failed(err error) string {
 	message := err.Error()
-	if domain, ok := err.(*sessionapi.Error); ok {
+	var domain *sessionapi.Error
+	if errors.As(err, &domain) {
 		message = domain.Message
 		if domain.Cause != nil {
 			message += ": " + domain.Cause.Error()

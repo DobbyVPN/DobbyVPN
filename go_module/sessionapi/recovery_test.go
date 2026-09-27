@@ -111,7 +111,7 @@ func TestAutoRecoveryBudgetResetsAfterFiveStableMinutes(t *testing.T) {
 		failures <- errors.New("synthetic health failure")
 		current = waitGenerationState(t, manager, id, current.Generation+1, StateConnected)
 	}
-		failures <- errors.New("synthetic health failure")
+	failures <- errors.New("synthetic health failure")
 	failed := waitGenerationState(t, manager, id, current.Generation, StateFailed)
 	if failed.LastFailure != FailureRuntime || !strings.Contains(failed.LastFailureMessage, autoRecoveryMessage) || !strings.Contains(failed.LastFailureMessage, "synthetic health failure") {
 		t.Fatalf("post-reset retry exhaustion = %#v", failed)

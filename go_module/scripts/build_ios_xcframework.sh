@@ -129,7 +129,7 @@ except (OSError, json.JSONDecodeError) as error:
     raise SystemExit(1)
 
 value = document.get("artifacts", {}).get("ios_simulator", {}).get("sha256")
-if document.get("schema") != 2 or not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+if document.get("schema") != 3 or not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
     print(f"invalid TrustTunnel Simulator bridge provenance {path}", file=sys.stderr)
     raise SystemExit(1)
 print(value)

@@ -191,11 +191,11 @@ func TestStructuredSinkFailureFallsBackWithOriginalRecord(t *testing.T) {
 
 	emit(slog.New(failingHandler{err: errors.New("disk write failed")}), slog.LevelError,
 		"tunnel.connect", "TUNNEL", "connection failed", map[string]any{"endpoint": "edge.example:443"})
-	if err := file.Sync(); err != nil {
-		t.Fatal(err)
+	if syncErr := file.Sync(); syncErr != nil {
+		t.Fatal(syncErr)
 	}
-	if _, err := file.Seek(0, 0); err != nil {
-		t.Fatal(err)
+	if _, seekErr := file.Seek(0, 0); seekErr != nil {
+		t.Fatal(seekErr)
 	}
 	output, err := io.ReadAll(file)
 	if err != nil {
@@ -210,10 +210,10 @@ func TestStructuredSinkFailureFallsBackWithOriginalRecord(t *testing.T) {
 
 type failingHandler struct{ err error }
 
-func (f failingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (f failingHandler) Enabled(context.Context, slog.Level) bool  { return true }
 func (f failingHandler) Handle(context.Context, slog.Record) error { return f.err }
-func (f failingHandler) WithAttrs([]slog.Attr) slog.Handler { return f }
-func (f failingHandler) WithGroup(string) slog.Handler { return f }
+func (f failingHandler) WithAttrs([]slog.Attr) slog.Handler        { return f }
+func (f failingHandler) WithGroup(string) slog.Handler             { return f }
 
 func TestActiveLogIsNotTruncated(t *testing.T) {
 	initMu.Lock()
