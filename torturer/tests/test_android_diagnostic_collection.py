@@ -101,9 +101,12 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             primary.add_note("android-native-ui_stdout:\npartial instrumentation output")
             native = b'{"event":"timeout-native-sentinel"}\n'
             calls: list[str] = []
+            reporter_test_arguments: list[list[str]] = []
 
-            def adb_call(_adb, _serial, _arguments, *, label, **_kwargs):
+            def adb_call(_adb, _serial, arguments, *, label, **_kwargs):
                 calls.append(label)
+                if label == "android-complete-throwable-self-test":
+                    reporter_test_arguments.append(arguments)
                 if label == "android-native-ui":
                     raise primary
                 if label == "android-complete-throwable-self-test":
@@ -146,6 +149,16 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
                     "android-native-ui",
                     "android-native-diagnostics",
                     "android-logcat-diagnostics",
+                ],
+            )
+            self.assertEqual(len(reporter_test_arguments), 1)
+            self.assertEqual(
+                reporter_test_arguments[0],
+                [
+                    "shell", "am", "instrument", "-w", "-r",
+                    "-e", "class",
+                    "com.dobby.CompleteThrowableReporterTest#reportsEveryFrameCauseSuppressedUnicodeAndCycle",
+                    "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
                 ],
             )
             self.assertEqual((logs / "android-native-logs.jsonl").read_bytes(), native)

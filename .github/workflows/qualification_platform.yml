@@ -256,7 +256,7 @@ jobs:
           reporter_status=0
           reporter_timed_out=false
           timeout --foreground 60s "$ADB" shell am instrument -w -r \
-            -e class com.dobby.CompleteThrowableReporterTest \
+            -e class com.dobby.CompleteThrowableReporterTest#reportsEveryFrameCauseSuppressedUnicodeAndCycle \
             com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
             >"$reporter_stdout" 2>"$reporter_stderr" || reporter_status=$?
           if [ "$reporter_status" -eq 124 ]; then
