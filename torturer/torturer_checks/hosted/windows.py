@@ -499,17 +499,57 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 continue
 
             def drain(stream=stream, name=name) -> None:
+                destination = getattr(sys.stderr, "buffer", None)
+                if destination is None:
+                    error = TypeError("sys.stderr has no binary buffer for child output")
+                    self._record_service_diagnostics(
+                        "stage=service-output "
+                        f"stream={name} error={type(error).__name__} detail={error}"
+                    )
+                else:
+                    try:
+                        destination.write(f"[windows-service {name}]\n".encode("ascii"))
+                        destination.flush()
+                    except Exception as error:
+                        self._record_service_diagnostics(
+                            "stage=service-output "
+                            f"stream={name} error={type(error).__name__} detail={error}"
+                        )
+                        destination = None
+
                 try:
-                    sys.stderr.write(f"[windows-service {name}]\n")
                     while True:
-                        chunk = stream.readline()
+                        try:
+                            chunk = stream.readline()
+                        except Exception as error:
+                            self._record_service_diagnostics(
+                                "stage=service-output "
+                                f"stream={name} error={type(error).__name__} detail={error}"
+                            )
+                            break
                         if not chunk:
                             break
-                        sys.stderr.write(chunk)
-                        sys.stderr.flush()
-                except (OSError, ValueError) as error:
+                        if destination is None:
+                            continue
+                        try:
+                            if not isinstance(chunk, bytes):
+                                raise TypeError(
+                                    "replacement process pipe returned non-bytes output"
+                                )
+                            destination.write(chunk)
+                            destination.flush()
+                        except Exception as error:
+                            self._record_service_diagnostics(
+                                "stage=service-output "
+                                f"stream={name} error={type(error).__name__} detail={error}"
+                            )
+                            destination = None
+                except Exception as error:
+                    # Keep unexpected reader failures visible even though the
+                    # worker thread cannot propagate them to its creator.
                     self._record_service_diagnostics(
-                        f"stage=service-output stream={name} error={type(error).__name__}"
+                        "stage=service-output "
+                        f"stream={name} error={type(error).__name__} detail={error}"
                     )
 
             thread = threading.Thread(
