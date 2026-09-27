@@ -638,7 +638,7 @@ func Java_com_dobby_nativebridge_NativeGoSession_initializeLogger(
 	env *C.JNIEnv, _ C.jclass, path C.jstring,
 ) C.jstring {
 	if env == nil {
-		return nil
+		return C.jstring(0)
 	}
 	return jniResult(env, initializeLogger(jniString(env, path)))
 }
