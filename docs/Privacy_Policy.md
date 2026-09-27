@@ -27,7 +27,8 @@ third-party services as part of normal operation:
   creates a plain-text file and opens the share sheet. On Windows, export copies
   the logs to the clipboard. DobbyVPN does not transmit logs automatically. If
   the user chooses another app or service as the destination, that recipient
-  gets the exported logs.
+  gets the exported logs. If Android cannot write a native diagnostic file,
+  it also sends that record and the write error to the local Android system log.
 
 `ExcludeIPs` deliberately routes the listed destinations outside the VPN or
 proxy path. This behavior can expose those connections to the network they use.

@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.system.Os
+import android.util.Base64
 import android.util.Log
 import androidx.core.content.FileProvider
 import java.io.File
@@ -39,7 +40,11 @@ object NativeVpnBridge {
     private const val SAVED_SOURCE_DIRECTORY = "configs"
     private const val SAVED_SOURCE_FILE = "connection-url.txt"
     private const val GO_DIAGNOSTIC_FILE = "go_app_logs.jsonl"
+    private const val LOGCAT_FALLBACK_CHUNK_BYTES = 1024
     private val diagnosticLock = Any()
+
+    @Volatile
+    private var nativeDiagnosticWriteFailed = false
 
     @Volatile
     private var service: DobbyVpnService? = null
@@ -292,6 +297,9 @@ object NativeVpnBridge {
     }
 
     @JvmStatic
+    fun nativeDiagnosticsUnavailable(): Boolean = nativeDiagnosticWriteFailed
+
+    @JvmStatic
     fun loadSourceURL(context: Context): String = try {
         File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE)
             .takeIf { it.isFile }
@@ -375,14 +383,44 @@ object NativeVpnBridge {
             }
             .toString()
         synchronized(diagnosticLock) {
-            val file = File(diagnosticsDirectory(context), NATIVE_DIAGNOSTIC_FILE)
-            try {
-                OutputStreamWriter(FileOutputStream(file, true), Charsets.UTF_8).use { writer ->
-                    writer.append(record).append('\n')
-                }
-            } catch (error: Exception) {
-                Log.e("DobbyVPN", "Native diagnostic write failed", error)
+            storeNativeDiagnostic(
+                { File(diagnosticsDirectory(context), NATIVE_DIAGNOSTIC_FILE) },
+                record,
+                ::reportNativeDiagnosticWriteFailure,
+            )
+        }
+    }
+
+    internal fun storeNativeDiagnostic(
+        destination: () -> File,
+        record: String,
+        onFailure: (String, Exception) -> Unit,
+    ) {
+        try {
+            OutputStreamWriter(FileOutputStream(destination(), true), Charsets.UTF_8).use { writer ->
+                writer.append(record).append('\n')
             }
+        } catch (error: Exception) {
+            onFailure(record, error)
+        }
+    }
+
+    private fun reportNativeDiagnosticWriteFailure(record: String, error: Exception) {
+        nativeDiagnosticWriteFailed = true
+        Log.e("DobbyVPN", "Native diagnostic file write failed; full record and error follow as base64 chunks")
+        emitNativeDiagnosticChunks("record", record) { Log.e("DobbyVPN", it) }
+        emitNativeDiagnosticChunks("write-error", error.stackTraceToString()) { Log.e("DobbyVPN", it) }
+    }
+
+    internal fun emitNativeDiagnosticChunks(kind: String, content: String, emit: (String) -> Unit) {
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        val parts = (bytes.size + LOGCAT_FALLBACK_CHUNK_BYTES - 1) / LOGCAT_FALLBACK_CHUNK_BYTES
+        val id = System.nanoTime().toString(16)
+        for (index in 0 until parts) {
+            val offset = index * LOGCAT_FALLBACK_CHUNK_BYTES
+            val size = minOf(LOGCAT_FALLBACK_CHUNK_BYTES, bytes.size - offset)
+            val encoded = Base64.encodeToString(bytes, offset, size, Base64.NO_WRAP)
+            emit("Native diagnostic fallback id=$id kind=$kind part=${index + 1}/$parts utf8_base64=$encoded")
         }
     }
 

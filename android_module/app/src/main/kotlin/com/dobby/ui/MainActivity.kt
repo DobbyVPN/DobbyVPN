@@ -168,7 +168,12 @@ private class SessionController(private val activity: MainActivity) {
                     if (!file.exists()) "" else file.readText(Charsets.UTF_8)
                 }.filter(String::isNotEmpty)
                 val text = contents.joinToString("\n")
-                main.post { state = state.copy(logs = text, logsError = "") }
+                val warning = if (NativeVpnBridge.nativeDiagnosticsUnavailable()) {
+                    "Some native diagnostics could not be saved. Check Android system logs."
+                } else {
+                    ""
+                }
+                main.post { state = state.copy(logs = text, logsError = warning) }
             } catch (failure: Exception) {
                 main.post { state = state.copy(logsError = failure.message ?: "Diagnostic files could not be read") }
             }
