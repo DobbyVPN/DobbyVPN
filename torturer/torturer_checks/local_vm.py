@@ -1009,6 +1009,80 @@ def _start_linux(
     }
 
 
+def _macos_launchd_pid(
+    result: subprocess.CompletedProcess[bytes], *, label: str, subject: str,
+) -> int:
+    pids = re.findall(
+        r"(?m)^\s*pid\s*=\s*([1-9][0-9]*)\s*$",
+        result.stdout.decode(errors="replace"),
+    )
+    if len(pids) != 1:
+        failure = LocalVMError(f"{subject} PID is missing or ambiguous")
+        _add_command_stream_notes(failure, label, result.stdout, result.stderr)
+        raise failure
+    return int(pids[0])
+
+
+def _wait_macos_service(
+    pid: int,
+    control_socket: Path,
+    run_dir: Path,
+    logs: Path,
+    timeout: float,
+) -> None:
+    deadline = time.monotonic() + min(timeout, 30.0)
+    last_probe_error: OSError | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.settimeout(min(0.2, max(0.01, deadline - time.monotonic())))
+                # Connect directly instead of lstat: launchd's execute-only
+                # control-socket directory may reject attribute lookups while
+                # still allowing the authorized peer to connect.
+                probe.connect(str(control_socket))
+        except OSError as error:
+            if error.errno not in {
+                errno.ECONNREFUSED,
+                errno.ENOENT,
+                errno.ENOTSOCK,
+                errno.EAGAIN,
+                errno.EWOULDBLOCK,
+                errno.ETIMEDOUT,
+            }:
+                raise LocalVMError(
+                    "macOS service readiness probe failed: "
+                    f"{type(error).__name__}: {error}"
+                ) from error
+            last_probe_error = error
+        else:
+            remaining = max(0.01, deadline - time.monotonic())
+            result = _run_logged(
+                ["launchctl", "print", "system/com.dobby.vpnservice"],
+                cwd=run_dir, logs=logs, label="service-ready", timeout=min(5.0, remaining),
+            )
+            observed_pid = _macos_launchd_pid(
+                result, label="service-ready", subject="ready macOS launchd service",
+            )
+            if observed_pid != pid:
+                failure = LocalVMError(
+                    "macOS launchd service PID changed during startup "
+                    f"(expected {pid}, observed {observed_pid})"
+                )
+                _add_command_stream_notes(
+                    failure, "service-ready", result.stdout, result.stderr,
+                )
+                raise failure
+            return
+        time.sleep(min(0.1, max(0.01, deadline - time.monotonic())))
+    detail = f"macOS service did not become ready on {control_socket}"
+    if last_probe_error is not None:
+        detail += (
+            "; last expected socket probe: "
+            f"{type(last_probe_error).__name__}: {last_probe_error}"
+        )
+    raise LocalVMError(detail)
+
+
 def _start_macos(
     run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float,
     network_interface: str,
@@ -1044,13 +1118,14 @@ def _start_macos(
         ["launchctl", "print", "system/com.dobby.vpnservice"],
         cwd=run_dir, logs=logs, label="service-probe", timeout=timeout,
     )
-    pids = re.findall(r"(?m)^\s*pid\s*=\s*([1-9][0-9]*)\s*$", result.stdout.decode(errors="replace"))
-    if len(pids) != 1:
-        raise LocalVMError("launchd service PID is missing or ambiguous")
+    pid = _macos_launchd_pid(
+        result, label="service-probe", subject="launchd service",
+    )
     pid_file = run_dir / "service.pid"
-    pid_file.write_text(f"{pids[0]}\n", encoding="ascii")
+    pid_file.write_text(f"{pid}\n", encoding="ascii")
+    _wait_macos_service(pid, Path("/var/run/dobbyvpn/control.sock"), run_dir, logs, timeout)
     return {
-        "pid": int(pids[0]),
+        "pid": pid,
         "pid_file": str(pid_file),
         "binary": str(service.resolve()),
         "socket": "/var/run/dobbyvpn/control.sock",
@@ -1073,16 +1148,16 @@ def _start_macos_release(
         ["launchctl", "print", "system/com.dobby.vpnservice"],
         cwd=run_dir, logs=logs, label="service-probe", timeout=timeout,
     )
-    pids = re.findall(
-        r"(?m)^\s*pid\s*=\s*([1-9][0-9]*)\s*$",
-        result.stdout.decode(errors="replace"),
+    pid = _macos_launchd_pid(
+        result,
+        label="service-probe",
+        subject="installed macOS launchd service",
     )
-    if len(pids) != 1:
-        raise LocalVMError("installed macOS launchd service PID is missing or ambiguous")
     pid_file = run_dir / "service.pid"
-    pid_file.write_text(f"{pids[0]}\n", encoding="ascii")
+    pid_file.write_text(f"{pid}\n", encoding="ascii")
+    _wait_macos_service(pid, Path("/var/run/dobbyvpn/control.sock"), run_dir, logs, timeout)
     return {
-        "pid": int(pids[0]),
+        "pid": pid,
         "pid_file": str(pid_file),
         "binary": str(service.resolve()),
         "socket": "/var/run/dobbyvpn/control.sock",

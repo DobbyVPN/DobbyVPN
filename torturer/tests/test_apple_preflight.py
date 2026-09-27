@@ -5,13 +5,14 @@ from contextlib import redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
 
-from torturer_checks import ios_simulator_app, local_vm_macos
+from torturer_checks import ios_simulator_app, local_vm, local_vm_macos
 
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +30,76 @@ def _load_smoke_script():
 
 
 class ApplePreflightTests(unittest.TestCase):
+    def test_macos_service_waits_for_connectable_socket_and_confirms_launchd_pid(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["launchctl", "print"], 0, b"pid = 418\n", b"",
+        )
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            control_socket = root / "control.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(control_socket))
+                listener.listen(1)
+                listener.settimeout(1)
+                with (
+                    mock.patch.object(local_vm, "_run_logged", return_value=completed) as run,
+                    mock.patch.object(Path, "is_socket", side_effect=PermissionError("lstat denied")),
+                ):
+                    local_vm._wait_macos_service(
+                        418, control_socket, root, root / "logs", timeout=1,
+                    )
+                connection, _ = listener.accept()
+                connection.close()
+
+        self.assertEqual(run.call_args.args[0], ["launchctl", "print", "system/com.dobby.vpnservice"])
+        self.assertEqual(run.call_args.kwargs["label"], "service-ready")
+
+    def test_macos_service_readiness_timeout_keeps_last_socket_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            with mock.patch.object(local_vm, "_run_logged") as run:
+                with self.assertRaises(local_vm.LocalVMError) as caught:
+                    local_vm._wait_macos_service(
+                        418, root / "missing.sock", root, root / "logs", timeout=0.02,
+                    )
+
+        self.assertIn("did not become ready", str(caught.exception))
+        self.assertIn("FileNotFoundError", str(caught.exception))
+        run.assert_not_called()
+
+    def test_source_and_release_macos_start_wait_for_service_readiness(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["launchctl", "print"], 0, b"pid = 418\n", b"",
+        )
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            for release in (False, True):
+                run_dir = root / ("release" if release else "source")
+                logs = run_dir / "logs"
+                service = run_dir / "candidate" / "dobbyvpn-backend"
+                service.parent.mkdir(parents=True)
+                if release:
+                    service.touch()
+                else:
+                    plist = run_dir / "source" / "installer/macos/vpnservice.plist"
+                    plist.parent.mkdir(parents=True)
+                    plist.touch()
+                descriptor = {
+                    "service": str(service),
+                    "network": str(run_dir / "candidate" / "network"),
+                }
+                start = local_vm._start_macos_release if release else local_vm._start_macos
+                with (
+                    mock.patch.object(local_vm, "_run_logged", return_value=completed),
+                    mock.patch.object(local_vm, "_wait_macos_service") as wait,
+                ):
+                    runtime = start(run_dir, descriptor, logs, 12, "en0")
+
+                self.assertEqual(runtime["pid"], 418)
+                wait.assert_called_once_with(
+                    418, Path("/var/run/dobbyvpn/control.sock"), run_dir, logs, 12,
+                )
+
     def test_appkit_compile_is_bounded_at_sixty_seconds(self) -> None:
         smoke = _load_smoke_script()
         completed = subprocess.CompletedProcess(
