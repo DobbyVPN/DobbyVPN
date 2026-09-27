@@ -72,6 +72,12 @@ absent from a supplied configuration remains untested. The hosted Release uses
 an Outline-only profile, so its pass does not replace a failed local Xray or
 TrustTunnel result.
 
+For execution-time analysis, the owner complete result records UTC boundaries
+and elapsed time for each local lane and controller phase, plus Actions job and
+step timestamps. Local candidate and hosted functional logs record UTC progress
+events and monotonic phase or command durations. These measurements do not
+change the functional pass criteria in the contract.
+
 CI runs source, build, lint, and workflow checks. Release is dispatched from
 main and qualifies packages; it does not publish. Publication is a separate
 manual workflow and requires an explicit owner request.

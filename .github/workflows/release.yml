@@ -142,7 +142,7 @@ jobs:
 
   render_start:
     name: Start one disposable Render VPN
-    needs: [android_build, ios_build, installers_build, fdroid_check, installer_migration]
+    needs: [android_build, ios_build, installers_build, installer_migration]
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     environment: render-functional
@@ -235,7 +235,7 @@ jobs:
   qualification_result:
     name: Require hosted mini and Render cleanup
     if: always()
-    needs: [render_start, qualification, render_cleanup]
+    needs: [render_start, qualification, render_cleanup, fdroid_check]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -244,6 +244,7 @@ jobs:
           RENDER_START_RESULT: ${{ needs.render_start.result }}
           PLATFORM_RESULT: ${{ needs.qualification.result }}
           RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
+          FDROID_RESULT: ${{ needs.fdroid_check.result }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
@@ -253,6 +254,7 @@ jobs:
           test "$RENDER_START_RESULT" = success
           test "$PLATFORM_RESULT" = success
           test "$RENDER_CLEANUP_RESULT" = success
+          test "$FDROID_RESULT" = success
           echo "Release hosted mini qualification passed"
 
   retain:

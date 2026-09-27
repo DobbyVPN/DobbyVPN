@@ -117,9 +117,43 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          qualification_progress="$RUNNER_TEMP/dobbyvpn-qualification-progress.jsonl"
+          : > "$qualification_progress"
+          trap 'if [ -s "$qualification_progress" ]; then cat "$qualification_progress" >&2; fi; rm -f "$qualification_progress"' EXIT
+          emit_phase_event() {
+            local event="$1" phase="$2" started_ns="$3" returncode="${4:-}"
+            python3 - "$qualification_progress" "$event" "$phase" "$started_ns" "$returncode" <<'PY'
+          from datetime import datetime, timezone
+          import json
+          import sys
+          import time
+
+          path, event, phase, started_ns, returncode = sys.argv[1:]
+          record = {
+              "kind": "dobbyvpn.qualification.progress",
+              "event": event,
+              "phase": phase,
+              "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+          }
+          if event == "phase-finish":
+              record["duration_seconds"] = max(0, time.monotonic_ns() - int(started_ns)) / 1_000_000_000
+              record["returncode"] = int(returncode)
+          with open(path, "a", encoding="utf-8") as stream:
+              stream.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
+          PY
+          }
+          run_timed() {
+            local phase="$1" status=0 started_ns
+            shift
+            started_ns="$(python3 -c 'import time; print(time.monotonic_ns())')"
+            emit_phase_event phase-start "$phase" "$started_ns"
+            "$@" || status=$?
+            emit_phase_event phase-finish "$phase" "$started_ns" "$status"
+            return "$status"
+          }
           case "$PLATFORM" in
             linux)
-              sudo -n dpkg -i "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb"
+              run_timed linux-package-install sudo -n dpkg -i "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb"
               mapfile -t cli_matches < <(find /opt/dobbyvpn -xdev -type f -name dobby-cli -perm -0100)
               mapfile -t service_matches < <(find /opt/dobbyvpn -xdev -type f -name dobbyvpn-backend -perm -0100)
               test "${#cli_matches[@]}" -eq 1; test "${#service_matches[@]}" -eq 1
@@ -130,14 +164,17 @@ jobs:
               package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
               PACKAGE_WIN="$(cygpath -w "$package")"
               export PACKAGE_WIN
-              installed_paths="$(powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $p=Start-Process msiexec.exe -ArgumentList @("/i", "`"$env:PACKAGE_WIN`"", "/qn", "/norestart") -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "msiexec failed" }; $root="$env:ProgramFiles\DobbyVPN"; $cli=Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File; $service=Get-ChildItem $root -Filter "dobbyvpn-backend.exe" -Recurse -File; $ui=Join-Path $root "bin\DobbyVPN.exe"; if ($cli.Count -ne 1 -or $service.Count -ne 1 -or -not (Test-Path $ui)) { throw "installed closure is ambiguous" }; Write-Output ("$($cli[0].FullName)|$($service[0].FullName)|$ui")')"
+              installed_paths_file="$RUNNER_TEMP/dobbyvpn-installed-paths.txt"
+              run_timed windows-package-install powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $p=Start-Process msiexec.exe -ArgumentList @("/i", "`"$env:PACKAGE_WIN`"", "/qn", "/norestart") -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "msiexec failed" }; $root="$env:ProgramFiles\DobbyVPN"; $cli=Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File; $service=Get-ChildItem $root -Filter "dobbyvpn-backend.exe" -Recurse -File; $ui=Join-Path $root "bin\DobbyVPN.exe"; if ($cli.Count -ne 1 -or $service.Count -ne 1 -or -not (Test-Path $ui)) { throw "installed closure is ambiguous" }; Write-Output ("$($cli[0].FullName)|$($service[0].FullName)|$ui")' | tee "$installed_paths_file"
+              installed_paths="$(cat "$installed_paths_file")"
+              rm -f "$installed_paths_file"
               IFS='|' read -r cli service ui_binary <<< "${installed_paths//$'\r'/}"
               cli="$(cygpath "$cli")"; service="$(cygpath "$service")"; ui_binary="$(cygpath "$ui_binary")"
               printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nSERVICE_PIPE=DobbyVPN.Control\n' "$cli" "$service" "$ui_binary" >> "$GITHUB_ENV"
               ;;
             macos)
               case "$(uname -m)" in arm64) package=dobbyVPN-macos-aarch64.pkg ;; x86_64) package=dobbyVPN-macos-amd64.pkg ;; *) exit 1 ;; esac
-              sudo -n env \
+              run_timed macos-package-install sudo -n env \
                 "DOBBYVPN_CONTROL_PEER_UID=$(id -u)" \
                 "DOBBY_LOG_PATH=$RUN_DIR/service.log" \
                 installer -pkg "$GITHUB_WORKSPACE/release-packages/$package" -target /
@@ -147,7 +184,7 @@ jobs:
               ;;
             android)
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
-              sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
+              run_timed android-sdk-install sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
               emulator_bin="$sdk_root/emulator/emulator"
               test -x "$emulator_bin"
               android_sdk_home="$RUNNER_TEMP/dobbyvpn-android"
@@ -156,11 +193,11 @@ jobs:
               export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
               mkdir -p "$ANDROID_AVD_HOME"
               printf 'Android AVD home: %s\n' "$ANDROID_AVD_HOME"
-              avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
+              run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
               test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
               avd_list_stdout="$RUN_DIR/android-avds.stdout.log"
               avd_list_stderr="$RUN_DIR/android-avds.stderr.log"
-              if ! "$emulator_bin" -list-avds >"$avd_list_stdout" 2>"$avd_list_stderr"; then
+              if ! run_timed android-avd-list "$emulator_bin" -list-avds >"$avd_list_stdout" 2>"$avd_list_stderr"; then
                 cat "$avd_list_stdout" >&2
                 cat "$avd_list_stderr" >&2
                 exit 1
@@ -173,19 +210,26 @@ jobs:
               done < "$avd_list_stdout"
               test "$avd_found" = true
               sudo -n chown "$(id -un)" /dev/kvm
-              "$emulator_bin" -accel-check
+              run_timed android-emulator-acceleration-check "$emulator_bin" -accel-check
               "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot \
                 > "$RUN_DIR/android-emulator.stdout.log" \
                 2> "$RUN_DIR/android-emulator.stderr.log" &
-              if ! timeout 120s adb wait-for-device; then
+              if ! run_timed android-emulator-adb-ready timeout 120s adb wait-for-device; then
                 echo "Android emulator did not become visible to ADB" >&2
                 exit 1
               fi
-              booted=false; for _ in $(seq 1 120); do [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && booted=true && break; sleep 1; done
-              test "$booted" = true
-              adb root
-              timeout 120s adb wait-for-device
-              test "$(adb shell id -u | tr -d '\r')" = 0
+              wait_for_android_boot() {
+                local booted=false
+                for _ in $(seq 1 120); do
+                  [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && booted=true && break
+                  sleep 1
+                done
+                test "$booted" = true
+              }
+              run_timed android-emulator-boot wait_for_android_boot
+              run_timed android-emulator-root adb root
+              run_timed android-emulator-root-ready timeout 120s adb wait-for-device
+              run_timed android-emulator-root-verify bash -c 'test "$(adb shell id -u | tr -d "\r")" = 0'
               signed="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f)"
               companion="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f)"
               test -f "$signed"; test -f "$companion"
@@ -195,12 +239,12 @@ jobs:
               signed_cert_stderr="$RUN_DIR/apksigner-signed.stderr.log"
               companion_cert_stdout="$RUN_DIR/apksigner-companion.stdout.log"
               companion_cert_stderr="$RUN_DIR/apksigner-companion.stderr.log"
-              if ! "$apksigner_bin" verify --print-certs "$signed" >"$signed_cert_stdout" 2>"$signed_cert_stderr"; then
+              if ! run_timed android-signed-apk-verify "$apksigner_bin" verify --print-certs "$signed" >"$signed_cert_stdout" 2>"$signed_cert_stderr"; then
                 cat "$signed_cert_stdout" >&2
                 cat "$signed_cert_stderr" >&2
                 exit 1
               fi
-              if ! "$apksigner_bin" verify --print-certs "$companion" >"$companion_cert_stdout" 2>"$companion_cert_stderr"; then
+              if ! run_timed android-companion-apk-verify "$apksigner_bin" verify --print-certs "$companion" >"$companion_cert_stdout" 2>"$companion_cert_stderr"; then
                 cat "$companion_cert_stdout" >&2
                 cat "$companion_cert_stderr" >&2
                 exit 1
@@ -211,7 +255,8 @@ jobs:
               cert_digest_re='^([0-9A-Fa-f]{64}|[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){31})$'
               [[ "$signed_cert" =~ $cert_digest_re ]]
               test "$signed_cert" = "$companion_cert"
-              adb install -r "$signed"; adb install -r -t "$companion"
+              run_timed android-signed-apk-install adb install -r "$signed"
+              run_timed android-companion-apk-install adb install -r -t "$companion"
               printf 'ADB=%s\n' "$(command -v adb)" >> "$GITHUB_ENV"
               ;;
           esac

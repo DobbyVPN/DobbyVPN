@@ -18,6 +18,7 @@ The run directory is the only state boundary:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import errno
 import hashlib
 import json
@@ -216,6 +217,56 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _emit_vm_progress(event: str, fields: dict[str, object]) -> None:
+    print(
+        json.dumps(
+            {
+                "kind": "dobbyvpn.local_vm.progress",
+                "event": event,
+                "timestamp_utc": datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z"),
+                **fields,
+            },
+            sort_keys=True,
+            allow_nan=False,
+        ),
+        flush=True,
+    )
+
+
+def _timed_call(phase: str, operation, **fields: object):
+    """Record monotonic phase time while leaving command streams untouched."""
+
+    started = time.monotonic()
+    progress = {"phase": phase, **fields}
+    _emit_vm_progress("phase-start", progress)
+    try:
+        result = operation()
+    except BaseException as error:
+        _emit_vm_progress(
+            "phase-finish",
+            {
+                **progress,
+                "duration_seconds": time.monotonic() - started,
+                "error_type": type(error).__name__,
+                "timed_out": isinstance(
+                    getattr(error, "__cause__", None), subprocess.TimeoutExpired
+                ),
+            },
+        )
+        raise
+    finished = {
+        **progress,
+        "duration_seconds": time.monotonic() - started,
+    }
+    returncode = getattr(result, "returncode", None)
+    if isinstance(returncode, int):
+        finished["returncode"] = returncode
+    _emit_vm_progress("phase-finish", finished)
+    return result
+
+
 def _read_state(run_dir: Path) -> dict[str, Any] | None:
     path = run_dir / "platform.json"
     if not path.is_file():
@@ -315,6 +366,32 @@ def _forward_probe_streams(
 
 
 def _run_probe_logged(
+    command: list[str],
+    *,
+    cwd: Path,
+    logs: Path | None,
+    label: str,
+    timeout: float,
+    environment: dict[str, str] | None = None,
+    check: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    return _timed_call(
+        "command",
+        lambda: _run_probe_logged_impl(
+            command,
+            cwd=cwd,
+            logs=logs,
+            label=label,
+            timeout=timeout,
+            environment=environment,
+            check=check,
+        ),
+        command_label=label,
+        timeout_seconds=timeout,
+    )
+
+
+def _run_probe_logged_impl(
     command: list[str],
     *,
     cwd: Path,
@@ -470,6 +547,34 @@ def _terminate_logged_process(
 
 
 def _run_logged(
+    command: list[str],
+    *,
+    cwd: Path,
+    logs: Path,
+    label: str,
+    timeout: float,
+    environment: dict[str, str] | None = None,
+    input_data: bytes | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    return _timed_call(
+        "command",
+        lambda: _run_logged_impl(
+            command,
+            cwd=cwd,
+            logs=logs,
+            label=label,
+            timeout=timeout,
+            environment=environment,
+            input_data=input_data,
+            check=check,
+        ),
+        command_label=label,
+        timeout_seconds=timeout,
+    )
+
+
+def _run_logged_impl(
     command: list[str],
     *,
     cwd: Path,
@@ -1440,15 +1545,21 @@ def run(args: argparse.Namespace) -> int:
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
         if args.platform == "ios-simulator":
-            runtime = _start_ios(
-                run_dir, logs, args.timeout, args.architecture,
+            runtime = _timed_call(
+                "ios-simulator-qualification",
+                lambda: _start_ios(run_dir, logs, args.timeout, args.architecture),
+                platform=args.platform,
             )
             state.update(runtime=runtime, status="functional-complete", functional_exit_code=0)
             _write_json(run_dir / "platform.json", state)
             return 0
         if args.release_manifest is not None:
-            descriptor = _prepare_release_candidate(
-                run_dir, args.platform, args.release_manifest, logs, args.timeout,
+            descriptor = _timed_call(
+                "release-package-prepare-install",
+                lambda: _prepare_release_candidate(
+                    run_dir, args.platform, args.release_manifest, logs, args.timeout,
+                ),
+                platform=args.platform,
             )
             persisted = _read_state(run_dir)
             if persisted is not None:
@@ -1457,7 +1568,18 @@ def run(args: argparse.Namespace) -> int:
             state["status"] = "candidate-prepared"
             _write_json(run_dir / "platform.json", state)
         else:
-            _prepare_candidate(run_dir, args.platform, logs, args.timeout, architecture=args.architecture, skip_deps=args.skip_deps)
+            _timed_call(
+                "candidate-build",
+                lambda: _prepare_candidate(
+                    run_dir,
+                    args.platform,
+                    logs,
+                    args.timeout,
+                    architecture=args.architecture,
+                    skip_deps=args.skip_deps,
+                ),
+                platform=args.platform,
+            )
             descriptor = _descriptor(run_dir)
             state["candidate"] = descriptor
             state["status"] = "candidate-prepared"
@@ -1490,20 +1612,32 @@ def run(args: argparse.Namespace) -> int:
             state.setdefault("runtime", {})["network_interface"] = interface
         _write_json(run_dir / "platform.json", state)
         if args.platform == "linux":
-            runtime = _start_linux(
-                run_dir, descriptor, logs, args.timeout,
-                state.get("runtime", {}).get("network_interface"),
+            runtime = _timed_call(
+                "service-start",
+                lambda: _start_linux(
+                    run_dir, descriptor, logs, args.timeout,
+                    state.get("runtime", {}).get("network_interface"),
+                ),
+                platform=args.platform,
             )
         elif args.platform == "macos":
             if args.release_manifest is not None:
-                runtime = _start_macos_release(
-                    run_dir, descriptor, logs, args.timeout,
-                    state.get("runtime", {}).get("network_interface"),
+                runtime = _timed_call(
+                    "service-start",
+                    lambda: _start_macos_release(
+                        run_dir, descriptor, logs, args.timeout,
+                        state.get("runtime", {}).get("network_interface"),
+                    ),
+                    platform=args.platform,
                 )
             else:
-                runtime = _start_macos(
-                    run_dir, descriptor, logs, args.timeout,
-                    state.get("runtime", {}).get("network_interface"),
+                runtime = _timed_call(
+                    "service-start",
+                    lambda: _start_macos(
+                        run_dir, descriptor, logs, args.timeout,
+                        state.get("runtime", {}).get("network_interface"),
+                    ),
+                    platform=args.platform,
                 )
         elif args.platform == "windows":
             if args.release_manifest is not None:
@@ -1525,9 +1659,17 @@ def run(args: argparse.Namespace) -> int:
                 release_state["msi_service_stopped"] = True
                 state["release"] = release_state
                 _write_json(run_dir / "platform.json", state)
-            runtime = _start_windows(run_dir, descriptor, logs, args.timeout)
+            runtime = _timed_call(
+                "service-start",
+                lambda: _start_windows(run_dir, descriptor, logs, args.timeout),
+                platform=args.platform,
+            )
         elif args.platform == "android":
-            runtime = _start_android(run_dir, descriptor, logs, args.timeout)
+            runtime = _timed_call(
+                "android-package-install",
+                lambda: _start_android(run_dir, descriptor, logs, args.timeout),
+                platform=args.platform,
+            )
         if args.platform in {"windows", "macos"}:
             runtime_environment = runtime.get("environment")
             runtime_environment = dict(runtime_environment) if isinstance(runtime_environment, dict) else {}
@@ -1539,11 +1681,10 @@ def run(args: argparse.Namespace) -> int:
         if args.platform == "android":
             from .local_vm_android import run_ui as run_android_ui
 
-            native_result = run_android_ui(
-                run_dir,
-                runtime,
-                logs,
-                args.timeout,
+            native_result = _timed_call(
+                "android-native-ui",
+                lambda: run_android_ui(run_dir, runtime, logs, args.timeout),
+                platform=args.platform,
             )
             state["native_ui_exit_code"] = native_result.returncode
             if native_result.returncode != 0:
@@ -1580,10 +1721,15 @@ def run(args: argparse.Namespace) -> int:
                 for key, value in runtime_environment.items()
                 if isinstance(key, str) and isinstance(value, str)
             })
-        result = _run_logged(
-            command, cwd=run_dir / "source" / "torturer", logs=logs,
-            label="functional", timeout=args.timeout,
-            environment=functional_environment, check=False,
+        result = _timed_call(
+            "functional-suite",
+            lambda: _run_logged(
+                command, cwd=run_dir / "source" / "torturer", logs=logs,
+                label="functional", timeout=args.timeout,
+                environment=functional_environment, check=False,
+            ),
+            platform=args.platform,
+            suite=functional_suite,
         )
         state["functional_exit_code"] = result.returncode
         state["status"] = "functional-complete" if result.returncode == 0 else "functional-failed"
@@ -1616,18 +1762,22 @@ def run(args: argparse.Namespace) -> int:
                 args.timeout, _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS,
             )
             try:
-                native_result = _run_native_ui(
-                    _native_ui_command(
-                        run_dir, native_descriptor, runtime, args.platform, native_task_timeout,
+                native_result = _timed_call(
+                    "desktop-native-ui",
+                    lambda: _run_native_ui(
+                        _native_ui_command(
+                            run_dir, native_descriptor, runtime, args.platform, native_task_timeout,
+                        ),
+                        platform=args.platform,
+                        run_dir=run_dir,
+                        # The journey is a Python module under torturer; Windows runs
+                        # this cwd through the existing interactive user task.
+                        cwd=run_dir / "source" / "torturer",
+                        logs=logs,
+                        timeout=native_task_timeout,
+                        environment=native_environment,
                     ),
                     platform=args.platform,
-                    run_dir=run_dir,
-                    # The journey is a Python module under torturer; Windows runs
-                    # this cwd through the existing interactive user task.
-                    cwd=run_dir / "source" / "torturer",
-                    logs=logs,
-                    timeout=native_task_timeout,
-                    environment=native_environment,
                 )
             except Exception as error:
                 if args.platform in {"windows", "macos"}:

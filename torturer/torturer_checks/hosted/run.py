@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import math
+from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -114,7 +115,14 @@ def _discover_connections(
 def _emit_progress_event(event: str, fields: dict[str, object]) -> None:
     print(
         json.dumps(
-            {"kind": "dobbyvpn.functional.progress", "event": event, **fields},
+            {
+                "kind": "dobbyvpn.functional.progress",
+                "event": event,
+                "timestamp_utc": datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z"),
+                **fields,
+            },
             sort_keys=True,
             allow_nan=False,
         ),
@@ -202,6 +210,7 @@ def _run_scenarios(
             if reset_called:
                 return
             reset_called = True
+            cleanup_started = time.monotonic()
             _emit_progress_event(
                 "scenario-cleanup-start",
                 {
@@ -210,19 +219,19 @@ def _run_scenarios(
                     "scenario": scenario.id,
                 },
             )
-            reset_timeout = _lane_remaining(deadline)
-            if reset_timeout is not None:
-                if reset_timeout <= 0:
-                    raise ValueError(
-                        "HOSTED_LANE_DEADLINE_EXCEEDED before scenario reset"
-                    )
-                reset_timeout = min(float(reset_timeout_seconds), reset_timeout)
-            else:
-                reset_timeout = float(reset_timeout_seconds)
-            reset_error: Exception | None = None
+            reset_error: BaseException | None = None
             try:
+                reset_timeout = _lane_remaining(deadline)
+                if reset_timeout is not None:
+                    if reset_timeout <= 0:
+                        raise ValueError(
+                            "HOSTED_LANE_DEADLINE_EXCEEDED before scenario reset"
+                        )
+                    reset_timeout = min(float(reset_timeout_seconds), reset_timeout)
+                else:
+                    reset_timeout = float(reset_timeout_seconds)
                 adapter.reset(timeout_seconds=reset_timeout)
-            except Exception as error:
+            except BaseException as error:
                 reset_error = error
             _emit_progress_event(
                 "scenario-cleanup-finish",
@@ -232,6 +241,7 @@ def _run_scenarios(
                         f"{type(reset_error).__name__}: {reset_error}"
                         if reset_error is not None else None
                     ),
+                    "duration_seconds": time.monotonic() - cleanup_started,
                     "protocol": connection.protocol,
                     "reset": reset_error is None,
                     "scenario": scenario.id,
@@ -350,15 +360,53 @@ def _execute_lane(
     finalization_attempted = False
     try:
         if reset_before_discovery:
-            adapter.reset()
+            reset_started = time.monotonic()
+            _emit_progress_event("adapter-reset-start", {"platform": provenance.platform})
+            try:
+                adapter.reset()
+            except BaseException as error:
+                _emit_progress_event(
+                    "adapter-reset-finish",
+                    {
+                        "duration_seconds": time.monotonic() - reset_started,
+                        "error_type": type(error).__name__,
+                        "platform": provenance.platform,
+                        "reset": False,
+                    },
+                )
+                raise
+            _emit_progress_event(
+                "adapter-reset-finish",
+                {
+                    "duration_seconds": time.monotonic() - reset_started,
+                    "platform": provenance.platform,
+                    "reset": True,
+                },
+            )
+        discovery_started = time.monotonic()
         _emit_progress_event(
             "connection-discovery-start",
             {"platform": provenance.platform},
         )
-        connections = _discover_connections(adapter, deadline=deadline)
+        try:
+            connections = _discover_connections(adapter, deadline=deadline)
+        except BaseException as error:
+            _emit_progress_event(
+                "connection-discovery-finish",
+                {
+                    "duration_seconds": time.monotonic() - discovery_started,
+                    "error_type": type(error).__name__,
+                    "platform": provenance.platform,
+                },
+            )
+            raise
         _emit_progress_event(
             "connection-discovery-finish",
-            {"connection_count": len(connections), "platform": provenance.platform},
+            {
+                "connection_count": len(connections),
+                "duration_seconds": time.monotonic() - discovery_started,
+                "platform": provenance.platform,
+            },
         )
         results = _run_connection_matrix(
             engine,

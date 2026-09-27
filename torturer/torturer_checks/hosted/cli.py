@@ -283,6 +283,57 @@ class SubprocessRunner:
         self.environment = dict(os.environ)
         if environment is not None:
             self.environment.update(environment)
+        self._progress_sink: Callable[[str, dict[str, object]], None] | None = None
+        self._command_number = 0
+
+    def set_progress_sink(
+        self, sink: Callable[[str, dict[str, object]], None]
+    ) -> None:
+        self._progress_sink = sink
+
+    def _emit_progress(self, event: str, **fields: object) -> None:
+        if self._progress_sink is not None:
+            self._progress_sink(event, fields)
+
+    def _run_with_progress(self, command, operation, *, detached: bool = False):
+        self._command_number += 1
+        first = command[0] if command and isinstance(command[0], str) else "unknown"
+        command_name = first.replace("\\", "/").rsplit("/", 1)[-1]
+        if command_name.lower() in {"python", "python.exe", "python3", "python3.exe"}:
+            try:
+                module_index = command.index("-m")
+                module = command[module_index + 1]
+            except (ValueError, IndexError):
+                module = ""
+            if isinstance(module, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", module):
+                command_name = module.rsplit(".", 1)[-1]
+        fields = {
+            "command_index": self._command_number,
+            "command_name": command_name,
+            "detached": detached,
+        }
+        started = time.monotonic()
+        self._emit_progress("command-start", **fields)
+        try:
+            result = operation()
+        except BaseException as error:
+            code = getattr(error, "code", None)
+            self._emit_progress(
+                "command-finish",
+                **fields,
+                duration_seconds=time.monotonic() - started,
+                error_type=type(error).__name__,
+                timed_out=code == "COMMAND_TIMEOUT",
+            )
+            raise
+        self._emit_progress(
+            "command-finish",
+            **fields,
+            duration_seconds=time.monotonic() - started,
+            returncode=result.returncode,
+            timed_out=result.timed_out,
+        )
+        return result
 
     def _emit_result(self, stage: str, result: CommandResult) -> None:
         emit_streams(
@@ -292,6 +343,22 @@ class SubprocessRunner:
         )
 
     def run(
+        self,
+        command: Sequence[str],
+        *,
+        timeout_seconds: float,
+        input_bytes: bytes | None = None,
+    ) -> CommandResult:
+        return self._run_with_progress(
+            command,
+            lambda: self._run(
+                command,
+                timeout_seconds=timeout_seconds,
+                input_bytes=input_bytes,
+            ),
+        )
+
+    def _run(
         self,
         command: Sequence[str],
         *,
@@ -425,6 +492,15 @@ class SubprocessRunner:
             raise primary from None
 
     def run_detached(
+        self, command: Sequence[str], *, timeout_seconds: float
+    ) -> CommandResult:
+        return self._run_with_progress(
+            command,
+            lambda: self._run_detached(command, timeout_seconds=timeout_seconds),
+            detached=True,
+        )
+
+    def _run_detached(
         self, command: Sequence[str], *, timeout_seconds: float
     ) -> CommandResult:
         """Run a service launcher whose child intentionally outlives it."""
@@ -1030,6 +1106,9 @@ class HostedCLIAdapter:
         self, sink: Callable[[str, dict[str, object]], None]
     ) -> None:
         self._progress_sink = sink
+        set_runner_sink = getattr(self.runner, "set_progress_sink", None)
+        if callable(set_runner_sink):
+            set_runner_sink(sink)
 
     def _emit_progress(self, event: str, **fields: object) -> None:
         if self._progress_sink is not None:
@@ -1180,21 +1259,28 @@ class HostedCLIAdapter:
         observations: dict[str, object] = {}
         for step in scenario.steps:
             fields = self._operation_progress_fields(scenario.id, step)
+            started = time.monotonic()
             self._emit_progress("operation-start", **fields)
             try:
                 result = self.execute(step)
+                if not isinstance(result, dict):
+                    raise ScenarioExecutionError("ADAPTER_RESULT_INVALID")
             except Exception as error:
                 code = getattr(error, "reason_code", getattr(error, "code", None))
                 self._emit_progress(
                     "operation-error",
                     **fields,
                     code=code if isinstance(code, str) else type(error).__name__,
+                    duration_seconds=time.monotonic() - started,
                 )
                 raise
-            if not isinstance(result, dict):
-                raise ScenarioExecutionError("ADAPTER_RESULT_INVALID")
             observations.update(result)
-            self._emit_progress("operation-finish", **fields, observations=result)
+            self._emit_progress(
+                "operation-finish",
+                **fields,
+                duration_seconds=time.monotonic() - started,
+                observations=result,
+            )
         return observations
 
     @staticmethod
