@@ -147,6 +147,16 @@ jobs:
             build-tools;36.0.0
             ndk;28.1.13356709
 
+      - name: Select and verify pinned Android NDK
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$sdk_root"
+          ndk_home="$sdk_root/ndk/28.1.13356709"
+          test -f "$ndk_home/source.properties"
+          grep -Fqx 'Pkg.Revision = 28.1.13356709' "$ndk_home/source.properties"
+          printf 'ANDROID_NDK_HOME=%s\n' "$ndk_home" >> "$GITHUB_ENV"
+
       - name: Prepare F-Droid-compatible source path
         run: |
           # Keep the exact detached Git objects with the source copy.  The
