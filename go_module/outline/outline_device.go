@@ -51,6 +51,7 @@ type OutlineDevice struct {
 	udpDialInFlight atomic.Int64
 	udpDialPeak     atomic.Int64
 	udpDNSTruncated atomic.Uint64
+	udpDNSBridged   atomic.Uint64
 	unsupportedDial atomic.Uint64
 	tcpConnClosed   atomic.Uint64
 	tcpConnReadErr  atomic.Uint64
@@ -308,9 +309,17 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		defer d.udpDialInFlight.Add(-1)
 
 		// Some platform resolvers did not receive replies through otherwise
-		// healthy Outline UDP transports in qualification, while their TCP retry
-		// path was reliable. Keep the standards-compliant fallback scoped by OS.
+		// healthy Outline UDP transports in qualification. Windows bridges each
+		// UDP DNS query over the existing protected stream transport; other
+		// platforms retain the standards-compliant TCP retry response.
 		if shouldForceTCPDNS() && port == 53 {
+			if shouldBridgeTCPDNS() {
+				d.udpDNSBridged.Add(1)
+				log.Debugf(Category, "[SOCKS5 DNS] bridging UDP query over TCP attempt=%d", attempt)
+				return newDNSTCPBridgeConn(ctx, addr, func(ctx context.Context, addr string) (net.Conn, error) {
+					return d.handleDial(ctx, networkTCP, addr)
+				}), nil
+			}
 			d.udpDNSTruncated.Add(1)
 
 			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS attempt=%d addr=%s stats={%s}", attempt, addr, d.dialStats())
@@ -340,6 +349,10 @@ func shouldForceTCPDNS() bool {
 	return forceTCPDNSForPlatform
 }
 
+func shouldBridgeTCPDNS() bool {
+	return bridgeTCPDNSForPlatform
+}
+
 func updatePeakInt64(peak *atomic.Int64, current int64) {
 	for {
 		old := peak.Load()
@@ -351,7 +364,7 @@ func updatePeakInt64(peak *atomic.Int64, current int64) {
 
 func (d *OutlineDevice) dialStats() string {
 	return fmt.Sprintf(
-		"uptime=%s tcp=%d/%d/%d/inflight=%d/peak=%d tcpIO=closed:%d/readErr:%d/writeErr:%d/readMB:%.2f/writeMB:%.2f udp=%d/%d/%d/inflight=%d/peak=%d udpIO=closed:%d/readErr:%d/writeErr:%d/readMB:%.2f/writeMB:%.2f udpDNSTrunc=%d unsupported=%d internalAuth=%d internalReset=%d internalBrokenPipe=%d internalEOF=%d internalClosed=%d internalAddrWarn=%d internalOther=%d goroutineExit=serve:%d/stats:%d",
+		"uptime=%s tcp=%d/%d/%d/inflight=%d/peak=%d tcpIO=closed:%d/readErr:%d/writeErr:%d/readMB:%.2f/writeMB:%.2f udp=%d/%d/%d/inflight=%d/peak=%d udpIO=closed:%d/readErr:%d/writeErr:%d/readMB:%.2f/writeMB:%.2f udpDNSTrunc=%d udpDNSBridge=%d unsupported=%d internalAuth=%d internalReset=%d internalBrokenPipe=%d internalEOF=%d internalClosed=%d internalAddrWarn=%d internalOther=%d goroutineExit=serve:%d/stats:%d",
 		time.Since(d.startedAt).Truncate(time.Millisecond),
 		d.tcpDialAttempt.Load(),
 		d.tcpDialOK.Load(),
@@ -374,6 +387,7 @@ func (d *OutlineDevice) dialStats() string {
 		float64(d.udpBytesRead.Load())/(1024*1024),
 		float64(d.udpBytesWritten.Load())/(1024*1024),
 		d.udpDNSTruncated.Load(),
+		d.udpDNSBridged.Load(),
 		d.unsupportedDial.Load(),
 		socksInternalAuthErr.Load(),
 		socksInternalResetErr.Load(),

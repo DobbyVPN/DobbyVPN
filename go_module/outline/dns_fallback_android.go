@@ -3,3 +3,4 @@
 package outline
 
 const forceTCPDNSForPlatform = true
+const bridgeTCPDNSForPlatform = false
