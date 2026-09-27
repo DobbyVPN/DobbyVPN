@@ -12,13 +12,16 @@ import re
 import time
 
 from torturer_contract.functional.engine import FunctionalEngine
+from torturer_contract.functional.coverage import (
+    coverage_contract,
+    qualification_exit_code,
+)
 from torturer_contract.functional.results import (
     ConnectionIdentity,
     RunProvenance,
 )
 from torturer_contract.functional.scenarios import (
     select_scenarios,
-    suite_set,
     validate_suite,
 )
 from torturer_checks.diagnostics import add_exception_notes
@@ -74,62 +77,6 @@ def _select_scenarios(
     if platform is not None and platform not in _HOSTED_ARCHITECTURE_BY_PLATFORM:
         raise ValueError("unknown hosted platform")
     return scenarios
-
-
-def _coverage_contract(
-    platform: str,
-    connections: tuple[ConnectionIdentity, ...],
-    selected_scenarios,
-    results: list[dict[str, object]],
-    *,
-    suite: str = "mini",
-    explicit_scenario_selection: bool = False,
-) -> dict[str, object]:
-    """Summarize results; only a complete suite can qualify.
-
-    Unavailable results are never accepted by the hosted coverage contract.
-    A focused ``--scenario`` invocation remains useful for diagnostics, but
-    is explicitly incomplete even if it names every scenario by hand.
-    """
-
-    suite_scenarios = suite_set(suite)
-    test_ids = {scenario.id for scenario in suite_scenarios}
-    selected_ids = {scenario.id for scenario in selected_scenarios}
-    actual_unavailable = {
-        (item["scenario"]["id"], item["failure"]["code"])
-        for item in results
-        if item["outcome"] == "unavailable"
-    }
-    matrix_complete = (
-        selected_ids == test_ids
-        and not explicit_scenario_selection
-        and len(results) == len(connections) * len(selected_scenarios)
-    )
-    accepted = (
-        not actual_unavailable
-        and all(item["outcome"] == "passed" for item in results)
-        and bool(connections)
-    )
-    valid = matrix_complete and accepted
-    complete = valid
-    status = "complete" if complete else "coverage-contract-failed"
-    return {
-        "suite": suite,
-        "status": status,
-        "complete": complete,
-        "test_set_scenario_count": len(test_ids),
-        "required_scenario_ids": sorted(test_ids),
-        "connection_count": len(connections),
-        "expected_result_count": len(connections) * len(selected_scenarios),
-        "selected_scenario_count": len(selected_ids),
-        "selected_scenario_ids": sorted(selected_ids),
-        "explicit_scenario_selection": explicit_scenario_selection,
-        "result_count": len(results),
-        "actual_unavailable": [
-            {"scenario_id": scenario_id, "reason_code": reason}
-            for scenario_id, reason in sorted(actual_unavailable)
-        ],
-    }
 
 
 def _lane_remaining(deadline: float | None) -> float | None:
@@ -434,11 +381,6 @@ def _execute_lane(
         raise
 
 
-def _qualification_exit_code(coverage: dict[str, object]) -> int:
-    """Fail qualification unless the reviewed platform coverage contract matches."""
-    return 0 if coverage.get("status") == "complete" else 2
-
-
 def _write_json(
     path: Path,
     payload: dict[str, object],
@@ -552,8 +494,7 @@ def main(argv: list[str] | None = None) -> int:
             provenance,
             deadline=lane_deadline,
         )
-        coverage = _coverage_contract(
-            args.platform,
+        coverage = coverage_contract(
             connections,
             selected_scenarios,
             results,
@@ -581,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             f"failed={len(failed)} unavailable={len(unavailable)} "
             f"coverage={coverage['status']}"
         )
-        return _qualification_exit_code(coverage)
+        return qualification_exit_code(coverage)
     except BaseException as error:
         if adapter is not None and not finalization_attempted:
             finalization_attempted = True

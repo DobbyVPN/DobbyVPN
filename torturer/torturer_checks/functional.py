@@ -17,13 +17,14 @@ import shutil
 import time
 
 from torturer_contract.functional.engine import FunctionalEngine
+from torturer_contract.functional.coverage import (
+    coverage_contract,
+    qualification_exit_code,
+)
 from torturer_contract.functional.results import (
     RunProvenance,
 )
-from torturer_contract.functional.scenarios import (
-    suite_set,
-    validate_suite,
-)
+from torturer_contract.functional.scenarios import validate_suite
 
 from .hosted.cli import (
     HostedAdapterError,
@@ -120,9 +121,12 @@ def _prepare_output_path(path: Path) -> None:
 
 
 def _local_exit_code(results: list[dict[str, object]]) -> int:
-    """A run passes only when it returned at least one passing scenario."""
+    """Focused local diagnostics pass when every returned result passed."""
 
-    return 0 if results and all(result["outcome"] == "passed" for result in results) else 2
+    return 0 if results and all(
+        isinstance(result, dict) and result.get("outcome") == "passed"
+        for result in results
+    ) else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -218,28 +222,21 @@ def main(argv: list[str] | None = None) -> int:
         "connections": [connection.to_dict() for connection in connections],
         "scenarios": results,
     }
-    suite_ids = {scenario.id for scenario in suite_set(args.suite)}
-    selected_ids = {scenario.id for scenario in selected}
-    complete_selection = not args.scenario_ids and selected_ids == suite_ids
-    passed_results = bool(results) and all(
-        result.get("outcome") == "passed" for result in results
+    coverage = coverage_contract(
+        connections,
+        selected,
+        results,
+        suite=args.suite,
+        explicit_scenario_selection=bool(args.scenario_ids),
     )
-    document["coverage"] = {
-        "suite": args.suite,
-        "complete": complete_selection and passed_results,
-        "selection_complete": complete_selection,
-        "passed": passed_results,
-        "selected_scenario_ids": sorted(selected_ids),
-        "required_scenario_ids": sorted(suite_ids),
-        "selected_scenario_count": len(selected_ids),
-        "expected_scenario_count": len(suite_ids),
-        "explicit_scenario_selection": bool(args.scenario_ids),
-    }
+    document["coverage"] = coverage
     # Preserve the existing field for consumers while making its semantics
     # explicit: focused diagnostics can pass but never claim qualification.
-    document["complete_test_set"] = complete_selection
+    document["complete_test_set"] = coverage["selection_complete"]
     _write_json(args.output, document)
-    return _local_exit_code(results)
+    if args.scenario_ids:
+        return _local_exit_code(results)
+    return qualification_exit_code(coverage)
 
 
 if __name__ == "__main__":

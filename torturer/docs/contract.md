@@ -10,6 +10,9 @@ The mini suite is the portable qualification contract. Full is available only
 on Windows and macOS with an interactive desktop; it runs mini once, then adds
 the native-window journey. A missing tool or environment is unavailable
 coverage and cannot be counted as a pass.
+Each functional run discovers and tests every profile in its supplied
+configuration. A failed or unavailable profile fails that run. Protocols absent
+from the configuration remain untested; their absence is not a pass.
 
 | Platform | Mini | Full |
 | --- | --- | --- |

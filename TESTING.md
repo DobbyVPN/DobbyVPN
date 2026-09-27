@@ -64,6 +64,13 @@ The private owner Harness runs local mini checks and the interactive Windows
 or macOS full journey on disposable guests. Its commands and guest setup are
 documented in the private owner workspace. Hosted Release qualification uses the
 exact packages built in that run and runs the canonical hosted mini suite.
+The owner workspace's complete qualification first requires local Linux mini,
+Windows full, Android mini, macOS full, and iOS Simulator mini on one product
+revision, then CI and the non-publishing Release at that revision. Every
+discovered profile in each supplied local configuration must pass. A protocol
+absent from a supplied configuration remains untested. The hosted Release uses
+an Outline-only profile, so its pass does not replace a failed local Xray or
+TrustTunnel result.
 
 CI runs source, build, lint, and workflow checks. Release is dispatched from
 main and qualifies packages; it does not publish. Publication is a separate
