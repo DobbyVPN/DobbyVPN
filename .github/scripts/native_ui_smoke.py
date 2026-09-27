@@ -449,7 +449,7 @@ def _macos_build_reference_event_helper(temporary: Path) -> Path:
             text=True,
             capture_output=True,
             stream_label="macOS AppKit reference helper compile",
-            timeout=20,
+            timeout=60,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(
@@ -882,7 +882,7 @@ def _macos_interactive_identity(timeout: float = 12.0) -> str:
     return f"{current_user}|uid={uid}|console={console_user}"
 
 
-def preflight_macos_capabilities(timeout: float = 20.0) -> str:
+def preflight_macos_capabilities(timeout: float = 90.0) -> str:
     """Run the product-independent macOS full-lane capability preflight.
 
     This is the single entrypoint used both before candidate preparation and
@@ -3631,7 +3631,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--platform", choices=("windows", "macos"), required=True)
     parser.add_argument("--ui", type=Path)
     parser.add_argument("--profile", type=Path, help="fresh synthetic/owner test profile to enter through the UI")
-    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--timeout", type=float)
     parser.add_argument(
         "--preflight-only",
         action="store_true",
@@ -3648,6 +3648,8 @@ def main(argv: list[str] | None = None) -> int:
         help="keep the real window open and serve native actions over JSON lines",
     )
     args = parser.parse_args(argv)
+    if args.timeout is None:
+        args.timeout = 90.0 if args.preflight_only else 30.0
     if args.preflight_only:
         if args.platform != "macos" or args.timeout <= 0:
             print("native-ui macOS capability preflight arguments are invalid", file=sys.stderr)

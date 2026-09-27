@@ -1462,14 +1462,18 @@ public final class NativeUiHostedProfileTest {
                 throw new IllegalStateException("ANDROID_NETWORK_IDENTITY_UNAVAILABLE");
             }
             boolean directRequired = "unblocked".equals(phase);
+            JSONObject directProbe = networkRequest(
+                    phasePhysical, identity.toString(), directRequired);
+            JSONObject vpnProbe = "blocked".equals(phase)
+                    ? routingProviderRequest(identity.toString(), deadlineElapsedRealtime)
+                    : routingProviderRequest(identity.toString());
             JSONObject response = new JSONObject().put("phase", phase)
-                    .put("direct", networkRequest(
-                            phasePhysical, identity.toString(), directRequired))
+                    .put("direct", directProbe)
                     // Run the positive oracle in the ordinary test-APK
                     // provider process. Its default route is deliberately
                     // unbound, and its UID is checked against the test APK
                     // before the result crosses this process boundary.
-                    .put("vpn", routingProviderRequest(identity.toString()));
+                    .put("vpn", vpnProbe);
             writeJson(new File(control.getPath() + ".ready"), response);
         }
     }
@@ -1533,14 +1537,36 @@ public final class NativeUiHostedProfileTest {
     }
 
     private JSONObject routingProviderRequest(String endpoint) throws Exception {
+        return routingProviderRequestOnce(endpoint, 8_000);
+    }
+
+    private JSONObject routingProviderRequest(String endpoint, long deadlineElapsedRealtime)
+            throws Exception {
+        JSONObject result = AndroidRoutingProbeRetry.run(
+                deadlineElapsedRealtime,
+                timeoutMillis -> routingProviderRequestOnce(endpoint, timeoutMillis));
+        JSONArray attemptErrors = result.optJSONArray("attempt_errors");
+        if (attemptErrors != null) {
+            for (int index = 0; index < attemptErrors.length(); index++) {
+                System.out.println("ANDROID_ROUTING_PROBE_ATTEMPT_FAILURE "
+                        + attemptErrors.getJSONObject(index).toString());
+            }
+        }
+        return result;
+    }
+
+    private JSONObject routingProviderRequestOnce(String endpoint, int timeoutMillis)
+            throws Exception {
         Bundle response;
         try {
+            Bundle extras = new Bundle();
+            extras.putInt(AndroidRoutingProbeProvider.KEY_TIMEOUT_MILLIS, timeoutMillis);
             ContentResolver resolver = testContext.getContentResolver();
             response = resolver.call(
                     Uri.parse("content://" + AndroidRoutingProbeProvider.AUTHORITY),
                     AndroidRoutingProbeProvider.METHOD_PROBE,
                     endpoint,
-                    null);
+                    extras);
         } catch (SecurityException failure) {
             return routingProviderFailure("ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED", failure);
         } catch (Throwable failure) {

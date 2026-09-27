@@ -45,6 +45,7 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
     public static final String KEY_NETWORK_TRANSPORT = "network_transport";
     public static final String KEY_ERROR_CODE = "error_code";
     public static final String KEY_ERROR_DETAIL = "error_detail";
+    public static final String KEY_TIMEOUT_MILLIS = "timeout_millis";
 
     private static final String NETWORK_BINDING_DEFAULT = "default";
     private static final String NETWORK_TRANSPORT_VPN = "vpn";
@@ -74,7 +75,10 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
             return failureResult();
         }
         try {
-            return request(argument);
+            int timeoutMillis = extras == null
+                    ? CONNECT_TIMEOUT_MILLIS
+                    : extras.getInt(KEY_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MILLIS);
+            return request(argument, timeoutMillis);
         } catch (Throwable failure) {
             return failureResult(REQUEST_ERROR_CODE, defaultNetworkTransport(), failure);
         }
@@ -166,7 +170,10 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
         return NETWORK_TRANSPORT_VPN.equals(networkTransport(connectivity, network));
     }
 
-    private Bundle request(String value) throws Exception {
+    private Bundle request(String value, int timeoutMillis) throws Exception {
+        if (timeoutMillis < 1 || timeoutMillis > CONNECT_TIMEOUT_MILLIS) {
+            throw new IllegalArgumentException("routing probe timeout is invalid");
+        }
         String defaultTransport = defaultNetworkTransport();
         if (!NETWORK_TRANSPORT_VPN.equals(defaultTransport)) {
             return failureResult(DEFAULT_NOT_VPN_ERROR_CODE, defaultTransport);
@@ -178,8 +185,8 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
             // select a Network or alter process network binding: the provider
             // process's default network is the routing oracle.
             connection = (HttpsURLConnection) endpoint.openConnection();
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MILLIS);
-            connection.setReadTimeout(READ_TIMEOUT_MILLIS);
+            connection.setConnectTimeout(timeoutMillis);
+            connection.setReadTimeout(timeoutMillis);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestMethod("GET");
             connection.setRequestProperty("User-Agent", "DobbyVPN-Harness/1");
@@ -189,7 +196,7 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
             InputStream response = status >= 400
                     ? connection.getErrorStream() : connection.getInputStream();
             long bodyDeadline = System.nanoTime()
-                    + READ_TIMEOUT_MILLIS * 1_000_000L;
+                    + timeoutMillis * 1_000_000L;
             String body = response == null ? "" : readBody(response, bodyDeadline);
             Bundle result = baseResult(defaultTransport);
             result.putInt(KEY_STATUS, status);

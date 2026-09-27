@@ -1141,21 +1141,26 @@ if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
     def _route_interface(self, timeout: float) -> str:
         if self._routing_probe_address is None:
             raise ScenarioExecutionError("ROUTING_PROBE_UNAVAILABLE")
-        script = r'''$ErrorActionPreference = "Stop"
-$address = [string]$args[0]
-$routes = @(Find-NetRoute -RemoteIPAddress $address -ErrorAction Stop |
-  Where-Object { -not [string]::IsNullOrWhiteSpace($_.DestinationPrefix) } |
-  Sort-Object RouteMetric, InterfaceMetric |
-  Select-Object -First 1)
-if ($routes.Count -ne 1) { throw "route unavailable" }
-[ordered]@{ interface_index = [int]$routes[0].InterfaceIndex } | ConvertTo-Json -Compress
-'''
-        result = self._powershell_command(
-            script,
-            timeout,
-            "ROUTING_INTERFACE_UNAVAILABLE",
-            self._routing_probe_address,
-        )
+        # Find-NetRoute invokes the NetTCPIP PowerShell provider for every
+        # observation. It can stall for the entire scenario bound on a busy VM.
+        # The IP Helper API asks Windows for the same best IPv4 interface
+        # directly, while the ordinary command runner still bounds the call.
+        try:
+            result = self.runner.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "torturer_checks.windows_route",
+                    self._routing_probe_address,
+                ],
+                timeout_seconds=timeout,
+            )
+        except HostedAdapterError as error:
+            raise ScenarioExecutionError(error.code) from error
+        if result.timed_out or result.returncode != 0:
+            error = ScenarioExecutionError("ROUTING_INTERFACE_UNAVAILABLE")
+            _append_command_result_notes(error, result)
+            raise error
         try:
             value = json.loads(result.stdout_text)
             interface = str(value["interface_index"])

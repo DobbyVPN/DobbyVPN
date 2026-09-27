@@ -56,6 +56,11 @@ IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS = 10 * 60
 # contract; RunBudget still enforces the 30-minute lane and cleanup reserve.
 IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
+# A timed-out command may need one bounded drain after SIGTERM, one after the
+# process-group SIGKILL, and one after killing the direct child. Keep that
+# worst-case time outside each operation timeout so RunBudget still preserves
+# its cleanup reserve.
+COMMAND_TERMINATION_RESERVE_SECONDS = 3 * COMMAND_TERMINATION_GRACE_SECONDS
 
 # These are deliberately stage-specific.  The old contract gave every
 # command the same five-minute limit, which made an XCTest hang
@@ -102,18 +107,30 @@ class IOSSimulatorStageError(IOSSimulatorAppContractError):
         detail: str,
         *,
         timeout_seconds: float | None = None,
+        elapsed_seconds: float | None = None,
     ) -> None:
         self.stage = stage
         self.timeout_seconds = timeout_seconds
+        self.elapsed_seconds = elapsed_seconds
         normalized = detail.strip() or "no command diagnostic"
         timed_out = "timed out" in normalized.lower()
         if timed_out and timeout_seconds is not None:
+            elapsed = (
+                f", elapsed {elapsed_seconds:.3f}s"
+                if elapsed_seconds is not None
+                else ""
+            )
             message = (
-                f"iOS Simulator stage '{stage}' timed out after "
-                f"{timeout_seconds:g}s: {normalized}"
+                f"iOS Simulator stage '{stage}' timed out "
+                f"(limit {timeout_seconds:g}s{elapsed}): {normalized}"
             )
         else:
-            message = f"iOS Simulator stage '{stage}' failed: {normalized}"
+            elapsed = (
+                f" after {elapsed_seconds:.3f}s"
+                if elapsed_seconds is not None
+                else ""
+            )
+            message = f"iOS Simulator stage '{stage}' failed{elapsed}: {normalized}"
         super().__init__(message)
 
 
@@ -207,14 +224,43 @@ def _stop_process_group(process: subprocess.Popen[bytes], grace_seconds: float) 
         except subprocess.TimeoutExpired as error:
             captured_stdout = error.output or error.stdout or b""
             captured_stderr = error.stderr or b""
-            process.kill()
-            stdout, stderr = process.communicate()
-            failure = IOSSimulatorAppContractError(
-                "iOS command pipes remained open after process-group cleanup"
-            )
-            failure.stdout = merge_output(captured_stdout, stdout or b"")
-            failure.stderr = merge_output(captured_stderr, stderr or b"")
-            raise failure from error
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = process.communicate(timeout=max(1.0, grace_seconds))
+            except subprocess.TimeoutExpired as final_error:
+                captured_stdout = merge_output(
+                    captured_stdout,
+                    final_error.output or final_error.stdout or b"",
+                )
+                captured_stderr = merge_output(
+                    captured_stderr,
+                    final_error.stderr or b"",
+                )
+                cleanup_errors: list[str] = []
+                for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+                    if stream is None:
+                        continue
+                    try:
+                        stream.close()
+                    except BaseException as close_error:
+                        cleanup_errors.append(
+                            f"{name} pipe close: {type(close_error).__name__}: {close_error}"
+                        )
+                failure = IOSSimulatorAppContractError(
+                    "iOS command pipes remained open after process-group cleanup; "
+                    "output collection did not finish within the bounded drain"
+                )
+                failure.stdout = merge_output(captured_stdout, final_error.output or b"")
+                failure.stderr = merge_output(captured_stderr, final_error.stderr or b"")
+                if cleanup_errors:
+                    failure.add_note("cleanup_errors: " + "; ".join(cleanup_errors))
+                raise failure from final_error
+            # Drain output already written before closing inherited handles.
+            stdout = merge_output(captured_stdout, stdout or b"")
+            stderr = merge_output(captured_stderr, stderr or b"")
     # The parent may have exited while a background command still shares its
     # process group but not its pipes. Reap that group as part of timeout cleanup.
     _signal_process_group(process, signal.SIGKILL)
@@ -465,7 +511,12 @@ def _stage_timeout(
     value = requested if requested is not None else STAGE_TIMEOUT_SECONDS.get(
         stage, DEFAULT_COMMAND_TIMEOUT_SECONDS
     )
-    return budget.operation_timeout(value) if budget is not None else value
+    if budget is None:
+        return value
+    bounded_with_termination = budget.operation_timeout(
+        value + COMMAND_TERMINATION_RESERVE_SECONDS
+    )
+    return bounded_with_termination - COMMAND_TERMINATION_RESERVE_SECONDS
 
 
 def _stage_error(
@@ -473,11 +524,20 @@ def _stage_error(
     error: BaseException | str,
     *,
     timeout_seconds: float | None = None,
+    elapsed_seconds: float | None = None,
 ) -> IOSSimulatorStageError:
     if isinstance(error, IOSSimulatorStageError) and error.stage == stage:
+        if elapsed_seconds is not None and error.elapsed_seconds is None:
+            error.elapsed_seconds = elapsed_seconds
+            error.add_note(f"stage_elapsed_seconds={elapsed_seconds:.3f}")
         return error
     detail = str(error).strip() or type(error).__name__
-    wrapped = IOSSimulatorStageError(stage, detail, timeout_seconds=timeout_seconds)
+    wrapped = IOSSimulatorStageError(
+        stage,
+        detail,
+        timeout_seconds=timeout_seconds,
+        elapsed_seconds=elapsed_seconds,
+    )
     for note in getattr(error, "__notes__", ()):
         wrapped.add_note(note)
     if hasattr(error, "stdout") or hasattr(error, "stderr"):
@@ -501,15 +561,20 @@ def _require_success(
     bounded_timeout: bool = False,
 ) -> CommandResult:
     effective_timeout: float | None = timeout_seconds
+    started_at = time.monotonic()
     try:
         # Cleanup callers pass a timeout already bounded by the cleanup
-        # reserve. Reapplying ``operation_timeout`` there would subtract the
-        # reserve twice and could skip a still-available shutdown window.
-        effective_timeout = (
-            timeout_seconds
-            if bounded_timeout and timeout_seconds is not None
-            else _stage_timeout(budget, stage, timeout_seconds)
-        )
+        # reserve. Keep the process-stop allowance inside that same window;
+        # reapplying ``operation_timeout`` would subtract the reserve twice.
+        if bounded_timeout and timeout_seconds is not None:
+            effective_timeout = timeout_seconds
+            if budget is not None:
+                effective_timeout = min(
+                    effective_timeout,
+                    budget.cleanup_timeout() - COMMAND_TERMINATION_RESERVE_SECONDS,
+                )
+        else:
+            effective_timeout = _stage_timeout(budget, stage, timeout_seconds)
         if effective_timeout <= 0:
             raise IOSSimulatorAppContractError(
                 f"iOS Simulator stage '{stage}' has no time remaining"
@@ -520,12 +585,19 @@ def _require_success(
         # copying a command stream into the error or any result file.
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise
-        raise _stage_error(stage, error, timeout_seconds=effective_timeout) from error
+        elapsed = max(0.0, time.monotonic() - started_at)
+        raise _stage_error(
+            stage,
+            error,
+            timeout_seconds=effective_timeout,
+            elapsed_seconds=elapsed,
+        ) from error
     if result.returncode:
         failure = IOSSimulatorStageError(
             stage,
             f"exit code {result.returncode}",
             timeout_seconds=effective_timeout,
+            elapsed_seconds=max(0.0, time.monotonic() - started_at),
         )
         add_stream_notes(failure, "command", result.stdout, result.stderr)
         raise failure
@@ -816,7 +888,10 @@ def _terminate_app(
     # starve diagnostics and shutdown, which are the reliable final cleanup
     # actions. Pass this bounded value directly; applying the functional
     # operation budget again would subtract the cleanup reserve twice.
-    timeout = min(STAGE_TIMEOUT_SECONDS["terminate"], budget.cleanup_timeout())
+    timeout = min(
+        STAGE_TIMEOUT_SECONDS["terminate"],
+        budget.cleanup_timeout() - COMMAND_TERMINATION_RESERVE_SECONDS,
+    )
     if timeout <= 0:
         raise IOSSimulatorStageError("terminate", "cleanup deadline expired")
     try:
