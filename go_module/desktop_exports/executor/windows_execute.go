@@ -12,6 +12,7 @@ import (
 
 	"go_module/desktop_exports/controljson"
 	"go_module/desktop_exports/controlplane"
+	"go_module/tunnel/platform_engine"
 
 	"go_module/log"
 
@@ -108,6 +109,10 @@ func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeReq
 		log.Debugf(desktopLogCategory, "[ERROR] failed to recover interrupted product state: %v", err)
 		return true, 1
 	}
+	if err := platform_engine.RecoverStaleWindowsResources(); err != nil {
+		log.Debugf(desktopLogCategory, "[ERROR] failed to recover stale Windows VPN resources: %v", err)
+		return true, 1
+	}
 	stopControl, serveDone, err := serveDesktopControl()
 	if err != nil {
 		log.Debugf(desktopLogCategory, "[ERROR] failed to listen for desktop control: %v", err)
@@ -140,6 +145,9 @@ func runService() error {
 func run() {
 	if err := recoverInterruptedState(); err != nil {
 		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
+	}
+	if err := platform_engine.RecoverStaleWindowsResources(); err != nil {
+		panic(fmt.Sprintf("failed to recover stale Windows VPN resources: %v", err))
 	}
 	stopControl, serveDone, err := serveDesktopControl()
 	if err != nil {

@@ -4,6 +4,7 @@ package routing
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -46,8 +47,9 @@ var ipv4ReservedSubnets = []string{
 }
 
 var (
-	windowsNetshCommand = executeNetshCommand
-	windowsRouteExists  = routeExistsInWindowsTable
+	windowsNetshCommand      = executeNetshCommand
+	windowsRouteExists       = routeExistsInWindowsTable
+	windowsPowerShellCommand = executeWindowsPowerShell
 
 	interfaceChangeCallback = windows.NewCallback(onInterfaceChange)
 	interfaceWaitersMu      sync.Mutex
@@ -192,6 +194,81 @@ func releaseWindowsRoute(route windowsRoute, timeout time.Duration) error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// CleanupStaleWindowsTunnelRoutes removes only the exact on-link split-default
+// routes associated with a generated DobbyVPN adapter alias. Physical bypass
+// and reserved routes are intentionally outside this recovery path.
+func CleanupStaleWindowsTunnelRoutes(interfaceName string) error {
+	if !IsOwnedWindowsTunnelInterface(interfaceName) {
+		return fmt.Errorf("refusing to clean routes for unowned Windows interface %q", interfaceName)
+	}
+	for _, prefix := range ipv4Subnets {
+		route := windowsRoute{
+			prefix:        prefix,
+			nextHop:       windowsOnLinkNextHop,
+			interfaceName: interfaceName,
+		}
+		if !IsOwnedWindowsTunRedirect(route.prefix, route.nextHop, route.interfaceName) {
+			continue
+		}
+		exists, err := windowsRouteExists(route)
+		if err != nil {
+			return fmt.Errorf("query stale owned route %s on %q: %w", prefix, interfaceName, err)
+		}
+		if !exists {
+			continue
+		}
+		log.Debugf(Category, "Outline/routing: removing stale owned TUN route prefix=%s nexthop=%s interface=%s", route.prefix, route.nextHop, route.interfaceName)
+		if err := releaseWindowsRoute(route, 2*time.Second); err != nil {
+			return fmt.Errorf("remove stale owned route %s on %q: %w", prefix, interfaceName, err)
+		}
+		log.Debugf(Category, "Outline/routing: removed stale owned TUN route prefix=%s nexthop=%s interface=%s", route.prefix, route.nextHop, route.interfaceName)
+	}
+	return nil
+}
+
+const cleanupStaleWindowsIPv6RulesScript = `$ErrorActionPreference = 'Stop'
+$pattern = '^DobbyVPN Block IPv6 windows-[0-9]+-[0-9]+$'
+$displayName = 'DobbyVPN Block IPv6 windows-*'
+$rules = @(Get-NetFirewallRule -DisplayName $displayName -PolicyStore PersistentStore -ErrorAction Stop | Where-Object { $_.DisplayName -cmatch $pattern })
+foreach ($rule in $rules) { [Console]::Out.WriteLine($rule.DisplayName); Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop }
+$remaining = @(Get-NetFirewallRule -DisplayName $displayName -PolicyStore PersistentStore -ErrorAction Stop | Where-Object { $_.DisplayName -cmatch $pattern })
+if ($remaining.Count -gt 0) { throw 'DobbyVPN-owned IPv6 firewall rules remained after cleanup.' }`
+
+// CleanupStaleWindowsIPv6FirewallRules deletes only rules whose local
+// persistent-store display name uses the exact generated Windows session form.
+func CleanupStaleWindowsIPv6FirewallRules() error {
+	stdout, stderr, err := windowsPowerShellCommand(cleanupStaleWindowsIPv6RulesScript, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("remove stale owned IPv6 firewall rules: %w, stdout: %s, stderr: %s", err, stdout, stderr)
+	}
+	names := strings.FieldsFunc(stdout, func(char rune) bool { return char == '\r' || char == '\n' })
+	for _, name := range names {
+		if !IsOwnedWindowsIPv6RuleName(name) {
+			return fmt.Errorf("stale IPv6 firewall cleanup returned an unowned rule name %q, stdout: %s, stderr: %s", name, stdout, stderr)
+		}
+	}
+	log.Debugf(Category, "Outline/routing: stale IPv6 firewall recovery removed=%d stdout=%s stderr=%s", len(names), stdout, stderr)
+	return nil
+}
+
+func executeWindowsPowerShell(script string, timeout time.Duration) (string, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return stdout.String(), stderr.String(), fmt.Errorf("PowerShell command failed: %w", err)
+	}
+	return stdout.String(), stderr.String(), nil
 }
 
 func routeExistsInWindowsTable(route windowsRoute) (bool, error) {

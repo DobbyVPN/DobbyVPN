@@ -241,3 +241,98 @@ func TestSelectExactInterfaceNeverUsesSubstringMatch(t *testing.T) {
 		t.Fatal("substring-compatible but non-exact adapter must not be selected")
 	}
 }
+
+func TestCleanupStaleWindowsTunnelRoutesDeletesOnlyOwnedSplitDefaults(t *testing.T) {
+	originalExists := windowsRouteExists
+	originalCommand := windowsNetshCommand
+	t.Cleanup(func() {
+		windowsRouteExists = originalExists
+		windowsNetshCommand = originalCommand
+	})
+	interfaceName := "DobbyVPN-0123456789abcdef0123456789abcdef"
+	state := map[windowsRoute]bool{
+		{prefix: "0.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}:   true,
+		{prefix: "128.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}: true,
+	}
+	windowsRouteExists = func(route windowsRoute) (bool, error) { return state[route], nil }
+	var commands [][]string
+	windowsNetshCommand = func(args ...string) (string, error) {
+		commands = append(commands, append([]string(nil), args...))
+		if len(args) >= 7 && args[2] == "delete" {
+			route := windowsRoute{
+				prefix:        args[4],
+				nextHop:       strings.TrimPrefix(args[5], "nexthop="),
+				interfaceName: strings.TrimPrefix(args[6], "interface="),
+			}
+			delete(state, route)
+		}
+		return "", nil
+	}
+
+	if err := CleanupStaleWindowsTunnelRoutes(interfaceName); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		windowsRouteArgs("delete", windowsRoute{prefix: "0.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}),
+		windowsRouteArgs("delete", windowsRoute{prefix: "128.0.0.0/1", nextHop: "0.0.0.0", interfaceName: interfaceName}),
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("stale route deletions=%#v, want=%#v", commands, want)
+	}
+}
+
+func TestCleanupStaleWindowsTunnelRoutesRejectsUnownedInterface(t *testing.T) {
+	originalCommand := windowsNetshCommand
+	t.Cleanup(func() { windowsNetshCommand = originalCommand })
+	called := false
+	windowsNetshCommand = func(...string) (string, error) {
+		called = true
+		return "", nil
+	}
+	if err := CleanupStaleWindowsTunnelRoutes("Ethernet"); err == nil {
+		t.Fatal("stale route cleanup accepted a physical interface")
+	}
+	if called {
+		t.Fatal("stale route cleanup mutated a physical interface")
+	}
+}
+
+func TestCleanupStaleWindowsIPv6FirewallRulesUsesExactPersistentRuleNames(t *testing.T) {
+	original := windowsPowerShellCommand
+	t.Cleanup(func() { windowsPowerShellCommand = original })
+	var script string
+	var timeout time.Duration
+	windowsPowerShellCommand = func(gotScript string, gotTimeout time.Duration) (string, string, error) {
+		script = gotScript
+		timeout = gotTimeout
+		return "DobbyVPN Block IPv6 windows-1790525851930782900-2\r\n", "", nil
+	}
+	if err := CleanupStaleWindowsIPv6FirewallRules(); err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"-DisplayName $displayName -PolicyStore PersistentStore",
+		"^DobbyVPN Block IPv6 windows-[0-9]+-[0-9]+$",
+		"Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop",
+		"$remaining.Count -gt 0",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("cleanup script does not contain %q: %s", required, script)
+		}
+	}
+	if timeout != 30*time.Second {
+		t.Errorf("PowerShell timeout=%s, want 30s", timeout)
+	}
+}
+
+func TestCleanupStaleWindowsIPv6FirewallRulesPreservesCommandOutputOnError(t *testing.T) {
+	original := windowsPowerShellCommand
+	t.Cleanup(func() { windowsPowerShellCommand = original })
+	windowsPowerShellCommand = func(string, time.Duration) (string, string, error) {
+		return "stdout diagnostic", "stderr diagnostic", errors.New("command failed")
+	}
+	err := CleanupStaleWindowsIPv6FirewallRules()
+	if err == nil || !strings.Contains(err.Error(), "stdout: stdout diagnostic") || !strings.Contains(err.Error(), "stderr: stderr diagnostic") {
+		t.Fatalf("cleanup error=%v, want complete stdout/stderr diagnostics", err)
+	}
+}

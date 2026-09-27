@@ -3,6 +3,8 @@
 package platform_engine
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -10,7 +12,9 @@ import (
 	"go_module/common"
 	"net"
 	"net/netip"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -44,6 +48,7 @@ const (
 	windowsAdapterPrefix         = "DobbyVPN-"
 	windowsAdapterRandomBytes    = 16
 	windowsAdapterRemovalTimeout = 60 * time.Second
+	windowsAdapterCommandTimeout = 30 * time.Second
 )
 
 func execAndLog(cmd string, context string) error {
@@ -220,6 +225,105 @@ func prepareWindowsStateForStart() error {
 	}
 	resetWindowsState()
 	return nil
+}
+
+// RecoverStaleWindowsResources runs once from the backend entrypoint before
+// it accepts desktop control requests.
+func RecoverStaleWindowsResources() error {
+	if ownedAdapterName != "" || lastIface != "" {
+		return fmt.Errorf("cannot run Windows startup recovery while adapter %q is active", ownedAdapterName)
+	}
+	return recoverStaleWindowsState()
+}
+
+func recoverStaleWindowsState() error {
+	interfaces, err := listWindowsInterfaces()
+	if err != nil {
+		return fmt.Errorf("enumerate Windows interfaces for stale DobbyVPN recovery: %w", err)
+	}
+	var candidates []string
+	for _, iface := range interfaces {
+		if routing.IsOwnedWindowsTunnelInterface(iface.Name) {
+			candidates = append(candidates, iface.Name)
+		}
+	}
+	log.Debugf(Category, "[Engine][Windows] stale adapter candidates=%q", candidates)
+	err = recoverStaleWindowsResources(
+		interfaces,
+		routing.CleanupStaleWindowsTunnelRoutes,
+		routing.CleanupStaleWindowsIPv6FirewallRules,
+		removeStaleWindowsAdapter,
+	)
+	if err != nil {
+		log.Debugf(Category, "[Engine][Windows] stale resource recovery failed candidates=%d: %v", len(candidates), err)
+		return err
+	}
+	log.Debugf(Category, "[Engine][Windows] stale resource recovery complete candidates=%d", len(candidates))
+	return nil
+}
+
+func removeStaleWindowsAdapter(name string) error {
+	if !routing.IsOwnedWindowsTunnelInterface(name) {
+		return fmt.Errorf("refusing to remove unowned Windows adapter %q", name)
+	}
+	instanceID, err := windowsAdapterPnPInstanceID(name)
+	if err != nil {
+		return err
+	}
+	log.Debugf(Category, "[Engine][Windows] removing stale adapter name=%s pnp_instance=%s", name, instanceID)
+	ctx, cancel := context.WithTimeout(context.Background(), windowsAdapterCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pnputil.exe", "/remove-device", instanceID)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return fmt.Errorf("pnputil /remove-device for owned adapter %q failed: %w, stdout: %s, stderr: %s", name, err, stdout.String(), stderr.String())
+	}
+	if err := waitForWindowsAdapterRemoval(name, windowsAdapterRemovalTimeout); err != nil {
+		return fmt.Errorf("verify stale owned adapter %q removal: %w, stdout: %s, stderr: %s", name, err, stdout.String(), stderr.String())
+	}
+	log.Debugf(Category, "[Engine][Windows] stale adapter removed name=%s pnp_instance=%s stdout=%s stderr=%s", name, instanceID, stdout.String(), stderr.String())
+	return nil
+}
+
+func windowsAdapterPnPInstanceID(name string) (string, error) {
+	if !routing.IsOwnedWindowsTunnelInterface(name) {
+		return "", fmt.Errorf("refusing to query unowned Windows adapter %q", name)
+	}
+	// The name has already been constrained to a fixed ASCII prefix and hex
+	// suffix, so it is safe to embed as a PowerShell string literal.
+	script := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object { $_.Name -ceq '%s' })
+if ($adapters.Count -ne 1) { throw 'Expected exactly one matching DobbyVPN adapter.' }
+$instanceID = [string]$adapters[0].PnPDeviceID
+if ([string]::IsNullOrWhiteSpace($instanceID)) { throw 'Matching DobbyVPN adapter has no PnP device ID.' }
+[Console]::Out.WriteLine($instanceID)`, name)
+	ctx, cancel := context.WithTimeout(context.Background(), windowsAdapterCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return "", fmt.Errorf("query PnP device ID for owned adapter %q failed: %w, stdout: %s, stderr: %s", name, err, stdout.String(), stderr.String())
+	}
+	instanceID := strings.TrimSpace(stdout.String())
+	if instanceID == "" || strings.ContainsAny(instanceID, "\r\n") {
+		return "", fmt.Errorf("query PnP device ID for owned adapter %q returned invalid output: stdout: %s, stderr: %s", name, stdout.String(), stderr.String())
+	}
+	log.Debugf(Category, "[Engine][Windows] stale adapter PnP lookup name=%s stdout=%s stderr=%s", name, stdout.String(), stderr.String())
+	return instanceID, nil
 }
 
 func cleanupWindowsState() error {
