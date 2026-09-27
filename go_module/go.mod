@@ -2,7 +2,7 @@ module go_module
 
 go 1.26.8
 
-replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260926103853-b4a92748a80c
+replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260927100020-f9950989d6b4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
