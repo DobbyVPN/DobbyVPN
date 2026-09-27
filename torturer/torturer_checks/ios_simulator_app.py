@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import os
 import plistlib
@@ -14,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence, TypeVar
 
 from torturer_checks.diagnostics import (
     add_exception_notes,
@@ -46,6 +47,7 @@ _DEFAULT_ARCHITECTURE = "arm64"
 _SUPPORTED_ARCHITECTURES = frozenset(("arm64", "amd64"))
 _SIMULATOR_PREFERENCES_FILE = "com.apple.iphonesimulator.plist"
 _HARDWARE_KEYBOARD_PREFERENCE = "ConnectHardwareKeyboard"
+_StageResult = TypeVar("_StageResult")
 MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
@@ -87,6 +89,48 @@ STAGE_TIMEOUT_SECONDS = {
     "shutdown": 120,
     "package-ios-app": IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS,
 }
+
+
+def _emit_stage_progress(event: str, stage: str, **fields: object) -> None:
+    print(
+        json.dumps(
+            {
+                "kind": "dobbyvpn.ios_simulator.progress",
+                "event": event,
+                "timestamp_utc": datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z"),
+                "stage": stage,
+                **fields,
+            },
+            sort_keys=True,
+            allow_nan=False,
+        ),
+        flush=True,
+    )
+
+
+def _timed_stage(stage: str, operation: Callable[[], _StageResult]) -> _StageResult:
+    started_at = time.monotonic()
+    _emit_stage_progress("stage-start", stage)
+    try:
+        result = operation()
+    except BaseException as error:
+        _emit_stage_progress(
+            "stage-finish",
+            stage,
+            duration_seconds=max(0.0, time.monotonic() - started_at),
+            status="failed",
+            error_type=type(error).__name__,
+        )
+        raise
+    _emit_stage_progress(
+        "stage-finish",
+        stage,
+        duration_seconds=max(0.0, time.monotonic() - started_at),
+        status="succeeded",
+    )
+    return result
 
 
 class IOSSimulatorAppContractError(RuntimeError):
@@ -1193,30 +1237,34 @@ def run_ios_simulator_app_contract(
                 was_connected=keyboard_override,
             )
         boot_started = True
-        boot_timeout = _stage_timeout(budget, "boot")
-        try:
-            boot = runner.run(
-                simctl_boot_command(simulator.udid),
-                timeout_seconds=boot_timeout,
+
+        def boot_simulator() -> None:
+            boot_timeout = _stage_timeout(budget, "boot")
+            try:
+                boot = runner.run(
+                    simctl_boot_command(simulator.udid),
+                    timeout_seconds=boot_timeout,
+                )
+            except BaseException as error:
+                if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                    raise
+                raise _stage_error("boot", error, timeout_seconds=boot_timeout) from error
+            if boot.returncode and "current state: Booted" not in (boot.stdout + boot.stderr):
+                failure = IOSSimulatorStageError(
+                    "boot",
+                    f"exit code {boot.returncode}",
+                    timeout_seconds=boot_timeout,
+                )
+                add_stream_notes(failure, "command", boot.stdout, boot.stderr)
+                raise failure
+            _require_success(
+                runner,
+                simctl_bootstatus_command(simulator.udid),
+                "bootstatus",
+                budget=budget,
             )
-        except BaseException as error:
-            if isinstance(error, (KeyboardInterrupt, SystemExit)):
-                raise
-            raise _stage_error("boot", error, timeout_seconds=boot_timeout) from error
-        if boot.returncode and "current state: Booted" not in (boot.stdout + boot.stderr):
-            failure = IOSSimulatorStageError(
-                "boot",
-                f"exit code {boot.returncode}",
-                timeout_seconds=boot_timeout,
-            )
-            add_stream_notes(failure, "command", boot.stdout, boot.stderr)
-            raise failure
-        _require_success(
-            runner,
-            simctl_bootstatus_command(simulator.udid),
-            "bootstatus",
-            budget=budget,
-        )
+
+        _timed_stage("boot", boot_simulator)
         if keyboard_state is not None:
             _disable_per_device_hardware_keyboard(
                 runner, keyboard_state, budget=budget
@@ -1227,11 +1275,14 @@ def run_ios_simulator_app_contract(
                 "verify-app-bundle",
                 f"SwiftUI Simulator build produced no app bundle: {app_path}",
             )
-        _require_success(
-            runner,
-            simctl_install_command(simulator.udid, app_path),
+        _timed_stage(
             "install",
-            budget=budget,
+            lambda: _require_success(
+                runner,
+                simctl_install_command(simulator.udid, app_path),
+                "install",
+                budget=budget,
+            ),
         )
         app_installed = True
         project = candidate_root / _PROJECT_PATH
@@ -1258,18 +1309,21 @@ def run_ios_simulator_app_contract(
         # launch and its in-test terminate/reopen lifecycle; handing it an
         # already-running simctl process can block setUp before test output.
         xctest_started = True
-        _require_success(
-            runner,
-            xcodebuild_ui_test_command(
-                simulator.udid,
-                project,
-                work_dir / "ui-tests",
-                result_bundle=result_bundle,
+        _timed_stage(
+            "xctest",
+            lambda: _require_success(
+                runner,
+                xcodebuild_ui_test_command(
+                    simulator.udid,
+                    project,
+                    work_dir / "ui-tests",
+                    result_bundle=result_bundle,
+                ),
+                "xctest-ui",
+                cwd=candidate_root,
+                budget=budget,
+                timeout_seconds=STAGE_TIMEOUT_SECONDS["xctest-ui"],
             ),
-            "xctest-ui",
-            cwd=candidate_root,
-            budget=budget,
-            timeout_seconds=STAGE_TIMEOUT_SECONDS["xctest-ui"],
         )
 
     except BaseException as error:
@@ -1280,68 +1334,84 @@ def run_ios_simulator_app_contract(
         # app log while the app data container is still installed; collection
         # failures remain explicit and secondary to a product assertion so
         # cleanup can still run.
-        if xctest_started:
-            if result_bundle.exists():
-                try:
-                    retained_result_bundle = _retain_xctest_result_bundle(
-                        result_bundle, work_dir
+        cleanup_errors: list[tuple[str, BaseException]] = []
+
+        def cleanup_simulator() -> None:
+            nonlocal retained_result_bundle, retained_native_log
+            if xctest_started:
+                if result_bundle.exists():
+                    try:
+                        retained_result_bundle = _retain_xctest_result_bundle(
+                            result_bundle, work_dir
+                        )
+                        _retain_xctest_screenshots(
+                            runner, retained_result_bundle, work_dir, budget=budget
+                        )
+                    except BaseException as error:
+                        cleanup_errors.append(("iOS XCTest result collection failed", error))
+                else:
+                    cleanup_errors.append(
+                        (
+                            "iOS XCTest result collection failed",
+                            IOSSimulatorStageError(
+                                "collect-xctest-result",
+                                f"complete XCTest result bundle is missing: {result_bundle}",
+                            ),
+                        )
                     )
-                    _retain_xctest_screenshots(
-                        runner, retained_result_bundle, work_dir, budget=budget
+                if simulator is not None and app_installed:
+                    try:
+                        retained_native_log = _collect_ios_native_log(
+                            runner,
+                            simulator,
+                            contract,
+                            work_dir,
+                            budget=budget,
+                        )
+                    except BaseException as error:
+                        cleanup_errors.append(
+                            ("iOS app log export collection failed", error)
+                        )
+            if simulator is not None:
+                if app_installed:
+                    try:
+                        _terminate_app(runner, simulator, contract, budget=budget)
+                    except BaseException as error:
+                        cleanup_errors.append(("Simulator app cleanup also failed", error))
+                if keyboard_state is not None:
+                    try:
+                        _restore_per_device_hardware_keyboard(
+                            runner, keyboard_state, budget=budget
+                        )
+                    except BaseException as error:
+                        cleanup_errors.append(
+                            ("Simulator keyboard preference cleanup also failed", error)
+                        )
+                if boot_started:
+                    try:
+                        _shutdown_simulator(runner, simulator, budget=budget)
+                    except BaseException as error:
+                        cleanup_errors.append(("Simulator shutdown also failed", error))
+            if keyboard_preference_configured:
+                try:
+                    _restore_simulator_hardware_keyboard(
+                        runner, previous_keyboard_preference, budget=budget
                     )
                 except BaseException as error:
-                    failure = _add_note(failure, "iOS XCTest result collection failed", error)
+                    cleanup_errors.append(
+                        ("Simulator keyboard preference cleanup also failed", error)
+                    )
+            if cleanup_errors:
+                raise cleanup_errors[0][1]
+
+        try:
+            _timed_stage("cleanup", cleanup_simulator)
+        except BaseException:
+            if cleanup_errors:
+                for label, cleanup_error in cleanup_errors:
+                    failure = _add_note(failure, label, cleanup_error)
             else:
-                failure = _add_note(
-                    failure,
-                    "iOS XCTest result collection failed",
-                    IOSSimulatorStageError(
-                        "collect-xctest-result",
-                        f"complete XCTest result bundle is missing: {result_bundle}",
-                    ),
-                )
-            if simulator is not None and app_installed:
-                try:
-                    retained_native_log = _collect_ios_native_log(
-                        runner,
-                        simulator,
-                        contract,
-                        work_dir,
-                        budget=budget,
-                    )
-                except BaseException as error:
-                    failure = _add_note(
-                        failure, "iOS app log export collection failed", error
-                    )
-        if simulator is not None:
-            if app_installed:
-                try:
-                    _terminate_app(runner, simulator, contract, budget=budget)
-                except BaseException as error:
-                    failure = _add_note(failure, "Simulator app cleanup also failed", error)
-            if keyboard_state is not None:
-                try:
-                    _restore_per_device_hardware_keyboard(
-                        runner, keyboard_state, budget=budget
-                    )
-                except BaseException as error:
-                    failure = _add_note(
-                        failure, "Simulator keyboard preference cleanup also failed", error
-                    )
-            if boot_started:
-                try:
-                    _shutdown_simulator(runner, simulator, budget=budget)
-                except BaseException as error:
-                    failure = _add_note(failure, "Simulator shutdown also failed", error)
-        if keyboard_preference_configured:
-            try:
-                _restore_simulator_hardware_keyboard(
-                    runner, previous_keyboard_preference, budget=budget
-                )
-            except BaseException as error:
-                failure = _add_note(
-                    failure, "Simulator keyboard preference cleanup also failed", error
-                )
+                raise
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
     if simulator is None or retained_result_bundle is None or retained_native_log is None:
@@ -1372,16 +1442,19 @@ def prepare_ios_simulator_candidate(
     work_dir.mkdir(parents=True, exist_ok=True)
     app_path = contract.app_path(work_dir)
     go_root = candidate_root / "go_module"
-    _require_success(
-        runner,
-        xcodebuild_app_command(contract, work_dir=work_dir),
-        "package-ios-app",
-        cwd=go_root,
-        budget=budget,
-        timeout_seconds=IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS,
-    )
-    if not app_path.is_dir():
-        raise IOSSimulatorStageError(
+    def build_app() -> None:
+        _require_success(
+            runner,
+            xcodebuild_app_command(contract, work_dir=work_dir),
             "package-ios-app",
-            f"SwiftUI build produced no Simulator app: {app_path}",
+            cwd=go_root,
+            budget=budget,
+            timeout_seconds=IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS,
         )
+        if not app_path.is_dir():
+            raise IOSSimulatorStageError(
+                "package-ios-app",
+                f"SwiftUI build produced no Simulator app: {app_path}",
+            )
+
+    _timed_stage("build", build_app)

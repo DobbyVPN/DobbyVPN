@@ -9,6 +9,7 @@ consume the paths in the descriptor to start the candidate.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 import traceback
 from typing import Any
 
@@ -74,31 +76,32 @@ def _retain_captured_stream(stream: Any, output: bytes) -> None:
     stream.buffer.flush()
 
 
-def _retain_command_metadata(
+def _utc_timestamp() -> str:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return timestamp.replace("+00:00", "Z")
+
+
+def _retain_command_event(
     event: str,
-    command: list[str],
     *,
     label: str,
     status: str,
     returncode: int | None,
-    stdout_bytes: int | None = None,
-    stderr_bytes: int | None = None,
+    duration_seconds: float | None = None,
 ) -> None:
     record: dict[str, object] = {
-        "argv": command,
         "event": event,
         "label": label,
         "returncode": returncode,
         "status": status,
+        "timestamp_utc": _utc_timestamp(),
     }
-    if stdout_bytes is not None:
-        record["stdout_bytes"] = stdout_bytes
-    if stderr_bytes is not None:
-        record["stderr_bytes"] = stderr_bytes
+    if duration_seconds is not None:
+        record["duration_seconds"] = round(duration_seconds, 3)
     _retain_captured_stream(
         sys.stderr,
         (
-            "local-candidate-command "
+            "local-candidate-progress "
             + json.dumps(record, sort_keys=True, separators=(",", ":"))
             + "\n"
         ).encode("utf-8"),
@@ -112,9 +115,9 @@ def _run_captured(
     environment: dict[str, str],
     timeout: int,
 ) -> subprocess.CompletedProcess[bytes]:
-    _retain_command_metadata(
+    started = time.monotonic()
+    _retain_command_event(
         "start",
-        command,
         label=label,
         status="started",
         returncode=None,
@@ -130,6 +133,7 @@ def _run_captured(
             timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
+        duration = time.monotonic() - started
         stdout = getattr(error, "stdout", getattr(error, "output", None)) or b""
         stderr = getattr(error, "stderr", None) or b""
         _retain_captured_stream(
@@ -137,14 +141,16 @@ def _run_captured(
             stdout,
         )
         _retain_captured_stream(sys.stderr, stderr)
-        _retain_command_metadata(
+        _retain_command_event(
             "finish",
-            command,
             label=label,
-            status="timed-out" if isinstance(error, subprocess.TimeoutExpired) else "launch-failed",
+            status=(
+                "timed-out"
+                if isinstance(error, subprocess.TimeoutExpired)
+                else "launch-failed"
+            ),
             returncode=getattr(error, "returncode", None),
-            stdout_bytes=len(stdout),
-            stderr_bytes=len(stderr),
+            duration_seconds=duration,
         )
         raise _command_error(
             label,
@@ -154,16 +160,15 @@ def _run_captured(
         ) from error
     stdout = completed.stdout or b""
     stderr = completed.stderr or b""
+    duration = time.monotonic() - started
     _retain_captured_stream(sys.stdout, stdout)
     _retain_captured_stream(sys.stderr, stderr)
-    _retain_command_metadata(
+    _retain_command_event(
         "finish",
-        command,
         label=label,
-        status="completed",
+        status=("completed" if completed.returncode == 0 else "failed"),
         returncode=completed.returncode,
-        stdout_bytes=len(stdout),
-        stderr_bytes=len(stderr),
+        duration_seconds=duration,
     )
     if completed.returncode != 0:
         raise _command_error(
@@ -212,14 +217,39 @@ def _regular_file(path: Path, root: Path, label: str) -> Path:
 def _run(
     command: list[str],
     *,
+    label: str,
     source_root: Path,
     environment: dict[str, str] | None = None,
 ) -> None:
-    subprocess.run(
-        command,
-        cwd=str(source_root),
-        env=environment,
-        check=True,
+    started = time.monotonic()
+    _retain_command_event(
+        "start",
+        label=label,
+        status="started",
+        returncode=None,
+    )
+    try:
+        subprocess.run(
+            command,
+            cwd=str(source_root),
+            env=environment,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        _retain_command_event(
+            "finish",
+            label=label,
+            status=("launch-failed" if isinstance(error, OSError) else "failed"),
+            returncode=getattr(error, "returncode", None),
+            duration_seconds=time.monotonic() - started,
+        )
+        raise
+    _retain_command_event(
+        "finish",
+        label=label,
+        status="completed",
+        returncode=0,
+        duration_seconds=time.monotonic() - started,
     )
 
 
@@ -368,7 +398,12 @@ def _build_desktop(
     libs.append("--with-cli")
     if skip_deps:
         libs.append("--skip-deps")
-    _run(libs, source_root=source_root, environment=environment)
+    _run(
+        libs,
+        label=f"desktop libs build ({platform})",
+        source_root=source_root,
+        environment=environment,
+    )
     if platform in {"windows", "macos"}:
         ui_output = candidate_root / ("frontend" if platform == "windows" else UI_NAMES[platform])
         native_ui = [
@@ -383,7 +418,12 @@ def _build_desktop(
         ]
         if skip_deps:
             native_ui.append("--skip-deps")
-        _run(native_ui, source_root=source_root, environment=environment)
+        _run(
+            native_ui,
+            label=f"desktop native UI build ({platform})",
+            source_root=source_root,
+            environment=environment,
+        )
 
 
 def _build_android(
@@ -406,7 +446,7 @@ def _build_android(
         str(companion_output),
     ]
     command.append("--local")
-    _run(command, source_root=source_root)
+    _run(command, label="Android candidate build", source_root=source_root)
     if not output.is_file():
         raise CandidateError("Android build did not produce the application APK")
     if not companion_output.is_file():

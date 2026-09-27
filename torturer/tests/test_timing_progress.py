@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_checks import local_vm
+from torturer_checks import ios_simulator_app
 from torturer_checks.hosted import run as hosted_run
 from torturer_checks.hosted.cli import HostedCLIAdapter, SubprocessRunner
 from torturer_contract.functional.engine import ScenarioExecutionError
@@ -31,6 +32,143 @@ def _assert_utc_timestamp(test: unittest.TestCase, value: object) -> None:
 
 
 class TimingProgressTests(unittest.TestCase):
+    def test_ios_build_stage_events_report_utc_duration_and_keep_failure_streams(self) -> None:
+        contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
+
+        class BuildRunner:
+            def __init__(self, returncode: int) -> None:
+                self.returncode = returncode
+
+            def run(self, _command, *, cwd=None, timeout_seconds=None):
+                del cwd, timeout_seconds
+                if self.returncode == 0:
+                    contract.app_path(work_dir).mkdir(parents=True)
+                return ios_simulator_app.CommandResult(
+                    self.returncode,
+                    "build stdout\x00" if self.returncode else "",
+                    "build stderr\xff" if self.returncode else "",
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work_dir = root / "work"
+            events_output = StringIO()
+            with redirect_stdout(events_output):
+                ios_simulator_app.prepare_ios_simulator_candidate(
+                    candidate_root=root / "candidate",
+                    work_dir=work_dir,
+                    runner=BuildRunner(0),
+                    contract=contract,
+                    budget=ios_simulator_app.RunBudget(),
+                )
+
+            events = _json_events(events_output.getvalue())
+            self.assertEqual(
+                [(event["event"], event["stage"]) for event in events],
+                [("stage-start", "build"), ("stage-finish", "build")],
+            )
+            for event in events:
+                self.assertEqual(event["kind"], "dobbyvpn.ios_simulator.progress")
+                _assert_utc_timestamp(self, event["timestamp_utc"])
+            self.assertGreaterEqual(events[-1]["duration_seconds"], 0)
+            self.assertEqual(events[-1]["status"], "succeeded")
+
+            failed_output = StringIO()
+            with redirect_stdout(failed_output):
+                with self.assertRaises(ios_simulator_app.IOSSimulatorStageError) as caught:
+                    ios_simulator_app.prepare_ios_simulator_candidate(
+                        candidate_root=root / "candidate",
+                        work_dir=root / "failed-work",
+                        runner=BuildRunner(1),
+                        contract=contract,
+                        budget=ios_simulator_app.RunBudget(),
+                    )
+
+        self.assertEqual(caught.exception.stage, "package-ios-app")
+        self.assertIn("build stdout\x00", "\n".join(caught.exception.__notes__))
+        self.assertIn("build stderrÿ", "\n".join(caught.exception.__notes__))
+        failed_events = _json_events(failed_output.getvalue())
+        self.assertEqual(
+            [(event["event"], event["stage"]) for event in failed_events],
+            [("stage-start", "build"), ("stage-finish", "build")],
+        )
+        _assert_utc_timestamp(self, failed_events[-1]["timestamp_utc"])
+        self.assertGreaterEqual(failed_events[-1]["duration_seconds"], 0)
+        self.assertEqual(failed_events[-1]["status"], "failed")
+        self.assertEqual(failed_events[-1]["error_type"], "IOSSimulatorStageError")
+
+    def test_ios_simulator_lifecycle_stage_events(self) -> None:
+        udid = "01234567-89ab-cdef-0123-456789abcdef"
+        inventory = {
+            "devices": {
+                "com.apple.CoreSimulator.SimRuntime.iOS-17-5": [{
+                    "isAvailable": True,
+                    "name": "iPhone 15",
+                    "udid": udid,
+                }],
+            },
+        }
+
+        class Runner:
+            def run(self, command, *, cwd=None, timeout_seconds=None):
+                del cwd, timeout_seconds
+                arguments = list(command)
+                if arguments[:4] == ["xcrun", "simctl", "list", "devices"]:
+                    return ios_simulator_app.CommandResult(0, json.dumps(inventory), "")
+                if arguments[:3] == ["xcrun", "--sdk", "iphonesimulator"]:
+                    return ios_simulator_app.CommandResult(0, "17.5", "")
+                if arguments[0] == "xcodebuild":
+                    result_bundle = Path(
+                        arguments[arguments.index("-resultBundlePath") + 1]
+                    )
+                    result_bundle.mkdir()
+                return ios_simulator_app.CommandResult(0, "", "")
+
+        contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work_dir = root / "work"
+            contract.app_path(work_dir).mkdir(parents=True)
+            (root / "candidate" / "swift_module" / "iosApp.xcodeproj").mkdir(
+                parents=True
+            )
+            events_output = StringIO()
+            with (
+                mock.patch.object(
+                    ios_simulator_app,
+                    "_read_simulator_hardware_keyboard_override",
+                    return_value=False,
+                ),
+                mock.patch.object(
+                    ios_simulator_app,
+                    "_retain_xctest_screenshots",
+                    return_value=root / "screenshots",
+                ),
+                mock.patch.object(
+                    ios_simulator_app,
+                    "_collect_ios_native_log",
+                    return_value=root / "native.log",
+                ),
+                redirect_stdout(events_output),
+            ):
+                ios_simulator_app.run_ios_simulator_app_contract(
+                    candidate_root=root / "candidate",
+                    work_dir=work_dir,
+                    runner=Runner(),
+                )
+
+        events = _json_events(events_output.getvalue())
+        finish_events = [event for event in events if event["event"] == "stage-finish"]
+        self.assertEqual(
+            [event["stage"] for event in finish_events],
+            ["boot", "install", "xctest", "cleanup"],
+        )
+        for event in events:
+            _assert_utc_timestamp(self, event["timestamp_utc"])
+        for event in finish_events:
+            self.assertGreaterEqual(event["duration_seconds"], 0)
+            self.assertEqual(event["status"], "succeeded")
+
     def test_hosted_progress_events_have_utc_timestamps(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
