@@ -40,6 +40,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
         forwarded: BinaryStderr,
     ) -> BaseException:
         command_file = profile.parent / "phase.command.json"
+        command_file.write_bytes(b"{}")
         output_name = "phase.observation.json"
         scenario = SimpleNamespace(id="android-diagnostic-phase")
         device_files: list[str] = []
@@ -153,6 +154,42 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
         self.assertIn(r"\xff", notes)
         self.assertIn("ANDROID_SCRATCH_CLEANUP_SENTINEL", notes)
         self.assertIn("scratch cleanup stdout", notes)
+
+
+class HostedAndroidRoutingProofDiagnosticsTests(unittest.TestCase):
+    def test_vpn_request_failure_keeps_code_and_complete_provider_detail(self) -> None:
+        detail = (
+            "java.net.SocketTimeoutException: request timed out\n"
+            "\tat example.Probe.request(Probe.java:17)\n"
+        )
+        observation = {
+            "phase": "blocked",
+            "direct": {"error_code": "ANDROID_NETWORK_REQUEST_FAILED"},
+            "vpn": {
+                "error_code": "ANDROID_NETWORK_REQUEST_FAILED",
+                "error_detail": detail,
+            },
+        }
+
+        with self.assertRaises(ScenarioExecutionError) as caught:
+            AndroidHostedAdapter._assert_routing_blocked(observation)
+
+        failure = caught.exception
+        self.assertEqual(str(failure), "ANDROID_NETWORK_REQUEST_FAILED")
+        self.assertIn("android_routing_phase=blocked", failure.__notes__)
+        self.assertIn("android_routing_vpn_error_detail:\n" + detail, failure.__notes__)
+
+    def test_vpn_request_success_still_passes_when_direct_request_is_blocked(self) -> None:
+        observation = {
+            "phase": "blocked",
+            "direct": {"error_code": "ANDROID_NETWORK_REQUEST_FAILED"},
+            "vpn": {"status": 200, "body": "203.0.113.7"},
+        }
+
+        self.assertEqual(
+            AndroidHostedAdapter._assert_routing_blocked(observation),
+            "203.0.113.7",
+        )
 
 
 if __name__ == "__main__":

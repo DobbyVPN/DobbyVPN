@@ -102,6 +102,13 @@ class NativeUiInstrumentedTest {
         requireObject(connectionActionLabel)
         captureScreenshot("startup")
 
+        // Resolve the app-owned diagnostic paths so the controller can
+        // collect the native JSONL file after instrumentation completes.
+        tapAndWaitForVisible("Logs", "Refresh")
+        waitForTextContaining("startup.diagnostic_store_ready")
+        tapStable("Back")
+        waitForOneOf(arrayOf("Disconnected"), 10_000)
+
         tapStable("Connection configuration")
         val nativeInput = waitForFocusedNativeInput(10_000)
         nativeInput.setText("invalidprofile")
@@ -260,6 +267,16 @@ class NativeUiInstrumentedTest {
     private fun waitForOneOf(labels: Array<String>, timeoutMillis: Long): UiObject2 {
         waitForOneOfOrNull(labels, timeoutMillis)?.let { return it }
         throw AssertionError("ANDROID_UI_STATE_TIMEOUT")
+    }
+
+    private fun waitForTextContaining(text: String, timeoutMillis: Long = 10_000) {
+        val selector = By.textContains(text).pkg(packageName)
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (device.findObject(selector) != null) return
+            Thread.sleep(100)
+        }
+        throw AssertionError("ANDROID_UI_TEXT_TIMEOUT:$text")
     }
 
     /** Capture a complete rendered frame as an extra, integrity-checked artifact. */

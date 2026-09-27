@@ -48,10 +48,11 @@ coverage only on Windows and macOS.
 Measurements must be finite and positive. Stability uses five successful
 samples at one-second intervals. Cleanup failure fails the scenario.
 
-The diagnostic-only functional.network-transition scenario remains selectable
-for focused work but is not part of either passing suite. Suspend/resume is
-not currently a functional scenario. Focused scenario selections are diagnostic
-runs and do not qualify a suite.
+`functional.network-transition` and suspend/resume recovery checks are disabled
+until further notice. Selecting `functional.network-transition` explicitly
+fails with a disabled-scenario error; it is not skipped or reported as passed.
+Suspend/resume has no selectable scenario. Focused scenario selections are
+diagnostic runs and do not qualify a suite.
 
 ## Traffic and shared service
 
@@ -82,6 +83,10 @@ commands, including failures, timeouts, original exceptions, and cleanup
 errors. Output is not truncated, reduced to selected lines, or replaced by a
 status code or byte count. Collection failures are reported alongside the
 test failure. Test cleanup runs after pass, failure, and timeout.
+
+The local Android rendered run retains the app's native diagnostic JSONL file
+and the `DobbyVPN` error stream from Logcat. Failure to collect either source
+fails the run while preserving the original instrumentation result.
 
 Required UI screenshots are kept with the current disposable run. Desktop
 captures contain the target app window; Android instrumentation captures the

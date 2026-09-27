@@ -66,9 +66,8 @@ def _select_scenarios(
     platform: str | None = None,
     suite: str = "mini",
 ) -> tuple:
-    # ``platform`` remains a caller-side preflight check.  Resolution itself
-    # is shared with the local entrypoint so a diagnostic selection can still
-    # name a deferred scenario; only a complete suite can qualify.
+    # ``platform`` remains a caller-side preflight check. Resolution is shared
+    # with the local entrypoint; only a complete suite can qualify.
     scenarios = select_scenarios(suite=suite, scenario_ids=scenario_ids)
     if len({scenario.id for scenario in scenarios}) != len(scenarios):
         raise ValueError("scenario-id values must be unique")

@@ -76,17 +76,14 @@ _COMMON_CONNECT = (
 )
 
 
-# ``functional.network-transition`` remains a useful, directly selectable
-# diagnostic scenario.  It is deliberately not part of either qualification
-# suite while network-transition is deferred.  Keeping the definition here
-# (rather than deleting it) preserves focused diagnostics without allowing a
-# hosted limitation to masquerade as qualification coverage.
 _QUALIFICATION_SCENARIO_IDS = (
     "functional.configure",
     "functional.core-connection",
     "functional.start-stop-start",
     "functional.product-process-loss",
 )
+
+_DISABLED_SCENARIO_IDS = frozenset({"functional.network-transition"})
 
 SUITE_NAMES = ("mini", "full")
 
@@ -179,35 +176,6 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
         max_duration_seconds=241,
     ),
     ScenarioDefinition(
-        id="functional.network-transition",
-        steps=_COMMON_CONNECT
-        + (
-            _step("network", "network_transition", 30),
-            _step("disconnect", "disconnect", 10),
-            _step("cleanup", "inspect_cleanup", 15),
-        ),
-        required_capabilities=frozenset(
-            {
-                Capability.CONFIGURE,
-                Capability.CONNECT,
-                Capability.TUNNEL_INTERFACE,
-                Capability.ROUTING_IDENTITY,
-                Capability.NETWORK_TRANSITION,
-                Capability.DISCONNECT,
-                Capability.RESOURCE_CLEANUP,
-            }
-        ),
-        assertion_ids=(
-            "configure.accepted",
-            "tunnel.established",
-            "routing.verified",
-            "network.transition",
-            "disconnect.clean",
-            "cleanup.restored",
-        ),
-        max_duration_seconds=193,
-    ),
-    ScenarioDefinition(
         id="functional.product-process-loss",
         steps=_COMMON_CONNECT
         + (
@@ -243,12 +211,7 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
 
 
 def test_set() -> tuple[ScenarioDefinition, ...]:
-    """Return every defined scenario, including diagnostic-only scenarios.
-
-    Callers running qualification must use :func:`suite_set`; this complete
-    definition list is retained so focused diagnostics can still resolve
-    scenarios that are not currently in a qualification suite.
-    """
+    """Return every scenario definition available for execution."""
 
     return TEST_SET
 
@@ -278,14 +241,22 @@ def select_scenarios(
 ) -> tuple[ScenarioDefinition, ...]:
     """Resolve a suite or an explicit diagnostic scenario selection.
 
-    Explicit selections intentionally resolve against all definitions, so a
-    deferred scenario remains available for diagnostics.  Qualification
-    callers must separately mark an explicit selection as incomplete.
+    Explicit selections resolve against executable definitions. Known
+    disabled scenarios fail clearly instead of being silently skipped.
     """
 
     suite_set(suite)  # validate the suite even when diagnostics are selected
     if not scenario_ids:
         return suite_set(suite)
+    disabled = [
+        scenario_id
+        for scenario_id in scenario_ids
+        if scenario_id in _DISABLED_SCENARIO_IDS
+    ]
+    if disabled:
+        raise ValueError(
+            "scenario is disabled until further notice: " + ", ".join(disabled)
+        )
     scenarios = tuple(get_scenario(value) for value in scenario_ids)
     if len({scenario.id for scenario in scenarios}) != len(scenarios):
         raise ValueError("scenario-id values must be unique")

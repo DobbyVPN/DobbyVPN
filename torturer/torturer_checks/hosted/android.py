@@ -1934,6 +1934,14 @@ class AndroidHostedAdapter:
                 "ANDROID_ROUTING_VPN_INVALID", value
             )
         provider_error = vpn.get("error_code")
+        if provider_error == "ANDROID_NETWORK_REQUEST_FAILED":
+            failure = AndroidHostedAdapter._routing_observation_failure(
+                provider_error, value
+            )
+            detail = vpn.get("error_detail")
+            if isinstance(detail, str) and detail:
+                failure.add_note("android_routing_vpn_error_detail:\n" + detail)
+            raise failure
         if isinstance(provider_error, str) and provider_error in {
             "ANDROID_NETWORK_PROBE_PROVIDER_ACCESS_DENIED",
             "ANDROID_NETWORK_PROBE_PROVIDER_FAILED",

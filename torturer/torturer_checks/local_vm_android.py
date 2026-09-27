@@ -31,6 +31,7 @@ _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
 COMPANION_PACKAGE = "com.dobby.vpn.test"
 _MAIN_ACTIVITY = "com.dobby.ui.MainActivity"
+_NATIVE_LOG_PATH = f"/data/user/0/{APP_PACKAGE}/files/diagnostics/native_logs.jsonl"
 PROBE_ROOT_GLOB = "/data/local/tmp/dobbyvpn-probe-*"
 _SCREENSHOT_ROOT = "/data/user/0/com.dobby.vpn/cache/dobbyvpn-rendered-screenshots/"
 _SCREENSHOT_MARKER = re.compile(
@@ -254,27 +255,50 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     )
     if b"Status: ok" not in app_start.stdout or b"Complete" not in app_start.stdout:
         raise _error("Android native UI app did not start in the foreground")
-    result = _adb_call(
-        adb_value,
-        serial,
-        [
-            "shell", "am", "instrument", "-w", "-r",
-            "-e", "class", "com.dobby.NativeUiInstrumentedTest",
-            "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
-        ],
-        run_dir=run_dir,
-        logs=logs,
-        label="android-native-ui",
-        timeout=min(timeout, 300),
-        environment=environment,
-        check=False,
-    )
+    try:
+        result = _adb_call(
+            adb_value,
+            serial,
+            [
+                "shell", "am", "instrument", "-w", "-r",
+                "-e", "class", "com.dobby.NativeUiInstrumentedTest",
+                "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
+            ],
+            run_dir=run_dir,
+            logs=logs,
+            label="android-native-ui",
+            timeout=min(timeout, 300),
+            environment=environment,
+            check=False,
+        )
+    except Exception as error:
+        # _run_logged retains the instrumentation streams before raising on a
+        # timeout. Collect device-side diagnostics on that path too, without
+        # replacing the original command failure.
+        try:
+            collection_errors = _collect_android_diagnostics(
+                adb_value,
+                serial,
+                run_dir=run_dir,
+                logs=logs,
+                timeout=min(timeout, 30),
+                environment=environment,
+            )
+        except Exception as collection_error:
+            collection_errors = [
+                _render_collection_error(
+                    "ANDROID_DIAGNOSTIC_COLLECTION_FAILED", collection_error
+                )
+            ]
+        for collection_error in collection_errors:
+            error.add_note(collection_error)
+        raise
     parsed = parse_instrumentation_result(
         returncode=result.returncode,
         stdout=result.stdout,
         stderr=result.stderr,
     )
-    collection_error: BaseException | None = None
+    collection_errors: list[str] = []
     try:
         _collect_rendered_screenshots(
             adb_value,
@@ -286,25 +310,111 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
             timeout=min(timeout, 30),
             environment=environment,
         )
-    except BaseException as error:
-        collection_error = error
-    if parsed.succeeded:
-        if collection_error is not None:
-            raise collection_error
-        return result
-    # Preserve the original instrumentation result as primary. A required
-    # screenshot collection failure is appended as secondary diagnostics so
-    # it cannot hide the product assertion that caused the test to fail.
-    stderr = result.stderr or b""
-    if collection_error is not None:
-        stderr += (
-            b"\nANDROID_UI_SCREENSHOT_COLLECTION_FAILED: "
-            + str(collection_error).encode("utf-8", errors="backslashreplace")
-            + b"\n"
+    except Exception as error:
+        collection_errors.append(
+            _render_collection_error("ANDROID_UI_SCREENSHOT_COLLECTION_FAILED", error)
         )
+    collection_errors.extend(
+        _collect_android_diagnostics(
+            adb_value,
+            serial,
+            run_dir=run_dir,
+            logs=logs,
+            timeout=min(timeout, 30),
+            environment=environment,
+        )
+    )
+    return _with_collection_errors(
+        result,
+        instrumentation_succeeded=parsed.succeeded,
+        collection_errors=collection_errors,
+    )
+
+
+def _with_collection_errors(
+    result: subprocess.CompletedProcess[bytes],
+    *,
+    instrumentation_succeeded: bool,
+    collection_errors: list[str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Fail on required collection errors without losing the test result."""
+
+    if instrumentation_succeeded and not collection_errors:
+        return result
+    stderr = result.stderr or b""
+    if collection_errors:
+        stderr += b"\n" + "\n".join(collection_errors).encode(
+            "utf-8", errors="backslashreplace"
+        ) + b"\n"
     return subprocess.CompletedProcess(
         result.args, result.returncode or 1, result.stdout, stderr
     )
+
+
+def _render_collection_error(code: str, error: BaseException) -> str:
+    details = [f"{code}: {type(error).__name__}: {error}"]
+    details.extend(str(note) for note in getattr(error, "__notes__", ()))
+    return "\n".join(details)
+
+
+def _collect_android_diagnostics(
+    adb: str,
+    serial: str,
+    *,
+    run_dir: Path,
+    logs: Path,
+    timeout: float,
+    environment: dict[str, str],
+) -> list[str]:
+    """Retain the app's native log and its Android system-log fallback."""
+
+    errors: list[str] = []
+    required_outputs = (
+        (
+            "ANDROID_NATIVE_LOG_COLLECTION_FAILED",
+            "android-native-diagnostics",
+            ["shell", "-T", "cat", _NATIVE_LOG_PATH],
+            logs / "android-native-logs.jsonl",
+            True,
+        ),
+        (
+            "ANDROID_LOGCAT_COLLECTION_FAILED",
+            "android-logcat-diagnostics",
+            ["shell", "logcat", "-d", "-v", "raw", "-s", "DobbyVPN:E"],
+            logs / "android-logcat.txt",
+            False,
+        ),
+    )
+    for code, label, command, destination, nonempty in required_outputs:
+        try:
+            result = _adb_call(
+                adb,
+                serial,
+                command,
+                run_dir=run_dir,
+                logs=logs,
+                label=label,
+                timeout=timeout,
+                environment=environment,
+                check=False,
+            )
+            if result.returncode != 0:
+                failure = _error(f"{code}: adb exited {result.returncode}")
+                failure.add_note(
+                    f"{label}_stdout:\n"
+                    + result.stdout.decode("utf-8", errors="backslashreplace")
+                )
+                failure.add_note(
+                    f"{label}_stderr:\n"
+                    + result.stderr.decode("utf-8", errors="backslashreplace")
+                )
+                raise failure
+            if nonempty and not result.stdout:
+                raise _error(f"{code}: app native log file is empty")
+            destination.write_bytes(result.stdout)
+        except Exception as error:
+            errors.append(_render_collection_error(code, error))
+    return errors
 
 def _collect_rendered_screenshots(
     adb: str,
