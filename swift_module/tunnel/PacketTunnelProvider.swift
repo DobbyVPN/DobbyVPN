@@ -260,9 +260,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 try await self.setTunnelNetworkSettings(nil)
             }
         }
-        guard settingsCleared else {
-            throw sessionError("NETWORK_SETTINGS_CLEAR_FAILED")
-        }
+        guard settingsCleared else { throw sessionError("NETWORK_SETTINGS_CLEAR_FAILED") }
         DobbyvpnRegisterSessionPlatform(callbackBridge)
         logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for session command")
 
@@ -562,12 +560,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return false
         }
         if let error = result.error {
-            let nsError = error as NSError
-            logs.writeLog(
-                log: "[tunnel:\(tunnelId)] NetworkExtension settings operation failed: " +
-                    "\(String(reflecting: error)) domain=\(nsError.domain) code=\(nsError.code) " +
-                    "userInfo=\(String(reflecting: nsError.userInfo))"
-            )
+            logs.writeLog(log: "[tunnel:\(tunnelId)] NetworkExtension settings operation failed: \(String(reflecting: error as NSError))")
         }
         return result.succeeded
     }
