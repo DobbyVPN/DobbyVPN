@@ -2817,6 +2817,13 @@ class NativeUIController:
             raise NativeUISmokeError("Dobby VPN window is unexpectedly small")
         self._windows_validate_window()
         user32.SetForegroundWindow(self.hwnd)
+        # WinUI can expose its top-level window before it has rendered the
+        # status text. Wait for actual app content before the required capture.
+        self._wait(
+            lambda: self.snapshot()["status"] != "Unknown",
+            "Dobby VPN window content did not become accessible",
+            timeout=min(self.timeout, 10.0),
+        )
         self.capture("startup", required=True)
 
     def _launch_macos(self) -> None:
