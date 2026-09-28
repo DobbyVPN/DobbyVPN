@@ -55,18 +55,21 @@ the Go backend links TrustTunnel's native bridge for both architectures.
 ## Android
 
 Android uses Kotlin and Jetpack Compose for its UI and a Go backend library for
-VPN behavior. Build commands require JDK 17, Android SDK, and the pinned Go and
-NDK toolchains. The main release build is:
+VPN behavior. Builds require JDK 17, Android SDK, and the pinned Go and NDK
+toolchains. The fast build-and-ABI check is
+`.github/scripts/android_build_check.sh`; Android PR CI and the Harness's fast
+local candidate path both call it. It builds the release app and test
+companion once through `android_build_driver.sh --local`, then checks the app's
+native libraries for both `arm64-v8a` and `x86_64`. The check verifies TrustTunnel
+bridge symbols and rejects unresolved C++ runtime imports, including the
+symbol implicated in the 1.5.0 Android startup crash.
 
-    cd android_module
-    ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleRelease
-
-The build packages the Go backend and TrustTunnel's native bridge for both
-arm64-v8a and x86_64. CI checks the bridge symbols in both APK ABIs and rejects
-unresolved C++ runtime imports, including the symbol implicated in the 1.5.0
-Android startup crash. The Go shared library statically links the pinned NDK's
-C++ runtime to satisfy the bridge imports. The same selected Go runtime tests
-run on Linux, Windows, and macOS; CI adds a native Linux ARM64 run.
+Complete local qualification and hosted Release use the driver's Release
+mode. That mode builds the app twice with a clean build between runs, checks
+APK reproducibility and source/dependency provenance, and verifies the native
+ABI payload. Release retains those unsigned outputs for later Publish signing.
+The same selected Go runtime tests run on Linux, Windows, and macOS; CI adds a
+native Linux ARM64 run.
 
 The local Harness builds the app and its Android instrumentation tests from the
 same selected worktree. Android mini runs on an emulator and checks rendered
