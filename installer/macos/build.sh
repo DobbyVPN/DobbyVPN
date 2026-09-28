@@ -80,5 +80,19 @@ build_package() {
   )
 }
 
-build_package aarch64 arm64 ../../services/arm64/dobbyvpn-backend
-build_package amd64 x86_64 ../../services/amd64/dobbyvpn-backend
+case "${1:-all}" in
+  all)
+    build_package aarch64 arm64 ../../services/arm64/dobbyvpn-backend
+    build_package amd64 x86_64 ../../services/amd64/dobbyvpn-backend
+    ;;
+  arm64|aarch64)
+    build_package aarch64 arm64 ../../services/arm64/dobbyvpn-backend
+    ;;
+  amd64|x86_64)
+    build_package amd64 x86_64 ../../services/amd64/dobbyvpn-backend
+    ;;
+  *)
+    echo "[!] Expected architecture: arm64, amd64, or all" >&2
+    exit 2
+    ;;
+esac

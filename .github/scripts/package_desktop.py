@@ -205,6 +205,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--version", required=True, help="Marketing version x.y.z")
     parser.add_argument("--output", type=Path, default=ROOT / "output")
     parser.add_argument("--staging-root", type=Path, default=SERVICES)
+    parser.add_argument(
+        "--platform",
+        choices=("all", "linux", "windows", "macos"),
+        default="all",
+        help="Build all desktop archives or only one platform archive.",
+    )
+    parser.add_argument(
+        "--arch",
+        choices=("amd64", "arm64", "aarch64", "x86_64"),
+        help="One macOS architecture when --platform=macos.",
+    )
     return parser.parse_args()
 
 
@@ -214,10 +225,28 @@ def main() -> None:
         fail("--version must be a numeric x.y.z version")
     output = args.output.resolve()
     staging = args.staging_root.resolve()
-    package_windows(args.version, output, staging / "windows-amd64")
-    package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64")
-    package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64")
-    package_linux(args.version, output, staging / "linux-amd64")
+    if args.platform == "all":
+        if args.arch is not None:
+            fail("--arch is valid only with --platform=macos")
+        package_windows(args.version, output, staging / "windows-amd64")
+        package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64")
+        package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64")
+        package_linux(args.version, output, staging / "linux-amd64")
+    elif args.platform == "linux":
+        if args.arch not in (None, "amd64"):
+            fail("Linux desktop packages are supported only for amd64")
+        package_linux(args.version, output, staging / "linux-amd64")
+    elif args.platform == "windows":
+        if args.arch not in (None, "amd64"):
+            fail("Windows desktop packages are supported only for amd64")
+        package_windows(args.version, output, staging / "windows-amd64")
+    elif args.platform == "macos":
+        if args.arch is None:
+            fail("--arch is required with --platform=macos")
+        if args.arch in {"arm64", "aarch64"}:
+            package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64")
+        else:
+            package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64")
     print(f"[+] Wrote desktop packages to {output}")
 
 
