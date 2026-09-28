@@ -603,12 +603,17 @@ def qualify(
     manifest_path: Path = DEFAULT_MANIFEST,
     log_dir: Path | None = None,
     control_pipe_sid: str | None = None,
+    temp_parent: Path | None = None,
 ) -> None:
     if platform not in PLATFORMS:
         raise _error(f"unsupported migration platform: {platform}")
     control_pipe_sid = validate_control_pipe_sid(control_pipe_sid)
     if control_pipe_sid is not None and platform != "windows":
         raise _error("a Windows desktop SID can only be used for Windows migration")
+    if temp_parent is not None:
+        temp_parent = Path(temp_parent)
+        if temp_parent.is_symlink() or not temp_parent.is_dir():
+            raise _error("installer migration temporary parent is not a directory")
     current_package = Path(current_package)
     if not current_package.is_file():
         raise _error(f"current release package is missing: {current_package}")
@@ -622,7 +627,10 @@ def qualify(
         except KeyError as error:
             raise _error(f"unsupported macOS architecture: {os.uname().machine}") from error
     asset = manifest[asset_key]
-    run_root = Path(tempfile.mkdtemp(prefix="dobbyvpn-installer-migration-"))
+    run_root = Path(tempfile.mkdtemp(
+        prefix="dobbyvpn-installer-migration-",
+        dir=str(temp_parent) if temp_parent is not None else None,
+    ))
     original_error: BaseException | None = None
     adapter: InstallerAdapter | None = None
     previous_package: Path | None = None
@@ -689,6 +697,11 @@ def _parser() -> argparse.ArgumentParser:
         "--control-pipe-sid",
         help="validated desktop account SID for a noninteractive Windows MSI install",
     )
+    parser.add_argument(
+        "--temp-parent",
+        type=Path,
+        help="use this disposable directory as the parent for migration downloads",
+    )
     return parser
 
 
@@ -702,6 +715,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             manifest_path=args.manifest,
             log_dir=args.log_dir,
             control_pipe_sid=args.control_pipe_sid,
+            temp_parent=args.temp_parent,
         )
     except MigrationError as error:
         print(f"installer migration failed: {error}", file=sys.stderr)

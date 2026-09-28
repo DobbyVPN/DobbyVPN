@@ -23,6 +23,7 @@ from .local_vm import LocalVMError
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
 _INTERFACE = re.compile(r"^[1-9][0-9]*$")
+_INTERACTIVE_TASK_LABEL = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _NATIVE_UI_CREATION_TICK_TOLERANCE = 10  # one microsecond in 100-ns ticks
 _CONTROL_PIPE = "DobbyVPN.Control"
 _FIREWALL_RULE = "DobbyVPN-Torturer-Routing-Probe"
@@ -285,6 +286,7 @@ Write-Output ("ready|{0}|{1}" -f $session, $explorerCount)
 
 def _preflight_interactive_desktop(
     *, run_dir: Path, logs: Path, timeout: float, user: str,
+    task_label: str = "native-ui",
 ) -> None:
     """Prove the scheduled task has a visible Explorer session before launch."""
 
@@ -295,7 +297,7 @@ def _preflight_interactive_desktop(
             _NATIVE_UI_PREFLIGHT_SCRIPT,
             cwd=run_dir,
             logs=logs,
-            label="native-ui-preflight",
+            label=f"{task_label}-preflight",
             # The script has a bounded 15-second WTS/Explorer convergence
             # wait; leave process startup and tscon cleanup headroom around
             # that inner deadline.
@@ -535,7 +537,7 @@ def _native_ui_access_script(
     source = cwd.parent if cwd.name.lower() == "torturer" else cwd
     read_path_flags = frozenset({
         "--cli", "--ui", "--profile", "--smoke-script", "--service-binary",
-        "--service-library-path", "--raw-log-dir", "--output",
+        "--service-library-path", "--raw-log-dir", "--output", "--package",
     })
     write_path_flags = frozenset({"--service-pid-file", "--service-identity-file"})
     read_paths: list[str] = [str(command[0]), str(wrapper)]
@@ -750,37 +752,59 @@ def run_interactive_ui(
     timeout: float,
     environment: dict[str, str],
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run the real Windows UI in the logged-in user's interactive session.
+    """Run the real Windows UI in the logged-in user's interactive session."""
+    return run_interactive_task(
+        command,
+        run_dir=run_dir,
+        cwd=cwd,
+        logs=logs,
+        timeout=timeout,
+        environment=environment,
+        task_label="native-ui",
+    )
+
+
+def run_interactive_task(
+    command: list[str],
+    *,
+    run_dir: Path,
+    cwd: Path,
+    logs: Path,
+    timeout: float,
+    environment: dict[str, str],
+    task_label: str,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a bounded Windows command under the configured signed-in account.
 
     The local VM worker remains SYSTEM and owns the supervised session and
-    cleanup.  The bounded native journey runs through the configured installed
-    administrator's interactive token so its real window, routing preparation,
-    and service-only recovery share one desktop context.  No password or second
-    service boundary is introduced.
+    cleanup. The command runs through the configured administrator's existing
+    interactive token. No password or persistent task is introduced.
     """
 
     from .local_vm import LocalVMError
 
     if timeout <= 0:
-        raise LocalVMError("Windows native UI timeout must be positive")
+        raise LocalVMError("Windows interactive task timeout must be positive")
+    if not isinstance(task_label, str) or not _INTERACTIVE_TASK_LABEL.fullmatch(task_label):
+        raise LocalVMError("Windows interactive task label is invalid")
     run_dir = run_dir.resolve()
     cwd = cwd.resolve()
     logs = logs.resolve()
     logs.mkdir(parents=True, exist_ok=True)
     user = _validated_interactive_account(
         environment.get("DOBBYVPN_CONTROL_PIPE_USER"),
-        context="Windows interactive UI user",
+        context="Windows interactive task user",
     )
     # Keep the task and all markers inside this disposable candidate.  The
     # wrapper itself is never exposed outside the VM run directory.
     suffix = uuid.uuid4().hex
-    task_name = f"DobbyVPN-Torturer-NativeUI-{suffix}"
-    wrapper = run_dir / "native-ui-task.ps1"
-    stdout = logs / "native-ui.stdout.log"
-    stderr = logs / "native-ui.stderr.log"
-    pid = run_dir / "native-ui.pid"
-    child_pid = run_dir / "native-ui-child.pid"
-    exit_code = run_dir / "native-ui.exit"
+    task_name = f"DobbyVPN-Torturer-{task_label}-{suffix}"
+    wrapper = run_dir / f"{task_label}-task.ps1"
+    stdout = logs / f"{task_label}.stdout.log"
+    stderr = logs / f"{task_label}.stderr.log"
+    pid = run_dir / f"{task_label}.pid"
+    child_pid = run_dir / f"{task_label}-child.pid"
+    exit_code = run_dir / f"{task_label}.exit"
     controller_binary = command[0] if command else ""
     try:
         ui_flag = command.index("--ui")
@@ -790,7 +814,7 @@ def run_interactive_ui(
     if requested_ui_binary is not None and (
         not isinstance(requested_ui_binary, str) or not requested_ui_binary
     ):
-        raise LocalVMError("Windows native UI binary argument is invalid")
+        raise LocalVMError("Windows interactive task binary argument is invalid")
     filtered_environment = {
         key: str(value)
         for key, value in environment.items()
@@ -798,13 +822,14 @@ def run_interactive_ui(
         and isinstance(value, str)
     }
     if filtered_environment.get("DOBBYVPN_CONTROL_PIPE_USER") != user:
-        raise LocalVMError("Windows interactive UI control-pipe user is invalid")
+        raise LocalVMError("Windows interactive task control-pipe user is invalid")
     # A SYSTEM worker can register an interactive task even when the target
-    # account has no visible shell.  Prove the user's Explorer session first;
-    # otherwise the wait for the task's exit marker can consume the full lane
-    # timeout without ever starting the production window.
+    # account has no visible shell. Prove the user's Explorer session first;
+    # otherwise the bounded wait could consume the lane without starting the
+    # requested command.
     _preflight_interactive_desktop(
         run_dir=run_dir, logs=logs, timeout=timeout, user=user,
+        task_label=task_label,
     )
     for path in (pid, child_pid, exit_code, stdout, stderr):
         try:
@@ -812,12 +837,12 @@ def run_interactive_ui(
         except FileNotFoundError:
             pass
         except OSError as error:
-            raise LocalVMError(f"Windows native UI marker is not removable: {path.name}") from error
+            raise LocalVMError(f"Windows interactive task marker is not removable: {path.name}") from error
     ui_binary = requested_ui_binary
     if ui_binary is not None and (
         not isinstance(ui_binary, str) or not ui_binary
     ):
-        raise LocalVMError("Windows native UI binary argument is invalid")
+        raise LocalVMError("Windows interactive task binary argument is invalid")
     registered = False
     failure: Exception | None = None
     child_cleanup_attempted = False
@@ -837,7 +862,7 @@ def run_interactive_ui(
             _NATIVE_UI_CHILD_KILL_SCRIPT,
             cwd=run_dir,
             logs=logs,
-            label="native-ui-child-kill",
+            label=f"{task_label}-child-kill",
             timeout=min(timeout, 20.0),
             environment=child_environment,
         )
@@ -868,7 +893,7 @@ def run_interactive_ui(
             ),
             cwd=run_dir,
             logs=logs,
-            label="native-ui-access",
+            label=f"{task_label}-access",
             timeout=min(timeout, 60.0),
         )
         # Register-ScheduledTask and Start-ScheduledTask are one PowerShell
@@ -882,7 +907,7 @@ def run_interactive_ui(
             ),
             cwd=run_dir,
             logs=logs,
-            label="native-ui-task-register",
+            label=f"{task_label}-task-register",
             timeout=min(timeout, 30.0),
         )
         deadline = time.monotonic() + timeout
@@ -893,9 +918,9 @@ def run_interactive_ui(
                 try:
                     value = pid.read_text(encoding="ascii").strip()
                 except OSError as error:
-                    raise LocalVMError("Windows native UI PID marker is unreadable") from error
+                    raise LocalVMError("Windows interactive task PID marker is unreadable") from error
                 if not _IDENTITY.fullmatch(value):
-                    raise LocalVMError("Windows native UI controller identity marker is invalid")
+                    raise LocalVMError("Windows interactive task controller identity marker is invalid")
                 kill_environment = os.environ.copy()
                 kill_environment["DOBBYVPN_NATIVE_UI_PID"] = value
                 kill_environment["DOBBYVPN_NATIVE_UI_CONTROLLER_BINARY"] = controller_binary
@@ -904,12 +929,12 @@ def run_interactive_ui(
                     _NATIVE_UI_KILL_SCRIPT,
                     cwd=run_dir,
                     logs=logs,
-                    label="native-ui-kill",
+                    label=f"{task_label}-kill",
                     timeout=min(timeout, 15.0),
                     environment=kill_environment,
                 )
             cleanup_child()
-            raise LocalVMError("Windows native UI task timed out")
+            raise LocalVMError(f"Windows {task_label} task timed out")
         raw_exit_code: str | None = None
         marker_error: OSError | None = None
         for attempt in range(10):
@@ -923,12 +948,12 @@ def run_interactive_ui(
                     time.sleep(0.05)
         if marker_error is not None:
             raise LocalVMError(
-                "Windows native UI exit marker is unreadable "
+                "Windows interactive task exit marker is unreadable "
                 f"(errno={marker_error.errno}, winerror={getattr(marker_error, 'winerror', None)})"
             ) from marker_error
         assert raw_exit_code is not None
         if not re.fullmatch(r"-?[0-9]+", raw_exit_code):
-            raise LocalVMError("Windows native UI exit marker is invalid")
+            raise LocalVMError("Windows interactive task exit marker is invalid")
         returncode = int(raw_exit_code)
         return subprocess.CompletedProcess(
             command,
@@ -951,7 +976,7 @@ def run_interactive_ui(
                     _native_ui_unregister_script(task_name),
                     cwd=run_dir,
                     logs=logs,
-                    label="native-ui-task-cleanup",
+                    label=f"{task_label}-task-cleanup",
                     timeout=min(timeout, 30.0),
                 )
             except Exception as cleanup_error:
@@ -969,8 +994,8 @@ def run_interactive_ui(
         if cleanup_failures:
             detail = "; ".join(cleanup_failures)
             if failure is None:
-                raise LocalVMError(f"Windows native UI cleanup failed: {detail}")
-            raise LocalVMError(f"{failure}; Windows native UI {detail}") from failure
+                raise LocalVMError(f"Windows {task_label} cleanup failed: {detail}")
+            raise LocalVMError(f"{failure}; Windows {task_label} {detail}") from failure
 
 
 def _discover_network_interface(run_dir: Path, logs: Path, timeout: float) -> str:

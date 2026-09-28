@@ -945,10 +945,40 @@ def _prepare_desktop_package(
         ]
         if control_pipe_sid is not None:
             migration.extend(("--control-pipe-sid", control_pipe_sid))
-        _run_logged(
-            migration,
-            cwd=source, logs=logs, label="desktop-installer-migration", timeout=timeout,
-        )
+        if platform == "windows":
+            # Keep the downloaded rollback MSI inside this disposable run even
+            # if the supervisor has to stop the interactive task on timeout.
+            migration.extend(("--temp-parent", str(run_dir)))
+            from .local_vm_windows import run_interactive_task
+
+            if control_pipe_sid is None:
+                raise LocalVMError("Windows installer migration requires the configured account SID")
+            migration_environment = os.environ.copy()
+            result = run_interactive_task(
+                migration,
+                run_dir=run_dir,
+                cwd=source,
+                logs=logs,
+                timeout=timeout,
+                environment=migration_environment,
+                task_label="installer-migration",
+            )
+            if result.returncode != 0:
+                failure = LocalVMError(
+                    f"desktop-installer-migration: command exited {result.returncode}"
+                )
+                _add_command_stream_notes(
+                    failure,
+                    "desktop-installer-migration",
+                    result.stdout,
+                    result.stderr,
+                )
+                raise failure
+        else:
+            _run_logged(
+                migration,
+                cwd=source, logs=logs, label="desktop-installer-migration", timeout=timeout,
+            )
     install = [
         sys.executable, str(script), "install", "--build-descriptor",
         str(output / "desktop-package.json"), "--run-dir", str(run_dir),
