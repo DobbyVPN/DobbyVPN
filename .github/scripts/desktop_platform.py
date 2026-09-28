@@ -465,11 +465,15 @@ def _build_macos_pkg(
 ) -> Path:
     label = "aarch64" if architecture == "arm64" else "amd64"
     aliases = {"arm64": "arm64", "amd64": "amd64"}
-    staging = work / "services" / aliases[architecture]
-    staging.mkdir(parents=True)
-    shutil.copyfile(service_directory / "dobbyvpn-backend", staging / "dobbyvpn-backend")
     installer = work / "installer" / "macos"
     installer.mkdir(parents=True)
+    # build.sh enters bin/<package-architecture> before it resolves the
+    # service path '../../services/<architecture>/dobbyvpn-backend'. Stage
+    # the binary under this installer directory so that relative path still
+    # resolves after that cwd change.
+    staging = installer / "services" / aliases[architecture]
+    staging.mkdir(parents=True)
+    shutil.copyfile(service_directory / "dobbyvpn-backend", staging / "dobbyvpn-backend")
     for name in ("build.sh", "postinstall.sh", "uninstall.sh", "vpnservice.plist"):
         shutil.copyfile(ROOT / "installer" / "macos" / name, installer / name)
     shutil.copyfile(archive, installer / f"dobbyVPN-macos-{label}.zip")
