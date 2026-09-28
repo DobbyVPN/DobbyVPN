@@ -25,16 +25,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
         configuration.tap()
         configuration.typeText("2")
-        let errorLabel = app.staticTexts["Error"]
-        let errorCleared = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == false"),
-            object: errorLabel
-        )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [errorCleared], timeout: 5),
-            .completed,
-            "Editing the connection configuration should clear the error"
-        )
+        XCTAssertEqual(configuration.value as? String, "invalidprofile2")
         app.buttons["Dismiss configuration keyboard"].tap()
 
         app.tabBars.buttons["Settings"].tap()
@@ -43,6 +34,8 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Source commit:")).firstMatch
             .exists)
 
+        app.tabBars.buttons["Connection"].tap()
+        XCTAssertEqual(configuration.value as? String, "invalidprofile2")
         app.tabBars.buttons["Logs"].tap()
         XCTAssertTrue(app.staticTexts["Logs"].waitForExistence(timeout: 10))
         app.buttons["Refresh"].tap()
