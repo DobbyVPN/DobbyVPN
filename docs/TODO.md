@@ -12,6 +12,9 @@ not accepted unavailable skips:
   verify connect, traffic, disconnect, and cleanup on each supported platform.
 - Add physical-device iOS qualification for NetworkExtension permission,
   tunnel traffic, routing, disconnect, and cleanup.
+- Add targeted Go fuzz tests for untrusted configuration and control-message
+  parsers. Keep seed cases in the existing unit suite and consider bounded
+  periodic fuzzing after the targets prove useful.
 
 ## Execution time
 
