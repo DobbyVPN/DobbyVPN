@@ -13,6 +13,7 @@ The transition sequence is shared and unit-testable without Windows or macOS.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import json
@@ -23,7 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 from urllib.request import Request, urlopen
 
 
@@ -266,6 +267,10 @@ class InstallerAdapter:
     def install(self, package: Path, *, label: str) -> None:
         raise NotImplementedError
 
+    def install_legacy(self, package: Path, *, label: str) -> None:
+        """Install the previous package, applying platform-specific compatibility setup."""
+        self.install(package, label=label)
+
     def uninstall(self, package: Path, *, label: str, allow_missing: bool = False) -> None:
         raise NotImplementedError
 
@@ -418,6 +423,83 @@ class MacOSInstaller(InstallerAdapter):
             environment=environment,
         )
 
+    @contextmanager
+    def _legacy_console_owner_fixture(self, *, label: str) -> Iterator[None]:
+        """Temporarily expose the active user to v1.5.0's /dev/console lookup."""
+        console_state = self.runner.run(
+            [
+                "/bin/sh", "-c",
+                "/usr/sbin/scutil <<'EOF'\nshow State:/Users/ConsoleUser\nEOF",
+            ],
+            label=f"{label}-console-user",
+        ).stdout
+        user_id = re.search(
+            r"(?m)^\s*kCGSSessionUserIDKey\s*:\s*([0-9]+)\s*$",
+            console_state,
+        )
+        if user_id is None:
+            raise _error("could not read the active macOS console user ID")
+        console_uid = int(user_id.group(1))
+        if console_uid <= 0:
+            raise _error("active macOS console user is root or unavailable")
+        if console_uid != os.getuid():
+            raise _error(
+                "migration runner user does not match the active macOS console user"
+            )
+
+        device_state = self.runner.run(
+            ["/usr/bin/stat", "-f", "%u:%g:%Lp", "/dev/console"],
+            label=f"{label}-console-owner",
+        ).stdout.strip()
+        device_match = re.fullmatch(r"([0-9]+):([0-9]+):([0-7]+)", device_state)
+        if device_match is None:
+            raise _error("could not read /dev/console owner, group, and mode")
+        owner_uid, owner_gid = (int(device_match.group(index)) for index in (1, 2))
+        owner_mode = int(device_match.group(3), 8)
+        if owner_uid == console_uid:
+            yield
+            return
+        if owner_uid != 0:
+            raise _error(
+                f"refusing to change /dev/console owner {owner_uid}; expected root or {console_uid}"
+            )
+
+        try:
+            self.runner.run(
+                ["sudo", "-n", "chown", str(console_uid), "/dev/console"],
+                label=f"{label}-console-owner-fixture",
+            )
+            yield
+        finally:
+            active_error = sys.exc_info()[1]
+            restore_errors: list[str] = []
+            for restore_command, restore_label in (
+                (
+                    ["sudo", "-n", "chown", f"{owner_uid}:{owner_gid}", "/dev/console"],
+                    f"{label}-console-owner-restore",
+                ),
+                (
+                    ["sudo", "-n", "chmod", f"{owner_mode:04o}", "/dev/console"],
+                    f"{label}-console-mode-restore",
+                ),
+            ):
+                try:
+                    self.runner.run(restore_command, label=restore_label)
+                except BaseException as error:
+                    restore_errors.append(f"{restore_label}: {error}")
+            if restore_errors:
+                detail = "; ".join(restore_errors)
+                if active_error is None:
+                    raise _error(f"could not restore /dev/console state: {detail}")
+                print(
+                    f"legacy console fixture restoration failed: {detail}",
+                    file=sys.stderr,
+                )
+
+    def install_legacy(self, package: Path, *, label: str) -> None:
+        with self._legacy_console_owner_fixture(label=label):
+            self.install(package, label=label)
+
     def uninstall(self, package: Path, *, label: str, allow_missing: bool = False) -> None:
         uninstaller = Path("/usr/local/libexec/dobbyvpn-uninstall")
         if uninstaller.is_file():
@@ -497,7 +579,7 @@ def migration_sequence(adapter: InstallerAdapter, current: Path, previous: Path,
     adapter.uninstall(current, label="fresh-uninstall")
     adapter.verify_uninstalled(label="fresh-uninstalled")
 
-    adapter.install(previous, label="old-install")
+    adapter.install_legacy(previous, label="old-install")
     adapter.verify_installed(OLD_VERSION, label="old-installed")
     adapter.install(current, label="upgrade-install")
     adapter.verify_installed(current_version, label="upgraded-to-current")
@@ -506,7 +588,7 @@ def migration_sequence(adapter: InstallerAdapter, current: Path, previous: Path,
     # it must not rely on a package-manager downgrade or mutable cache.
     adapter.uninstall(current, label="rollback-uninstall-current")
     adapter.verify_uninstalled(label="rollback-empty")
-    adapter.install(previous, label="rollback-install-old")
+    adapter.install_legacy(previous, label="rollback-install-old")
     adapter.verify_installed(OLD_VERSION, label="rolled-back-to-old")
 
     adapter.uninstall(previous, label="final-uninstall")
