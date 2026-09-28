@@ -131,6 +131,8 @@ def _functional_arguments(args: argparse.Namespace, installed: dict[str, Any]) -
     routing_helper = args.routing_firewall_helper
     if args.platform == "linux" and routing_helper is None:
         routing_helper = helper_root / "linux" / "routing-probe-firewall"
+    if args.platform == "macos" and routing_helper is None:
+        routing_helper = helper_root / "macos" / "network-transition"
     if routing_helper is not None:
         argv.extend(("--routing-firewall-helper", str(routing_helper)))
     transition_helper = args.network_transition_helper
