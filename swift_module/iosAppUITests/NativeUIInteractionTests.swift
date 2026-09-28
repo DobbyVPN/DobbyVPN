@@ -28,9 +28,13 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(configuration.value as? String, "invalidprofile2")
         app.buttons["Dismiss configuration keyboard"].tap()
 
-        app.tabBars.buttons["Settings"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Version:")).firstMatch
-            .waitForExistence(timeout: 10))
+        let settingsTab = app.tabBars.buttons["Settings"]
+        let version = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Version:")).firstMatch
+        settingsTab.tap()
+        if !version.waitForExistence(timeout: 3) && !settingsTab.isSelected {
+            settingsTab.tap()
+        }
+        XCTAssertTrue(version.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Source commit:")).firstMatch
             .exists)
 
