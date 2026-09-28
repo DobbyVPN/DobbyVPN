@@ -88,13 +88,13 @@ jobs:
           artifact_names="$(jq -sr '.[] | .artifacts[] | select(.expired == false) | .name' \
             "$CAPTURED_GH_STDOUT" | sort -u)"
           for name in \
-            DobbyVPN.ipa \
+            DobbyVPN.xcarchive.tar.gz \
             dobbyVPN-linux.deb \
             dobbyVPN-windows-amd64.msi \
             dobbyVPN-macos-aarch64.pkg \
             dobbyVPN-macos-amd64.pkg \
-            dobbyvpn-android-sign.apk \
             dobbyvpn-android-unsign.apk \
+            dobbyvpn-android-test-companion-unsigned.apk \
             dobbyvpn-android-provenance; do
             if ! grep -Fxq "$name" <<<"$artifact_names"; then
               echo "Release run $RELEASE_RUN_ID is missing unexpired artifact: $name" >&2
@@ -190,14 +190,64 @@ jobs:
         run: |
           set -euo pipefail
           echo "APP_STORE_VERSION=${{ needs.resolve_release.outputs.version_name }}" >> "$GITHUB_ENV"
-          echo "APP_STORE_BUILD_NUMBER=${{ needs.resolve_release.outputs.release_run_number }}" >> "$GITHUB_ENV"
-      - name: Download exact IPA
+          echo "APP_STORE_BUILD_NUMBER=${{ needs.resolve_release.outputs.android_version_code }}" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=${{ needs.resolve_release.outputs.version_name }}" >> "$GITHUB_ENV"
+          echo "APP_BUILD=${{ needs.resolve_release.outputs.android_version_code }}" >> "$GITHUB_ENV"
+          echo "SOURCE_COMMIT=${{ needs.resolve_release.outputs.source_sha }}" >> "$GITHUB_ENV"
+      - name: Download selected unsigned archive
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: DobbyVPN.ipa
+          name: DobbyVPN.xcarchive.tar.gz
           path: selected-release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
+      - name: Prepare Apple signing identity and profiles
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          CERT_P12_PASSWORD: ${{ secrets.CERT_P12_PASSWORD }}
+          CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
+          PROVISION_DOBBY_BASE64: ${{ secrets.PROVISION_DOBBY_BASE64 }}
+          PROVISION_DOBBY_TUNNEL_BASE64: ${{ secrets.PROVISION_DOBBY_TUNNEL_BASE64 }}
+        run: bundle exec fastlane ios prepare_signing
+      - name: Sign and export selected archive without compiling
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          bash go_module/scripts/package_ios_app.sh iosexport \
+            selected-release/DobbyVPN.ipa \
+            selected-release/DobbyVPN.xcarchive.tar.gz
+      - name: Verify signed IPA entitlements and profile binding
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-ios-entitlements.XXXXXX")"
+          trap 'rm -rf "$work"' EXIT
+          ditto -x -k selected-release/DobbyVPN.ipa "$work/extracted"
+          apps=("$work"/extracted/Payload/*.app)
+          test "${#apps[@]}" -eq 1
+          tunnels=("${apps[0]}"/PlugIns/*.appex)
+          test "${#tunnels[@]}" -eq 1
+          codesign --verify --strict "${apps[0]}"
+          codesign --verify --strict "${tunnels[0]}"
+          codesign --display --entitlements :- "${apps[0]}" > "$work/app-entitlements.plist"
+          codesign --display --entitlements :- "${tunnels[0]}" > "$work/tunnel-entitlements.plist"
+          security cms -D -i "${apps[0]}/embedded.mobileprovision" > "$work/app-profile.plist"
+          security cms -D -i "${tunnels[0]}/embedded.mobileprovision" > "$work/tunnel-profile.plist"
+          python3 .github/scripts/verify_ios_app_group.py \
+            --app-entitlements "$work/app-entitlements.plist" \
+            --app-profile "$work/app-profile.plist" \
+            --tunnel-entitlements "$work/tunnel-entitlements.plist" \
+            --tunnel-profile "$work/tunnel-profile.plist" \
+            --app-info "${apps[0]}/Info.plist" \
+            --tunnel-info "${tunnels[0]}/Info.plist" \
+            --team-id "$APPLE_TEAM_ID" \
+            --source-sha "$SOURCE_COMMIT" \
+            --version "$VERSION_NAME" \
+            --build-number "$APP_BUILD"
       - name: Upload or reuse exact IPA and wait for processing
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
@@ -339,17 +389,17 @@ jobs:
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
-      - name: Download signed Android package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyvpn-android-sign.apk
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
       - name: Download unsigned Android package
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dobbyvpn-android-unsign.apk
+          path: release
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - name: Download unsigned Android test companion
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-android-test-companion-unsigned.apk
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
@@ -367,39 +417,56 @@ jobs:
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: build-tools;36.0.0
-      - name: Verify exact Android artifacts
+      - name: Verify and production-sign selected Android package
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
           ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
         run: |
           set -euo pipefail
-          signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
           unsigned="release/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
+          companion="release/DobbyVPN-v$RELEASE_VERSION-android-test-companion-unsigned.apk"
           provenance="release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
-          test -f "$signed"; test -f "$unsigned"; test -f "$provenance"
+          signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
+          test -f "$unsigned"; test -f "$companion"; test -f "$provenance"
+
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$sdk_root"
+          apksigner="$sdk_root/build-tools/36.0.0/apksigner"
+          test -x "$apksigner"
+          apkanalyzer="$(command -v apkanalyzer || true)"
+          if [[ -z "$apkanalyzer" ]]; then
+            apkanalyzer="$(find "$sdk_root/cmdline-tools" -type f -name apkanalyzer -perm -u+x -print -quit)"
+          fi
+          test -n "$apkanalyzer" && test -x "$apkanalyzer"
+
+          python3 .github/scripts/verify_android_reproducibility.py verify-provenance \
+            --apk "$unsigned" --provenance "$provenance" \
+            --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
+            --version-code "$ANDROID_VERSION_CODE"
           python3 .github/scripts/verify_android_apk_source.py \
-            --apk "$signed" --apk "$unsigned" \
-            --source-sha "$RELEASE_SOURCE_SHA" --repository "$GITHUB_REPOSITORY"
-          signer_stdout="$RUNNER_TEMP/publish-apksigner.stdout"
-          signer_stderr="$RUNNER_TEMP/publish-apksigner.stderr"
-          set +e
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --print-certs "$signed" \
-            >"$signer_stdout" 2>"$signer_stderr"
-          signer_status=$?
-          set -e
-          cat "$signer_stdout"
-          cat "$signer_stderr" >&2
-          test "$signer_status" -eq 0
-          mapfile -t signer_digests < <(
-            sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' "$signer_stdout"
-          )
-          test "${#signer_digests[@]}" -eq 1
-          test "${signer_digests[0]}" = "$EXPECTED_ANDROID_SIGNER_SHA256"
+            --apk "$unsigned" --source-sha "$RELEASE_SOURCE_SHA" \
+            --repository "$GITHUB_REPOSITORY" --apkanalyzer "$apkanalyzer" \
+            --test-companion "$companion"
+
+          python3 .github/scripts/android_apk_signing.py sign-release \
+            --unsigned-apk "$unsigned" --signed-apk "$signed" --apksigner "$apksigner"
+
+          python3 .github/scripts/android_apk_signing.py finalize-provenance \
+            --provenance "$provenance" --unsigned-apk "$unsigned" --signed-apk "$signed" \
+            --test-companion "$companion" --source-sha "$RELEASE_SOURCE_SHA" \
+            --version-name "$RELEASE_VERSION" --version-code "$ANDROID_VERSION_CODE" \
+            --apksigner "$apksigner"
+
           python3 .github/scripts/verify_android_reproducibility.py verify-publication \
             --unsigned-apk "$unsigned" --signed-apk "$signed" --provenance "$provenance" \
             --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
             --version-code "$ANDROID_VERSION_CODE" \
             --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
+          rm -- "$companion"
       - name: Create F-Droid metadata and release provenance
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}

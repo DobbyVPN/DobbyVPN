@@ -2,17 +2,6 @@ name: iOS Build
 
 on:
   workflow_call:
-    secrets:
-      KEYCHAIN_PASSWORD:
-        required: true
-      CERT_P12_PASSWORD:
-        required: true
-      CERT_P12_BASE64:
-        required: true
-      PROVISION_DOBBY_BASE64:
-        required: true
-      PROVISION_DOBBY_TUNNEL_BASE64:
-        required: true
     inputs:
       app_major_version:
         type: string
@@ -23,29 +12,23 @@ on:
       app_maintenance_version:
         type: string
         required: true
+      android_version_code:
+        description: Stable build number shared with the product version metadata.
+        type: string
+        required: true
       source_sha:
         description: Lowercase full source commit SHA to build.
         type: string
         required: true
 
-env:
-  GOTOOLCHAIN: local
-
 jobs:
   ios_build:
     runs-on: macos-15
-    timeout-minutes: 30
-    environment: release
+    timeout-minutes: 40
     env:
-      APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
-      APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
-      APP_MAINTENANCE_VERSION: ${{ inputs.app_maintenance_version }}
-      APP_SOURCE_SHA: ${{ inputs.source_sha }}
-      # Fastlane reads the build number while loading the Fastfile, so make it
-      # available to every lane (including build_ios), not only the bump and
-      # entitlement-verification steps.
-      APPLE_BUILD_NUMBER: ${{ github.run_number }}
-      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      VERSION_NAME: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
+      APP_BUILD: ${{ inputs.android_version_code }}
+      SOURCE_COMMIT: ${{ inputs.source_sha }}
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -57,106 +40,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$APP_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$APP_SOURCE_SHA"
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
 
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
-        with:
-          ruby-version: '3.3'
-          bundler-cache: false
-
-      - name: Install Ruby dependencies
-        run: bundle install --jobs 4 --retry 3
-
-      - name: Set up Go for the shared iOS VPN runtime
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: .go-version
-          cache: false
-
-      - name: Download Go modules
-        working-directory: go_module
-        run: go mod download
-
-      - name: Download iOS lib
+      - name: Download iOS runtime framework
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: DobbyVPNRuntime.xcframework
           path: swift_module/DobbyVPNRuntime.xcframework
 
-      - name: Analyze the production iPhone app and tunnel
-        run: |
-          xcodebuild \
-            -project swift_module/iosApp.xcodeproj \
-            -scheme iosApp \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/dobbyvpn-ios-analysis" \
-            CODE_SIGNING_ALLOWED=NO \
-            analyze
-
-      - name: Fastlane bump build and version
-        env:
-          APPLE_BUILD_NUMBER: ${{ github.run_number }}
-        run: |
-          bundle exec fastlane ios bump_build_and_version
-
-      - name: Fastlane prepare_signing
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          CERT_P12_PASSWORD: ${{ secrets.CERT_P12_PASSWORD }}
-          CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
-          PROVISION_DOBBY_BASE64: ${{ secrets.PROVISION_DOBBY_BASE64 }}
-          PROVISION_DOBBY_TUNNEL_BASE64: ${{ secrets.PROVISION_DOBBY_TUNNEL_BASE64 }}
-        run: |
-          bundle exec fastlane ios prepare_signing
-
-      - name: Fastlane build_ios
-        run: |
-          bundle exec fastlane ios build_ios
-
-      - name: Verify signed IPA App Group and packet tunnel entitlements
-        env:
-          APPLE_BUILD_NUMBER: ${{ github.run_number }}
-        shell: bash
+      - name: Analyze production iOS app and tunnel without signing
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          ipas=(swift_module/build/ipa/*.ipa)
-          test "${#ipas[@]}" -eq 1
-          work="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-ios-entitlements.XXXXXX")"
-          trap 'rm -rf "$work"' EXIT
-          ditto -x -k "${ipas[0]}" "$work/extracted"
-          apps=("$work"/extracted/Payload/*.app)
-          test "${#apps[@]}" -eq 1
-          tunnels=("${apps[0]}"/PlugIns/*.appex)
-          test "${#tunnels[@]}" -eq 1
-          codesign --verify --strict "${apps[0]}"
-          codesign --verify --strict "${tunnels[0]}"
-          codesign --display --entitlements :- "${apps[0]}" > "$work/app-entitlements.plist"
-          codesign --display --entitlements :- "${tunnels[0]}" > "$work/tunnel-entitlements.plist"
-          security cms -D -i "${apps[0]}/embedded.mobileprovision" > "$work/app-profile.plist"
-          security cms -D -i "${tunnels[0]}/embedded.mobileprovision" > "$work/tunnel-profile.plist"
-          python3 .github/scripts/verify_ios_app_group.py \
-            --app-entitlements "$work/app-entitlements.plist" \
-            --app-profile "$work/app-profile.plist" \
-            --tunnel-entitlements "$work/tunnel-entitlements.plist" \
-            --tunnel-profile "$work/tunnel-profile.plist" \
-            --app-info "${apps[0]}/Info.plist" \
-            --tunnel-info "${tunnels[0]}/Info.plist" \
-            --team-id "$APPLE_TEAM_ID" \
-            --source-sha "$APP_SOURCE_SHA" \
-            --version "$APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION" \
-            --build-number "$APPLE_BUILD_NUMBER"
+          bash go_module/scripts/package_ios_app.sh \
+            iosanalyze "$RUNNER_TEMP/dobbyvpn-ios-analysis" \
+            swift_module/DobbyVPNRuntime.xcframework
 
-      - name: Upload IPA as artifact
+      - name: Archive production iOS app and tunnel without signing
+        run: |
+          set -euo pipefail
+          mkdir -p swift_module/build/release
+          bash go_module/scripts/package_ios_app.sh \
+            iosarchive swift_module/build/release/DobbyVPN.xcarchive.tar.gz \
+            swift_module/DobbyVPNRuntime.xcframework
+
+      - name: Upload unsigned iOS archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: DobbyVPN.ipa
-          path: swift_module/build/ipa/*.ipa
+          name: DobbyVPN.xcarchive.tar.gz
+          path: swift_module/build/release/DobbyVPN.xcarchive.tar.gz
           if-no-files-found: error
           retention-days: 90

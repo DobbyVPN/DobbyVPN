@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -24,7 +26,10 @@ from typing import Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from verify_android_reproducibility import verify_signed_payload  # noqa: E402
+from verify_android_reproducibility import (  # noqa: E402
+    verify_document,
+    verify_signed_payload,
+)
 
 CERTIFICATE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 SIGNER_LINE = re.compile(
@@ -248,6 +253,149 @@ def sign_release_apk(
         keystore_bytes = b""
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _artifact_record(kind: str, path: Path) -> dict[str, str]:
+    if not path.is_file():
+        raise SigningError(f"APK artifact is missing: {path}")
+    return {"kind": kind, "name": path.name, "sha256": _sha256(path)}
+
+
+def finalize_provenance(
+    provenance: Path,
+    unsigned_apk: Path,
+    signed_apk: Path,
+    test_companion: Path,
+    *,
+    source_sha: str,
+    version_name: str,
+    version_code: int,
+    expected_certificate_sha256: str,
+    apksigner: Path,
+) -> str:
+    """Validate Release build records, bind the signed APK, and write final provenance."""
+    expected = expected_certificate_sha256.replace(":", "").lower()
+    if not CERTIFICATE_SHA256.fullmatch(expected):
+        raise SigningError("expected signer certificate must be a SHA-256 digest")
+    if not apksigner.is_file():
+        raise SigningError("pinned Android apksigner is unavailable")
+    if not provenance.is_file():
+        raise SigningError(f"Android provenance is missing: {provenance}")
+    try:
+        document = json.loads(provenance.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SigningError("Android build provenance is not valid JSON") from error
+    if not isinstance(document, dict):
+        raise SigningError("Android build provenance must be a JSON object")
+    if (
+        document.get("schema") != 1
+        or document.get("source_sha") != source_sha
+        or document.get("version_name") != version_name
+        or document.get("version_code") != version_code
+        or document.get("application_id") != "com.dobby.vpn"
+    ):
+        raise SigningError("Android build provenance metadata does not match the selected Release")
+
+    verify_document(
+        document.get("reproducibility"),
+        unsigned_apk,
+        source_sha,
+        version_name,
+        version_code,
+    )
+    if not test_companion.is_file():
+        raise SigningError("unsigned Android test companion is missing")
+    companion_sha = _sha256(test_companion)
+    companion = document.get("test_companion")
+    if (
+        not isinstance(companion, dict)
+        or companion.get("name") != test_companion.name
+        or companion.get("sha256") != companion_sha
+        or companion.get("bytes") != test_companion.stat().st_size
+        or companion.get("application_id") != "com.dobby.vpn.test"
+        or companion.get("source_sha") != source_sha
+    ):
+        raise SigningError("unsigned Android test companion does not match build provenance")
+
+    expected_artifacts = {
+        "unsigned": _artifact_record("unsigned", unsigned_apk),
+        "test_companion_unsigned": _artifact_record("test_companion_unsigned", test_companion),
+    }
+    artifacts = document.get("artifacts")
+    if not isinstance(artifacts, list) or len(artifacts) != len(expected_artifacts):
+        raise SigningError("Android build provenance artifact set mismatch")
+    by_kind = {
+        artifact.get("kind"): artifact
+        for artifact in artifacts
+        if isinstance(artifact, dict)
+    }
+    if set(by_kind) != set(expected_artifacts):
+        raise SigningError("Android build provenance artifact kinds mismatch")
+    for kind, expected_record in expected_artifacts.items():
+        record = by_kind[kind]
+        if any(record.get(key) != value for key, value in expected_record.items()):
+            raise SigningError(f"Android build provenance {kind} artifact does not match its APK")
+
+    driver = document.get("build_driver")
+    if not isinstance(driver, dict) or any(
+        driver.get(key) != value
+        for key, value in {
+            "source_sha": source_sha,
+            "version_name": version_name,
+            "version_code": version_code,
+            "package": "com.dobby.vpn",
+            "signing_classification": "unsigned",
+            "signer_certificate_sha256": None,
+        }.items()
+    ):
+        raise SigningError("Android build-driver metadata does not match the selected Release")
+    driver_artifact = driver.get("artifact")
+    driver_companion = driver.get("test_companion")
+    for actual, expected_record, label in (
+        (driver_artifact, expected_artifacts["unsigned"], "application"),
+        (driver_companion, expected_artifacts["test_companion_unsigned"], "test companion"),
+    ):
+        if (
+            not isinstance(actual, dict)
+            or actual.get("name") != expected_record["name"]
+            or actual.get("sha256") != expected_record["sha256"]
+            or actual.get("bytes")
+            != (unsigned_apk if label == "application" else test_companion).stat().st_size
+        ):
+            raise SigningError(f"Android build-driver {label} does not match the selected APK")
+    if driver_companion.get("signing_classification") != "unsigned":
+        raise SigningError("Android build-driver test companion is not recorded as unsigned")
+
+    verify_signed_payload(unsigned_apk, signed_apk)
+    signer_digest = _signer_digest(apksigner, signed_apk, os.environ.copy())
+    if signer_digest != expected:
+        raise SigningError("signed APK certificate does not match the expected release signer")
+
+    document["signer_certificate_sha256"] = signer_digest
+    document["signed_payload_matches_unsigned"] = True
+    document["artifacts"] = [
+        _artifact_record("signed", signed_apk),
+        _artifact_record("unsigned", unsigned_apk),
+    ]
+    temporary = provenance.with_name(f".{provenance.name}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(provenance)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return signer_digest
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -270,6 +418,19 @@ def _parser() -> argparse.ArgumentParser:
         "--expected-certificate-sha256",
         default=os.environ.get("EXPECTED_ANDROID_SIGNER_SHA256", ""),
     )
+    finalize = commands.add_parser("finalize-provenance")
+    finalize.add_argument("--provenance", type=Path, required=True)
+    finalize.add_argument("--unsigned-apk", type=Path, required=True)
+    finalize.add_argument("--signed-apk", type=Path, required=True)
+    finalize.add_argument("--test-companion", type=Path, required=True)
+    finalize.add_argument("--source-sha", required=True)
+    finalize.add_argument("--version-name", required=True)
+    finalize.add_argument("--version-code", type=int, required=True)
+    finalize.add_argument("--apksigner", type=Path, required=True)
+    finalize.add_argument(
+        "--expected-certificate-sha256",
+        default=os.environ.get("EXPECTED_ANDROID_SIGNER_SHA256", ""),
+    )
     return parser
 
 
@@ -286,7 +447,7 @@ def main(argv: list[str] | None = None) -> int:
                 keytool=args.keytool,
             )
             print(f"Temporary Android test signer SHA-256: {digest}")
-        else:
+        elif args.command == "sign-release":
             digest = sign_release_apk(
                 args.unsigned_apk,
                 args.signed_apk,
@@ -298,6 +459,19 @@ def main(argv: list[str] | None = None) -> int:
                 expected_certificate_sha256=args.expected_certificate_sha256,
             )
             print(f"Android release signer SHA-256: {digest}")
+        else:
+            digest = finalize_provenance(
+                args.provenance,
+                args.unsigned_apk,
+                args.signed_apk,
+                args.test_companion,
+                source_sha=args.source_sha,
+                version_name=args.version_name,
+                version_code=args.version_code,
+                expected_certificate_sha256=args.expected_certificate_sha256,
+                apksigner=args.apksigner,
+            )
+            print(f"Android publication provenance finalized; signer SHA-256: {digest}")
         return 0
     except (OSError, SigningError, ValueError) as error:
         print(f"Android APK signing failed: {error}", file=sys.stderr)
