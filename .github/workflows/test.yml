@@ -105,9 +105,9 @@ jobs:
         working-directory: go_module
         run: go mod download
 
-      - name: Run Android shell tests and build both Go ABIs
+      - name: Build Android app and test companion for both Go ABIs
         working-directory: android_module
-        run: ./gradlew :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease --info --stacktrace
+        run: ./gradlew :app:assembleReleaseAndroidTest :app:assembleRelease --info --stacktrace
 
       - name: Verify Android ABI bridge symbols and runtime dependencies
         run: |

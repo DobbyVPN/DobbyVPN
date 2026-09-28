@@ -33,11 +33,14 @@ The setup command's environment changes do not escape its shell process.
 
 The Android app is built from android_module. It uses Kotlin and Jetpack
 Compose for the frontend, with a thin Android VPN service boundary and the
-shared Go backend. Build and run the release unit and instrumentation targets
+shared Go backend. Build the release app and instrumentation test companion
 with JDK 17, Android SDK, and the pinned NDK:
 
     cd android_module
-    ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:testReleaseUnitTest :app:assembleReleaseAndroidTest :app:assembleRelease
+    ./gradlew -PdobbyGoBinary="$(go env GOROOT)/bin/go" :app:assembleReleaseAndroidTest :app:assembleRelease
+
+There are currently no Android app unit-test sources. The Test workflow builds
+the instrumentation companion; Android mini executes the on-device tests.
 
 The Test workflow builds both APK ABIs and verifies that each includes the
 TrustTunnel bridge symbols with no unresolved C++ runtime symbols. A separate
