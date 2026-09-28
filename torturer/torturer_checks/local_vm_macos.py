@@ -42,6 +42,7 @@ class MacOSNativeCapabilityPreflightFailed(LocalVMError):
 
 
 _MACOS_CAPABILITY_PREFLIGHT_TIMEOUT_SECONDS = 90.0
+_MACOS_ACCESSIBILITY_PROBE_TIMEOUT_SECONDS = 30.0
 
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
     if not (exists process "Finder") then error "Finder is unavailable"
@@ -108,16 +109,17 @@ def _probe(
     logs: Path,
     label: str,
     timeout: float,
+    timeout_cap: float = 5.0,
     input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run one short platform probe through the logged command runner."""
+    """Run one bounded platform probe through the logged command runner."""
 
     try:
         kwargs: dict[str, Any] = {
             "cwd": run_dir,
             "logs": logs,
             "label": label,
-            "timeout": min(timeout, 5.0),
+            "timeout": min(timeout, timeout_cap),
             "check": False,
         }
         if input_data is not None:
@@ -329,6 +331,9 @@ def preflight_interactive_desktop(
         logs=logs,
         label="macos-ui-accessibility",
         timeout=timeout,
+        # System Events may need time to activate and respond on a busy or
+        # newly started desktop; metadata probes above remain capped at 5s.
+        timeout_cap=_MACOS_ACCESSIBILITY_PROBE_TIMEOUT_SECONDS,
     )
     if not _finder_accessibility_available(accessibility):
         raise MacOSInteractiveDesktopUnavailable(

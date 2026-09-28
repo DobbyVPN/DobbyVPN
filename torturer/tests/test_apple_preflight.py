@@ -30,6 +30,53 @@ def _load_smoke_script():
 
 
 class ApplePreflightTests(unittest.TestCase):
+    def test_accessibility_probe_gets_longer_timeout_than_other_aqua_probes(self) -> None:
+        responses = {
+            "scutil": b"kCGSSessionUserNameKey : tester\nkCGSSessionUserIDKey : 501\n",
+            "launchctl": b"gui session ready\n",
+            "ioreg": b"Root\n    | |   \"CGSSessionScreenIsLocked\" = No\n",
+            "osascript": b"Finder\n",
+        }
+
+        def run(command, **kwargs):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                responses[command[0]],
+                b"",
+            )
+
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            with (
+                mock.patch.object(local_vm_macos.host_platform, "system", return_value="Darwin"),
+                mock.patch.object(local_vm_macos.getpass, "getuser", return_value="tester"),
+                mock.patch.object(local_vm_macos.os, "getuid", return_value=501),
+                mock.patch.object(local_vm_macos, "_run_logged", side_effect=run) as logged,
+            ):
+                self.assertEqual(
+                    local_vm_macos.preflight_interactive_desktop(
+                        run_dir=root,
+                        logs=root / "logs",
+                        timeout=300,
+                    ),
+                    ("tester", 501),
+                )
+
+        self.assertEqual(
+            [call.kwargs["label"] for call in logged.call_args_list],
+            [
+                "macos-ui-console",
+                "macos-ui-session",
+                "macos-ui-screen",
+                "macos-ui-accessibility",
+            ],
+        )
+        self.assertEqual(
+            [call.kwargs["timeout"] for call in logged.call_args_list],
+            [5.0, 5.0, 5.0, 30.0],
+        )
+
     def test_macos_service_waits_for_connectable_socket_and_confirms_launchd_pid(self) -> None:
         completed = subprocess.CompletedProcess(
             ["launchctl", "print"], 0, b"pid = 418\n", b"",
