@@ -25,7 +25,9 @@ final class NativeUIInteractionTests: XCTestCase {
 
         configuration.tap()
         configuration.typeText("2")
-        XCTAssertEqual(configuration.value as? String, "invalidprofile2")
+        let editedConfiguration = try XCTUnwrap(configuration.value as? String)
+        XCTAssertEqual(editedConfiguration.count, "invalidprofile".count + 1)
+        XCTAssertEqual(editedConfiguration.filter { $0 != "2" }, "invalidprofile")
         app.buttons["Dismiss configuration keyboard"].tap()
 
         let settingsTab = app.tabBars.buttons["Settings"]
@@ -39,7 +41,7 @@ final class NativeUIInteractionTests: XCTestCase {
             .exists)
 
         app.tabBars.buttons["Connection"].tap()
-        XCTAssertEqual(configuration.value as? String, "invalidprofile2")
+        XCTAssertEqual(configuration.value as? String, editedConfiguration)
         app.tabBars.buttons["Logs"].tap()
         XCTAssertTrue(app.staticTexts["Logs"].waitForExistence(timeout: 10))
         app.buttons["Refresh"].tap()

@@ -42,7 +42,7 @@ export GOPATH="${GOPATH:-$("$go_bin" env GOPATH)}"
 sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
 [[ -n "$sdk_root" && -d "$sdk_root" ]] || { echo 'Android SDK is required' >&2; exit 2; }
 export ANDROID_SDK_ROOT="$sdk_root"
-export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$sdk_root/ndk/28.1.13356709}"
+export ANDROID_NDK_HOME="$sdk_root/ndk/28.1.13356709"
 [[ -f "$ANDROID_NDK_HOME/source.properties" ]] || {
   echo "Android NDK 28.1.13356709 is required: $ANDROID_NDK_HOME" >&2
   exit 2
