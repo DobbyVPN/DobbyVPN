@@ -918,6 +918,10 @@ def _prepare_desktop_package(
     script = source / ".github" / "scripts" / "desktop_platform.py"
     output = run_dir / "output" / "desktop-package"
     version = (source / "VERSION").read_text(encoding="utf-8").strip()
+    control_pipe_sid = (
+        _windows_control_pipe_sid(run_dir, logs, timeout)
+        if platform == "windows" else None
+    )
     build = [
         sys.executable, str(script), "build", "--platform", platform,
         "--version", version, "--source-sha", source_sha,
@@ -933,13 +937,16 @@ def _prepare_desktop_package(
             "dobbyVPN-macos-aarch64.pkg" if host_platform.machine().lower() in {"arm64", "aarch64"}
             else "dobbyVPN-macos-amd64.pkg"
         )
+        migration = [
+            sys.executable, str(source / ".github" / "scripts" / "installer_migration.py"),
+            "--platform", platform, "--package", str(output / package_name),
+            "--current-version", version,
+            "--log-dir", str(logs / "installer-migration"),
+        ]
+        if control_pipe_sid is not None:
+            migration.extend(("--control-pipe-sid", control_pipe_sid))
         _run_logged(
-            [
-                sys.executable, str(source / ".github" / "scripts" / "installer_migration.py"),
-                "--platform", platform, "--package", str(output / package_name),
-                "--current-version", version,
-                "--log-dir", str(logs / "installer-migration"),
-            ],
+            migration,
             cwd=source, logs=logs, label="desktop-installer-migration", timeout=timeout,
         )
     install = [
@@ -947,8 +954,8 @@ def _prepare_desktop_package(
         str(output / "desktop-package.json"), "--run-dir", str(run_dir),
         "--output", str(run_dir / "installed.json"),
     ]
-    if platform == "windows":
-        install.extend(("--control-pipe-sid", _windows_control_pipe_sid(run_dir, logs, timeout)))
+    if control_pipe_sid is not None:
+        install.extend(("--control-pipe-sid", control_pipe_sid))
     _run_logged(install, cwd=source, logs=logs, label="desktop-package-install", timeout=timeout)
     descriptor = _release_document(run_dir / "installed.json", label="installed package")
     return _write_candidate_descriptor(run_dir, descriptor)

@@ -34,6 +34,8 @@ OLD_VERSION = "1.5.0"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 PLATFORMS = ("windows", "macos")
 MACOS_ASSET = {"arm64": "macos-aarch64", "x86_64": "macos-amd64"}
+WINDOWS_CONTROL_PIPE_SID = re.compile(r"^S-1-(?:[0-9]+-)*[0-9]+$")
+WINDOWS_SYSTEM_SID = "S-1-5-18"
 
 
 class MigrationError(RuntimeError):
@@ -248,6 +250,16 @@ class CommandRunner:
         )
 
 
+def validate_control_pipe_sid(control_pipe_sid: str | None) -> str | None:
+    """Validate the optional account SID passed to a noninteractive Windows MSI install."""
+    if control_pipe_sid is not None and (
+        not WINDOWS_CONTROL_PIPE_SID.fullmatch(control_pipe_sid)
+        or control_pipe_sid == WINDOWS_SYSTEM_SID
+    ):
+        raise _error("configured Windows desktop SID is invalid")
+    return control_pipe_sid
+
+
 class InstallerAdapter:
     """Interface implemented by native package-manager adapters."""
 
@@ -267,15 +279,24 @@ class InstallerAdapter:
 class WindowsInstaller(InstallerAdapter):
     """MSI install/uninstall and ARP/file checks for a Windows runner."""
 
-    def __init__(self, runner: CommandRunner) -> None:
+    def __init__(
+        self,
+        runner: CommandRunner,
+        *,
+        current_package: Path,
+        control_pipe_sid: str | None,
+    ) -> None:
         self.runner = runner
+        self.current_package = Path(current_package).resolve()
+        self.control_pipe_sid = validate_control_pipe_sid(control_pipe_sid)
 
     def install(self, package: Path, *, label: str) -> None:
+        command = ["msiexec.exe", "/i", str(package), "/qn", "/norestart"]
+        if Path(package).resolve() == self.current_package and self.control_pipe_sid:
+            command.append(f"DOBBYVPN_CONTROL_PIPE_SID={self.control_pipe_sid}")
+        command.extend(("/L*v", str(self.runner.log_dir / f"{label}.msi.log")))
         self.runner.run(
-            [
-                "msiexec.exe", "/i", str(package), "/qn", "/norestart",
-                "/L*v", str(self.runner.log_dir / f"{label}.msi.log"),
-            ],
+            command,
             label=label,
             accepted_codes=frozenset({0, 3010}),
         )
@@ -499,9 +520,13 @@ def qualify(
     current_version: str = CURRENT_VERSION,
     manifest_path: Path = DEFAULT_MANIFEST,
     log_dir: Path | None = None,
+    control_pipe_sid: str | None = None,
 ) -> None:
     if platform not in PLATFORMS:
         raise _error(f"unsupported migration platform: {platform}")
+    control_pipe_sid = validate_control_pipe_sid(control_pipe_sid)
+    if control_pipe_sid is not None and platform != "windows":
+        raise _error("a Windows desktop SID can only be used for Windows migration")
     current_package = Path(current_package)
     if not current_package.is_file():
         raise _error(f"current release package is missing: {current_package}")
@@ -523,7 +548,11 @@ def qualify(
         previous_package = download_asset(asset, run_root / asset.name)
         runner = CommandRunner(Path(log_dir) if log_dir is not None else run_root / "logs")
         if platform == "windows":
-            adapter = WindowsInstaller(runner)
+            adapter = WindowsInstaller(
+                runner,
+                current_package=current_package,
+                control_pipe_sid=control_pipe_sid,
+            )
         else:
             adapter = MacOSInstaller(
                 runner, fallback_uninstaller=SCRIPT_DIR.parent.parent / "installer/macos/uninstall.sh"
@@ -574,6 +603,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--current-version", default=CURRENT_VERSION)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--log-dir", type=Path, help="optional diagnostic log directory")
+    parser.add_argument(
+        "--control-pipe-sid",
+        help="validated desktop account SID for a noninteractive Windows MSI install",
+    )
     return parser
 
 
@@ -586,6 +619,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             current_version=args.current_version,
             manifest_path=args.manifest,
             log_dir=args.log_dir,
+            control_pipe_sid=args.control_pipe_sid,
         )
     except MigrationError as error:
         print(f"installer migration failed: {error}", file=sys.stderr)
