@@ -153,6 +153,39 @@ exit 0
         encoding="utf-8",
     )
     postinst.chmod(0o755)
+    prerm = debian / "prerm"
+    prerm.write_text(
+        """#!/bin/sh
+set -e
+case "${1:-}" in
+    remove|upgrade|deconfigure)
+        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+            systemctl stop dobbyvpn.service
+            systemctl disable dobbyvpn.service
+        fi
+        ;;
+esac
+exit 0
+""",
+        encoding="utf-8",
+    )
+    prerm.chmod(0o755)
+    postrm = debian / "postrm"
+    postrm.write_text(
+        """#!/bin/sh
+set -e
+case "${1:-}" in
+    remove|purge|upgrade|disappear)
+        if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload
+        fi
+        ;;
+esac
+exit 0
+""",
+        encoding="utf-8",
+    )
+    postrm.chmod(0o755)
 
 
 def package_linux(version: str, output: Path, source: Path) -> None:

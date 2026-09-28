@@ -271,6 +271,96 @@ def _build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _describe(args: argparse.Namespace) -> int:
+    """Record identity for a package downloaded from the current Release run."""
+    platform, architecture = _select_host(args.platform, args.arch)
+    version = _version(args.version)
+    source_sha = _source_sha(args.source_sha)
+    package = args.package.resolve(strict=True)
+    if not package.is_file():
+        _fail(f"desktop package is not a regular file: {package}")
+
+    if platform == "linux":
+        expected_name = "dobbyVPN-linux.deb"
+        if package.name != expected_name:
+            _fail(f"Linux package must be named {expected_name}")
+        package_version = _run(
+            "read Linux package version",
+            ["dpkg-deb", "-f", str(package), "Version"],
+            capture=True,
+        )
+        architecture_result = _run(
+            "read Linux package architecture",
+            ["dpkg-deb", "-f", str(package), "Architecture"],
+            capture=True,
+        )
+        observed_version = (package_version.stdout or b"").decode("utf-8", errors="replace").strip()
+        observed_architecture = (architecture_result.stdout or b"").decode("utf-8", errors="replace").strip()
+        if observed_version != version or observed_architecture != architecture:
+            _fail(
+                "Linux package metadata differs from the Release checkout: "
+                f"version={observed_version!r}, architecture={observed_architecture!r}"
+            )
+        with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-check-") as temporary:
+            _verify_deb(package, version, Path(temporary))
+    elif platform == "windows":
+        expected_name = "dobbyVPN-windows-amd64.msi"
+        if package.name != expected_name:
+            _fail(f"Windows package must be named {expected_name}")
+        _verify_msi(package, version, os.environ.copy())
+    else:
+        archive_arch = "aarch64" if architecture == "arm64" else "amd64"
+        expected_name = f"dobbyVPN-macos-{archive_arch}.pkg"
+        if package.name != expected_name:
+            _fail(f"macOS package must be named {expected_name}")
+        with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-check-") as temporary:
+            work = Path(temporary)
+            _verify_pkg(package, version, work)
+            _verify_macos_package_source(package, source_sha, architecture, work)
+
+    package_record = {
+        "file_name": package.name,
+        "path": str(package),
+        "sha256": _sha256(package),
+    }
+    descriptor = {
+        "schema": 1,
+        "mode": "desktop-package",
+        "platform": platform,
+        "architecture": architecture,
+        "version": version,
+        "source_sha": source_sha,
+        "package": package_record,
+        "package_path": package_record["path"],
+        "package_sha256": package_record["sha256"],
+    }
+    _write_json(args.output, descriptor)
+    _log(f"recorded {package.name} sha256={package_record['sha256']}")
+    return 0
+
+
+def _verify_macos_package_source(package: Path, source_sha: str, architecture: str, work: Path) -> None:
+    expanded = work / "expanded-pkg-source"
+    _run("expand macOS package for source identity check", ["pkgutil", "--expand-full", str(package), str(expanded)])
+    info_plists = list(expanded.rglob("Info.plist"))
+    if len(info_plists) != 1:
+        _fail(f"expected one application Info.plist in macOS package, found {len(info_plists)}")
+    import plistlib
+
+    with info_plists[0].open("rb") as stream:
+        info = plistlib.load(stream)
+    if info.get("DobbySourceCommit") != source_sha:
+        _fail("macOS package source commit does not match the Release checkout")
+    backend = next(expanded.rglob("dobbyvpn-backend"), None)
+    if backend is None:
+        _fail("macOS package does not contain its VPN backend")
+    expected_arch = "arm64" if architecture == "arm64" else "x86_64"
+    observed = _run("read macOS package backend architecture", ["lipo", "-archs", str(backend)], capture=True)
+    architectures = (observed.stdout or b"").decode("utf-8", errors="replace").split()
+    if architectures != [expected_arch]:
+        _fail(f"macOS package backend architecture is {architectures!r}, expected {[expected_arch]!r}")
+
+
 def _ensure_windows_pillow(work: Path, env: dict[str, str]) -> dict[str, str]:
     try:
         import PIL  # noqa: F401
@@ -420,6 +510,21 @@ def _verify_deb(package: Path, version: str, work: Path) -> None:
     if not service.is_file() or not cli.is_file() or not unit.is_file():
         _fail("Linux DEB is missing its service, CLI, or systemd unit")
     library_path = expanded / "opt" / "dobbyvpn" / "lib"
+    unit_text = unit.read_text(encoding="utf-8")
+    if "ExecStart=/opt/dobbyvpn/bin/dobbyvpn-backend" not in unit_text:
+        _fail("Linux DEB systemd unit does not start the packaged backend")
+    control = work / "expanded-deb-control"
+    _run("expand Linux package maintainer scripts", ["dpkg-deb", "-e", str(package), str(control)])
+    expected_script_fragments = {
+        "postinst": "systemctl enable dobbyvpn.service",
+        "prerm": "systemctl disable dobbyvpn.service",
+        "postrm": "systemctl daemon-reload",
+    }
+    for name, fragment in expected_script_fragments.items():
+        script = control / name
+        if not script.is_file() or fragment not in script.read_text(encoding="utf-8"):
+            _fail(f"Linux DEB maintainer script {name} is missing {fragment!r}")
+        _run(f"check Linux DEB {name} syntax", ["sh", "-n", str(script)])
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = str(library_path)
     library_check = _run(
@@ -492,7 +597,18 @@ def _install(args: argparse.Namespace) -> int:
     logs.mkdir(parents=True, exist_ok=True)
     msi_log = logs / "desktop-package-install.msi.log"
     if host == "linux":
+        systemd_available = Path("/run/systemd/system").is_dir() and shutil.which("systemctl") is not None
+        if systemd_available and any(
+            path.is_file()
+            for path in (
+                Path("/usr/lib/systemd/system/dobbyvpn.service"),
+                Path("/lib/systemd/system/dobbyvpn.service"),
+            )
+        ):
+            _run("stop existing DobbyVPN service before package installation", ["sudo", "-n", "systemctl", "stop", "dobbyvpn.service"])
         _run("install Linux DEB", ["sudo", "-n", "dpkg", "-i", str(package_path)])
+        if systemd_available:
+            _run("keep packaged DobbyVPN service stopped for qualification", ["sudo", "-n", "systemctl", "stop", "dobbyvpn.service"])
     elif host == "windows":
         command = ["msiexec.exe", "/i", str(package_path), "/qn", "/norestart"]
         if args.control_pipe_sid:
@@ -590,6 +706,13 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--source-sha")
     build.add_argument("--output-dir", type=Path, required=True)
     build.add_argument("--skip-deps", action="store_true")
+    describe = commands.add_parser("describe", help="validate and record a downloaded Release package")
+    describe.add_argument("--platform", choices=PLATFORMS, required=True)
+    describe.add_argument("--arch", choices=("amd64", "arm64"))
+    describe.add_argument("--version", required=True)
+    describe.add_argument("--source-sha", required=True)
+    describe.add_argument("--package", type=Path, required=True)
+    describe.add_argument("--output", type=Path, required=True)
     install = commands.add_parser("install", help="install the package described by a build result")
     install.add_argument("--build-descriptor", type=Path, required=True)
     install.add_argument("--run-dir", type=Path, required=True)
@@ -611,6 +734,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.action == "build":
         return _build(args)
+    if args.action == "describe":
+        return _describe(args)
     if args.action == "install":
         return _install(args)
     if args.action == "uninstall":
