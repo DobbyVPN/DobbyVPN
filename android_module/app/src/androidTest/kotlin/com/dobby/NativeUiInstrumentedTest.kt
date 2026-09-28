@@ -123,6 +123,46 @@ class NativeUiInstrumentedTest {
         tapAndWaitForVisible("Settings", "Back")
         tapStable("Back")
         waitForOneOf(arrayOf("Disconnected"), 30_000)
+
+        // Repeat the UI-only lifecycle that previously exposed an intermittent
+        // Settings lookup timeout. The source is deliberately invalid text, so
+        // these cycles exercise editor and Activity state without starting a
+        // VPN connection or requiring a live profile.
+        for (iteration in 1..20) {
+            val suffix = iteration.toString().padStart(2, '0')
+            val expectedSource = "invalidprofile-round-trip-$suffix"
+            var phase = "open-configuration"
+            try {
+                tapStable("Connection configuration")
+                phase = "enter-source"
+                waitForFocusedNativeInput(10_000).setText(expectedSource)
+                device.waitForIdle()
+                dismissNativeInputIfVisible()
+                waitForConfigurationText(expectedSource, 10_000)
+
+                phase = "settings"
+                tapAndWaitForVisible("Settings", "Back")
+                phase = "back"
+                tapStable("Back")
+                waitForOneOf(arrayOf("Disconnected"), 10_000)
+                waitForConfigurationText(expectedSource, 10_000)
+
+                phase = "background"
+                backgroundActivity()
+                phase = "reopen"
+                launch()
+                waitForOneOf(arrayOf("Disconnected"), 10_000)
+                requireObject(connectionActionLabel)
+                waitForConfigurationText(expectedSource, 10_000)
+            } catch (failure: Throwable) {
+                throw AssertionError(
+                    "ANDROID_SETTINGS_ROUND_TRIP_FAILED iteration=$iteration " +
+                        "phase=$phase expected_source=$expectedSource",
+                    failure,
+                )
+            }
+        }
+
         tapAndWaitForFailureOutcome()
         captureScreenshot("failure-state")
 
@@ -207,6 +247,16 @@ class NativeUiInstrumentedTest {
         throw AssertionError("ANDROID_UI_INPUT_FOCUS_TIMEOUT")
     }
 
+    private fun waitForConfigurationText(expected: String, timeoutMillis: Long) {
+        val selector = By.clazz("android.widget.EditText").pkg(packageName)
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (device.findObject(selector)?.text == expected) return
+            Thread.sleep(100)
+        }
+        throw AssertionError("ANDROID_UI_SOURCE_RETENTION_TIMEOUT expected=$expected")
+    }
+
     private fun waitForStableBounds(label: String, timeoutMillis: Long): Rect {
         val deadline = System.currentTimeMillis() + timeoutMillis
         var previous: Rect? = null
@@ -287,7 +337,7 @@ class NativeUiInstrumentedTest {
         var sourceBitmap: Bitmap? = null
         var output: File? = null
         try {
-            dismissNativeInputIfVisible()
+            if (label != "failure") dismissNativeInputIfVisible()
             sourceBitmap = instrumentation.uiAutomation.takeScreenshot()
                 ?: throw IllegalStateException("ANDROID_UI_SCREENSHOT_CAPTURE_EMPTY")
             val source = sourceBitmap ?: throw IllegalStateException(

@@ -23,6 +23,7 @@ import android.os.SystemClock;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -852,59 +853,77 @@ public final class NativeUiHostedProfileTest {
     }
 
     private UiObject2 findUiObject(String label) {
+        return findUiObject(label, null);
+    }
+
+    private UiObject2 findUiObject(String label, UiLookupCounters counters) {
         UiDevice device = uiDevice();
         // A rendered profile can make the editable text node large. Prefer
         // stable accessibility descriptions when locating visible controls.
         UiObject2 value = findVisibleUiObject(
-                device.findObjects(By.desc(label).pkg(context.getPackageName())));
+                device.findObjects(By.desc(label).pkg(context.getPackageName())), counters,
+                "description");
         if (value != null) return value;
         return findVisibleUiObject(
-                device.findObjects(By.text(label).pkg(context.getPackageName())));
+                device.findObjects(By.text(label).pkg(context.getPackageName())), counters,
+                "text");
     }
 
     private UiObject2 findVisibleUiObject(List<UiObject2> candidates) {
+        return findVisibleUiObject(candidates, null, "");
+    }
+
+    private UiObject2 findVisibleUiObject(
+            List<UiObject2> candidates, UiLookupCounters counters, String selectorKind) {
+        if (counters != null) counters.recordCandidates(selectorKind, candidates.size());
         for (UiObject2 candidate : candidates) {
             try {
                 // Accessibility can retain nodes from a hidden screen
                 // while another screen is already rendered. A state assertion
                 // must describe the visible UI, not any matching node still
                 // present in the package's accessibility tree.
-                if (!candidate.getVisibleBounds().isEmpty()) return candidate;
+                Rect bounds = candidate.getVisibleBounds();
+                if (!bounds.isEmpty()) {
+                    if (counters != null) counters.visibleMatches++;
+                    return candidate;
+                }
+                if (counters != null) counters.emptyBounds++;
             } catch (StaleObjectException ignored) {
                 // The rendered tree can be replaced between lookup and bounds
                 // access. Callers poll again within their existing deadline.
+                if (counters != null) counters.staleObjects++;
             }
         }
         return null;
     }
 
     private UiObject2 waitForUiControl(String label, long timeout) throws Exception {
+        long startedAt = SystemClock.uptimeMillis();
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
+        UiLookupCounters counters = new UiLookupCounters();
         while (System.currentTimeMillis() < deadline) {
-            UiObject2 value = findUiObject(label);
+            counters.attempts++;
+            UiObject2 value = findUiObject(label, counters);
             if (value != null) return value;
             Thread.sleep(POLL_MILLIS);
         }
-        throw new IllegalStateException("ANDROID_UI_CONTROL_TIMEOUT");
+        throw uiControlTimeout(label, timeout, startedAt, counters, "none");
     }
 
     private void tapUiControl(String label, long timeout) throws Exception {
         UiDevice device = uiDevice();
+        long startedAt = SystemClock.uptimeMillis();
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
-        int attempts = 0;
-        int visibleSamples = 0;
-        int emptyBounds = 0;
-        int staleObjects = 0;
+        UiLookupCounters counters = new UiLookupCounters();
         String lastBounds = "none";
         while (System.currentTimeMillis() < deadline) {
-            attempts++;
-            UiObject2 value = findUiObject(label);
+            counters.attempts++;
+            UiObject2 value = findUiObject(label, counters);
             if (value != null) {
-                visibleSamples++;
                 try {
                     Rect bounds = value.getVisibleBounds();
                     if (bounds.isEmpty()) {
-                        emptyBounds++;
+                        counters.emptyBounds++;
                     } else {
                         lastBounds = bounds.toShortString();
                         if (!device.click(bounds.centerX(), bounds.centerY())) {
@@ -915,23 +934,146 @@ public final class NativeUiHostedProfileTest {
                     }
                 } catch (StaleObjectException ignored) {
                     // Retry if Compose replaced the visible node after lookup.
-                    staleObjects++;
+                    counters.staleObjects++;
                 }
             }
             Thread.sleep(POLL_MILLIS);
         }
-        String diagnosticLabel = "Settings".equals(label)
+        throw uiControlTimeout(label, timeout, startedAt, counters, lastBounds);
+    }
+
+    private IllegalStateException uiControlTimeout(
+            String label,
+            long timeout,
+            long startedAt,
+            UiLookupCounters counters,
+            String lastBounds) {
+        String safeLabel = "Settings".equals(label)
                 || "Back".equals(label)
                 || "Connection configuration".equals(label)
                 || CONNECTION_ACTION_LABEL.equals(label)
                 ? label
                 : "other";
-        throw new IllegalStateException("ANDROID_UI_CONTROL_TIMEOUT: label=" + diagnosticLabel
-                + ", attempts=" + attempts
-                + ", visibleSamples=" + visibleSamples
-                + ", emptyBounds=" + emptyBounds
-                + ", staleObjects=" + staleObjects
-                + ", lastBounds=" + lastBounds);
+        IllegalStateException failure = new IllegalStateException(
+                "ANDROID_UI_CONTROL_TIMEOUT: label=" + safeLabel
+                        + ", selector=By.desc(" + JSONObject.quote(safeLabel)
+                        + ")|By.text(" + JSONObject.quote(safeLabel) + ")"
+                        + ", package=" + context.getPackageName()
+                        + ", timeoutMillis=" + timeout
+                        + ", elapsedMillis="
+                        + Math.max(0L, SystemClock.uptimeMillis() - startedAt)
+                        + ", attempts=" + counters.attempts
+                        + ", descriptionCandidates=" + counters.descriptionCandidates
+                        + ", textCandidates=" + counters.textCandidates
+                        + ", visibleMatches=" + counters.visibleMatches
+                        + ", emptyBounds=" + counters.emptyBounds
+                        + ", staleObjects=" + counters.staleObjects
+                        + ", lastBounds=" + lastBounds);
+        try {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_UI_CONTROL_TIMEOUT_DIAGNOSTICS\n"
+                            + dumpUiTimeoutContext(label)));
+        } catch (Throwable diagnosticFailure) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_UI_CONTROL_TIMEOUT_DIAGNOSTIC_COLLECTION_FAILED",
+                    diagnosticFailure));
+        }
+        return failure;
+    }
+
+    /** Capture the currently rendered accessibility state without touching UI. */
+    private String dumpUiTimeoutContext(String label) {
+        StringBuilder output = new StringBuilder();
+        UiDevice device = uiDevice();
+        output.append("requested_label=").append(JSONObject.quote(label)).append('\n');
+        try {
+            output.append("foreground_package=")
+                    .append(JSONObject.quote(String.valueOf(device.getCurrentPackageName())))
+                    .append('\n');
+        } catch (Throwable failure) {
+            output.append("foreground_package_error=")
+                    .append(JSONObject.quote(CompleteThrowableReporter.format(failure)))
+                    .append('\n');
+        }
+
+        List<AccessibilityWindowInfo> windows = InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation().getWindows();
+        output.append("window_count=").append(windows.size()).append('\n');
+        for (int index = 0; index < windows.size(); index++) {
+            AccessibilityWindowInfo window = windows.get(index);
+            Rect bounds = new Rect();
+            window.getBoundsInScreen(bounds);
+            output.append("window[").append(index).append("] id=").append(window.getId())
+                    .append(" type=").append(window.getType())
+                    .append(" layer=").append(window.getLayer())
+                    .append(" active=").append(window.isActive())
+                    .append(" focused=").append(window.isFocused())
+                    .append(" bounds=").append(bounds.toShortString())
+                    .append(" title=").append(JSONObject.quote(String.valueOf(window.getTitle())))
+                    .append('\n');
+            AccessibilityNodeInfo root = window.getRoot();
+            if (root == null) {
+                output.append("  root=null\n");
+                continue;
+            }
+            try {
+                appendAccessibilityNode(output, root, "  ", "root");
+            } finally {
+                root.recycle();
+            }
+        }
+        return output.toString();
+    }
+
+    private void appendAccessibilityNode(
+            StringBuilder output, AccessibilityNodeInfo node, String indent, String path) {
+        Rect bounds = new Rect();
+        node.getBoundsInScreen(bounds);
+        output.append(indent).append(path)
+                .append(" class=").append(JSONObject.quote(String.valueOf(node.getClassName())))
+                .append(" package=").append(JSONObject.quote(String.valueOf(node.getPackageName())))
+                .append(" resource=").append(JSONObject.quote(String.valueOf(node.getViewIdResourceName())))
+                .append(" text=").append(JSONObject.quote(String.valueOf(node.getText())))
+                .append(" description=").append(JSONObject.quote(String.valueOf(node.getContentDescription())))
+                .append(" bounds=").append(bounds.toShortString())
+                .append(" visible=").append(node.isVisibleToUser())
+                .append(" focused=").append(node.isFocused())
+                .append(" accessibilityFocused=").append(node.isAccessibilityFocused())
+                .append(" enabled=").append(node.isEnabled())
+                .append(" clickable=").append(node.isClickable())
+                .append(" focusable=").append(node.isFocusable())
+                .append(" children=").append(node.getChildCount())
+                .append('\n');
+        for (int index = 0; index < node.getChildCount(); index++) {
+            AccessibilityNodeInfo child = node.getChild(index);
+            if (child == null) {
+                output.append(indent).append(path).append('/').append(index)
+                        .append(" child=null\n");
+                continue;
+            }
+            try {
+                appendAccessibilityNode(output, child, indent + "  ", path + "/" + index);
+            } finally {
+                child.recycle();
+            }
+        }
+    }
+
+    private static final class UiLookupCounters {
+        int attempts;
+        int descriptionCandidates;
+        int textCandidates;
+        int visibleMatches;
+        int emptyBounds;
+        int staleObjects;
+
+        void recordCandidates(String selectorKind, int count) {
+            if ("description".equals(selectorKind)) {
+                descriptionCandidates += count;
+            } else if ("text".equals(selectorKind)) {
+                textCandidates += count;
+            }
+        }
     }
 
     private void ensureUiSurface(long timeout) throws Exception {
@@ -2250,7 +2392,10 @@ public final class NativeUiHostedProfileTest {
         Bitmap sourceBitmap = null;
         File output = null;
         try {
-            dismissNativeInputIfVisible();
+            // A failure frame must describe the actual timed-out UI. In
+            // particular, preserve an open keyboard until both accessibility
+            // diagnostics and this screenshot have captured the state.
+            if (!"failed".equals(state)) dismissNativeInputIfVisible();
             sourceBitmap = InstrumentationRegistry.getInstrumentation()
                     .getUiAutomation().takeScreenshot();
             if (sourceBitmap == null
