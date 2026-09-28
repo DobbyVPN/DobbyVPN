@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import platform as host_platform
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -226,6 +227,9 @@ def _build_android(
     source_root: Path,
     candidate_root: Path,
     architecture: str,
+    *,
+    source_sha: str | None,
+    source_tree: str | None,
 ) -> Path:
     helper = _android_helper(source_root)
     output = candidate_root / "dobbyvpn-release-unsigned.apk"
@@ -241,12 +245,93 @@ def _build_android(
         "--test-companion-output",
         str(companion_output),
     ]
-    command.append("--local")
-    _run(command, label="Android candidate build", source_root=source_root)
+    environment = os.environ.copy()
+    if source_sha is None and source_tree is None:
+        command.append("--local")
+        label = "Android candidate build"
+    else:
+        if source_sha is None or source_tree is None:
+            raise CandidateError("complete Android build requires both source SHA and source tree")
+        version = (source_root / "VERSION").read_text(encoding="utf-8").strip()
+        output_base = candidate_root
+        manifest = output_base / "android-build-driver-manifest.json"
+        first_output = output_base / "android-first-unsigned.apk"
+        reproducibility = output_base / "android-reproducibility.json"
+        dependency_manifest = output_base / "android-dependency-provenance.json"
+        command.extend([
+            "--source-sha", source_sha,
+            "--source-tree", source_tree,
+            "--trusted-archive-source",
+            "--source-repository", "DobbyVPN/DobbyVPN",
+            "--manifest", str(manifest),
+            "--first-output", str(first_output),
+            "--reproducibility", str(reproducibility),
+            "--dependency-manifest", str(dependency_manifest),
+        ])
+
+        # Android lint preflight installs this exact Go version through the
+        # shared desktop tool bootstrap. Re-select it in this process because
+        # PATH changes made by the preflight subprocess do not propagate here.
+        sys.path.insert(0, str(source_root / ".github" / "scripts"))
+        import desktop_build
+
+        desktop_build.install_go(skip_deps=True)
+        go_binary = shutil.which("go")
+        if not go_binary:
+            raise CandidateError("pinned Go executable is unavailable after Android preflight")
+        go_version = subprocess.run(
+            [go_binary, "env", "GOVERSION"],
+            cwd=str(source_root),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+        expected_go = "go" + (source_root / ".go-version").read_text(encoding="utf-8").strip()
+        if go_version != expected_go:
+            raise CandidateError(f"expected {expected_go}, found {go_version}")
+
+        go_path = Path.home() / "go"
+        go_path.mkdir(parents=True, exist_ok=True)
+        environment["GO_BIN"] = str(Path(go_binary).resolve())
+        environment["GOPATH"] = str(go_path)
+        environment["GRADLE_BIN"] = str(source_root / "android_module" / "gradlew")
+        label = "Android Release-mode candidate build"
+
+    _run(command, label=label, source_root=source_root, environment=environment)
     if not output.is_file():
         raise CandidateError("Android build did not produce the application APK")
     if not companion_output.is_file():
         raise CandidateError("Android build did not produce the test companion APK")
+
+    if source_sha is not None and source_tree is not None:
+        provenance = candidate_root / "android-provenance.json"
+        version_code_match = re.search(
+            r"^versionCode=([1-9][0-9]*)$",
+            (source_root / "android_module" / "gradle.properties").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        if version_code_match is None:
+            raise CandidateError("Android versionCode is missing or invalid")
+        _run(
+            [
+                sys.executable,
+                str(source_root / ".github" / "scripts" / "android_apk_signing.py"),
+                "create-provenance",
+                "--output", str(provenance),
+                "--unsigned-apk", str(output),
+                "--test-companion", str(companion_output),
+                "--build-driver-manifest", str(manifest),
+                "--reproducibility", str(reproducibility),
+                "--source-sha", source_sha,
+                "--source-tree", source_tree,
+                "--source-repository", "DobbyVPN/DobbyVPN",
+                "--version-name", version,
+                "--version-code", version_code_match.group(1),
+            ],
+            label="Android unsigned build provenance",
+            source_root=source_root,
+            environment=environment,
+        )
     sign_test_pair(
         output,
         companion_output,
@@ -327,6 +412,8 @@ def prepare_candidate(
     architecture: str | None = None,
     candidate_root: Path | None = None,
     skip_deps: bool = False,
+    source_sha: str | None = None,
+    source_tree: str | None = None,
 ) -> dict[str, Any]:
     request_root = _existing_directory(request_root, "request root")
     source_root = _existing_directory(source_root, "source root")
@@ -336,6 +423,13 @@ def prepare_candidate(
         raise CandidateError("source root must be below request root")
     if platform not in PLATFORMS:
         raise CandidateError(f"unsupported platform: {platform}")
+    if (source_sha is None) != (source_tree is None):
+        raise CandidateError("Android archived-source build requires both source SHA and source tree")
+    if source_sha is not None:
+        if platform != "android":
+            raise CandidateError("source SHA/tree arguments are supported only for Android candidates")
+        if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None or re.fullmatch(r"[0-9a-f]{40}", source_tree or "") is None:
+            raise CandidateError("Android source SHA and tree must be full lowercase Git identities")
     # Local macOS candidates must match the native host, including Intel Macs;
     # the release lane's Apple-silicon default is not a local build target.
     architecture = architecture or (
@@ -372,7 +466,13 @@ def prepare_candidate(
         )
         app_path = None
     else:
-        app_path = _build_android(source_root, candidate_root, architecture)
+        app_path = _build_android(
+            source_root,
+            candidate_root,
+            architecture,
+            source_sha=source_sha,
+            source_tree=source_tree,
+        )
         test_companion_path = candidate_root / "dobbyvpn-test-companion.apk"
         service_path = None
         cli_path = None
@@ -411,6 +511,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidate-root", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--skip-deps", action="store_true")
+    parser.add_argument("--source-sha")
+    parser.add_argument("--source-tree")
     return parser
 
 
@@ -425,6 +527,8 @@ def main(argv: list[str] | None = None) -> int:
             architecture=args.architecture,
             candidate_root=args.candidate_root,
             skip_deps=args.skip_deps,
+            source_sha=args.source_sha,
+            source_tree=args.source_tree,
         )
     except CandidateError as error:
         traceback.print_exception(error)
