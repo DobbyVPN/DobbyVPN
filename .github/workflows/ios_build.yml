@@ -87,6 +87,18 @@ jobs:
           name: DobbyVPNRuntime.xcframework
           path: swift_module/DobbyVPNRuntime.xcframework
 
+      - name: Analyze the production iPhone app and tunnel
+        run: |
+          xcodebuild \
+            -project swift_module/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/dobbyvpn-ios-analysis" \
+            CODE_SIGNING_ALLOWED=NO \
+            analyze
+
       - name: Fastlane bump build and version
         env:
           APPLE_BUILD_NUMBER: ${{ github.run_number }}

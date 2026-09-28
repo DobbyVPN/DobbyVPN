@@ -32,8 +32,9 @@ traffic, and cleanup.
 Android's rendered journey enters one complete supported Outline or Xray
 profile through the production Compose screen. The separate binding lane
 retains the complete profile matrix. The iOS Simulator journey types an
-invalid non-empty value, observes the frontend's error handling, checks
-release metadata and the Logs screen, then relaunches the app. Simulator
+invalid non-empty value, verifies it survives tab navigation, observes the
+frontend's error handling and error clearing after an edit, checks release
+metadata and the Logs screen, then relaunches the app. Simulator
 coverage does not assert a successful configuration or VPN connection.
 
 ## Canonical scenarios

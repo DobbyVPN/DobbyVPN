@@ -52,6 +52,8 @@ the TrustTunnel bridge, packages the SwiftUI Simulator app, and runs its XCTest
 UI check. This verifies Go/native linking and app rendering; it does not claim
 physical-device VPN traffic. Physical-device full coverage requires a device
 runner.
+The Release iOS build also runs Xcode static analysis of the production app and
+NetworkExtension target before signing.
 
 ## Desktop
 

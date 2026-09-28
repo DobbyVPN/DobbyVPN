@@ -18,9 +18,15 @@ final class NativeUIInteractionTests: XCTestCase {
         app.buttons["Dismiss configuration keyboard"].tap()
         app.tabBars.buttons["Settings"].tap()
         app.tabBars.buttons["Connection"].tap()
+        XCTAssertEqual(configuration.value as? String, "invalidprofile")
         app.buttons["VPN connection action"].tap()
         XCTAssertTrue(app.staticTexts["Error"].waitForExistence(timeout: 30))
         attachScreenshot("failure")
+
+        configuration.tap()
+        configuration.typeText("2")
+        XCTAssertFalse(app.staticTexts["Error"].exists)
+        app.buttons["Dismiss configuration keyboard"].tap()
 
         app.tabBars.buttons["Settings"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Version:")).firstMatch
