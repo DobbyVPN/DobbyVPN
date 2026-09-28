@@ -7,6 +7,10 @@ Do not import test or owner-infrastructure packages into production code.
 
 ## Architecture
 
+The current product scope is iOS and Android phones, macOS and Windows with
+both native UI and CLI, and Linux with CLI only. Tablets and other platform
+targets are outside this scope.
+
 Native UI frontends use SwiftUI on macOS/iOS, Kotlin with Jetpack Compose on
 Android, and C# with WinUI 3 on Windows. Linux remains CLI/service only. Do
 not introduce Kotlin Multiplatform or remove Outline, Xray, or TrustTunnel.
