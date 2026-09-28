@@ -23,6 +23,7 @@ SERVICES = ROOT / "runtime" / "services"
 VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 PLATFORMS = ("linux", "windows", "macos")
+WINDOWS_PILLOW_VERSION = "11.3.0"
 
 
 class DesktopPlatformError(RuntimeError):
@@ -340,8 +341,9 @@ def _describe(args: argparse.Namespace) -> int:
 
 
 def _verify_macos_package_source(package: Path, source_sha: str, architecture: str, work: Path) -> None:
-    expanded = work / "expanded-pkg-source"
-    _run("expand macOS package for source identity check", ["pkgutil", "--expand-full", str(package), str(expanded)])
+    expanded = work / "expanded-pkg"
+    if not expanded.is_dir():
+        _run("expand macOS package for source identity check", ["pkgutil", "--expand-full", str(package), str(expanded)])
     info_plists = list(expanded.rglob("Info.plist"))
     if len(info_plists) != 1:
         _fail(f"expected one application Info.plist in macOS package, found {len(info_plists)}")
@@ -362,20 +364,20 @@ def _verify_macos_package_source(package: Path, source_sha: str, architecture: s
 
 
 def _ensure_windows_pillow(work: Path, env: dict[str, str]) -> dict[str, str]:
-    try:
-        import PIL  # noqa: F401
-    except ImportError:
-        target = work / "python-packages"
-        _run(
-            "install Windows icon packaging dependency",
-            [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--target", str(target), "Pillow"],
-            env=env,
-        )
-        updated = env.copy()
-        existing = updated.get("PYTHONPATH")
-        updated["PYTHONPATH"] = str(target) + (os.pathsep + existing if existing else "")
-        return updated
-    return env
+    target = work / "python-packages"
+    _run(
+        "install pinned Windows icon packaging dependency",
+        [
+            sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+            "--only-binary=:all:", "--target", str(target),
+            f"Pillow=={WINDOWS_PILLOW_VERSION}",
+        ],
+        env=env,
+    )
+    updated = env.copy()
+    existing = updated.get("PYTHONPATH")
+    updated["PYTHONPATH"] = str(target) + (os.pathsep + existing if existing else "")
+    return updated
 
 
 def _build_windows_msi(
@@ -623,7 +625,13 @@ def _install(args: argparse.Namespace) -> int:
         uid = str(os.getuid())
         _run(
             "install macOS PKG",
-            ["sudo", "-n", "env", f"DOBBYVPN_CONTROL_PEER_UID={uid}", "installer", "-pkg", str(package_path), "-target", "/"],
+            [
+                "sudo", "-n", "env",
+                f"DOBBYVPN_CONTROL_PEER_UID={uid}",
+                f"DOBBY_LOG_PATH={run_dir / 'service.log'}",
+                f"DOBBY_LOG_ROOT={run_dir}",
+                "installer", "-pkg", str(package_path), "-target", "/",
+            ],
         )
 
     required = [Path(descriptor["cli"]), Path(descriptor["service"])]
