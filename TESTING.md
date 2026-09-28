@@ -37,8 +37,8 @@ runs remove their temporary coverage directory after reporting.
 
 CI runs Go tests, selected native Go runtime tests, Swift tests, Go/Android/
 Swift lint, dependency and credential scans, Actionlint, Android build checks,
-and the iOS Simulator UI check. The Android build and iOS Simulator jobs remain
-in the platform-check workflow until the shared platform commands own them.
+and the iOS Simulator UI check. GitHub Actions YAML calls the shared commands
+and contains the Android and iOS platform-specific build steps directly in CI.
 
 ## Go
 
