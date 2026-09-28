@@ -13,17 +13,13 @@ gRPC control server.
 
 ## Go tests
 
-On Linux, first stage the pinned native TrustTunnel bridge and C++ runtime:
+From the repository root, run the shared Go unit and race checks with:
 
-    python3 .github/scripts/desktop_build.py prepare-go-test-deps --go-mod-tidy
+    python3 .github/scripts/source_checks.py go-tests
 
-Then run from this directory:
-
-    go test -tags=ci ./...
-    go test -race ./routing/... ./sessionapi/... ./tunnel/...
-
-The setup command changes only its own environment. The Test workflow runs the
-same Go test targets after preparing those dependencies.
+The command prepares the pinned Go toolchain, TrustTunnel bridge, and C++
+runtime in the same process that runs the tests. CI and the local Linux Harness
+use this command. For focused runs, use `go-unit` or `go-race` instead.
 
 ## Desktop backend and CLI
 
@@ -70,8 +66,9 @@ installed:
 
 The default script builds both a physical-device slice and a universal
 Simulator slice for Release. Simulator packaging does not require an Apple
-development certificate. Physical-device packaging uses the signing identities
-and profiles provided by Release.
+development certificate. Release analyzes and archives the unsigned production
+app; Publish signs and exports that selected archive with the configured Apple
+identities and provisioning profiles.
 
 ## Desktop JSON control
 

@@ -24,7 +24,10 @@ canonical mini suite from the same source revision. It covers Linux, Windows,
 macOS, and Android. The mini suite checks Linux CLI/service behavior, native
 Windows and macOS UI behavior where the hosted runner supports it, and the
 Android Compose UI with the real VPN service. The iOS Simulator has its own
-single mini UI/lifecycle contract in the Test workflow.
+single mini UI/lifecycle contract in CI and in the local Harness. Local
+complete also analyzes and archives the production iOS app after the Simulator
+check. Hosted Release performs that production analysis and archive check while
+qualifying the other platform packages.
 
 The private Harness packages the product and suite from one selected worktree,
 downloads a fresh owner profile, and runs the functional engine on disposable

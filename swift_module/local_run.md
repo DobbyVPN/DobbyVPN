@@ -7,8 +7,10 @@ diagnostics.
 ## iOS Simulator
 
 Open swift_module/iosApp.xcodeproj in Xcode, select the iosSimulatorApp scheme,
-and run it on an iOS Simulator. The Test workflow builds the Go runtime
-XCFramework, packages the Simulator app, and runs the XCTest UI contract.
+and run it on an iOS Simulator. CI's iOS Simulator job builds the Go runtime
+XCFramework, packages the Simulator app, and runs the XCTest UI contract. The
+local Harness runs the same contract; local complete follows it with the
+production iOS analysis and archive check, as does Release.
 
 The Simulator check covers visible SwiftUI controls and app lifecycle. It does
 not establish a physical NetworkExtension tunnel or validate physical-device
@@ -35,11 +37,12 @@ socket. Release packages install the app and Go backend together.
 
 ## Swift lifecycle tests
 
-Run the platform-neutral Swift lifecycle tests with:
+Run the shared Swift lifecycle test and coverage check on macOS with:
 
-    swift test --enable-code-coverage --package-path swift_module
+    python3 .github/scripts/source_checks.py swift-unit
 
-These tests cover native provider command and response behavior. The iOS
-Simulator XCTest target separately checks the rendered SwiftUI app.
-Physical-device builds require the Apple signing identities and provisioning
-profiles configured for Release.
+CI and the local macOS Harness use this command. These tests cover native
+provider command and response behavior. The iOS Simulator XCTest contract
+separately checks the rendered SwiftUI app.
+Publish requires the Apple signing identities and provisioning profiles to
+export the physical-device package.

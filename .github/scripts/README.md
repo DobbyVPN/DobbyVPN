@@ -78,14 +78,18 @@ Compose controls and the VPN service.
 ## iOS
 
 The iOS application uses SwiftUI and embeds the Go NetworkExtension runtime.
-The Test workflow builds the Go NetworkExtension runtime with the TrustTunnel
-Simulator bridge, then builds the Simulator app and runs the XCTest UI contract.
-This checks native linking and UI rendering; it does not claim physical-device
-VPN traffic. That requires a physical iOS runner.
+The iOS Simulator job in CI builds the Go NetworkExtension runtime with the
+TrustTunnel Simulator bridge, then builds the Simulator app and runs the XCTest
+UI contract. The local Harness runs the same contract. During local complete,
+the Mac then runs `.github/scripts/ios_production_check.py`, which invokes
+`package_ios_app.sh iosanalyze` and `iosarchive` with a build number derived
+from `VERSION`. Release runs those same analysis and archive steps and retains
+the unsigned archive for Publish to sign and export. Simulator coverage does
+not claim physical-device VPN traffic.
 
-The release workflow builds and signs the physical-device package with the
-configured Apple certificates and provisioning profiles. Run Swift lifecycle
-tests on macOS with:
+Publish signs and exports the selected iOS archive with the configured Apple
+certificates and provisioning profiles. Run Swift lifecycle tests on macOS
+with:
 
     python3 .github/scripts/source_checks.py swift-unit
 
@@ -109,8 +113,9 @@ the app/package paths and platform details needed by the guest adapter.
 Release verifies Android APK reproducibility and source identity. The F-Droid
 check updates a temporary metadata candidate, then uses fdroidserver's build
 server to build the same Kotlin/Compose app and Go backend from the candidate
-source. It compares the resulting unsigned APK with the signed Release APK's
-payload.
+source. It compares the resulting unsigned APK with the Release app's payload;
+the check uses a disposable test-signed reference APK, not the production
+signing key.
 
 The Android recipe pins the Go toolchain and Compose dependencies used by the
 product build. Historical changelogs remain as published release records.

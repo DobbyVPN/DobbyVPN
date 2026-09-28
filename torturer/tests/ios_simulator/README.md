@@ -1,7 +1,9 @@
 # iOS Simulator mini check
 
-The Test workflow builds the Go packet-tunnel runtime XCFramework, packages the
-SwiftUI app, installs it in an iOS Simulator, and runs one XCTest UI contract.
+The CI iOS Simulator job builds the Go packet-tunnel runtime XCFramework,
+packages the SwiftUI app, installs it in an iOS Simulator, and runs this XCTest
+UI contract. The local Harness runs the same contract through its iOS
+Simulator mini check.
 The contract checks that the app renders, accepts input, validates an empty
 source, reports a visible connection failure for a non-empty invalid source,
 and survives terminate/reopen lifecycle actions.
