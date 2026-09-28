@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import platform
+import sys
 
 from . import ios_simulator_app as ios
 
@@ -13,8 +14,9 @@ def run(
     logs: Path,
     timeout: float,
     architecture: str | None,
+    source_sha: str | None,
 ) -> dict:
-    from .local_vm import _read_state, _write_json
+    from .local_vm import _read_state, _run_logged, _write_json
 
     contract = ios.public_ios_simulator_app_contract(
         architecture or ("amd64" if platform.machine().lower() in {"x86_64", "amd64"} else "arm64")
@@ -67,6 +69,16 @@ def run(
             )
         raise
     ios.retain_ios_diagnostics(work, logs / "ios-simulator")
+    if source_sha is not None:
+        _run_logged(
+            [
+                sys.executable, str(run_dir / "source" / ".github" / "scripts" / "ios_production_check.py"),
+                "--source-sha", source_sha,
+                "--output-dir", str(run_dir / "work" / "ios-production"),
+            ],
+            cwd=run_dir / "source", logs=logs,
+            label="ios-production-analysis-and-archive", timeout=timeout,
+        )
     _write_json(logs / "simulator.json", {
         "scope": "ios-simulator-mini", "suite": "mini", "passed": True,
         "udid": evidence.simulator.udid, "architecture": contract.architecture,

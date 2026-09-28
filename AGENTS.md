@@ -57,10 +57,14 @@ and report what could not run.
 Pushes and pull requests run checks. Release is dispatched from `main`,
 builds packages, and qualifies those exact packages with the in-repository
 functional suite. It does not publish. Publish is a separate manual workflow:
-it selects a successful Release run and promotes those tested artifacts.
+it selects a successful Release run. Desktop packages are published from the
+exact tested files. Release retains unsigned Android and iOS builds; Publish
+signs or exports those selected builds. Publish verifies Android payload
+equivalence and checks iOS source metadata, provisioning, and entitlements.
 GitHub publication and Apple submission run independently. Signing and
-publication credentials belong to their protected jobs, not the candidate
-processes under test. F-Droid builds the promoted tag and `version.txt`.
+publication credentials belong to their protected Publish jobs, not the
+candidate processes under test. F-Droid builds the
+promoted tag and `version.txt`.
 Operational authorization in the private owner workspace is defined by its
 `AGENTS.md`.
 

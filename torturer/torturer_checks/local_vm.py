@@ -1,9 +1,10 @@
 """Run one bounded DobbyVPN qualification candidate in a prepared VM.
 
 The private Harness owns the VM, SSH session, timeout supervisor, and process
-tree kill.  This module owns only the candidate inside that VM: build it with
-``local_candidate.py``, install/start it, run the canonical functional suite,
-and later clean up the exact state recorded in ``platform.json``.
+tree kill. This module builds and installs the native desktop package for a
+complete run, starts the installed product, runs the canonical functional
+suite, and cleans up the exact state recorded in ``platform.json``. Focused
+runs use ``local_candidate.py`` where package qualification is unnecessary.
 
 ``run`` intentionally leaves the candidate running.  A supervisor invokes
 ``cleanup`` in a separate step, which also makes a failed setup inspectable.
@@ -166,6 +167,9 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "run":
             command.add_argument("--architecture")
             command.add_argument("--skip-deps", action="store_true")
+            command.add_argument("--source-checks", action="store_true")
+            command.add_argument("--source-sha")
+            command.add_argument("--source-tree")
             command.add_argument("--network-interface")
             command.add_argument(
                 "--release-manifest", type=_absolute_path,
@@ -868,7 +872,7 @@ def _write_candidate_descriptor(run_dir: Path, descriptor: dict[str, Any]) -> di
     return descriptor
 
 
-def _prepare_candidate(run_dir: Path, platform: str, logs: Path, timeout: float, *, architecture: str | None, skip_deps: bool) -> None:
+def _prepare_candidate(run_dir: Path, platform: str, logs: Path, timeout: float, *, architecture: str | None, skip_deps: bool, source_sha: str | None = None, source_tree: str | None = None) -> None:
     source = run_dir / "source"
     command = [
         sys.executable, str(source / ".github/scripts/local_candidate.py"),
@@ -879,7 +883,75 @@ def _prepare_candidate(run_dir: Path, platform: str, logs: Path, timeout: float,
         command.extend(("--architecture", architecture))
     if skip_deps:
         command.append("--skip-deps")
+    if platform == "android" and source_sha and source_tree:
+        command.extend(("--source-sha", source_sha, "--source-tree", source_tree))
     _run_logged(command, cwd=source, logs=logs, label="candidate-prepare", timeout=timeout)
+
+
+def _run_platform_source_checks(run_dir: Path, platform: str, logs: Path, timeout: float) -> None:
+    """Run the same platform source commands used by CI on the selected source."""
+    commands = {
+        "linux": ("go-tests", "go-native-runtime", "lint-go"),
+        "android": ("lint-android",),
+        "windows": ("go-native-runtime",),
+        "macos": ("go-native-runtime", "swift-unit", "lint-swift"),
+    }.get(platform, ())
+    source = run_dir / "source"
+    script = source / ".github" / "scripts" / "source_checks.py"
+    for check in commands:
+        _timed_call(
+            f"source-{check}",
+            lambda check=check: _run_logged(
+                [sys.executable, str(script), check], cwd=source, logs=logs,
+                label=f"source-{check}", timeout=timeout,
+            ),
+            platform=platform,
+        )
+
+
+def _prepare_desktop_package(
+    run_dir: Path, platform: str, source_sha: str, logs: Path,
+    timeout: float, *, architecture: str | None, skip_deps: bool,
+) -> dict[str, Any]:
+    """Build and install the same native package used by hosted Release."""
+    source = run_dir / "source"
+    script = source / ".github" / "scripts" / "desktop_platform.py"
+    output = run_dir / "output" / "desktop-package"
+    version = (source / "VERSION").read_text(encoding="utf-8").strip()
+    build = [
+        sys.executable, str(script), "build", "--platform", platform,
+        "--version", version, "--source-sha", source_sha,
+        "--output-dir", str(output),
+    ]
+    if architecture:
+        build.extend(("--arch", architecture))
+    if skip_deps:
+        build.append("--skip-deps")
+    _run_logged(build, cwd=source, logs=logs, label="desktop-package-build", timeout=timeout)
+    if platform in {"windows", "macos"}:
+        package_name = "dobbyVPN-windows-amd64.msi" if platform == "windows" else (
+            "dobbyVPN-macos-aarch64.pkg" if host_platform.machine().lower() in {"arm64", "aarch64"}
+            else "dobbyVPN-macos-amd64.pkg"
+        )
+        _run_logged(
+            [
+                sys.executable, str(source / ".github" / "scripts" / "installer_migration.py"),
+                "--platform", platform, "--package", str(output / package_name),
+                "--current-version", version,
+                "--log-dir", str(logs / "installer-migration"),
+            ],
+            cwd=source, logs=logs, label="desktop-installer-migration", timeout=timeout,
+        )
+    install = [
+        sys.executable, str(script), "install", "--build-descriptor",
+        str(output / "desktop-package.json"), "--run-dir", str(run_dir),
+        "--output", str(run_dir / "installed.json"),
+    ]
+    if platform == "windows":
+        install.extend(("--control-pipe-sid", _windows_control_pipe_sid(run_dir, logs, timeout)))
+    _run_logged(install, cwd=source, logs=logs, label="desktop-package-install", timeout=timeout)
+    descriptor = _release_document(run_dir / "installed.json", label="installed package")
+    return _write_candidate_descriptor(run_dir, descriptor)
 
 
 def _discover_network_interface(
@@ -965,6 +1037,8 @@ def _start_linux(
     network = _candidate_path(descriptor, "network")
     if service is None or network is None:
         raise LocalVMError("Linux candidate service paths are incomplete")
+    library_path = descriptor.get("library_path")
+    library = str(library_path) if isinstance(library_path, str) and library_path else str(service.parent)
     logs.mkdir(parents=True, exist_ok=True)
     service_log = logs / "service.log"
     service_log.touch(exist_ok=True)
@@ -987,7 +1061,7 @@ def _start_linux(
     command = [
         "sudo", "-n", "sh", "-c", launch_script,
         "dobbyvpn-service", str(service), str(network), str(service_log),
-        str(run_dir), str(service.parent), str(pid_file), str(os.getuid()), str(logs),
+        str(run_dir), library, str(pid_file), str(os.getuid()), str(logs),
         str(logs / "service.log.stdout"), str(logs / "service.log.stderr"),
     ]
     result = _run_logged(command, cwd=service.parent, logs=logs, label="service-start", timeout=timeout)
@@ -1003,7 +1077,7 @@ def _start_linux(
         "pid_file": str(run_dir / "service.pid"),
         "socket": str(network),
         "environment": {"DOBBYVPN_CONTROL_SOCKET": str(network)},
-        "library_path": str(service.parent),
+        "library_path": library,
         "process_group": pid,
         "network_interface": network_interface,
     }
@@ -1385,9 +1459,10 @@ def _start_ios(
     logs: Path,
     timeout: float,
     architecture: str | None,
+    source_sha: str | None,
 ) -> dict[str, Any]:
     from .local_vm_ios import run
-    return run(run_dir, logs, timeout, architecture)
+    return run(run_dir, logs, timeout, architecture, source_sha)
 
 
 def _functional_command(
@@ -1399,6 +1474,29 @@ def _functional_command(
     suite: str,
 ) -> list[str]:
     logs = run_dir / "logs"
+    if platform in {"linux", "windows", "macos"} and (run_dir / "installed.json").is_file():
+        runtime = descriptor.get("runtime", {})
+        if not isinstance(runtime, dict) or not isinstance(runtime.get("pid"), int):
+            raise LocalVMError("installed desktop service runtime PID is unavailable")
+        command = [
+            sys.executable, str(run_dir / "source" / ".github" / "scripts" / "desktop_platform.py"),
+            "test", "--mode", "local", "--platform", platform,
+            "--installed-descriptor", str(run_dir / "installed.json"),
+            "--profile", str(run_dir / "profile"), "--suite", suite,
+            "--output", str(logs / "functional.json"), "--raw-log-dir", str(logs),
+            "--platform-version", f"local-{platform}",
+            "--lane-timeout-seconds", str(timeout),
+            "--service-pid", str(runtime["pid"]),
+        ]
+        endpoint = ("pipe", "--service-pipe") if platform == "windows" else ("socket", "--service-socket")
+        if endpoint[0] in runtime:
+            command.extend((endpoint[1], str(runtime[endpoint[0]])))
+        for name, flag in (("pid_file", "--service-pid-file"), ("identity_file", "--service-identity-file"), ("network_interface", "--network-interface")):
+            if isinstance(runtime.get(name), str) and runtime[name]:
+                command.extend((flag, str(runtime[name])))
+        if scenarios:
+            raise LocalVMError("focused scenarios are unavailable for installed desktop packages")
+        return command
     command = [
         sys.executable, "-m", "torturer_checks.functional", "--platform", platform,
         "--profile", str(run_dir / "profile"), "--output", str(logs / "functional.json"),
@@ -1569,6 +1667,8 @@ def _refresh_desktop_runtime_after_headless(
 def run(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     source = _required_input(run_dir, "source", directory=True)
+    if args.platform == "android" and (args.source_sha is None) != (args.source_tree is None):
+        raise LocalVMError("complete Android build requires both source commit and source tree")
     if args.suite == "full" and args.platform not in {"windows", "macos"}:
         raise LocalVMError(
             f"{args.platform} full is unsupported: local full adds a native desktop window only"
@@ -1592,6 +1692,14 @@ def run(args: argparse.Namespace) -> int:
     }
     _write_json(run_dir / "platform.json", state)
     try:
+        if args.source_checks:
+            state["source_checks_attempted"] = True
+            state["status"] = "source-checks"
+            _write_json(run_dir / "platform.json", state)
+            _run_platform_source_checks(run_dir, args.platform, logs, args.timeout)
+            state["source_checks"] = "passed"
+            state["status"] = "preparing"
+            _write_json(run_dir / "platform.json", state)
         if args.platform == "macos" and args.suite == "full":
             # Full macOS is the only lane that spends time building/installing
             # a desktop candidate. Fail early when this worker is not attached
@@ -1621,8 +1729,8 @@ def run(args: argparse.Namespace) -> int:
             _write_json(run_dir / "platform.json", state)
         if args.platform == "ios-simulator":
             runtime = _timed_call(
-                "ios-simulator-qualification",
-                lambda: _start_ios(run_dir, logs, args.timeout, args.architecture),
+                "ios-simulator-and-production-check",
+                lambda: _start_ios(run_dir, logs, args.timeout, args.architecture, args.source_sha),
                 platform=args.platform,
             )
             state.update(runtime=runtime, status="functional-complete", functional_exit_code=0)
@@ -1642,6 +1750,18 @@ def run(args: argparse.Namespace) -> int:
             state["candidate"] = descriptor
             state["status"] = "candidate-prepared"
             _write_json(run_dir / "platform.json", state)
+        elif args.source_sha and args.platform in {"linux", "windows", "macos"}:
+            descriptor = _timed_call(
+                "desktop-package-build-install",
+                lambda: _prepare_desktop_package(
+                    run_dir, args.platform, args.source_sha, logs, args.timeout,
+                    architecture=args.architecture, skip_deps=args.skip_deps,
+                ),
+                platform=args.platform,
+            )
+            state["candidate"] = descriptor
+            state["status"] = "candidate-prepared"
+            _write_json(run_dir / "platform.json", state)
         else:
             _timed_call(
                 "candidate-build",
@@ -1652,6 +1772,8 @@ def run(args: argparse.Namespace) -> int:
                     args.timeout,
                     architecture=args.architecture,
                     skip_deps=args.skip_deps,
+                    source_sha=args.source_sha,
+                    source_tree=args.source_tree,
                 ),
                 platform=args.platform,
             )
@@ -1696,7 +1818,7 @@ def run(args: argparse.Namespace) -> int:
                 platform=args.platform,
             )
         elif args.platform == "macos":
-            if args.release_manifest is not None:
+            if args.release_manifest is not None or (args.source_sha and (run_dir / "installed.json").is_file()):
                 runtime = _timed_call(
                     "service-start",
                     lambda: _start_macos_release(
@@ -1715,25 +1837,28 @@ def run(args: argparse.Namespace) -> int:
                     platform=args.platform,
                 )
         elif args.platform == "windows":
-            if args.release_manifest is not None:
+            if args.release_manifest is not None or (args.source_sha and (run_dir / "installed.json").is_file()):
                 from .local_vm_windows import stop_installed_service
 
                 release_state = state.get("release")
-                if not isinstance(release_state, dict):
+                if args.release_manifest is not None and not isinstance(release_state, dict):
                     raise LocalVMError("exact Windows Release install state is missing")
-                release_state["msi_service_stop_attempted"] = True
-                state["release"] = release_state
+                if isinstance(release_state, dict):
+                    release_state["msi_service_stop_attempted"] = True
+                    state["release"] = release_state
                 _write_json(run_dir / "platform.json", state)
                 try:
                     stop_installed_service(run_dir, logs, args.timeout)
                 except Exception as error:
-                    release_state["msi_service_stop_error"] = f"{type(error).__name__}: {error}"
+                    if isinstance(release_state, dict):
+                        release_state["msi_service_stop_error"] = f"{type(error).__name__}: {error}"
+                        state["release"] = release_state
+                        _write_json(run_dir / "platform.json", state)
+                    raise
+                if isinstance(release_state, dict):
+                    release_state["msi_service_stopped"] = True
                     state["release"] = release_state
                     _write_json(run_dir / "platform.json", state)
-                    raise
-                release_state["msi_service_stopped"] = True
-                state["release"] = release_state
-                _write_json(run_dir / "platform.json", state)
             runtime = _timed_call(
                 "service-start",
                 lambda: _start_windows(run_dir, descriptor, logs, args.timeout),
@@ -2173,6 +2298,7 @@ def cleanup(args: argparse.Namespace) -> int:
     logs = run_dir / "logs"
     runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
     release = state.get("release") if isinstance(state.get("release"), dict) else None
+    installed_descriptor = run_dir / "installed.json"
     errors: list[str] = []
     if args.platform == "linux":
         helper = Path(__file__).resolve().parents[1] / "helpers/local/linux/routing-probe-firewall"
@@ -2230,7 +2356,7 @@ def cleanup(args: argparse.Namespace) -> int:
                 cwd=run_dir, logs=logs, label="cleanup-package",
                 timeout=args.timeout, errors=errors,
             )
-        else:
+        elif not installed_descriptor.is_file():
             label = runtime.get("launchd_label", "system/com.dobby.vpnservice")
             # bootout is required: KeepAlive would immediately restart the
             # service after a mere launchctl kill.
@@ -2273,6 +2399,24 @@ def cleanup(args: argparse.Namespace) -> int:
             cleanup_ios(run_dir, runtime, logs, args.timeout)
         except Exception as error:
             errors.append(f"cleanup-ios: {type(error).__name__}: {error}")
+    if installed_descriptor.is_file():
+        source = run_dir / "source"
+        _cleanup_logged(
+            [
+                sys.executable, str(source / ".github" / "scripts" / "desktop_platform.py"),
+                "uninstall", "--installed-descriptor", str(installed_descriptor),
+                "--run-dir", str(run_dir),
+            ],
+            cwd=source, logs=logs, label="cleanup-installed-package",
+            timeout=args.timeout, errors=errors,
+        )
+    if state.get("source_checks_attempted") is True:
+        source = run_dir / "source"
+        _cleanup_logged(
+            [sys.executable, str(source / ".github" / "scripts" / "source_checks.py"), "cache-clean"],
+            cwd=source, logs=logs, label="cleanup-source-caches",
+            timeout=args.timeout, errors=errors,
+        )
     state["status"] = "cleaned" if not errors else "cleanup-failed"
     if errors:
         state["cleanup_errors"] = errors

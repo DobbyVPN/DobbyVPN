@@ -33,10 +33,16 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
-      - name: Download signed Android artifact
+      - name: Download unsigned Android app
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: dobbyvpn-android-sign.apk
+          name: dobbyvpn-android-unsign.apk
+          path: ${{ runner.temp }}/fdroid-reference
+
+      - name: Download unsigned Android test companion
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-android-test-companion-unsigned.apk
           path: ${{ runner.temp }}/fdroid-reference
 
       - name: Verify release inputs
@@ -46,7 +52,28 @@ jobs:
           [[ "$VERSION_NAME" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           [[ "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test -f "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-sign.apk"
+          test -f "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-unsign.apk"
+          test -f "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-android-test-companion-unsigned.apk"
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: build-tools;36.0.0
+
+      - name: Sign a disposable F-Droid reference APK
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/android_apk_signing.py sign-test \
+            --unsigned-app "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-unsign.apk" \
+            --unsigned-companion "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-android-test-companion-unsigned.apk" \
+            --signed-app "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-sign.apk" \
+            --signed-companion "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-android-test-companion.apk" \
+            --apksigner "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" \
+            --keytool "$(command -v keytool)"
 
       - name: Fetch current F-Droid metadata and server
         id: upstream
@@ -75,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/fdroid-diagnostics"
-          # fdroid_release_check.sh serves the signed Release APK over a
+          # fdroid_release_check.sh serves the disposable test-signed APK over a
           # temporary, container-local HTTPS endpoint for fdroidserver's
           # reference-binary comparison.
           docker run --rm --init \

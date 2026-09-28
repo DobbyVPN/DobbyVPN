@@ -17,7 +17,7 @@ import sys
 import time
 
 
-RENDER_LIFETIME_SECONDS = 30 * 60
+RENDER_LIFETIME_SECONDS = 2 * 60 * 60
 
 from .outline import OutlineWSSProfile
 from .render import DisposableRenderController, RenderAPI, RenderServiceSpec

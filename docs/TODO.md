@@ -15,6 +15,9 @@ not accepted unavailable skips:
 - Add targeted Go fuzz tests for untrusted configuration and control-message
   parsers. Keep seed cases in the existing unit suite and consider bounded
   periodic fuzzing after the targets prove useful.
+- Add Linux DEB upgrade and removal checks using the installed package.
+- Run Android phone qualification on an older supported API level in addition
+  to the current API 35 emulator.
 
 ## Execution time
 
