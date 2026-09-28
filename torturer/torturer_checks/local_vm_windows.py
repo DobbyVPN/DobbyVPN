@@ -302,9 +302,9 @@ def _preflight_interactive_desktop(
             logs=logs,
             label=f"{task_label}-preflight",
             # The script has a bounded 15-second WTS/Explorer convergence
-            # wait; leave process startup and tscon cleanup headroom around
-            # that inner deadline.
-            timeout=min(timeout, 30.0),
+            # wait. A package-to-UI transition exhausted the previous 30
+            # seconds before readiness output, so allow bounded startup time.
+            timeout=min(timeout, 60.0),
             environment=environment,
             check=False,
         )
