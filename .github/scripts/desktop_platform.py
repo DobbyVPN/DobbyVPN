@@ -24,6 +24,7 @@ VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 PLATFORMS = ("linux", "windows", "macos")
 WINDOWS_PILLOW_VERSION = "11.3.0"
+WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS = 180
 
 
 class DesktopPlatformError(RuntimeError):
@@ -58,6 +59,7 @@ def _run(
     env: dict[str, str] | None = None,
     check: bool = True,
     capture: bool = False,
+    timeout_seconds: float | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     _log(f"{label}: $ {' '.join(command)}")
     try:
@@ -69,7 +71,21 @@ def _run(
             stdout=subprocess.PIPE if capture else None,
             stderr=subprocess.PIPE if capture else None,
             check=False,
+            timeout=timeout_seconds,
         )
+    except subprocess.TimeoutExpired as error:
+        # subprocess.run kills and reaps the timed-out process. Forward output
+        # collected before termination so the timeout keeps its diagnostics.
+        if capture:
+            stdout = error.stdout
+            stderr = error.stderr
+            if isinstance(stdout, str):
+                stdout = stdout.encode("utf-8", errors="backslashreplace")
+            if isinstance(stderr, str):
+                stderr = stderr.encode("utf-8", errors="backslashreplace")
+            _forward(sys.stdout, stdout or b"")
+            _forward(sys.stderr, stderr or b"")
+        raise DesktopPlatformError(f"{label}: {error}") from error
     except OSError as error:
         _fail(f"{label}: command could not start: {error}")
     if capture:
@@ -451,6 +467,7 @@ foreach ($required in @("dobbyvpn-backend.exe", "dobby_bridge.dll", "wintun.dll"
         "Windows MSI content and version check",
         ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
         env=verify_env,
+        timeout_seconds=WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS,
     )
 
 
