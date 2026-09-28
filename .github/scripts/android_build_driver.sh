@@ -55,8 +55,8 @@ source_root=$(cd -- "$source_root" && pwd -P)
   echo 'source tree must be a full lowercase Git tree identity' >&2
   exit 2
 }
-if [[ "$local_build" == 1 && ( -n "$source_sha" || -n "$source_tree" || "$trusted_archive_source" == 1 ) ]]; then
-  echo '--local cannot be combined with archived source identity' >&2
+if [[ "$local_build" == 1 && ( -n "$source_tree" || "$trusted_archive_source" == 1 ) ]]; then
+  echo '--local cannot be combined with an archived source tree' >&2
   exit 2
 fi
 if [[ "$trusted_archive_source" == 1 && ( "$local_build" == 1 || -z "$source_sha" || -z "$source_tree" ) ]]; then
@@ -133,11 +133,21 @@ if [[ "$trusted_archive_source" == 1 ]]; then
   source_commit_link="https://github.com/$source_repository/tree/$source_commit"
   source_identity_mode='harness_verified_archive'
 elif [[ "$local_build" == 1 ]]; then
-  # Local builds are disposable, not release provenance claims.
-  source_commit=local
-  source_commit_link=''
-  source_tree=''
-  source_identity_mode='unverified_local_checkout'
+  # Fast local builds are not Release provenance claims. When the caller
+  # supplies a source SHA, validate and embed it for CI build checks; ordinary
+  # dirty local candidates remain explicitly identified as "local".
+  if [[ -n "$source_sha" ]]; then
+    validate_source_checkout "$source_root" "$source_sha"
+    source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit} | tee_stderr)
+    source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree} | tee_stderr)
+    source_commit_link="https://github.com/$source_repository/tree/$source_commit"
+    source_identity_mode='git_checkout'
+  else
+    source_commit=local
+    source_commit_link=''
+    source_tree=''
+    source_identity_mode='unverified_local_checkout'
+  fi
 else
   validate_source_checkout "$source_root" "$source_sha"
   source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit} | tee_stderr)
@@ -343,6 +353,9 @@ if [[ "$local_build" == 1 ]]; then
   run_unsigned_build "$build_cache/local" "$build_tmp/local" "$output"
   if [[ -n "$test_companion_output" ]]; then
     run_test_companion_build "$test_companion_output"
+  fi
+  if [[ -n "$source_sha" ]]; then
+    verify_source_integrity_after_build
   fi
   echo "android_build_driver mode=local artifact=$output"
   exit 0

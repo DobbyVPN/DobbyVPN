@@ -232,11 +232,12 @@ def _build_android(
     source_tree: str | None,
 ) -> Path:
     helper = _android_helper(source_root)
+    build_check = source_root / ".github" / "scripts" / "android_build_check.sh"
     output = candidate_root / "dobbyvpn-release-unsigned.apk"
     companion_output = candidate_root / "dobbyvpn-test-companion-unsigned.apk"
     signed_output = candidate_root / "dobbyvpn-release.apk"
     signed_companion = candidate_root / "dobbyvpn-test-companion.apk"
-    command = [
+    driver_command = [
         str(helper),
         "--source-root",
         str(source_root),
@@ -247,8 +248,13 @@ def _build_android(
     ]
     environment = os.environ.copy()
     if source_sha is None and source_tree is None:
-        command.append("--local")
-        label = "Android candidate build"
+        command = [
+            str(build_check),
+            "--source-root", str(source_root),
+            "--output", str(output),
+            "--test-companion-output", str(companion_output),
+        ]
+        label = "Android candidate build and native ABI check"
     else:
         if source_sha is None or source_tree is None:
             raise CandidateError("complete Android build requires both source SHA and source tree")
@@ -258,7 +264,7 @@ def _build_android(
         first_output = output_base / "android-first-unsigned.apk"
         reproducibility = output_base / "android-reproducibility.json"
         dependency_manifest = output_base / "android-dependency-provenance.json"
-        command.extend([
+        driver_command.extend([
             "--source-sha", source_sha,
             "--source-tree", source_tree,
             "--trusted-archive-source",
@@ -296,6 +302,7 @@ def _build_android(
         environment["GOPATH"] = str(go_path)
         environment["GRADLE_BIN"] = str(source_root / "android_module" / "gradlew")
         label = "Android Release-mode candidate build"
+        command = driver_command
 
     _run(command, label=label, source_root=source_root, environment=environment)
     if not output.is_file():

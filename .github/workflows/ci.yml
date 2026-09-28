@@ -200,7 +200,6 @@ jobs:
           go_root="$(go env GOROOT)"
           test "$(readlink -f "$(command -v go)")" = "$(readlink -f "$go_root/bin/go")"
           echo "GOROOT=$go_root" >> "$GITHUB_ENV"
-          echo "ORG_GRADLE_PROJECT_dobbyGoBinary=$go_root/bin/go" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -219,17 +218,15 @@ jobs:
         working-directory: go_module
         run: go mod download
 
-      - name: Build Android app and instrumentation companion for both ABIs
-        working-directory: android_module
-        run: ./gradlew :app:assembleReleaseAndroidTest :app:assembleRelease --info --stacktrace
-
-      - name: Verify Android ABI bridge symbols and runtime dependencies
+      - name: Build Android app and instrumentation companion, then verify native ABI
         run: |
-          ndk="$ANDROID_HOME/ndk/28.1.13356709"
-          toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          python3 .github/scripts/verify_android_native_payloads.py \
-            --apk android_module/app/build/outputs/apk/release/app-release-unsigned.apk \
-            --readelf "$toolchain/llvm-readelf"
+          set -euo pipefail
+          build_root="$RUNNER_TEMP/dobbyvpn-android-ci"
+          .github/scripts/android_build_check.sh \
+            --source-root "$GITHUB_WORKSPACE" \
+            --source-sha "$GITHUB_SHA" \
+            --output "$build_root/app-release-unsigned.apk" \
+            --test-companion-output "$build_root/app-release-androidTest.apk"
 
   ios_simulator:
     name: iOS Simulator UI test
