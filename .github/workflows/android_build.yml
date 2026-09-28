@@ -188,53 +188,18 @@ jobs:
           driver_manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
           manifest="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-provenance.json"
           test -f "$unsigned"; test -f "$companion"
-
-          UNSIGNED_APK="$unsigned" COMPANION_APK="$companion" \
-            REPRODUCIBILITY="$reproducibility" DRIVER_MANIFEST="$driver_manifest" MANIFEST="$manifest" python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          def artifact(kind: str, variable: str) -> dict[str, str]:
-              path = Path(os.environ[variable])
-              return {
-                  "kind": kind,
-                  "name": path.name,
-                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-              }
-
-          companion = Path(os.environ["COMPANION_APK"])
-
-          document = {
-              "schema": 1,
-              "source_sha": os.environ["SOURCE_SHA"],
-              "version_name": os.environ["VERSION_NAME"],
-              "version_code": int(os.environ["VERSION_CODE"]),
-              "application_id": "com.dobby.vpn",
-              "test_companion": {
-                  "name": companion.name,
-                  "sha256": hashlib.sha256(companion.read_bytes()).hexdigest(),
-                  "bytes": companion.stat().st_size,
-                  "application_id": "com.dobby.vpn.test",
-                  "source_sha": os.environ["SOURCE_SHA"],
-              },
-              "build_driver": json.loads(
-                  Path(os.environ["DRIVER_MANIFEST"]).read_text(encoding="utf-8")
-              ),
-              "reproducibility": json.loads(
-                  Path(os.environ["REPRODUCIBILITY"]).read_text(encoding="utf-8")
-              ),
-              "artifacts": [
-                  artifact("unsigned", "UNSIGNED_APK"),
-                  artifact("test_companion_unsigned", "COMPANION_APK"),
-              ],
-          }
-          Path(os.environ["MANIFEST"]).write_text(
-              json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="utf-8",
-          )
-          PY
+          source_tree="$(git -C "$FDROID_COMPAT_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
+          python3 .github/scripts/android_apk_signing.py create-provenance \
+            --output "$manifest" \
+            --unsigned-apk "$unsigned" \
+            --test-companion "$companion" \
+            --build-driver-manifest "$driver_manifest" \
+            --reproducibility "$reproducibility" \
+            --source-sha "$SOURCE_SHA" \
+            --source-tree "$source_tree" \
+            --source-repository "$APP_SOURCE_REPOSITORY" \
+            --version-name "$VERSION_NAME" \
+            --version-code "$VERSION_CODE"
 
       - name: Upload unsigned APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

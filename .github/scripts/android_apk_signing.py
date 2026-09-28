@@ -267,6 +267,120 @@ def _artifact_record(kind: str, path: Path) -> dict[str, str]:
     return {"kind": kind, "name": path.name, "sha256": _sha256(path)}
 
 
+def _load_json(path: Path, label: str) -> dict[str, object]:
+    if not path.is_file():
+        raise SigningError(f"{label} is missing: {path}")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SigningError(f"{label} is not valid JSON") from error
+    if not isinstance(document, dict):
+        raise SigningError(f"{label} must be a JSON object")
+    return document
+
+
+def _write_json_atomic(path: Path, document: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _verify_driver_artifact(
+    actual: object,
+    expected_file: Path,
+    *,
+    label: str,
+) -> None:
+    if not isinstance(actual, dict):
+        raise SigningError(f"Android build-driver {label} record is missing")
+    if (
+        actual.get("name") != expected_file.name
+        or actual.get("sha256") != _sha256(expected_file)
+        or actual.get("bytes") != expected_file.stat().st_size
+    ):
+        raise SigningError(f"Android build-driver {label} does not match the selected APK")
+
+
+def create_provenance(
+    output: Path,
+    unsigned_apk: Path,
+    test_companion: Path,
+    build_driver_manifest: Path,
+    reproducibility: Path,
+    *,
+    source_sha: str,
+    source_tree: str,
+    source_repository: str,
+    version_name: str,
+    version_code: int,
+) -> None:
+    """Validate Android Release build outputs and write unsigned provenance."""
+    if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+        raise SigningError("Android source SHA must be a lowercase 40-character Git commit")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_tree):
+        raise SigningError("Android source tree must be a lowercase 40-character Git tree")
+    driver = _load_json(build_driver_manifest, "Android build-driver manifest")
+    reproduction = _load_json(reproducibility, "Android reproducibility record")
+    verify_document(reproduction, unsigned_apk, source_sha, version_name, version_code)
+    if not test_companion.is_file():
+        raise SigningError("unsigned Android test companion is missing")
+
+    expected_driver_fields = {
+        "schema": 1,
+        "repository": source_repository,
+        "source_sha": source_sha,
+        "source_tree": source_tree,
+        "version_name": version_name,
+        "version_code": version_code,
+        "package": "com.dobby.vpn",
+        "signing_classification": "unsigned",
+        "signer_certificate_sha256": None,
+    }
+    if any(driver.get(key) != value for key, value in expected_driver_fields.items()):
+        raise SigningError("Android build-driver manifest does not match the selected Release")
+    if driver.get("source_identity_mode") not in {"git_checkout", "harness_verified_archive"}:
+        raise SigningError("Android build-driver source identity was not verified")
+    _verify_driver_artifact(driver.get("artifact"), unsigned_apk, label="application")
+    driver_companion = driver.get("test_companion")
+    _verify_driver_artifact(driver_companion, test_companion, label="test companion")
+    if (
+        not isinstance(driver_companion, dict)
+        or driver_companion.get("signing_classification") != "unsigned"
+    ):
+        raise SigningError("Android build-driver test companion is not recorded as unsigned")
+
+    companion_record = {
+        "name": test_companion.name,
+        "sha256": _sha256(test_companion),
+        "bytes": test_companion.stat().st_size,
+        "application_id": "com.dobby.vpn.test",
+        "source_sha": source_sha,
+    }
+    document: dict[str, object] = {
+        "schema": 1,
+        "source_sha": source_sha,
+        "version_name": version_name,
+        "version_code": version_code,
+        "application_id": "com.dobby.vpn",
+        "test_companion": companion_record,
+        "build_driver": driver,
+        "reproducibility": reproduction,
+        "artifacts": [
+            _artifact_record("unsigned", unsigned_apk),
+            _artifact_record("test_companion_unsigned", test_companion),
+        ],
+    }
+    _write_json_atomic(output, document)
+
+
 def finalize_provenance(
     provenance: Path,
     unsigned_apk: Path,
@@ -431,6 +545,17 @@ def _parser() -> argparse.ArgumentParser:
         "--expected-certificate-sha256",
         default=os.environ.get("EXPECTED_ANDROID_SIGNER_SHA256", ""),
     )
+    create = commands.add_parser("create-provenance")
+    create.add_argument("--output", type=Path, required=True)
+    create.add_argument("--unsigned-apk", type=Path, required=True)
+    create.add_argument("--test-companion", type=Path, required=True)
+    create.add_argument("--build-driver-manifest", type=Path, required=True)
+    create.add_argument("--reproducibility", type=Path, required=True)
+    create.add_argument("--source-sha", required=True)
+    create.add_argument("--source-tree", required=True)
+    create.add_argument("--source-repository", required=True)
+    create.add_argument("--version-name", required=True)
+    create.add_argument("--version-code", type=int, required=True)
     return parser
 
 
@@ -459,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_certificate_sha256=args.expected_certificate_sha256,
             )
             print(f"Android release signer SHA-256: {digest}")
-        else:
+        elif args.command == "finalize-provenance":
             digest = finalize_provenance(
                 args.provenance,
                 args.unsigned_apk,
@@ -472,6 +597,20 @@ def main(argv: list[str] | None = None) -> int:
                 apksigner=args.apksigner,
             )
             print(f"Android publication provenance finalized; signer SHA-256: {digest}")
+        else:
+            create_provenance(
+                args.output,
+                args.unsigned_apk,
+                args.test_companion,
+                args.build_driver_manifest,
+                args.reproducibility,
+                source_sha=args.source_sha,
+                source_tree=args.source_tree,
+                source_repository=args.source_repository,
+                version_name=args.version_name,
+                version_code=args.version_code,
+            )
+            print(f"Unsigned Android build provenance created: {args.output}")
         return 0
     except (OSError, SigningError, ValueError) as error:
         print(f"Android APK signing failed: {error}", file=sys.stderr)

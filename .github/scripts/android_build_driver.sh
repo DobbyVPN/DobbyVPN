@@ -6,6 +6,7 @@ export PYTHONDONTWRITEBYTECODE=1
 
 source_root=''
 source_sha=''
+source_tree=''
 output=''
 manifest=''
 first_output=''
@@ -14,6 +15,7 @@ reproducibility=''
 dependency_manifest=''
 source_repository='DobbyVPN/DobbyVPN'
 local_build=0
+trusted_archive_source=0
 gradle_archive=''
 gradle_root=''
 go_binary=''
@@ -22,6 +24,7 @@ while (($#)); do
   case "$1" in
     --source-root) source_root=${2:?missing --source-root value}; shift 2 ;;
     --source-sha) source_sha=${2:?missing --source-sha value}; shift 2 ;;
+    --source-tree) source_tree=${2:?missing --source-tree value}; shift 2 ;;
     --output) output=${2:?missing --output value}; shift 2 ;;
     --manifest) manifest=${2:?missing --manifest value}; shift 2 ;;
     --first-output) first_output=${2:?missing --first-output value}; shift 2 ;;
@@ -32,6 +35,7 @@ while (($#)); do
     --gradle-root) gradle_root=$2; shift 2 ;;
     --go-binary) go_binary=$2; shift 2 ;;
     --local) local_build=1; shift ;;
+    --trusted-archive-source) trusted_archive_source=1; shift ;;
     --source-repository) source_repository=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -44,8 +48,20 @@ source_root=$(cd -- "$source_root" && pwd -P)
   echo 'source SHA must be a full lowercase Git commit identity' >&2
   exit 2
 }
-if [[ "$local_build" == 1 && -n "$source_sha" ]]; then
-  echo '--local cannot be combined with --source-sha' >&2
+[[ -z "$source_tree" || "$source_tree" =~ ^[0-9a-f]{40}$ ]] || {
+  echo 'source tree must be a full lowercase Git tree identity' >&2
+  exit 2
+}
+if [[ "$local_build" == 1 && ( -n "$source_sha" || -n "$source_tree" || "$trusted_archive_source" == 1 ) ]]; then
+  echo '--local cannot be combined with archived source identity' >&2
+  exit 2
+fi
+if [[ "$trusted_archive_source" == 1 && ( "$local_build" == 1 || -z "$source_sha" || -z "$source_tree" ) ]]; then
+  echo '--trusted-archive-source requires --source-sha and --source-tree and cannot use --local' >&2
+  exit 2
+fi
+if [[ "$trusted_archive_source" == 0 && -n "$source_tree" ]]; then
+  echo '--source-tree requires --trusted-archive-source' >&2
   exit 2
 fi
 
@@ -101,15 +117,30 @@ validate_source_checkout() {
   }
 }
 
-if [[ "$local_build" == 1 ]]; then
+if [[ "$trusted_archive_source" == 1 ]]; then
+  # Harness passes these identities only after validating the clean source
+  # checkout before and after creating its .git-free source archive. The
+  # archive mode carries that identity into the Android APK and provenance;
+  # no .git directory is shipped to the runner.
+  [[ ! -e "$source_root/.git" ]] || {
+    echo 'trusted archived-source mode expects a source archive without .git metadata' >&2
+    exit 2
+  }
+  source_commit=$source_sha
+  source_commit_link="https://github.com/$source_repository/tree/$source_commit"
+  source_identity_mode='harness_verified_archive'
+elif [[ "$local_build" == 1 ]]; then
   # Local builds are disposable, not release provenance claims.
   source_commit=local
   source_commit_link=''
+  source_tree=''
+  source_identity_mode='unverified_local_checkout'
 else
   validate_source_checkout "$source_root" "$source_sha"
   source_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit} | tee_stderr)
   source_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree} | tee_stderr)
   source_commit_link="https://github.com/$source_repository/tree/$source_commit"
+  source_identity_mode='git_checkout'
 fi
 [[ -f "$dependency_helper" && -f "$dependency_spec" && -f "$source_verifier" && -f "$reproducibility_verifier" ]] || {
   echo 'Android build helper or dependency specification is missing' >&2
@@ -217,6 +248,18 @@ done <<< "$java_version_output"
 [[ "$java_version" == 17.* ]] || { echo "Java runtime must have major version 17; observed $java_version" >&2; exit 2; }
 
 verify_source_integrity_after_build() {
+  if [[ "$trusted_archive_source" == 1 ]]; then
+    # The Harness already checks the selected commit/tree before and after it
+    # creates the source archive. This runner has only that trusted tarball,
+    # so it records the externally validated pair instead of running Git
+    # commands against unavailable object metadata.
+    [[ "$source_commit" == "$source_sha" && "$source_tree" =~ ^[0-9a-f]{40}$ ]]
+    [[ ! -e "$source_root/.git" ]] || {
+      echo 'unexpected .git metadata appeared during the archived-source build' >&2
+      exit 2
+    }
+    return
+  fi
   observed_commit=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{commit} | tee_stderr)
   observed_tree=$("$git_bin" -C "$source_root" rev-parse --verify HEAD^{tree} | tee_stderr)
   [[ "$observed_commit" == "$source_commit" && "$observed_tree" == "$source_tree" ]] || {
@@ -285,6 +328,12 @@ python3 "$reproducibility_verifier" create --first-apk "$first_output" --second-
   --output "$reproducibility" --source-sha "$source_commit" --version-name "$version_name" --version-code "$version_code"
 [[ -f "$source_verifier" ]] || { echo 'APK source verifier is missing' >&2; exit 2; }
 apkanalyzer_bin=${APKANALYZER:-"$(command -v apkanalyzer || true)"}
+if [[ -z "$apkanalyzer_bin" ]]; then
+  sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
+  if [[ -n "$sdk_root" && -x "$sdk_root/cmdline-tools/latest/bin/apkanalyzer" ]]; then
+    apkanalyzer_bin="$sdk_root/cmdline-tools/latest/bin/apkanalyzer"
+  fi
+fi
 [[ -n "$apkanalyzer_bin" && -x "$apkanalyzer_bin" ]] || { echo 'apkanalyzer is required for source identity verification' >&2; exit 2; }
 source_verifier_args=(--apk "$first_output" --apk "$output" --source-sha "$source_commit" --repository "$source_repository" --apkanalyzer "$apkanalyzer_bin")
 if [[ -n "$test_companion_output" ]]; then
@@ -314,6 +363,7 @@ python3 "$source_root/.github/scripts/verify_android_native_payloads.py" \
 SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" \
   TEST_COMPANION_OUTPUT="$test_companion_output" REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \
   SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" SOURCE_REPOSITORY="$source_repository" \
+  SOURCE_IDENTITY_MODE="$source_identity_mode" \
   VERSION_NAME="$version_name" VERSION_CODE="$version_code" \
   python3 - <<'PY'
 import hashlib
@@ -338,6 +388,7 @@ document = {
     "repository": os.environ["SOURCE_REPOSITORY"],
     "source_sha": os.environ["SOURCE_COMMIT"],
     "source_tree": os.environ["SOURCE_TREE"],
+    "source_identity_mode": os.environ["SOURCE_IDENTITY_MODE"],
     "version_name": os.environ["VERSION_NAME"],
     "version_code": int(os.environ["VERSION_CODE"]),
     "package": "com.dobby.vpn",
