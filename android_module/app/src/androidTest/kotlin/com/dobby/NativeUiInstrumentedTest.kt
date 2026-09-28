@@ -115,7 +115,7 @@ class NativeUiInstrumentedTest {
         device.waitForIdle()
         // The backend rejects this deliberately invalid source. The visible
         // Error state proves the Compose input reached the production binding.
-        dismissNativeInputIfVisible()
+        dismissNativeInputAfterTextEntry()
 
         // Navigate only after typing so a real control transition proves the
         // Entry focus/IME teardown completed and the entered source survives
@@ -137,7 +137,7 @@ class NativeUiInstrumentedTest {
                 phase = "enter-source"
                 waitForFocusedNativeInput(10_000).setText(expectedSource)
                 device.waitForIdle()
-                dismissNativeInputIfVisible()
+                dismissNativeInputAfterTextEntry()
                 waitForConfigurationText(expectedSource, 10_000)
 
                 phase = "settings"
@@ -392,6 +392,27 @@ class NativeUiInstrumentedTest {
     private fun dismissNativeInputIfVisible() {
         if (isImeVisible()) device.pressBack()
         device.waitForIdle()
+    }
+
+    /** Wait for the keyboard opened by the focused field, then close and verify it. */
+    private fun dismissNativeInputAfterTextEntry() {
+        check(waitForImeVisibility(expectedVisible = true, timeoutMillis = 5_000)) {
+            "ANDROID_UI_IME_SHOW_TIMEOUT"
+        }
+        device.pressBack()
+        check(waitForImeVisibility(expectedVisible = false, timeoutMillis = 5_000)) {
+            "ANDROID_UI_IME_DISMISS_TIMEOUT"
+        }
+        device.waitForIdle()
+    }
+
+    private fun waitForImeVisibility(expectedVisible: Boolean, timeoutMillis: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            if (isImeVisible() == expectedVisible) return true
+            Thread.sleep(50)
+        }
+        return isImeVisible() == expectedVisible
     }
 
     private fun isImeVisible(): Boolean {
