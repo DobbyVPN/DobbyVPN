@@ -7,6 +7,25 @@ Actions.
 The Go toolchain is pinned in .go-version. Local tools downloaded by the
 desktop build helper are kept in .local-tools/desktop-build.
 
+## Source checks
+
+Use the same source-check commands on local runners and GitHub Actions:
+
+    python3 .github/scripts/source_checks.py <check>
+
+The checks are `go-tests`, `go-unit`, `go-race`, `go-native-runtime`,
+`swift-unit`, `lint-go`, `lint-android`, `lint-swift`, `security`,
+`actionlint`, and `cache-clean`. Go checks use the Go version in .go-version.
+The Go installer and dependency staging run in the same process as tests so
+CGO settings are available to the test commands.
+
+Lint, scan, and Actionlint binaries are downloaded at fixed versions, checked
+against pinned SHA-256 values, and kept in one temporary directory. That
+directory is removed when the command exits. `cache-clean` clears Go build and
+test caches plus the golangci-lint cache; it leaves Go module downloads intact.
+TruffleHog needs a Git checkout with full history. If the local runner uses a
+source archive, pass `--git-repository <controller-checkout>`.
+
 ## Desktop commands
 
 Build the Go backend and CLI for the current host:
@@ -49,8 +68,8 @@ The build packages the Go backend and TrustTunnel's native bridge for both
 arm64-v8a and x86_64. CI checks the bridge symbols in both APK ABIs and rejects
 unresolved C++ runtime imports, including the symbol implicated in the 1.5.0
 Android startup crash. The Go shared library statically links the pinned NDK's
-C++ runtime to satisfy the bridge imports. A separate hosted ARM64 job runs the
-selected Go runtime tests on a native ARM64 Linux runner.
+C++ runtime to satisfy the bridge imports. The same selected Go runtime tests
+run on Linux, Windows, and macOS; CI adds a native Linux ARM64 run.
 
 The local Harness builds the app and its Android instrumentation tests from the
 same selected worktree. Android mini runs on an emulator and checks rendered
@@ -65,10 +84,10 @@ This checks native linking and UI rendering; it does not claim physical-device
 VPN traffic. That requires a physical iOS runner.
 
 The release workflow builds and signs the physical-device package with the
-configured Apple certificates and provisioning profiles. Swift lifecycle
-tests can be run with:
+configured Apple certificates and provisioning profiles. Run Swift lifecycle
+tests on macOS with:
 
-    swift test --enable-code-coverage --package-path swift_module
+    python3 .github/scripts/source_checks.py swift-unit
 
 ## Functional qualification
 
