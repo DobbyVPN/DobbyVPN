@@ -6,15 +6,16 @@ target=${1:-}
 output=${2:-}
 architecture=${4:-}
 if [[ -z "$target" || -z "$output" ]]; then
-  echo "usage: $0 ios|iossimulator OUTPUT [runtime-xcframework] [simulator-architecture]" >&2
+  echo "usage: $0 ios|iosarchive|iosanalyze|iossimulator|iosexport OUTPUT [runtime-xcframework|archive.tar.gz] [simulator-architecture]" >&2
   exit 2
 fi
 case "$target" in
-  ios) sdk=iphoneos; scheme=iosApp ;;
+  ios|iosarchive|iosanalyze) sdk=iphoneos; scheme=iosApp ;;
   iossimulator)
     sdk=iphonesimulator; scheme=iosSimulatorApp
     case "$architecture" in arm64) xcode_arch=arm64 ;; amd64) xcode_arch=x86_64 ;; "") xcode_arch="" ;; *) echo "unsupported Simulator architecture: $architecture" >&2; exit 2 ;; esac
     ;;
+  iosexport) sdk=; scheme= ;;
   *) echo "unsupported iOS target: $target" >&2; exit 2 ;;
 esac
 
@@ -34,7 +35,7 @@ fi
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION_NAME must be x.y.z" >&2; exit 2; }
 [[ "$build" =~ ^[1-9][0-9]*$ ]] || { echo "APP_BUILD must be a positive integer" >&2; exit 2; }
 [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || { echo "SOURCE_COMMIT must be a full commit SHA" >&2; exit 2; }
-if [[ "$target" == ios ]]; then
+if [[ "$target" == ios || "$target" == iosarchive || "$target" == iosanalyze ]]; then
   [[ -d "$runtime" ]] || { echo "DobbyVPNRuntime.xcframework is unavailable: $runtime" >&2; exit 2; }
 fi
 
@@ -43,14 +44,61 @@ for tool in xcodebuild python3; do
 done
 
 team_id=${IOS_TEAM_ID:-${APPLE_TEAM_ID:-}}
-if [[ "$target" == ios ]]; then
+if [[ "$target" == ios || "$target" == iosexport ]]; then
   [[ -n "$team_id" ]] || { echo "IOS_TEAM_ID or APPLE_TEAM_ID is required for an iOS IPA" >&2; exit 2; }
   [[ "$team_id" =~ ^[A-Za-z0-9]+$ ]] || { echo "IOS_TEAM_ID must contain only letters and digits" >&2; exit 2; }
 fi
 
-if [[ "$target" == ios ]]; then
+if [[ "$target" == ios || "$target" == iosarchive || "$target" == iosanalyze ]]; then
   python3 "$script_root/go_module/scripts/ios_runtime_framework.py" \
-    "$target" "$runtime" arm64
+    ios "$runtime" arm64
+fi
+
+if [[ "$target" == iosexport ]]; then
+  archive_tar=${3:-}
+  [[ -n "$archive_tar" && -f "$archive_tar" ]] || { echo "unsigned iOS archive tarball is unavailable: $archive_tar" >&2; exit 2; }
+  profile_name=${IOS_PROFILE_NAME:-DobbyVPNAppStore}
+  tunnel_profile_name=${IOS_TUNNEL_PROFILE_NAME:-DobbyVPNTunnelAppStore}
+  profile_name_pattern='^[A-Za-z0-9_. -]+$'
+  [[ "$profile_name" =~ $profile_name_pattern && "$tunnel_profile_name" =~ $profile_name_pattern ]] || {
+    echo "iOS provisioning profile names contain unsupported characters" >&2
+    exit 2
+  }
+  derived=$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-export.XXXXXX")
+  trap 'rm -rf "$derived"' EXIT
+  python3 "$script_root/.github/scripts/ios_archive.py" extract \
+    --input "$archive_tar" --output-dir "$derived/unpacked"
+  archive="$derived/unpacked/DobbyVPN.xcarchive"
+  python3 "$script_root/.github/scripts/ios_archive.py" verify \
+    --archive-dir "$archive" --source-sha "$source_commit" \
+    --version "$version" --build-number "$build"
+  export_options="$derived/ExportOptions.plist"
+  export_dir="$derived/export"
+  cat > "$export_options" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>method</key><string>app-store</string>
+  <key>teamID</key><string>$team_id</string>
+  <key>signingStyle</key><string>manual</string>
+  <key>manageAppVersionAndBuildNumber</key><false/>
+  <key>provisioningProfiles</key><dict>
+    <key>vpn.dobby.app</key><string>$profile_name</string>
+    <key>vpn.dobby.app.tunnel</key><string>$tunnel_profile_name</string>
+  </dict>
+</dict></plist>
+PLIST
+  xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
+    -exportOptionsPlist "$export_options"
+  shopt -s nullglob
+  ipas=("$export_dir"/*.ipa)
+  [[ "${#ipas[@]}" -eq 1 ]] || { echo "Xcode export did not produce exactly one IPA" >&2; exit 1; }
+  python3 "$script_root/.github/scripts/ios_archive.py" verify-ipa \
+    --ipa "${ipas[0]}" --source-sha "$source_commit" \
+    --version "$version" --build-number "$build"
+  mkdir -p "$(dirname -- "$output")"
+  cp "${ipas[0]}" "$output"
+  exit 0
 fi
 
 derived=$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-native-ui.XXXXXX")
@@ -66,7 +114,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ "$target" == ios ]]; then
+if [[ "$target" == ios || "$target" == iosarchive || "$target" == iosanalyze ]]; then
   runtime_real=$(cd -- "$runtime" && pwd -P)
   fixed_real=""
   if [[ -d "$fixed_runtime" ]]; then fixed_real=$(cd -- "$fixed_runtime" && pwd -P); fi
@@ -96,6 +144,28 @@ if [[ "$target" == iossimulator ]]; then
   xcode_args+=(-derivedDataPath "$derived_data" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=-)
   if [[ -n "${xcode_arch:-}" ]]; then xcode_args+=(ARCHS="$xcode_arch" ONLY_ACTIVE_ARCH=YES); fi
   xcodebuild "${xcode_args[@]}" build
+elif [[ "$target" == iosanalyze ]]; then
+  mkdir -p "$output"
+  xcode_args+=(-derivedDataPath "$output" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
+  xcodebuild "${xcode_args[@]}" \
+    -destination "generic/platform=iOS" \
+    DEVELOPMENT_TEAM="" \
+    analyze
+elif [[ "$target" == iosarchive ]]; then
+  [[ "$output" == *.tar.gz ]] || { echo "unsigned archive output must end in .tar.gz" >&2; exit 2; }
+  archive="$derived/DobbyVPN.xcarchive"
+  xcode_args+=(-destination "generic/platform=iOS" -archivePath "$archive")
+  xcodebuild "${xcode_args[@]}" \
+    DEVELOPMENT_TEAM="" \
+    CODE_SIGN_IDENTITY="" \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_REQUIRED=NO \
+    archive
+  python3 "$script_root/.github/scripts/ios_archive.py" pack \
+    --archive-dir "$archive" --output "$output" \
+    --source-sha "$source_commit" --version "$version" \
+    --build-number "$build"
 else
   identity=${IOS_SIGNING_IDENTITY:-Apple\ Distribution}
   archive="$derived/DobbyVPN.xcarchive"

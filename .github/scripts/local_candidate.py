@@ -15,13 +15,13 @@ import os
 from pathlib import Path
 import platform as host_platform
 import re
-import secrets
-import shutil
 import subprocess
 import sys
 import time
 import traceback
 from typing import Any
+
+from android_apk_signing import find_android_tool, sign_test_pair
 
 
 PLATFORMS = ("linux", "windows", "android", "macos")
@@ -46,27 +46,11 @@ UI_NAMES = {
     "windows": "DobbyVPN.exe",
     "macos": "Dobby VPN.app",
 }
-ANDROID_BUILD_TOOLS_VERSION = "36.0.0"
 ARCHITECTURE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
-SIGNER_DIGEST = re.compile(r"certificate SHA-256 digest:\s*([0-9a-fA-F:]+)")
 
 
 class CandidateError(ValueError):
     """Raised when a candidate request or its resulting descriptor is invalid."""
-
-
-def _command_error(
-    label: str,
-    *,
-    returncode: int | None,
-    stdout: bytes | str | None,
-    stderr: bytes | str | None,
-) -> CandidateError:
-    return CandidateError(
-        f"{label}: returncode={returncode!r}\n"
-        f"stdout:\n{stdout!r}\n"
-        f"stderr:\n{stderr!r}"
-    )
 
 
 def _retain_captured_stream(stream: Any, output: bytes) -> None:
@@ -106,78 +90,6 @@ def _retain_command_event(
             + "\n"
         ).encode("utf-8"),
     )
-
-
-def _run_captured(
-    command: list[str],
-    *,
-    label: str,
-    environment: dict[str, str],
-    timeout: int,
-) -> subprocess.CompletedProcess[bytes]:
-    started = time.monotonic()
-    _retain_command_event(
-        "start",
-        label=label,
-        status="started",
-        returncode=None,
-    )
-    try:
-        completed = subprocess.run(
-            command,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        duration = time.monotonic() - started
-        stdout = getattr(error, "stdout", getattr(error, "output", None)) or b""
-        stderr = getattr(error, "stderr", None) or b""
-        _retain_captured_stream(
-            sys.stdout,
-            stdout,
-        )
-        _retain_captured_stream(sys.stderr, stderr)
-        _retain_command_event(
-            "finish",
-            label=label,
-            status=(
-                "timed-out"
-                if isinstance(error, subprocess.TimeoutExpired)
-                else "launch-failed"
-            ),
-            returncode=getattr(error, "returncode", None),
-            duration_seconds=duration,
-        )
-        raise _command_error(
-            label,
-            returncode=getattr(error, "returncode", None),
-            stdout=stdout,
-            stderr=stderr,
-        ) from error
-    stdout = completed.stdout or b""
-    stderr = completed.stderr or b""
-    duration = time.monotonic() - started
-    _retain_captured_stream(sys.stdout, stdout)
-    _retain_captured_stream(sys.stderr, stderr)
-    _retain_command_event(
-        "finish",
-        label=label,
-        status=("completed" if completed.returncode == 0 else "failed"),
-        returncode=completed.returncode,
-        duration_seconds=duration,
-    )
-    if completed.returncode != 0:
-        raise _command_error(
-            label,
-            returncode=completed.returncode,
-            stdout=stdout,
-            stderr=stderr,
-        )
-    return completed
 
 
 def _existing_directory(path: Path, label: str) -> Path:
@@ -267,122 +179,6 @@ def _android_helper(source_root: Path) -> Path:
     return helper
 
 
-def _android_tool(name: str, environment_name: str) -> Path:
-    configured = os.environ.get(environment_name)
-    if configured:
-        found = shutil.which(configured)
-        if found is not None:
-            return Path(found)
-        raise CandidateError(f"{name} is unavailable")
-    found = shutil.which(name)
-    if found is not None:
-        return Path(found)
-    sdk_root = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
-    if sdk_root:
-        candidates = sorted(Path(sdk_root).glob(f"build-tools/*/{name}"), reverse=True)
-        for path in candidates:
-            if os.access(path, os.X_OK):
-                return path
-    java_home = os.environ.get("JAVA_HOME")
-    if java_home:
-        path = Path(java_home) / "bin" / name
-        if os.access(path, os.X_OK):
-            return path
-    raise CandidateError(f"{name} is unavailable")
-
-
-def _android_apksigner() -> Path:
-    sdk_root_value = os.environ.get("ANDROID_SDK_ROOT")
-    if not sdk_root_value:
-        raise CandidateError("pinned Android apksigner is unavailable")
-    sdk_root = Path(sdk_root_value)
-    path = sdk_root / "build-tools" / ANDROID_BUILD_TOOLS_VERSION / "apksigner"
-    if not path.is_file():
-        raise CandidateError("pinned Android apksigner is unavailable")
-    return path
-
-
-def _android_signer_digest(apksigner: Path, apk: Path, environment: dict[str, str]) -> str:
-    completed = _run_captured(
-        [str(apksigner), "verify", "--print-certs", str(apk)],
-        label="Android APK signer verification failed",
-        environment=environment,
-        timeout=30,
-    )
-    output = (completed.stdout + completed.stderr).decode("utf-8", errors="replace")
-    digests = [match.group(1).replace(":", "").lower() for match in SIGNER_DIGEST.finditer(output)]
-    if len(digests) != 1 or len(digests[0]) != 64:
-        raise CandidateError("Android APK must have exactly one signer certificate")
-    return digests[0]
-
-
-def _sign_android_pair(
-    unsigned_app: Path,
-    unsigned_companion: Path,
-    signed_app: Path,
-    signed_companion: Path,
-) -> None:
-    keytool = _android_tool("keytool", "DOBBYVPN_KEYTOOL")
-    apksigner = _android_apksigner()
-    keystore = signed_app.parent / ".local-android-test.keystore"
-    password = secrets.token_urlsafe(32)
-    environment = os.environ.copy()
-    environment["DOBBYVPN_LOCAL_KEYSTORE_PASSWORD"] = password
-    environment["DOBBYVPN_LOCAL_KEY_PASSWORD"] = password
-    primary: BaseException | None = None
-    try:
-        _run_captured(
-            [
-                str(keytool), "-genkeypair", "-noprompt", "-storetype", "JKS",
-                "-keystore", str(keystore), "-alias", "dobbyvpn-local",
-                "-keyalg", "RSA", "-keysize", "2048", "-validity", "1",
-                "-dname", "CN=DobbyVPN local Android qualification",
-                "-storepass:env", "DOBBYVPN_LOCAL_KEYSTORE_PASSWORD",
-                "-keypass:env", "DOBBYVPN_LOCAL_KEY_PASSWORD",
-            ],
-            label="could not create the local Android qualification signer",
-            environment=environment,
-            timeout=60,
-        )
-        for unsigned, signed in ((unsigned_app, signed_app), (unsigned_companion, signed_companion)):
-            _run_captured(
-                [
-                    str(apksigner), "sign", "--ks", str(keystore),
-                    "--ks-key-alias", "dobbyvpn-local",
-                    "--ks-pass", "env:DOBBYVPN_LOCAL_KEYSTORE_PASSWORD",
-                    "--key-pass", "env:DOBBYVPN_LOCAL_KEY_PASSWORD",
-                    "--out", str(signed), str(unsigned),
-                ],
-                label="could not sign the local Android qualification APK",
-                environment=environment,
-                timeout=60,
-            )
-        first_digest = _android_signer_digest(apksigner, signed_app, environment)
-        companion_digest = _android_signer_digest(apksigner, signed_companion, environment)
-        if first_digest != companion_digest:
-            raise CandidateError("local Android APK signer certificates do not match")
-    except OSError as error:
-        primary = error
-        raise CandidateError("local Android signing tool failed") from error
-    except BaseException as error:
-        primary = error
-        raise
-    finally:
-        try:
-            keystore.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as cleanup_error:
-            if primary is None:
-                raise
-            primary.add_note(
-                "local Android signer cleanup failed:\n"
-                + "".join(traceback.format_exception(cleanup_error)).rstrip()
-            )
-        environment.pop("DOBBYVPN_LOCAL_KEYSTORE_PASSWORD", None)
-        environment.pop("DOBBYVPN_LOCAL_KEY_PASSWORD", None)
-
-
 def _build_desktop(
     source_root: Path,
     candidate_root: Path,
@@ -451,7 +247,14 @@ def _build_android(
         raise CandidateError("Android build did not produce the application APK")
     if not companion_output.is_file():
         raise CandidateError("Android build did not produce the test companion APK")
-    _sign_android_pair(output, companion_output, signed_output, signed_companion)
+    sign_test_pair(
+        output,
+        companion_output,
+        signed_output,
+        signed_companion,
+        apksigner=find_android_tool("apksigner", "DOBBYVPN_APKSIGNER"),
+        keytool=find_android_tool("keytool", "DOBBYVPN_KEYTOOL"),
+    )
     output.unlink()
     companion_output.unlink()
     return signed_output
