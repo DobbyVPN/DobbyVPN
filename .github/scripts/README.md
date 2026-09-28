@@ -28,28 +28,25 @@ source archive, pass `--git-repository <controller-checkout>`.
 
 ## Desktop commands
 
-Build the Go backend and CLI for the current host:
+Build and package one desktop target on a runner for that target's native OS
+and architecture:
 
-    python3 .github/scripts/desktop_build.py libs --with-cli
+    python3 .github/scripts/desktop_platform.py build \
+        --platform linux \
+        --output-dir output/linux
 
-Build the Windows or macOS native frontend on its target operating system:
+Use `--platform windows` on Windows or `--platform macos` on macOS. Linux and
+Windows packages require amd64. macOS packages use the runner's native
+architecture; specify `--arch arm64` or `--arch amd64` only when needed to make
+that selection explicit. The command reads the version from `VERSION` and the
+source commit from Git. For source archives without `.git`, pass
+`--source-sha <full-commit-sha>`; `--version <x.y.z>` can override the version.
 
-    python3 .github/scripts/desktop_build.py native-ui --platform current --output <path>
-
-The Windows frontend is built with dotnet and the macOS frontend with Swift
-Package Manager. Linux has no graphical frontend build.
-
-Stage desktop backends, CLIs, and available native frontend inputs:
-
-    python3 .github/scripts/desktop_build.py app --skip-libs
-
-Assemble Windows and macOS archives and the Linux DEB from staged inputs:
-
-    python3 .github/scripts/package_desktop.py --version 1.5.1 --output output
-
-The Windows and macOS installers consume those archives. The Linux package
-contains the backend, CLI, and service files. Desktop packaging does not install
-a JVM.
+The command builds the backend and CLI, builds the Windows or macOS native UI
+where applicable, assembles the installer package, and writes the package plus
+`desktop-package.json` into the output directory. Local candidate builds and
+GitHub desktop package builds use this same command. The resulting package is
+a Linux DEB, Windows MSI, or macOS PKG. Linux has no graphical frontend build.
 
 The Windows backend package includes dobbyvpn-backend.exe, dobby_bridge.dll,
 and wintun.dll. macOS packages include the backend and CLI in the app bundle;

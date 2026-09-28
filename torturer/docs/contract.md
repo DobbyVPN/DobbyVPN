@@ -31,11 +31,15 @@ traffic, and cleanup.
 
 Android's rendered journey enters one complete supported Outline or Xray
 profile through the production Compose screen. The separate binding lane
-retains the complete profile matrix. The iOS Simulator journey types an
-invalid non-empty value, verifies it survives tab navigation, observes the
-frontend's error handling and error clearing after an edit, checks release
-metadata and the Logs screen, then relaunches the app. Simulator
-coverage does not assert a successful configuration or VPN connection.
+retains the complete profile matrix. The iOS Simulator journey enters a
+non-empty draft, verifies it survives tab navigation, activates the connection
+action and observes a visible connection error, then edits the draft and
+verifies the changed text both immediately and after tab navigation. The
+Simulator can report a NetworkExtension provider IPC error independently of
+the draft; editing the draft is not expected to clear that connection error.
+The journey also checks release metadata and the Logs screen, then terminates
+and relaunches the app. Simulator coverage does not assert a successful
+configuration or VPN connection.
 
 ## Canonical scenarios
 
