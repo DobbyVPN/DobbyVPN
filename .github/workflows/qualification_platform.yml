@@ -57,13 +57,18 @@ jobs:
           pattern: dobbyVPN-macos-*.pkg
           path: release-packages
           merge-multiple: true
-      - name: Download Android packages
+      - name: Download unsigned Android application
         if: inputs.platform == 'android'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
-          pattern: dobbyvpn-android-*.apk
+          name: dobbyvpn-android-unsign.apk
           path: release-packages
-          merge-multiple: true
+      - name: Download unsigned Android test companion
+        if: inputs.platform == 'android'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: dobbyvpn-android-test-companion-unsigned.apk
+          path: release-packages
       - name: Download shared Render VPN profile
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
@@ -79,6 +84,9 @@ jobs:
             echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-release-run"
             echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-release-diagnostics"
             echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-result/functional-result.json"
+            echo "DESKTOP_PACKAGE_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/desktop-package.json"
+            echo "INSTALLED_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/installed.json"
+            echo "ANDROID_SIGNED_DIR=$RUNNER_TEMP/dobbyvpn-android-test-signed"
           } >> "$GITHUB_ENV"
           if [ "$PLATFORM" = linux ]; then
             echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
@@ -100,20 +108,31 @@ jobs:
             linux) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb" ;;
             windows) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi" ;;
             macos) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg" ;;
-            android) test "$(find "$GITHUB_WORKSPACE/release-packages" -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f | wc -l)" -eq 1; test "$(find "$GITHUB_WORKSPACE/release-packages" -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f | wc -l)" -eq 1 ;;
+            android)
+              version="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")"
+              test -s "$GITHUB_WORKSPACE/release-packages/DobbyVPN-v${version}-unsign.apk"
+              test -s "$GITHUB_WORKSPACE/release-packages/DobbyVPN-v${version}-android-test-companion-unsigned.apk"
+              ;;
             *) exit 1 ;;
           esac
           deadline="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/render/deadline_epoch.txt")"
           [[ "$deadline" =~ ^[0-9]+$ ]]
           printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
 
-      - name: Install Android tooling for the exact Release APKs
+      - name: Install JDK 17 for temporary Android test signing
+        if: inputs.platform == 'android'
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android tooling for Release package qualification
         if: inputs.platform == 'android'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
         with:
           packages: platform-tools
 
-      - name: Install the exact native Release package
+      - name: Validate and install the exact native Release package
         shell: bash
         run: |
           set -euo pipefail
@@ -151,40 +170,89 @@ jobs:
             emit_phase_event phase-finish "$phase" "$started_ns" "$status"
             return "$status"
           }
-          case "$PLATFORM" in
-            linux)
-              run_timed linux-package-install sudo -n dpkg -i "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb"
-              mapfile -t cli_matches < <(find /opt/dobbyvpn -xdev -type f -name dobby-cli -perm -0100)
-              mapfile -t service_matches < <(find /opt/dobbyvpn -xdev -type f -name dobbyvpn-backend -perm -0100)
-              test "${#cli_matches[@]}" -eq 1; test "${#service_matches[@]}" -eq 1
+          if [ "$PLATFORM" != android ]; then
+            version="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")"
+            case "$PLATFORM" in
+              linux)
+                architecture=amd64
+                package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb"
+                ;;
+              windows)
+                architecture=amd64
+                package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
+                ;;
+              macos)
+                test "$(uname -m)" = arm64
+                architecture=arm64
+                package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg"
+                ;;
+              *) printf 'unsupported desktop platform=%s\n' "$PLATFORM" >&2; exit 1 ;;
+            esac
+            run_timed desktop-package-validation python3 .github/scripts/desktop_platform.py describe \
+              --platform "$PLATFORM" --arch "$architecture" --version "$version" \
+              --source-sha "$DOBBYVPN_COMMIT_SHA" --package "$package" \
+              --output "$DESKTOP_PACKAGE_DESCRIPTOR"
+            install_arguments=(
+              install
+              --build-descriptor "$DESKTOP_PACKAGE_DESCRIPTOR"
+              --run-dir "$RUN_DIR"
+              --output "$INSTALLED_DESCRIPTOR"
+            )
+            run_timed desktop-package-install python3 .github/scripts/desktop_platform.py "${install_arguments[@]}"
+            mapfile -t installed_values < <(python3 - "$INSTALLED_DESCRIPTOR" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          installed = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          for key in ("cli", "service", "ui", "library_path"):
+              print(installed.get(key, ""))
+          PY
+            )
+            test "${#installed_values[@]}" -eq 4
+            CLI="${installed_values[0]}"
+            SERVICE="${installed_values[1]}"
+            UI_BINARY="${installed_values[2]}"
+            SERVICE_LIBRARY_PATH="${installed_values[3]}"
+            if [ "$PLATFORM" = windows ]; then
+              CLI="$(cygpath -u "$CLI")"
+              SERVICE="$(cygpath -u "$SERVICE")"
+              UI_BINARY="$(cygpath -u "$UI_BINARY")"
+              SERVICE_PIPE=DobbyVPN.Control
+            elif [ "$PLATFORM" = linux ]; then
+              SERVICE_SOCKET="$CONTROL_DIR/control.sock"
+            else
+              SERVICE_SOCKET=/var/run/dobbyvpn/control.sock
+            fi
+            if [ "$PLATFORM" = linux ]; then
               printf 'CLI=%s\nSERVICE=%s\nSERVICE_SOCKET=%s\nSERVICE_LIBRARY_PATH=%s\n' \
-                "${cli_matches[0]}" "${service_matches[0]}" "$CONTROL_DIR/control.sock" /opt/dobbyvpn/lib >> "$GITHUB_ENV"
-              ;;
-            windows)
-              package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
-              PACKAGE_WIN="$(cygpath -w "$package")"
-              export PACKAGE_WIN
-              installed_paths_file="$RUNNER_TEMP/dobbyvpn-installed-paths.txt"
-              run_timed windows-package-install powershell.exe -NoLogo -NoProfile -NonInteractive -Command '$ErrorActionPreference="Stop"; $p=Start-Process msiexec.exe -ArgumentList @("/i", "`"$env:PACKAGE_WIN`"", "/qn", "/norestart") -Wait -PassThru; if ($p.ExitCode -ne 0) { throw "msiexec failed" }; $root="$env:ProgramFiles\DobbyVPN"; $cli=Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File; $service=Get-ChildItem $root -Filter "dobbyvpn-backend.exe" -Recurse -File; $ui=Join-Path $root "bin\DobbyVPN.exe"; if ($cli.Count -ne 1 -or $service.Count -ne 1 -or -not (Test-Path $ui)) { throw "installed closure is ambiguous" }; Write-Output ("$($cli[0].FullName)|$($service[0].FullName)|$ui")' | tee "$installed_paths_file"
-              installed_paths="$(cat "$installed_paths_file")"
-              rm -f "$installed_paths_file"
-              IFS='|' read -r cli service ui_binary <<< "${installed_paths//$'\r'/}"
-              cli="$(cygpath "$cli")"; service="$(cygpath "$service")"; ui_binary="$(cygpath "$ui_binary")"
-              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nSERVICE_PIPE=DobbyVPN.Control\n' "$cli" "$service" "$ui_binary" >> "$GITHUB_ENV"
-              ;;
-            macos)
-              case "$(uname -m)" in arm64) package=dobbyVPN-macos-aarch64.pkg ;; x86_64) package=dobbyVPN-macos-amd64.pkg ;; *) exit 1 ;; esac
-              run_timed macos-package-install sudo -n env \
-                "DOBBYVPN_CONTROL_PEER_UID=$(id -u)" \
-                "DOBBY_LOG_PATH=$RUN_DIR/service.log" \
-                installer -pkg "$GITHUB_WORKSPACE/release-packages/$package" -target /
-              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nSERVICE_SOCKET=%s\n' "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli" "/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend" "/Applications/Dobby VPN.app/Contents/MacOS/DobbyVPNMacApp" "/var/run/dobbyvpn/control.sock" >> "$GITHUB_ENV"
-              test -x "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
-              test -x "/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend"
-              ;;
+                "$CLI" "$SERVICE" "$SERVICE_SOCKET" "$SERVICE_LIBRARY_PATH" >> "$GITHUB_ENV"
+            elif [ "$PLATFORM" = windows ]; then
+              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nSERVICE_PIPE=%s\n' \
+                "$CLI" "$SERVICE" "$UI_BINARY" "$SERVICE_PIPE" >> "$GITHUB_ENV"
+            else
+              printf 'CLI=%s\nSERVICE=%s\nUI_BINARY=%s\nSERVICE_SOCKET=%s\n' \
+                "$CLI" "$SERVICE" "$UI_BINARY" "$SERVICE_SOCKET" >> "$GITHUB_ENV"
+            fi
+          fi
+          case "$PLATFORM" in
             android)
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
               run_timed android-sdk-install sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
+              unsigned_app="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-unsign.apk"
+              unsigned_companion="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-android-test-companion-unsigned.apk"
+              signed_app="$ANDROID_SIGNED_DIR/DobbyVPN-test.apk"
+              signed_companion="$ANDROID_SIGNED_DIR/DobbyVPN-test-companion.apk"
+              mkdir -p "$ANDROID_SIGNED_DIR"
+              apksigner_bin="$sdk_root/build-tools/36.0.0/apksigner"
+              keytool_bin="$JAVA_HOME/bin/keytool"
+              test -x "$keytool_bin"
+              run_timed android-temporary-test-signature python3 .github/scripts/android_apk_signing.py sign-test \
+                --unsigned-app "$unsigned_app" --unsigned-companion "$unsigned_companion" \
+                --signed-app "$signed_app" --signed-companion "$signed_companion" \
+                --apksigner "$apksigner_bin" --keytool "$keytool_bin"
+              printf 'ANDROID_SIGNED_APP=%s\nANDROID_SIGNED_COMPANION=%s\n' \
+                "$signed_app" "$signed_companion" >> "$GITHUB_ENV"
               emulator_bin="$sdk_root/emulator/emulator"
               test -x "$emulator_bin"
               android_sdk_home="$RUNNER_TEMP/dobbyvpn-android"
@@ -230,10 +298,9 @@ jobs:
               run_timed android-emulator-root adb root
               run_timed android-emulator-root-ready timeout 120s adb wait-for-device
               run_timed android-emulator-root-verify bash -c 'test "$(adb shell id -u | tr -d "\r")" = 0'
-              signed="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-sign.apk' -type f)"
-              companion="$(find release-packages -maxdepth 1 -name 'DobbyVPN-*-android-test-companion.apk' -type f)"
+              signed="$ANDROID_SIGNED_APP"
+              companion="$ANDROID_SIGNED_COMPANION"
               test -f "$signed"; test -f "$companion"
-              apksigner_bin="$sdk_root/build-tools/36.0.0/apksigner"
               test -x "$apksigner_bin"
               signed_cert_stdout="$RUN_DIR/apksigner-signed.stdout.log"
               signed_cert_stderr="$RUN_DIR/apksigner-signed.stderr.log"
@@ -553,17 +620,17 @@ jobs:
               --raw-log-dir "$RUN_DIR"
           else
             release_args=(
+              test
+              --mode hosted
               --platform "$PLATFORM"
-              --suite mini
-              --cli "$CLI"
+              --installed-descriptor "$INSTALLED_DESCRIPTOR"
               --profile "$GITHUB_WORKSPACE/render/profile.toml"
-              --source-sha "$DOBBYVPN_COMMIT_SHA"
+              --suite mini
               --platform-version "$PLATFORM_VERSION"
               --lane-timeout-seconds "$lane_timeout"
               --output "$RESULT_PATH"
               --raw-log-dir "$RUN_DIR"
               --service-pid "$SERVICE_PID"
-              --service-binary "$SERVICE_BINARY"
             )
             if [ "$PLATFORM" = windows ]; then
               release_args+=(--service-pipe "$SERVICE_PIPE")
@@ -579,7 +646,7 @@ jobs:
               export DOBBY_LOG_PATH="$RUN_DIR/service.log"
               export DOBBY_LOG_ROOT="$RUN_DIR"
             fi
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run "${release_args[@]}"
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 .github/scripts/desktop_platform.py "${release_args[@]}"
           fi
 
       - name: Stop Linux qualification service
@@ -605,6 +672,40 @@ jobs:
           if [ -n "${CONTROL_DIR:-}" ] && [ -d "$CONTROL_DIR" ]; then
             sudo -n rmdir "$CONTROL_DIR"
           fi
+
+      - name: Stop Windows qualification process
+        if: always() && inputs.platform == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${SERVICE_PID:-}" ]; then
+            export QUALIFICATION_SERVICE_PID="$SERVICE_PID"
+            powershell.exe -NoLogo -NoProfile -NonInteractive -Command '
+          $ErrorActionPreference = "Stop"
+          $process = Get-Process -Id ([int]$env:QUALIFICATION_SERVICE_PID) -ErrorAction SilentlyContinue
+          if ($null -eq $process) {
+            Write-Output "Windows qualification process was already stopped: pid=$env:QUALIFICATION_SERVICE_PID"
+            exit 0
+          }
+          $process.Kill()
+          if (-not $process.WaitForExit(30000)) { throw "Windows qualification process did not stop" }
+          Write-Output "Windows qualification process stopped: pid=$env:QUALIFICATION_SERVICE_PID"
+          '
+          fi
+          if [ -f "$RUN_DIR/service.log.stdout" ]; then cat "$RUN_DIR/service.log.stdout" >&2; fi
+          if [ -f "$RUN_DIR/service.log.stderr" ]; then cat "$RUN_DIR/service.log.stderr" >&2; fi
+
+      - name: Remove exact installed desktop package
+        if: always() && inputs.platform != 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -s "$INSTALLED_DESCRIPTOR" ]; then
+            printf 'No installed package descriptor was created; package removal was not needed.\n'
+            exit 0
+          fi
+          python3 .github/scripts/desktop_platform.py uninstall \
+            --installed-descriptor "$INSTALLED_DESCRIPTOR" --run-dir "$RUN_DIR"
 
       - name: Remove Android standalone probe staging
         if: always() && inputs.platform == 'android'
@@ -707,3 +808,4 @@ jobs:
           rm -rf "$RUN_DIR"
           rm -rf "$RESULT_DIR"
           rm -rf "$ARTIFACT_DIR"
+          rm -rf "$ANDROID_SIGNED_DIR"
