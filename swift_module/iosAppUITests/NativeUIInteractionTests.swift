@@ -25,7 +25,16 @@ final class NativeUIInteractionTests: XCTestCase {
 
         configuration.tap()
         configuration.typeText("2")
-        XCTAssertFalse(app.staticTexts["Error"].exists)
+        let errorLabel = app.staticTexts["Error"]
+        let errorCleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: errorLabel
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [errorCleared], timeout: 5),
+            .completed,
+            "Editing the connection configuration should clear the error"
+        )
         app.buttons["Dismiss configuration keyboard"].tap()
 
         app.tabBars.buttons["Settings"].tap()
