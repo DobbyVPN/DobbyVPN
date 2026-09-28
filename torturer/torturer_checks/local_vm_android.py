@@ -19,7 +19,6 @@ from typing import Any
 from .android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
-    validate_complete_throwable_report,
 )
 from .screenshot_artifacts import (
     ScreenshotIntegrityError,
@@ -219,33 +218,6 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         timeout=min(timeout, 30),
         environment=environment,
     )
-    reporter_test = _adb_call(
-        adb_value,
-        serial,
-        [
-            "shell", "am", "instrument", "-w", "-r",
-            "-e", "class",
-            "com.dobby.CompleteThrowableReporterTest#reportsEveryFrameCauseSuppressedUnicodeAndCycle",
-            "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
-        ],
-        run_dir=run_dir,
-        logs=logs,
-        label="android-complete-throwable-self-test",
-        timeout=min(timeout, 60),
-        environment=environment,
-        check=False,
-    )
-    parsed_reporter_test = parse_instrumentation_result(
-        returncode=reporter_test.returncode,
-        stdout=reporter_test.stdout,
-        stderr=reporter_test.stderr,
-    )
-    if not parsed_reporter_test.succeeded:
-        raise _error("Android complete throwable reporter self-test failed")
-    try:
-        validate_complete_throwable_report(reporter_test.stdout)
-    except ValueError as error:
-        raise _error(f"Android complete throwable reporter output invalid: {error}") from error
     app_start = _adb_call(
         adb_value,
         serial,

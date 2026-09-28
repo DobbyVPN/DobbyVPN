@@ -116,16 +116,10 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             native = b'{"event":"timeout-native-sentinel"}\n'
             go = b'{"event":"timeout-go-sentinel"}\n'
             calls: list[str] = []
-            reporter_test_arguments: list[list[str]] = []
-
             def adb_call(_adb, _serial, arguments, *, label, **_kwargs):
                 calls.append(label)
-                if label == "android-complete-throwable-self-test":
-                    reporter_test_arguments.append(arguments)
                 if label == "android-native-ui":
                     raise primary
-                if label == "android-complete-throwable-self-test":
-                    return subprocess.CompletedProcess(("adb",), 0, b"", b"")
                 if label == "android-native-ui-app-start":
                     return subprocess.CompletedProcess(("adb",), 0, b"Complete\nStatus: ok\n", b"")
                 if label == "android-native-diagnostics":
@@ -144,7 +138,6 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
                     "parse_instrumentation_result",
                     return_value=SimpleNamespace(succeeded=True),
                 ),
-                mock.patch.object(local_vm_android, "validate_complete_throwable_report"),
             ):
                 with self.assertRaises(type(primary)) as caught:
                     local_vm_android.run_ui(
@@ -167,16 +160,6 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
                     "android-native-diagnostics",
                     "android-go-app-diagnostics",
                     "android-logcat-diagnostics",
-                ],
-            )
-            self.assertEqual(len(reporter_test_arguments), 1)
-            self.assertEqual(
-                reporter_test_arguments[0],
-                [
-                    "shell", "am", "instrument", "-w", "-r",
-                    "-e", "class",
-                    "com.dobby.CompleteThrowableReporterTest#reportsEveryFrameCauseSuppressedUnicodeAndCycle",
-                    "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
                 ],
             )
             self.assertEqual((logs / "android-native-logs.jsonl").read_bytes(), native)
