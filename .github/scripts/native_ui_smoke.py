@@ -3188,6 +3188,12 @@ class NativeUIController:
     def settings(self) -> dict[str, object]:
         if self.platform == "windows":
             self._windows_click_name("Settings")
+            self._wait(
+                lambda: self._windows_has_name("Version:", prefix=True)
+                and self._windows_has_name("Source commit:", prefix=True),
+                "Windows UI did not show Settings metadata",
+                timeout=min(10.0, self.timeout),
+            )
             version = self._windows_has_name("Version:", prefix=True)
             commit = self._windows_has_name("Source commit:", prefix=True)
             self._windows_click_name("Connection")
