@@ -4,6 +4,11 @@ Product and functional tests live in this repository and are built from the
 same revision. Run relevant checks for each change. Missing tools and
 unavailable platforms are reported as unavailable, never as a pass.
 
+The shared Test workflow checks product behavior, native builds and linking,
+and iOS Simulator interaction. Toolchain checks are prerequisites within those
+jobs. CI and Release both call this workflow; it does not run the Python
+self-tests of the functional test helpers or Android package checker.
+
 The supported platform coverage and canonical functional scenarios are
 defined in the [functional contract](torturer/docs/contract.md). In brief,
 mini is portable; full is currently available only on Windows and macOS with

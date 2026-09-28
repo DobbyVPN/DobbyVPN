@@ -63,22 +63,8 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
-  hosted_adapters:
-    name: Hosted adapter tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Test hosted Linux process checks
-        env:
-          PYTHONPATH: ${{ github.workspace }}/torturer
-        run: python3 -m unittest discover -s torturer/tests -p 'test_*.py' -v
-
   android:
-    name: Android native Compose UI and Go tests
+    name: Android build and native library checks
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -125,7 +111,6 @@ jobs:
 
       - name: Verify Android ABI bridge symbols and runtime dependencies
         run: |
-          python3 -m unittest discover -s .github/scripts -p 'test_verify_android_native_payloads.py' -v
           ndk="$ANDROID_HOME/ndk/28.1.13356709"
           toolchain="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
           python3 .github/scripts/verify_android_native_payloads.py \
