@@ -953,7 +953,9 @@ def run_interactive_task(
             cwd=run_dir,
             logs=logs,
             label=f"{task_label}-task-register",
-            timeout=min(timeout, 30.0),
+            # Start-ScheduledTask can take longer than registration after a
+            # full package build on the dedicated Windows VM.
+            timeout=min(timeout, 60.0),
         )
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and not exit_code.is_file():

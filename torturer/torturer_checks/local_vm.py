@@ -1159,6 +1159,9 @@ def _wait_macos_service(
                 errno.EAGAIN,
                 errno.EWOULDBLOCK,
                 errno.ETIMEDOUT,
+                # The daemon publishes the socket before changing its owner.
+                # The authorized user can briefly see EACCES during startup.
+                errno.EACCES,
             }:
                 raise LocalVMError(
                     "macOS service readiness probe failed: "
