@@ -107,12 +107,15 @@ def go_environment() -> dict[str, str]:
     return desktop_build.child_environment([shutil.which("go") or "go"], environment)
 
 
-def capture(command: list[str], *, cwd: Path = ROOT) -> str:
+def capture(
+    command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None,
+) -> str:
     log("$ " + " ".join(command))
     try:
         result = subprocess.run(
             command,
             cwd=cwd,
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -233,7 +236,7 @@ def ensure_go() -> Path:
     go = shutil.which("go")
     if not go:
         raise CheckError("pinned Go installer completed without putting `go` on PATH")
-    version = capture([go, "env", "GOVERSION"]).strip()
+    version = capture([go, "env", "GOVERSION"], env=go_environment()).strip()
     if version != f"go{GO_VERSION}":
         raise CheckError(f"expected Go go{GO_VERSION}, found {version or '<empty>'}")
     return Path(go).resolve()
@@ -298,13 +301,17 @@ def go_unit(args: argparse.Namespace) -> None:
         profile = output / "coverage.out"
         run(
             [
-                str(go), "test", "-v", "-tags=ci", "-covermode=atomic",
+                str(go), "test", "-p", "1", "-v", "-tags=ci", "-covermode=atomic",
                 "-coverpkg=./...", f"-coverprofile={profile}", "./...",
             ],
             cwd=GO_MODULE,
             env=go_environment(),
         )
-        report = capture([str(go), "tool", "cover", f"-func={profile}"], cwd=GO_MODULE)
+        report = capture(
+            [str(go), "tool", "cover", f"-func={profile}"],
+            cwd=GO_MODULE,
+            env=go_environment(),
+        )
         write_step_summary("Unified Go coverage", report)
     finally:
         if temporary is not None:
@@ -315,7 +322,7 @@ def go_race() -> None:
     require_platform("linux")
     go = prepare_go_source_checks()
     run(
-        [str(go), "test", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
+        [str(go), "test", "-p", "1", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
         cwd=GO_MODULE,
         env=go_environment(),
     )
@@ -334,16 +341,20 @@ def go_tests(args: argparse.Namespace) -> None:
         profile = output / "coverage.out"
         run(
             [
-                str(go), "test", "-v", "-tags=ci", "-covermode=atomic",
+                str(go), "test", "-p", "1", "-v", "-tags=ci", "-covermode=atomic",
                 "-coverpkg=./...", f"-coverprofile={profile}", "./...",
             ],
             cwd=GO_MODULE,
             env=go_environment(),
         )
-        report = capture([str(go), "tool", "cover", f"-func={profile}"], cwd=GO_MODULE)
+        report = capture(
+            [str(go), "tool", "cover", f"-func={profile}"],
+            cwd=GO_MODULE,
+            env=go_environment(),
+        )
         write_step_summary("Unified Go coverage", report)
         run(
-            [str(go), "test", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
+            [str(go), "test", "-p", "1", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
             cwd=GO_MODULE,
             env=go_environment(),
         )
