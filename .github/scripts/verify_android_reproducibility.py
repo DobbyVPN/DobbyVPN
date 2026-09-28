@@ -145,6 +145,8 @@ def verify_publication_provenance(
         raise VerificationError("Android provenance must be a JSON object")
     if document.get("schema") != 1:
         raise VerificationError("Android provenance schema mismatch")
+    if document.get("build_profile", "release") != "release":
+        raise VerificationError("Android publication provenance must use the Release build profile")
     if document.get("source_sha") != source_sha:
         raise VerificationError("Android provenance source mismatch")
     if document.get("version_name") != version_name:
@@ -197,6 +199,13 @@ def create_document(
     source_sha: str,
     version_name: str,
     version_code: int,
+    *,
+    profile: str = "release",
+    source_root: Path | None = None,
+    go_root: Path | None = None,
+    gopath: Path | None = None,
+    gradle_source: str | None = None,
+    go_binary_sha256: str | None = None,
 ) -> dict[str, object]:
     _validate_metadata(source_sha, version_name, version_code)
     _regular_file(first_apk, "first APK")
@@ -210,8 +219,32 @@ def create_document(
     if first_native != second_native:
         raise VerificationError("native APK payloads differ between independent builds")
     size = first_apk.stat().st_size
-    return {
-        "build_environment": dict(BUILD_ENVIRONMENT),
+    build_environment = dict(BUILD_ENVIRONMENT)
+    toolchain = dict(TOOLCHAIN)
+    if profile == "local-complete":
+        required_paths = (source_root, go_root, gopath)
+        if any(path is None or not path.is_absolute() for path in required_paths):
+            raise VerificationError("local-complete profile requires absolute source, Go root, and GOPATH")
+        if gradle_source not in {"wrapper_checksum", "external_verified_archive"}:
+            raise VerificationError("local-complete profile requires a verified Gradle distribution source")
+        if not isinstance(go_binary_sha256, str) or not SHA256.fullmatch(go_binary_sha256):
+            raise VerificationError("local-complete profile requires the Go executable SHA-256")
+        build_environment.update({
+            "go_root": str(go_root),
+            "gopath": str(gopath),
+            "source_root": str(source_root),
+            "gradle_distribution_source": gradle_source,
+        })
+        toolchain.update({
+            "go_source_commit": None,
+            "go_build_origin": "binary_executable",
+            "go_binary_sha256": go_binary_sha256,
+        })
+    elif profile != "release":
+        raise VerificationError(f"unsupported Android reproducibility profile: {profile}")
+
+    document: dict[str, object] = {
+        "build_environment": build_environment,
         "builds": [
             {"bytes": size, "id": "first", "sha256": first_digest},
             {"bytes": size, "id": "second", "sha256": second_digest},
@@ -221,10 +254,13 @@ def create_document(
         "native_libraries": first_native,
         "schema": SCHEMA,
         "source_sha": source_sha,
-        "toolchain": dict(TOOLCHAIN),
+        "toolchain": toolchain,
         "version_code": version_code,
         "version_name": version_name,
     }
+    if profile == "local-complete":
+        document["profile"] = profile
+    return document
 
 
 def verify_document(
@@ -233,6 +269,8 @@ def verify_document(
     source_sha: str,
     version_name: str,
     version_code: int,
+    *,
+    expected_profile: str = "release",
 ) -> None:
     _validate_metadata(source_sha, version_name, version_code)
     _regular_file(apk, "unsigned APK")
@@ -250,6 +288,15 @@ def verify_document(
         "version_code",
         "version_name",
     }
+    observed_profile = document.get("profile", "release")
+    if observed_profile != expected_profile:
+        raise VerificationError(
+            f"Android reproducibility profile mismatch: expected {expected_profile}, got {observed_profile}"
+        )
+    if expected_profile == "local-complete":
+        expected_keys.add("profile")
+    elif expected_profile != "release":
+        raise VerificationError(f"unsupported expected Android reproducibility profile: {expected_profile}")
     if set(document) != expected_keys:
         raise VerificationError("reproducibility evidence fields mismatch")
     if document["schema"] != SCHEMA or document["kind"] != KIND:
@@ -258,10 +305,51 @@ def verify_document(
         raise VerificationError("reproducibility source SHA mismatch")
     if document["version_name"] != version_name or document["version_code"] != version_code:
         raise VerificationError("reproducibility version mismatch")
-    if document["toolchain"] != TOOLCHAIN:
-        raise VerificationError("reproducibility toolchain mismatch")
-    if document["build_environment"] != BUILD_ENVIRONMENT:
-        raise VerificationError("reproducibility build environment mismatch")
+    toolchain = document["toolchain"]
+    build_environment = document["build_environment"]
+    if expected_profile == "release":
+        if toolchain != TOOLCHAIN:
+            raise VerificationError("reproducibility toolchain mismatch")
+        if build_environment != BUILD_ENVIRONMENT:
+            raise VerificationError("reproducibility build environment mismatch")
+    else:
+        if not isinstance(toolchain, dict):
+            raise VerificationError("local-complete toolchain must be an object")
+        expected_local_toolchain = dict(TOOLCHAIN)
+        expected_local_toolchain.update({
+            "go_source_commit": None,
+            "go_build_origin": "binary_executable",
+        })
+        actual_local_toolchain = dict(toolchain)
+        binary_digest = actual_local_toolchain.pop("go_binary_sha256", None)
+        if (
+            actual_local_toolchain != expected_local_toolchain
+            or not isinstance(binary_digest, str)
+            or not SHA256.fullmatch(binary_digest)
+        ):
+            raise VerificationError("local-complete Go/toolchain record is invalid")
+        if not isinstance(build_environment, dict):
+            raise VerificationError("local-complete build environment must be an object")
+        expected_local_environment = dict(BUILD_ENVIRONMENT)
+        expected_local_environment.update({
+            "go_root": "",
+            "gopath": "",
+            "source_root": "",
+            "gradle_distribution_source": "",
+        })
+        if build_environment.keys() != expected_local_environment.keys():
+            raise VerificationError("local-complete build environment fields mismatch")
+        for key in ("go_root", "gopath", "source_root"):
+            value = build_environment.get(key)
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                raise VerificationError(f"local-complete {key} must be an absolute path")
+        if build_environment.get("gradle_distribution_source") not in {
+            "wrapper_checksum", "external_verified_archive",
+        }:
+            raise VerificationError("local-complete Gradle distribution source is invalid")
+        for key in ("go_flags", "gradle_flags", "go_cache_isolation"):
+            if build_environment.get(key) != BUILD_ENVIRONMENT[key]:
+                raise VerificationError(f"local-complete {key} mismatch")
     if document["identical"] is not True:
         raise VerificationError("reproducibility evidence does not assert exact equality")
 
@@ -308,6 +396,12 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--first-apk", type=Path, required=True)
     create.add_argument("--second-apk", type=Path, required=True)
     create.add_argument("--output", type=Path, required=True)
+    create.add_argument("--profile", choices=("release", "local-complete"), default="release")
+    create.add_argument("--source-root", type=Path)
+    create.add_argument("--go-root", type=Path)
+    create.add_argument("--gopath", type=Path)
+    create.add_argument("--gradle-source", choices=("wrapper_checksum", "external_verified_archive"))
+    create.add_argument("--go-binary-sha256")
     verify = commands.add_parser("verify-provenance")
     verify.add_argument("--apk", type=Path, required=True)
     verify.add_argument("--provenance", type=Path, required=True)
@@ -336,6 +430,12 @@ def main(argv: list[str] | None = None) -> int:
                 args.source_sha,
                 args.version_name,
                 args.version_code,
+                profile=args.profile,
+                source_root=args.source_root,
+                go_root=args.go_root,
+                gopath=args.gopath,
+                gradle_source=args.gradle_source,
+                go_binary_sha256=args.go_binary_sha256,
             )
             _write_json(args.output, document)
             print(f"Android unsigned APK reproducibility verified: {document['builds'][0]['sha256']}")

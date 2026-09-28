@@ -317,6 +317,7 @@ def _build_android(
                 sys.executable,
                 str(source_root / ".github" / "scripts" / "android_apk_signing.py"),
                 "create-provenance",
+                "--profile", "local-complete",
                 "--output", str(provenance),
                 "--unsigned-apk", str(output),
                 "--test-companion", str(companion_output),

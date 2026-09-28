@@ -155,6 +155,8 @@ def create_manifest(
     java_version: str = str(JAVA_MAJOR),
     gradle_archive: Path | None = None,
     gradle_root: Path | None = None,
+    go_build_origin: str = "source_tree",
+    go_binary_sha256: str | None = None,
 ) -> dict[str, object]:
     if not SHA40.fullmatch(source_commit) or not SHA40.fullmatch(source_tree):
         raise ValueError("source commit/tree must be full lowercase Git identities")
@@ -165,6 +167,13 @@ def create_manifest(
         raise ValueError(f"observed Java version must have major {JAVA_MAJOR}, got {java_version!r}")
     if (gradle_archive is None) != (gradle_root is None):
         raise ValueError("external Gradle archive and root proof must be supplied together")
+    if go_build_origin not in {"source_tree", "binary"}:
+        raise ValueError("Go build origin must be source_tree or binary")
+    if go_build_origin == "source_tree":
+        if go_binary_sha256 is not None:
+            raise ValueError("a source-built Go toolchain must not be identified as a binary install")
+    elif not isinstance(go_binary_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", go_binary_sha256):
+        raise ValueError("binary Go toolchain requires its lowercase executable SHA-256")
     spec_file, spec_relative = _spec_location(source_root, spec_path)
     spec = _read_spec(spec_file)
     inputs: list[dict[str, object]] = []
@@ -183,6 +192,22 @@ def create_manifest(
         "size_bytes": spec_file.stat().st_size,
     }
     inputs.append(spec_input)
+    toolchain: dict[str, object] = {
+        "java_major": JAVA_MAJOR,
+        "java_version": java_version,
+        "android_build_tools": ANDROID_BUILD_TOOLS,
+        "android_ndk": ANDROID_NDK,
+        "go_version": GO_VERSION,
+    }
+    if go_build_origin == "source_tree":
+        toolchain["go_source_commit"] = GO_SOURCE_COMMIT
+    else:
+        toolchain.update({
+            "go_build_origin": "binary_executable",
+            "go_source_commit": None,
+            "go_binary_sha256": go_binary_sha256,
+        })
+
     return {
         "schema": SCHEMA,
         "kind": "dobbyvpn.android.dependency-provenance",
@@ -196,14 +221,7 @@ def create_manifest(
             "repositories": spec["repositories"],
             "gradle_distribution": gradle_distribution,
         },
-        "toolchain": {
-            "java_major": JAVA_MAJOR,
-            "java_version": java_version,
-            "android_build_tools": ANDROID_BUILD_TOOLS,
-            "android_ndk": ANDROID_NDK,
-            "go_version": GO_VERSION,
-            "go_source_commit": GO_SOURCE_COMMIT,
-        },
+        "toolchain": toolchain,
         "go_modules": [{"module": MOBILE_MODULE, "version": MOBILE_VERSION, "commands": ["go build -buildmode=c-shared"]}],
         "spec": {
             "root": "source",
@@ -225,6 +243,8 @@ def verify_manifest(
     java_version: str = str(JAVA_MAJOR),
     gradle_archive: Path | None = None,
     gradle_root: Path | None = None,
+    go_build_origin: str = "source_tree",
+    go_binary_sha256: str | None = None,
 ) -> None:
     try:
         actual = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -238,6 +258,8 @@ def verify_manifest(
         java_version=java_version,
         gradle_archive=gradle_archive,
         gradle_root=gradle_root,
+        go_build_origin=go_build_origin,
+        go_binary_sha256=go_binary_sha256,
     ):
         raise ValueError("dependency provenance or declared input hashes changed after the build")
 
@@ -257,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--verify-manifest", action="store_true")
     parser.add_argument("--java-version")
+    parser.add_argument("--go-build-origin", choices=("source_tree", "binary"), default="source_tree")
+    parser.add_argument("--go-binary-sha256")
     parser.add_argument("--gradle-archive", type=Path)
     parser.add_argument("--gradle-root", type=Path)
     parser.add_argument("--verify-gradle-distribution", action="store_true")
@@ -314,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
                 java_version=java_version,
                 gradle_archive=args.gradle_archive,
                 gradle_root=args.gradle_root,
+                go_build_origin=args.go_build_origin,
+                go_binary_sha256=args.go_binary_sha256,
             )
             print("android dependency provenance verification passed")
             return 0
@@ -329,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
                 java_version=java_version,
                 gradle_archive=args.gradle_archive,
                 gradle_root=args.gradle_root,
+                go_build_origin=args.go_build_origin,
+                go_binary_sha256=args.go_binary_sha256,
             ),
         )
     except (OSError, ValueError) as error:

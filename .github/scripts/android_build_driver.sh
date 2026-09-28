@@ -19,6 +19,9 @@ trusted_archive_source=0
 gradle_archive=''
 gradle_root=''
 go_binary=''
+go_build_origin=''
+go_binary_sha256=''
+gradle_distribution_source='wrapper_checksum'
 
 while (($#)); do
   case "$1" in
@@ -154,6 +157,7 @@ if [[ -n "$gradle_archive" || -n "$gradle_root" ]]; then
   python3 "$dependency_helper" --spec "$dependency_spec" \
     --verify-gradle-distribution --gradle-archive "$gradle_archive" --gradle-root "$gradle_root"
   gradle_bin=${GRADLE_BIN:-"$gradle_root/bin/gradle"}
+  gradle_distribution_source='external_verified_archive'
 fi
 gradle_proof_args=()
 if [[ -n "$gradle_archive" ]]; then
@@ -186,6 +190,31 @@ selected_go_path=$("$go_bin" env GOPATH | tee_stderr)
   echo 'Go environment does not match the selected tool inputs' >&2
   exit 2
 }
+if [[ "$trusted_archive_source" == 1 ]]; then
+  # Local complete uses the version-pinned Go executable already installed by
+  # source_checks. Record the selected binary's digest and do not claim the Go
+  # source commit used by the hosted Release toolchain.
+  go_build_origin='binary'
+  go_binary_sha256=$(python3 - "$go_bin" <<'PY'
+import hashlib
+import sys
+
+with open(sys.argv[1], "rb") as stream:
+    print(hashlib.file_digest(stream, "sha256").hexdigest())
+PY
+)
+elif [[ "$local_build" == 1 ]]; then
+  # Cached local iteration does not emit dependency or Release provenance.
+  go_build_origin='binary'
+else
+  pinned_go_commit=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-go-source-commit | tee_stderr)
+  observed_go_commit=$("$git_bin" -C "$go_root" rev-parse --verify HEAD^{commit} | tee_stderr)
+  [[ "$observed_go_commit" == "$pinned_go_commit" ]] || {
+    echo 'Go source checkout does not match the approved source commit' >&2
+    exit 2
+  }
+  go_build_origin='source_tree'
+fi
 
 mobile_pin=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-mobile-version | tee_stderr)
 mobile_module=${mobile_pin%@*}
@@ -231,9 +260,14 @@ if [[ -n "$test_companion_output" ]]; then
 fi
 
 write_dependency_manifest() {
+  local go_origin_args=(--go-build-origin "$go_build_origin")
+  if [[ -n "$go_binary_sha256" ]]; then
+    go_origin_args+=(--go-binary-sha256 "$go_binary_sha256")
+  fi
   python3 "$dependency_helper" --source-root "$source_root" --source-commit "$source_commit" \
     --source-tree "$source_tree" --spec "$dependency_spec" \
-    --java-version "$java_version" "${gradle_proof_args[@]}" --output "$dependency_manifest"
+    --java-version "$java_version" "${gradle_proof_args[@]}" "${go_origin_args[@]}" \
+    --output "$dependency_manifest"
 }
 java_bin=${JAVA_BIN:-"$(command -v java || true)"}
 [[ -n "$java_bin" && -x "$java_bin" ]] || { echo 'Java executable is required' >&2; exit 2; }
@@ -324,8 +358,20 @@ verify_source_integrity_after_build
 write_dependency_manifest
 
 [[ -f "$reproducibility_verifier" ]] || { echo 'reproducibility verifier is missing' >&2; exit 2; }
+reproducibility_profile_args=()
+if [[ "$trusted_archive_source" == 1 ]]; then
+  reproducibility_profile_args=(
+    --profile local-complete
+    --source-root "$source_root"
+    --go-root "$go_root"
+    --gopath "$selected_go_path"
+    --gradle-source "$gradle_distribution_source"
+    --go-binary-sha256 "$go_binary_sha256"
+  )
+fi
 python3 "$reproducibility_verifier" create --first-apk "$first_output" --second-apk "$output" \
-  --output "$reproducibility" --source-sha "$source_commit" --version-name "$version_name" --version-code "$version_code"
+  --output "$reproducibility" --source-sha "$source_commit" --version-name "$version_name" --version-code "$version_code" \
+  "${reproducibility_profile_args[@]}"
 [[ -f "$source_verifier" ]] || { echo 'APK source verifier is missing' >&2; exit 2; }
 apkanalyzer_bin=${APKANALYZER:-"$(command -v apkanalyzer || true)"}
 if [[ -z "$apkanalyzer_bin" ]]; then

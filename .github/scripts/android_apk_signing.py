@@ -321,6 +321,7 @@ def create_provenance(
     source_repository: str,
     version_name: str,
     version_code: int,
+    profile: str = "release",
 ) -> None:
     """Validate Android Release build outputs and write unsigned provenance."""
     if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
@@ -329,9 +330,22 @@ def create_provenance(
         raise SigningError("Android source tree must be a lowercase 40-character Git tree")
     driver = _load_json(build_driver_manifest, "Android build-driver manifest")
     reproduction = _load_json(reproducibility, "Android reproducibility record")
-    verify_document(reproduction, unsigned_apk, source_sha, version_name, version_code)
+    verify_document(
+        reproduction,
+        unsigned_apk,
+        source_sha,
+        version_name,
+        version_code,
+        expected_profile=profile,
+    )
     if not test_companion.is_file():
         raise SigningError("unsigned Android test companion is missing")
+    expected_source_identity_mode = {
+        "release": "git_checkout",
+        "local-complete": "harness_verified_archive",
+    }.get(profile)
+    if expected_source_identity_mode is None:
+        raise SigningError(f"unsupported Android provenance profile: {profile}")
 
     expected_driver_fields = {
         "schema": 1,
@@ -346,8 +360,8 @@ def create_provenance(
     }
     if any(driver.get(key) != value for key, value in expected_driver_fields.items()):
         raise SigningError("Android build-driver manifest does not match the selected Release")
-    if driver.get("source_identity_mode") not in {"git_checkout", "harness_verified_archive"}:
-        raise SigningError("Android build-driver source identity was not verified")
+    if driver.get("source_identity_mode") != expected_source_identity_mode:
+        raise SigningError("Android build-driver source identity mode does not match the build profile")
     _verify_driver_artifact(driver.get("artifact"), unsigned_apk, label="application")
     driver_companion = driver.get("test_companion")
     _verify_driver_artifact(driver_companion, test_companion, label="test companion")
@@ -378,6 +392,8 @@ def create_provenance(
             _artifact_record("test_companion_unsigned", test_companion),
         ],
     }
+    if profile != "release":
+        document["build_profile"] = profile
     _write_json_atomic(output, document)
 
 
@@ -409,6 +425,7 @@ def finalize_provenance(
         raise SigningError("Android build provenance must be a JSON object")
     if (
         document.get("schema") != 1
+        or document.get("build_profile", "release") != "release"
         or document.get("source_sha") != source_sha
         or document.get("version_name") != version_name
         or document.get("version_code") != version_code
@@ -556,6 +573,7 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--source-repository", required=True)
     create.add_argument("--version-name", required=True)
     create.add_argument("--version-code", type=int, required=True)
+    create.add_argument("--profile", choices=("release", "local-complete"), default="release")
     return parser
 
 
@@ -609,6 +627,7 @@ def main(argv: list[str] | None = None) -> int:
                 source_repository=args.source_repository,
                 version_name=args.version_name,
                 version_code=args.version_code,
+                profile=args.profile,
             )
             print(f"Unsigned Android build provenance created: {args.output}")
         return 0
