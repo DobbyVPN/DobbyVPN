@@ -13,7 +13,7 @@ from torturer_contract.functional.coverage import (
     qualification_exit_code,
 )
 from torturer_contract.functional.results import ConnectionIdentity
-from torturer_contract.functional.scenarios import suite_set
+from torturer_contract.functional.scenarios import select_scenarios
 
 
 def _matrix_results(connections, scenarios):
@@ -34,7 +34,7 @@ class FunctionalCoverageTests(unittest.TestCase):
             ConnectionIdentity(index=0, protocol="OUTLINE"),
             ConnectionIdentity(index=1, protocol="XRAY"),
         )
-        self.scenarios = suite_set("mini")
+        self.scenarios = select_scenarios(suite="mini")
         self.results = _matrix_results(self.connections, self.scenarios)
 
     def coverage(self, results=None, *, scenarios=None, explicit=False, connections=None):

@@ -1,0 +1,127 @@
+//go:build darwin && !(android || ios)
+
+package platform_engine
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os/exec"
+	"time"
+
+	"github.com/xjasonlyu/tun2socks/v2/engine"
+
+	"core/log"
+)
+
+var LastIface string
+
+const (
+	macOSTunReleaseTimeout = 5 * time.Second
+	macOSTunReleasePoll    = 50 * time.Millisecond
+)
+
+func startPlatformEngine(cfg interface{}) error {
+	c := cfg.(EngineConfig)
+	proxyAddr := c.ProxyAddr
+
+	deviceName := "utun233"
+	LastIface = deviceName
+
+	log.Debugf(Category, "[Engine][Darwin] proxy_ready=true device=%s", deviceName)
+
+	key := &engine.Key{
+		Proxy:    fmt.Sprintf("socks5://%s", proxyAddr),
+		Device:   deviceName,
+		LogLevel: "info",
+		MTU:      1200,
+	}
+
+	engine.Insert(key)
+	engine.Start()
+
+	time.Sleep(500 * time.Millisecond)
+
+	ifaces, _ := net.Interfaces()
+	found := false
+	for _, ifc := range ifaces {
+		if ifc.Name == deviceName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		engine.Stop()
+		return fmt.Errorf("utun interface not found: %s", deviceName)
+	}
+
+	// Setting IP
+	cmd := exec.CommandContext(
+		context.Background(),
+		"ifconfig",
+		deviceName,
+		"inet",
+		"198.18.0.1",
+		"198.18.0.2",
+		"netmask",
+		"255.255.0.0",
+		"up",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		engine.Stop()
+		return fmt.Errorf("ifconfig failed: %w (%s)", err, out)
+	}
+
+	cmd = exec.CommandContext(
+		context.Background(),
+		"ifconfig",
+		deviceName,
+		"inet6",
+		"fd00:dbb::2",
+		"fd00:dbb::1",
+		"prefixlen",
+		"128",
+		"up",
+	)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		engine.Stop()
+		return fmt.Errorf("ifconfig inet6 failed: %w (%s)", err, out)
+	}
+
+	return nil
+}
+
+func stopPlatformEngine(stopDevice func()) error {
+	deviceName := LastIface
+	stopDevice()
+	if deviceName == "" {
+		return nil
+	}
+
+	deadline := time.Now().Add(macOSTunReleaseTimeout)
+	for {
+		interfaces, err := net.Interfaces()
+		if err != nil {
+			return fmt.Errorf("list interfaces while releasing macOS TUN %s: %w", deviceName, err)
+		}
+		found := false
+		for _, iface := range interfaces {
+			if iface.Name == deviceName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			LastIface = ""
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("macOS TUN %s remained after tun2socks stopped", deviceName)
+		}
+		time.Sleep(macOSTunReleasePoll)
+	}
+}
+
+func platformInterfaceName() string { return LastIface }

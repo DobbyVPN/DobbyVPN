@@ -79,8 +79,8 @@ jobs:
           set -euo pipefail
           download_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle.XXXXXX")"
           archive="$download_root/gradle-8.13-bin.zip"
-          gradle_url="$(python3 .github/scripts/android_dependency_provenance.py \
-            --spec .github/android/dependency-spec.json --print-gradle-url)"
+          gradle_url="$(python3 .github/scripts/android/android_dependency_provenance.py \
+            --spec .github/scripts/android/dependency-spec.json --print-gradle-url)"
           curl --fail --show-error --location --output "$archive" "$gradle_url"
           extraction_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle-root.XXXXXX")"
           unzip "$archive" -d "$extraction_root"
@@ -98,13 +98,13 @@ jobs:
           set -euo pipefail
           GO_VERSION="$ANDROID_GO_VERSION"
           [[ "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
-          SPEC_GO_VERSION="$(python3 .github/scripts/android_dependency_provenance.py \
-            --spec .github/android/dependency-spec.json \
+          SPEC_GO_VERSION="$(python3 .github/scripts/android/android_dependency_provenance.py \
+            --spec .github/scripts/android/dependency-spec.json \
             --print-go-version)"
           test "$GO_VERSION" = "$SPEC_GO_VERSION"
           GO_SRC="$FDROID_COMPAT_GO_ROOT"
-          GO_COMMIT="$(python3 .github/scripts/android_dependency_provenance.py \
-            --spec .github/android/dependency-spec.json \
+          GO_COMMIT="$(python3 .github/scripts/android/android_dependency_provenance.py \
+            --spec .github/scripts/android/dependency-spec.json \
             --print-go-source-commit)"
           [[ "$GO_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 
@@ -160,14 +160,14 @@ jobs:
         run: |
           set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          "$GITHUB_WORKSPACE/.github/scripts/android_build_driver.sh" \
+          "$GITHUB_WORKSPACE/.github/scripts/android/android_build_driver.sh" \
             --source-root "$FDROID_COMPAT_SOURCE_ROOT" \
             --source-sha "$APP_SOURCE_SHA" \
-            --output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-unsign.apk" \
-            --test-companion-output "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
+            --output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-unsign.apk" \
+            --test-companion-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
             --manifest "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
             --first-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-repro-first.apk" \
-            --reproducibility "$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v${version}-android-reproducibility.json" \
+            --reproducibility "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-reproducibility.json" \
             --gradle-archive "$GRADLE_ARCHIVE" \
             --gradle-root "$GRADLE_ROOT" \
             --go-binary "$GOROOT/bin/go" \
@@ -182,14 +182,14 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
-          unsigned="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-unsign.apk"
-          companion="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-test-companion-unsigned.apk"
-          reproducibility="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
+          unsigned="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-unsign.apk"
+          companion="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-test-companion-unsigned.apk"
+          reproducibility="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
           driver_manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
-          manifest="$FDROID_COMPAT_SOURCE_ROOT/fastlane/DobbyVPN-v$VERSION_NAME-android-provenance.json"
+          manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-provenance.json"
           test -f "$unsigned"; test -f "$companion"
           source_tree="$(git -C "$FDROID_COMPAT_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
-          python3 .github/scripts/android_apk_signing.py create-provenance \
+          python3 .github/scripts/android/android_apk_signing.py create-provenance \
             --output "$manifest" \
             --unsigned-apk "$unsigned" \
             --test-companion "$companion" \
@@ -205,7 +205,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-unsign.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
           if-no-files-found: error
           retention-days: 90
 
@@ -213,7 +213,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-test-companion-unsigned.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
           if-no-files-found: error
           retention-days: 90
 
@@ -221,6 +221,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-provenance
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/fastlane/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
+          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
           if-no-files-found: error
           retention-days: 90

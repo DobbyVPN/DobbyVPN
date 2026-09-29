@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import math
 from pathlib import Path
 import re
 import shlex
@@ -32,7 +31,7 @@ from torturer_checks.diagnostics import (
 from torturer_checks.screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
-    png_metadata,
+    file_metadata,
 )
 from torturer_contract.functional.android_observation import (
     AndroidObservationError,
@@ -44,7 +43,7 @@ from torturer_contract.functional.results import ConnectionIdentity
 from torturer_contract.functional.scenarios import (
     ScenarioDefinition,
     ScenarioStep,
-    get_scenario,
+    select_scenarios,
 )
 
 from .cli import (
@@ -82,10 +81,8 @@ _ALLOWED_OPERATIONS = {
     "disconnect",
     "reconnect",
     "inspect_cleanup",
-    "network_transition",
 }
 _EXTERNAL_OPERATIONS = frozenset({
-    "network_transition",
     "observe_routing_identity",
 })
 _CORE_CAPABILITIES = frozenset(
@@ -333,8 +330,6 @@ class AndroidHostedAdapter:
         self._active_controls: tuple[tuple[str, str, float], ...] = ()
         self._connections: tuple[ConnectionIdentity, ...] = ()
         self._selected_connection: ConnectionIdentity | None = None
-        self._validated_physical_interface: str | None = None
-        self._validated_physical_transport: str | None = None
         self._last_observation: AndroidProfileObservation | None = None
         self._observed_baseline_ip: str | None = None
         self._observed_tunneled_ips: set[str] = set()
@@ -379,7 +374,9 @@ class AndroidHostedAdapter:
             # lane using the binding mode below.
             self._connections = (ConnectionIdentity(index=0, protocol="AUTO"),)
             return self._connections
-        self.execute_scenario(get_scenario("functional.configure"))
+        self.execute_scenario(
+            select_scenarios(scenario_ids=["functional.configure"])[0]
+        )
         observation = self._last_observation
         if observation is None:
             raise HostedAdapterError("CONNECTION_INVENTORY_INVALID")
@@ -409,12 +406,7 @@ class AndroidHostedAdapter:
 
     @property
     def capabilities(self) -> frozenset[Capability]:
-        return _CORE_CAPABILITIES | frozenset(
-            {
-                Capability.PROCESS_LOSS,
-                Capability.NETWORK_TRANSITION,
-            }
-        )
+        return _CORE_CAPABILITIES | frozenset({Capability.PROCESS_LOSS})
 
     @property
     def capability_unavailable_reasons(self) -> dict[Capability, str]:
@@ -429,8 +421,6 @@ class AndroidHostedAdapter:
         the command vector and in-memory result metadata contain no profile bytes.
         """
         self._progress_scenario_id = scenario.id
-        self._validated_physical_interface = None
-        self._validated_physical_transport = None
         started = time.monotonic()
         deadline, cleanup_deadline = _scenario_deadlines(
             started, float(scenario.max_duration_seconds)
@@ -673,15 +663,10 @@ class AndroidHostedAdapter:
                 f"{progress_name}.tmp",
             )
         )
-        for control_file, _operation, _timeout in self._active_controls:
+        for control_file, _, _ in self._active_controls:
             device_files.extend(
                 (control_file, f"{control_file}.ready", f"{control_file}.tmp")
             )
-            if _operation == "network_transition":
-                routing_file = f"{control_file}.routing"
-                device_files.extend(
-                    (routing_file, f"{routing_file}.ready", f"{routing_file}.tmp")
-                )
         try:
             profile_bytes = self.profile.read_bytes()
         except OSError as error:
@@ -1438,7 +1423,7 @@ class AndroidHostedAdapter:
         expected_width: int,
         expected_height: int,
     ) -> Path:
-        """Pull one complete captured frame and validate its full PNG."""
+        """Pull one frame and verify its exact producer-reported bytes."""
 
         raw_directory = getattr(self.runner, "raw_directory", None)
         if not isinstance(raw_directory, Path):
@@ -1477,15 +1462,13 @@ class AndroidHostedAdapter:
         if result.returncode != 0:
             raise AndroidScreenshotCollectionError(
                 f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: pull returned {result.returncode} for {label}"
-            )
+        )
         try:
-            metadata = png_metadata(destination)
+            metadata = file_metadata(destination)
             assert_marker_matches(
                 metadata,
                 bytes_count=expected_bytes,
                 sha256_value=expected_sha256,
-                width=expected_width,
-                height=expected_height,
             )
         except (ScreenshotIntegrityError, OSError) as error:
             try:
@@ -1546,28 +1529,11 @@ class AndroidHostedAdapter:
         ready: Mapping[str, object] | None = None,
         abort: Callable[[], None] | None = None,
     ) -> None:
-        if operation == "observe_routing_identity":
-            self._routing_proof(
-                control_file, deadline, ready=ready, abort=abort
-            )
-            return
-        if ready is None:
-            self._wait_device_file(
-                control_file + ".ready", deadline, abort=abort
-            )
-        self._perform_external_control(operation, deadline)
-        payload = json.dumps(
-            {"operation": operation},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("ascii") + b"\n"
-        self._stage_control_payload(control_file, payload, deadline)
-        if operation == "network_transition":
-            # The app's legacy transition acknowledgement is followed by a
-            # separate ready file so it cannot be confused with routing proof.
-            self._routing_proof(
-                f"{control_file}.routing", deadline, abort=abort
-            )
+        if operation != "observe_routing_identity":
+            raise ScenarioExecutionError("ANDROID_OPERATION_UNSUPPORTED")
+        self._routing_proof(
+            control_file, deadline, ready=ready, abort=abort
+        )
 
     def _stage_control_payload(
         self, control_file: str, payload: bytes, deadline: float
@@ -1614,7 +1580,7 @@ class AndroidHostedAdapter:
                     control_file, "ready", deadline, abort=abort
                 )
             )
-            physical, transport, vpn, ipv4s, port = self._routing_ready_values(ready_value)
+            physical, vpn, ipv4s, port = self._routing_ready_values(ready_value)
             self._emit_progress(
                 "native-state",
                 kind="routing-proof",
@@ -1774,8 +1740,6 @@ class AndroidHostedAdapter:
             record(error)
         if primary is not None:
             raise primary
-        self._validated_physical_interface = physical
-        self._validated_physical_transport = transport
 
     def _routing_ready(
         self,
@@ -1830,22 +1794,14 @@ class AndroidHostedAdapter:
     @staticmethod
     def _routing_ready_values(
         ready: Mapping[str, object],
-    ) -> tuple[str, str | None, str, tuple[str, ...], int]:
+    ) -> tuple[str, str, tuple[str, ...], int]:
         physical = ready.get("physical_interface")
-        transport = ready.get("physical_transport")
         vpn = ready.get("vpn_interface")
         raw_ipv4s = ready.get("ipv4s")
         raw_port = ready.get("port")
         if (
             not isinstance(physical, str)
             or _ANDROID_INTERFACE.fullmatch(physical) is None
-            or (
-                transport is not None
-                and (
-                    not isinstance(transport, str)
-                    or transport not in {"wifi", "ethernet"}
-                )
-            )
             or not isinstance(vpn, str)
             or _ANDROID_INTERFACE.fullmatch(vpn) is None
             or physical == vpn
@@ -1876,7 +1832,7 @@ class AndroidHostedAdapter:
                     "ANDROID_ROUTING_READY_INVALID", ready
                 )
             addresses.append(str(address))
-        return physical, transport, vpn, tuple(addresses), raw_port
+        return physical, vpn, tuple(addresses), raw_port
 
     def _routing_counters(self, interface: str, deadline: float) -> tuple[int, int]:
         if _ANDROID_INTERFACE.fullmatch(interface) is None:
@@ -2139,18 +2095,6 @@ class AndroidHostedAdapter:
             time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         raise ScenarioExecutionError("ANDROID_CONTROL_TIMEOUT")
 
-    def _perform_external_control(self, operation: str, deadline: float) -> None:
-        if operation == "network_transition":
-            interface = self._validated_physical_interface
-            transport = self._validated_physical_transport
-            if interface is None or transport is None:
-                raise ScenarioExecutionError(
-                    "ANDROID_UPLINK_IDENTITY_UNAVAILABLE"
-                )
-            self._interrupt_uplink(interface, transport, deadline)
-            return
-        raise ScenarioExecutionError("ANDROID_OPERATION_UNSUPPORTED")
-
     def _stop_product_for_loss(self, deadline: float) -> None:
         before = self._device_text(
             ("shell", "pidof", _PACKAGE_NAME), deadline,
@@ -2191,364 +2135,6 @@ class AndroidHostedAdapter:
                 absent_probes = 0
             time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
         raise ScenarioExecutionError("ANDROID_PROCESS_LOSS_NOT_ABSENT")
-
-    def _interrupt_uplink(self, interface: str, transport: str, deadline: float) -> None:
-        """Toggle the proven Android uplink using its matching control.
-
-        ADB remains on an independent Android control transport. The guest-side
-        transaction uses Android's Wi-Fi service or link state according to the
-        proven Android network transport, then restores it from a trap.
-        """
-
-        remaining = _remaining(deadline, "ANDROID_UPLINK_TIMEOUT")
-        if _ANDROID_INTERFACE.fullmatch(interface) is None:
-            raise ScenarioExecutionError("ANDROID_UPLINK_IDENTITY_UNAVAILABLE")
-        if transport not in {"wifi", "ethernet"}:
-            raise ScenarioExecutionError("ANDROID_UPLINK_TRANSITION_UNSUPPORTED")
-        transition_kind = transport
-        restore_reserve = min(20.0, max(2.0, remaining / 2.0))
-        down_window = remaining - restore_reserve
-        if down_window <= 0:
-            raise ScenarioExecutionError("ANDROID_UPLINK_TIMEOUT")
-        down_budget_seconds = max(1, math.ceil(down_window))
-        overall_budget_seconds = max(down_budget_seconds + 1, math.ceil(remaining))
-        script = r'''
-set +e
-script_start=$(date +%s)
-down_deadline=$((script_start + $1))
-overall_deadline=$((script_start + $2))
-transition_kind=$3
-interface=$4
-restore_needed=0
-restore_status=0
-restore_detail=
-capture_root="/data/local/tmp/dobbyvpn-uplink.$$"
-capture_sequence=0
-capture_file=
-capture_rc=0
-
-# Keep the complete combined stream of every probe in a private temporary
-# file, then copy that file to the adb stream before parsing it.  Command
-# substitution strips trailing newlines and the old implementation also
-# reduced Wi-Fi status to its first line before forwarding a failure.  The
-# parser may still read a first line or a state flag, but diagnostics always
-# receive the exact command stream.
-if ! (umask 077 && mkdir "$capture_root"); then
-    printf '%s\n' "DobbyVPN uplink capture setup failed: $capture_root" >&2
-    exit 18
-fi
-
-capture_command() {
-    capture_label=$1
-    shift
-    capture_sequence=$((capture_sequence + 1))
-    capture_file="$capture_root/$capture_sequence-$capture_label"
-    "$@" >"$capture_file" 2>&1
-    capture_rc=$?
-    printf '%s\n' "DobbyVPN uplink capture=$capture_label rc=$capture_rc"
-    cat "$capture_file"
-    printf '%s\n' "DobbyVPN uplink capture-end=$capture_label"
-    return 0
-}
-
-cleanup_captures() {
-    cleanup_output=$(rm -rf "$capture_root" 2>&1)
-    cleanup_rc=$?
-    if [ "$cleanup_rc" -ne 0 ]; then
-        printf '%s\n' "DobbyVPN uplink secondary code=ANDROID_UPLINK_CAPTURE_CLEANUP_FAILED rc=$cleanup_rc output=$cleanup_output" >&2
-    fi
-    return "$cleanup_rc"
-}
-
-link_is_up() {
-    flags=$(printf '%s\n' "$1" | sed -n 's/^[0-9][0-9]*:[^:]*: <\([^>]*\)>.*/\1/p')
-    case ",$flags," in
-        *,UP,*) return 0 ;;
-    esac
-    return 1
-}
-
-link_is_up_file() {
-    flags=$(sed -n 's/^[0-9][0-9]*:[^:]*: <\([^>]*\)>.*/\1/p' "$1")
-    case ",$flags," in
-        *,UP,*) return 0 ;;
-    esac
-    return 1
-}
-
-route_is_usable() {
-    selected=0
-    usable=0
-    while IFS= read -r line; do
-        case "$line" in
-            default*)
-                case " $line " in
-                    *" dev $interface "*)
-                        selected=1
-                        case " $line " in
-                            *" linkdown "*) ;;
-                            *) usable=1 ;;
-                        esac
-                        ;;
-                esac
-                ;;
-        esac
-    done <<EOF
-$1
-EOF
-[ "$selected" -eq 1 ] && [ "$usable" -eq 1 ]
-}
-
-route_is_usable_file() {
-    selected=0
-    usable=0
-    while IFS= read -r line; do
-        case "$line" in
-            default*)
-                case " $line " in
-                    *" dev $interface "*)
-                        selected=1
-                        case " $line " in
-                            *" linkdown "*) ;;
-                            *) usable=1 ;;
-                        esac
-                        ;;
-                esac
-                ;;
-        esac
-    done <"$1"
-    [ "$selected" -eq 1 ] && [ "$usable" -eq 1 ]
-}
-
-wifi_state_is() {
-    capture_command wifi-status cmd wifi status
-    wifi_status_file=$capture_file
-    wifi_state_rc=$capture_rc
-    wifi_state_output=$(sed -n '1p' "$wifi_status_file")
-    [ "$wifi_state_rc" -eq 0 ] && [ "$wifi_state_output" = "Wifi is $1" ]
-}
-
-network_state_is() {
-    state=$1
-    link_file=$2
-    if [ "$state" = present ]; then
-        link_is_up_file "$link_file" || return 1
-        [ "$transition_kind" != wifi ] || wifi_state_is enabled
-    elif [ "$transition_kind" = wifi ]; then
-        wifi_state_is disabled
-    else
-        ! link_is_up_file "$link_file"
-    fi
-}
-
-restore_uplink() {
-    [ "$restore_needed" -eq 1 ] || return 0
-    if [ "$transition_kind" = wifi ]; then
-        restore_command="svc wifi enable"
-        capture_command restore svc wifi enable
-    else
-        restore_command="ip link set up"
-        capture_command restore ip link set dev "$interface" up
-    fi
-    restore_file=$capture_file
-    restore_rc=$capture_rc
-    restore_output=$(cat "$restore_file")
-    if [ "$restore_rc" -ne 0 ]; then
-        restore_status=1
-        restore_detail="$restore_command rc=$restore_rc output=$restore_output"
-        return 0
-    fi
-    restore_ready=0
-    while [ "$(date +%s)" -lt "$overall_deadline" ]; do
-        capture_command restore-link ip -o link show dev "$interface"
-        restore_link_file=$capture_file
-        restore_link_rc=$capture_rc
-        restore_link=$(cat "$restore_link_file")
-        capture_command restore-routes ip -4 route show table all default
-        restore_routes_file=$capture_file
-        restore_routes_rc=$capture_rc
-        restore_routes=$(cat "$restore_routes_file")
-        if [ "$restore_link_rc" -ne 0 ] || [ "$restore_routes_rc" -ne 0 ]; then
-            restore_status=1
-            restore_detail="restore link rc=$restore_link_rc output=$restore_link; restore routes rc=$restore_routes_rc output=$restore_routes"
-            return 0
-        fi
-        if network_state_is present "$restore_link_file" && route_is_usable_file "$restore_routes_file"; then
-            restore_ready=$((restore_ready + 1))
-        else
-            restore_ready=0
-        fi
-        if [ "$restore_ready" -ge 2 ]; then
-            break
-        fi
-        sleep 0.1
-    done
-    if [ "$restore_ready" -lt 2 ]; then
-        restore_status=1
-        restore_detail="restore network=$transition_kind; wifi=$wifi_state_output; link=$restore_link; routes=$restore_routes"
-        return 0
-    fi
-    restore_needed=0
-    printf '%s\n' "DobbyVPN uplink interface=$interface state=restored"
-}
-
-finish() {
-    exit_status=$1
-    trap - 0 1 2 3 15
-    restore_uplink
-    if [ "$restore_status" -ne 0 ]; then
-        printf '%s\n' "DobbyVPN uplink secondary code=ANDROID_UPLINK_RESTORE_FAILED detail=$restore_detail" >&2
-        [ "$exit_status" -eq 0 ] && exit_status=1
-    fi
-    cleanup_captures
-    cleanup_status=$?
-    if [ "$cleanup_status" -ne 0 ] && [ "$exit_status" -eq 0 ]; then
-        exit_status=1
-    fi
-    exit "$exit_status"
-}
-on_exit() {
-    finish "$1"
-}
-on_signal() {
-    finish "$1"
-}
-trap 'on_exit "$?"' 0
-trap 'on_signal 129' 1
-trap 'on_signal 130' 2
-trap 'on_signal 131' 3
-trap 'on_signal 143' 15
-
-capture_command id-u id -u
-uid_file=$capture_file
-uid_rc=$capture_rc
-uid_output=$(cat "$uid_file")
-if [ "$uid_rc" -ne 0 ] || [ "$uid_output" != "0" ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_ROOT_REQUIRED detail=id -u rc=$uid_rc output=$uid_output" >&2
-    exit 10
-fi
-
-capture_command route ip -4 route show table all default
-route_file=$capture_file
-route_rc=$capture_rc
-route_output=$(cat "$route_file")
-if [ "$route_rc" -ne 0 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_ROUTE_PROBE_FAILED detail=ip route rc=$route_rc output=$route_output" >&2
-    exit 11
-fi
-capture_command link-before ip -o link show dev "$interface"
-before_link_file=$capture_file
-before_link_rc=$capture_rc
-before_link=$(cat "$before_link_file")
-if [ "$before_link_rc" -ne 0 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_LINK_PROBE_FAILED detail=link rc=$before_link_rc output=$before_link" >&2
-    exit 13
-fi
-if ! network_state_is present "$before_link_file" || ! route_is_usable_file "$route_file"; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PRECONDITION detail=link=$before_link; routes=$route_output" >&2
-    exit 14
-fi
-printf '%s\n' "DobbyVPN uplink interface=$interface state=present"
-
-# Mark the proven uplink for restoration before changing it, including partial failure.
-restore_needed=1
-if [ "$transition_kind" = wifi ]; then
-    down_command="svc wifi disable"
-    capture_command down svc wifi disable
-else
-    down_command="ip link set down"
-    capture_command down ip link set dev "$interface" down
-fi
-down_file=$capture_file
-down_rc=$capture_rc
-down_output=$(cat "$down_file")
-if [ "$down_rc" -ne 0 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_DOWN_FAILED detail=$down_command rc=$down_rc output=$down_output" >&2
-    exit 15
-fi
-
-absence=0
-while [ "$(date +%s)" -lt "$down_deadline" ]; do
-    capture_command link-down ip -o link show dev "$interface"
-    down_link_file=$capture_file
-    down_link_rc=$capture_rc
-    down_link=$(cat "$down_link_file")
-    capture_command route-down ip -4 route show table all default
-    down_routes_file=$capture_file
-    down_routes_rc=$capture_rc
-    down_routes=$(cat "$down_routes_file")
-    if [ "$down_link_rc" -ne 0 ] || [ "$down_routes_rc" -ne 0 ]; then
-        printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_PROBE_FAILED detail=link rc=$down_link_rc output=$down_link; routes rc=$down_routes_rc output=$down_routes" >&2
-        exit 16
-    fi
-    if network_state_is absent "$down_link_file" && ! route_is_usable_file "$down_routes_file"; then
-        absence=$((absence + 1))
-    else
-        absence=0
-    fi
-    if [ "$absence" -ge 2 ]; then
-        break
-    fi
-    sleep 0.1
-done
-if [ "$absence" -lt 2 ]; then
-    printf '%s\n' "DobbyVPN uplink primary code=ANDROID_UPLINK_LOSS_NOT_OBSERVED detail=wifi=$wifi_state_output; link=$down_link; routes=$down_routes" >&2
-    exit 17
-fi
-printf '%s\n' "DobbyVPN uplink interface=$interface state=absent"
-exit 0
-'''
-        result = self._adb(
-            (
-                "shell",
-                "sh",
-                "-c",
-                shlex.quote(script),
-                "dobbyvpn-uplink",
-                str(down_budget_seconds),
-                str(overall_budget_seconds),
-                transition_kind,
-                interface,
-            ),
-            remaining,
-            "ANDROID_UPLINK_TRANSITION_FAILED",
-        )
-        states: list[str] = []
-        reported_interface: str | None = None
-        state_pattern = re.compile(
-            r"^DobbyVPN uplink interface=([A-Za-z0-9_.:-]+) state=(present|absent|restored)$"
-        )
-        for line in result.stdout_text.splitlines():
-            match = state_pattern.fullmatch(line.strip())
-            if match is None:
-                continue
-            current_interface, state = match.groups()
-            if reported_interface is None:
-                reported_interface = current_interface
-            elif reported_interface != current_interface:
-                error = ScenarioExecutionError("ANDROID_UPLINK_OUTPUT_INVALID")
-                _append_command_result_notes(error, result)
-                raise error
-            if current_interface != interface:
-                error = ScenarioExecutionError("ANDROID_UPLINK_OUTPUT_INVALID")
-                _append_command_result_notes(error, result)
-                raise error
-            states.append(state)
-        if (
-            reported_interface is None
-            or states != ["present", "absent", "restored"]
-        ):
-            error = ScenarioExecutionError("ANDROID_UPLINK_OUTPUT_INVALID")
-            _append_command_result_notes(error, result)
-            raise error
-        for state in states:
-            self._emit_progress(
-                "native-state",
-                interface=reported_interface,
-                kind="uplink",
-                platform="android",
-                state=state,
-            )
 
     def _device_text(self, arguments: tuple[str, ...], deadline: float, failure: str) -> str:
         result = self._adb(arguments, _remaining(deadline, failure), failure, allow_nonzero=True)
@@ -2828,243 +2414,3 @@ exit 0
                         f"android_cleanup_verification_error={_failure_code(failure)}"
                     )
         return error
-
-
-def _composite_failure(
-    operation: str,
-    failures: list[tuple[str, BaseException]],
-) -> None:
-    """Raise one error while retaining every Android lane failure.
-
-    Discovery and finalization are aggregate lifecycle operations. Calling
-    only the first lane that fails would make the other lane silently absent
-    from the result (or leave it unfinalized), so the composite preserves each
-    child message and contextual note while leaving already-emitted streams in
-    their raw command logs.
-    """
-
-    if not failures:
-        return
-    aggregate = HostedAdapterError(f"ANDROID_COMPOSITE_{operation.upper()}_FAILED")
-    for lane, failure in failures:
-        code = getattr(failure, "reason_code", None)
-        if not isinstance(code, str):
-            code = getattr(failure, "code", None)
-        suffix = f" code={code}" if isinstance(code, str) else ""
-        detail = str(failure)
-        detail_suffix = f" detail={detail}" if detail and detail != code else ""
-        aggregate.add_note(
-            f"{lane} {operation} failure={type(failure).__name__}"
-            f"{suffix}{detail_suffix}"
-        )
-        cause = failure.__cause__ or failure.__context__
-        if cause is not None:
-            aggregate.add_note(
-                f"{lane} {operation} cause={type(cause).__name__}: {cause}"
-            )
-        for note in getattr(failure, "__notes__", ()):
-            heading = note.partition("\n")[0]
-            if heading.endswith(("_stdout:", "_stderr:")):
-                # Command streams were already emitted and retained by the
-                # child runner. Keep the other contextual notes without
-                # copying large output into the aggregate result a second time.
-                continue
-            aggregate.add_note(f"{lane} {operation} {note}")
-    raise aggregate
-
-
-class AndroidCompositeHostedAdapter:
-    """Expose rendered AUTO and protocol-matrix Android as one lane.
-
-    The public connection inventory is deliberately contiguous: AUTO is
-    external index zero and each discovered binding profile follows it.  The
-    profile indexes used by the protocol-matrix child remain private, so the
-    canonical runner can use the same connection/scenario loop without
-    pretending that the rendered action covers every binding profile.
-    """
-
-    adapter_id = "hosted-android-composite"
-    adapter_version = "v1"
-
-    def __init__(
-        self,
-        *,
-        gui_auto: AndroidHostedAdapter,
-        protocol_matrix: AndroidHostedAdapter,
-    ) -> None:
-        if gui_auto.ui_mode != "gui-auto" or protocol_matrix.ui_mode != "protocol-matrix":
-            raise HostedAdapterError("ANDROID_COMPOSITE_LANES_INVALID")
-        self.gui_auto = gui_auto
-        self.protocol_matrix = protocol_matrix
-        self.runner = gui_auto.runner
-        self.profile = gui_auto.profile
-        self.adb = gui_auto.adb
-        self.source_sha = gui_auto.source_sha
-        self.identity_url = gui_auto.identity_url
-        self.latency_url = gui_auto.latency_url
-        self.download_url = gui_auto.download_url
-        self.upload_url = gui_auto.upload_url
-        self._connections: tuple[ConnectionIdentity, ...] = ()
-        self._external_to_internal: dict[
-            ConnectionIdentity, tuple[AndroidHostedAdapter, ConnectionIdentity]
-        ] = {}
-        self._selected_connection: ConnectionIdentity | None = None
-        self._selected_lane: AndroidHostedAdapter | None = None
-
-    @property
-    def coverage_lane(self) -> str:
-        """Identify the adapter as a composite; child events name each lane."""
-
-        return "android-composite"
-
-    @property
-    def _lanes(self) -> tuple[tuple[str, AndroidHostedAdapter], ...]:
-        return (("gui-auto", self.gui_auto), ("protocol-matrix", self.protocol_matrix))
-
-    def set_progress_sink(
-        self, sink: Callable[[str, dict[str, object]], None]
-    ) -> None:
-        failures: list[tuple[str, BaseException]] = []
-        for lane, adapter in self._lanes:
-            try:
-                adapter.set_progress_sink(sink)
-            except Exception as error:
-                failures.append((lane, error))
-        _composite_failure("progress", failures)
-
-    def discover_connections(
-        self, timeout_seconds: float = 30.0
-    ) -> tuple[ConnectionIdentity, ...]:
-        if timeout_seconds <= 0:
-            raise HostedAdapterError("CONNECTION_DISCOVERY_TIMEOUT")
-        self._connections = ()
-        self._external_to_internal = {}
-        self._selected_connection = None
-        self._selected_lane = None
-
-        discovered: dict[str, tuple[ConnectionIdentity, ...]] = {}
-        failures: list[tuple[str, BaseException]] = []
-        for lane, adapter in self._lanes:
-            try:
-                discovered[lane] = tuple(
-                    adapter.discover_connections(timeout_seconds=timeout_seconds)
-                )
-            except Exception as error:
-                failures.append((lane, error))
-
-        gui_connections = discovered.get("gui-auto")
-        if gui_connections is not None and gui_connections != (
-            ConnectionIdentity(index=0, protocol="AUTO"),
-        ):
-            failures.append(
-                (
-                    "gui-auto",
-                    HostedAdapterError("ANDROID_GUI_AUTO_INVENTORY_INVALID"),
-                )
-            )
-        matrix_connections = discovered.get("protocol-matrix")
-        if matrix_connections is not None:
-            try:
-                if not matrix_connections:
-                    raise HostedAdapterError("ANDROID_PROTOCOL_MATRIX_EMPTY")
-                if [item.index for item in matrix_connections] != list(
-                    range(len(matrix_connections))
-                ):
-                    raise HostedAdapterError("ANDROID_PROTOCOL_MATRIX_INDEX_INVALID")
-                if any(item.protocol == "AUTO" for item in matrix_connections):
-                    raise HostedAdapterError("ANDROID_PROTOCOL_MATRIX_AUTO_INVALID")
-            except Exception as error:
-                failures.append(("protocol-matrix", error))
-
-        _composite_failure("discovery", failures)
-        assert gui_connections is not None
-        assert matrix_connections is not None
-
-        external: list[ConnectionIdentity] = [ConnectionIdentity(0, "AUTO")]
-        mapping: dict[
-            ConnectionIdentity, tuple[AndroidHostedAdapter, ConnectionIdentity]
-        ] = {
-            external[0]: (self.gui_auto, gui_connections[0]),
-        }
-        for internal in matrix_connections:
-            identity = ConnectionIdentity(len(external), internal.protocol)
-            external.append(identity)
-            mapping[identity] = (self.protocol_matrix, internal)
-        self._connections = tuple(external)
-        self._external_to_internal = mapping
-        return self._connections
-
-    def select_connection(self, connection: ConnectionIdentity) -> None:
-        try:
-            adapter, internal = self._external_to_internal[connection]
-        except KeyError as error:
-            raise HostedAdapterError("CONNECTION_NOT_DISCOVERED") from error
-        lane = "gui-auto" if adapter is self.gui_auto else "protocol-matrix"
-        try:
-            adapter.select_connection(internal)
-        except Exception as error:
-            error.add_note(
-                f"Android composite selection failed for lane={lane} "
-                f"external_connection={connection!r} internal_connection={internal!r}"
-            )
-            raise
-        self._selected_connection = connection
-        self._selected_lane = adapter
-
-    @property
-    def capabilities(self) -> frozenset[Capability]:
-        if self._selected_lane is not None:
-            return self._selected_lane.capabilities
-        # Before selection, advertise only capabilities shared by both child
-        # lanes.  The canonical runner selects before evaluating a scenario.
-        return frozenset(self.gui_auto.capabilities & self.protocol_matrix.capabilities)
-
-    @property
-    def capability_unavailable_reasons(self) -> dict[Capability, str]:
-        if self._selected_lane is not None:
-            return dict(self._selected_lane.capability_unavailable_reasons)
-        reasons: dict[Capability, str] = {}
-        for _lane, adapter in self._lanes:
-            for capability, reason in adapter.capability_unavailable_reasons.items():
-                if capability in reasons and reasons[capability] != reason:
-                    reasons[capability] = f"{reasons[capability]}; {reason}"
-                else:
-                    reasons[capability] = reason
-        return reasons
-
-    def execute_scenario(self, scenario: ScenarioDefinition) -> Mapping[str, object]:
-        if self._selected_lane is None or self._selected_connection is None:
-            raise HostedAdapterError("CONNECTION_NOT_SELECTED")
-        try:
-            return self._selected_lane.execute_scenario(scenario)
-        except Exception as error:
-            lane = "gui-auto" if self._selected_lane is self.gui_auto else "protocol-matrix"
-            error.add_note(
-                f"Android composite execution lane={lane} "
-                f"external_connection={self._selected_connection!r}"
-            )
-            raise
-
-    def reset(self, timeout_seconds: float = 5.0) -> None:
-        if timeout_seconds <= 0:
-            raise HostedAdapterError("INVALID_RESET_TIMEOUT")
-        failures: list[tuple[str, BaseException]] = []
-        for lane, adapter in self._lanes:
-            try:
-                adapter.reset(timeout_seconds=timeout_seconds)
-            except Exception as error:
-                failures.append((lane, error))
-        _composite_failure("reset", failures)
-
-    def finalize(
-        self, timeout_seconds: float = 30.0, *, deadline: float | None = None
-    ) -> None:
-        if timeout_seconds <= 0:
-            raise HostedAdapterError("INVALID_FINALIZE_TIMEOUT")
-        failures: list[tuple[str, BaseException]] = []
-        for lane, adapter in self._lanes:
-            try:
-                adapter.finalize(timeout_seconds=timeout_seconds, deadline=deadline)
-            except Exception as error:
-                failures.append((lane, error))
-        _composite_failure("finalize", failures)

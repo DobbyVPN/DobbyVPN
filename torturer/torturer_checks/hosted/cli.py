@@ -365,6 +365,22 @@ class SubprocessRunner:
         timeout_seconds: float,
         input_bytes: bytes | None = None,
     ) -> CommandResult:
+        return self._run_captured(
+            command,
+            timeout_seconds=timeout_seconds,
+            input_bytes=input_bytes,
+            detached=False,
+        )
+
+    def _run_captured(
+        self,
+        command: Sequence[str],
+        *,
+        timeout_seconds: float,
+        input_bytes: bytes | None,
+        detached: bool,
+    ) -> CommandResult:
+        """Capture both command kinds while preserving their process boundaries."""
         if input_bytes is not None and not isinstance(input_bytes, bytes):
             raise HostedAdapterError("INVALID_INPUT_BYTES")
         if timeout_seconds <= 0 or any(
@@ -374,122 +390,115 @@ class SubprocessRunner:
         argv = tuple(command)
         deadline = time.monotonic() + timeout_seconds
         process: subprocess.Popen[bytes] | None = None
+        stage = "hosted-detached-command" if detached else "hosted-cli-command"
+        timeout_stage = f"{stage}-timeout"
         try:
-            process = popen_with_windows_job(
-                subprocess.Popen,
-                list(argv),
-                stdin=subprocess.PIPE if input_bytes is not None else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=self.environment,
-                stage="hosted-cli-command",
-                deadline=deadline,
+            popen_kwargs = {
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "env": self.environment,
                 **_process_group_kwargs(),
-            )
+            }
+            if detached:
+                process = subprocess.Popen(list(argv), **popen_kwargs)
+            else:
+                popen_kwargs["stdin"] = (
+                    subprocess.PIPE if input_bytes is not None else None
+                )
+                process = popen_with_windows_job(
+                    subprocess.Popen,
+                    list(argv),
+                    stage=stage,
+                    deadline=deadline,
+                    **popen_kwargs,
+                )
+            if input_bytes is None:
+                stdout, stderr = process.communicate(timeout=_remaining_until(deadline))
+            else:
+                stdout, stderr = process.communicate(
+                    input=input_bytes,
+                    timeout=_remaining_until(deadline),
+                )
+        except subprocess.TimeoutExpired as timeout_error:
+            assert process is not None
+            stdout = _output_bytes(timeout_error.output)
+            stderr = _output_bytes(timeout_error.stderr)
+            errors: list[tuple[str, BaseException]] = []
+            cleanup_deadline = time.monotonic() + _PROCESS_CLEANUP_SECONDS
             try:
-                if input_bytes is None:
-                    stdout, stderr = process.communicate(
-                        timeout=_remaining_until(deadline)
-                    )
-                else:
-                    stdout, stderr = process.communicate(
-                        input=input_bytes,
-                        timeout=_remaining_until(deadline),
-                    )
-            except subprocess.TimeoutExpired as timeout_error:
-                stdout = _output_bytes(timeout_error.output)
-                stderr = _output_bytes(timeout_error.stderr)
-                errors: list[tuple[str, BaseException]] = []
-                cleanup_deadline = time.monotonic() + _PROCESS_CLEANUP_SECONDS
-                try:
-                    _terminate_process(
-                        process,
-                        deadline=cleanup_deadline,
-                        stage="hosted-cli-command-timeout",
-                    )
-                except BaseException as error:
-                    errors.append(("termination", error))
-                stdout, stderr, drain_errors = _drain_after_termination(
+                _terminate_process(
                     process,
                     deadline=cleanup_deadline,
-                    stdout=stdout,
-                    stderr=stderr,
+                    stage=timeout_stage,
                 )
-                errors.extend(drain_errors)
+            except BaseException as error:
+                errors.append(("termination", error))
+            stdout, stderr, drain_errors = _drain_after_termination(
+                process,
+                deadline=cleanup_deadline,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            errors.extend(drain_errors)
+            if not detached:
                 try:
                     _close_process_boundary(
                         process,
                         deadline=cleanup_deadline,
-                        stage="hosted-cli-command-timeout",
+                        stage=timeout_stage,
                     )
                 except BaseException as error:
                     errors.append(("close", error))
-                result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
-                primary = HostedAdapterError("COMMAND_TIMEOUT")
-                primary.stdout = stdout
-                primary.stderr = stderr
-                _append_error_notes(primary, errors)
-                _append_command_metadata(primary, result)
-                add_stream_notes(
-                    primary,
-                    "command",
-                    result.stdout,
-                    result.stderr,
-                )
-                self._emit_result("hosted-cli-command", result)
-                raise primary from None
+            result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
+            primary = HostedAdapterError("COMMAND_TIMEOUT", stdout=stdout, stderr=stderr)
+            _append_error_notes(primary, errors)
+            _append_command_metadata(primary, result)
+            add_stream_notes(primary, "command", result.stdout, result.stderr)
+            self._emit_result(stage, result)
+            raise primary from None
+        except WindowsJobError as error:
+            if detached:
+                raise
+            result = CommandResult(argv, -1, error.stdout, error.stderr)
+            primary = HostedAdapterError(
+                "PROCESS_CONTAINMENT_UNAVAILABLE",
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+            _append_command_metadata(primary, result)
+            add_stream_notes(primary, "command", result.stdout, result.stderr)
+            self._emit_result(stage, result)
+            raise primary from None
+        except OSError as error:
+            stdout = _output_bytes(getattr(error, "stdout", None))
+            stderr = _output_bytes(getattr(error, "stderr", None))
+            result = CommandResult(argv, -1, stdout, stderr)
+            primary = HostedAdapterError(
+                "COMMAND_UNAVAILABLE", stdout=stdout, stderr=stderr
+            )
+            _append_command_metadata(primary, result)
+            add_stream_notes(primary, "command", stdout, stderr)
+            self._emit_result(stage, result)
+            raise primary from None
+
+        if not detached:
             try:
                 _close_process_boundary(
                     process,
                     deadline=deadline,
-                    stage="hosted-cli-command",
+                    stage=stage,
                 )
             except BaseException as error:
                 result = CommandResult(argv, process.returncode, stdout, stderr)
                 primary = HostedAdapterError("PROCESS_CLEANUP_FAILED")
                 _append_error_notes(primary, (("close", error),))
                 _append_command_metadata(primary, result)
-                add_stream_notes(
-                    primary,
-                    "command",
-                    result.stdout,
-                    result.stderr,
-                )
-                self._emit_result("hosted-cli-command", result)
+                add_stream_notes(primary, "command", result.stdout, result.stderr)
+                self._emit_result(stage, result)
                 raise primary from None
-            result = CommandResult(argv, process.returncode, stdout, stderr)
-            self._emit_result("hosted-cli-command", result)
-            return result
-        except WindowsJobError as error:
-            result = CommandResult(argv, -1, error.stdout, error.stderr)
-            primary = HostedAdapterError("PROCESS_CONTAINMENT_UNAVAILABLE")
-            primary.stdout = result.stdout
-            primary.stderr = result.stderr
-            _append_command_metadata(primary, result)
-            add_stream_notes(
-                primary,
-                "command",
-                result.stdout,
-                result.stderr,
-            )
-            self._emit_result("hosted-cli-command", result)
-            raise primary from None
-        except OSError as error:
-            stdout = _output_bytes(getattr(error, "stdout", None))
-            stderr = _output_bytes(getattr(error, "stderr", None))
-            result = CommandResult(argv, -1, stdout, stderr)
-            primary = HostedAdapterError("COMMAND_UNAVAILABLE")
-            primary.stdout = stdout
-            primary.stderr = stderr
-            _append_command_metadata(primary, result)
-            add_stream_notes(
-                primary,
-                "command",
-                stdout,
-                stderr,
-            )
-            self._emit_result("hosted-cli-command", result)
-            raise primary from None
+        result = CommandResult(argv, process.returncode, stdout, stderr)
+        self._emit_result(stage, result)
+        return result
 
     def run_detached(
         self, command: Sequence[str], *, timeout_seconds: float
@@ -504,79 +513,12 @@ class SubprocessRunner:
         self, command: Sequence[str], *, timeout_seconds: float
     ) -> CommandResult:
         """Run a service launcher whose child intentionally outlives it."""
-
-        if timeout_seconds <= 0 or any(
-            not isinstance(item, str) or not item for item in command
-        ):
-            raise HostedAdapterError("INVALID_COMMAND")
-        argv = tuple(command)
-        deadline = time.monotonic() + timeout_seconds
-        process: subprocess.Popen[bytes] | None = None
-        try:
-            process = subprocess.Popen(
-                list(argv),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=self.environment,
-                **_process_group_kwargs(),
-            )
-            try:
-                stdout, stderr = process.communicate(
-                    timeout=_remaining_until(deadline)
-                )
-            except subprocess.TimeoutExpired as timeout_error:
-                stdout = _output_bytes(timeout_error.output)
-                stderr = _output_bytes(timeout_error.stderr)
-                errors: list[tuple[str, BaseException]] = []
-                cleanup_deadline = time.monotonic() + _PROCESS_CLEANUP_SECONDS
-                try:
-                    _terminate_process(
-                        process,
-                        deadline=cleanup_deadline,
-                        stage="hosted-detached-command-timeout",
-                    )
-                except BaseException as error:
-                    errors.append(("termination", error))
-                stdout, stderr, drain_errors = _drain_after_termination(
-                    process,
-                    deadline=cleanup_deadline,
-                    stdout=stdout,
-                    stderr=stderr,
-                )
-                errors.extend(drain_errors)
-                result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
-                primary = HostedAdapterError("COMMAND_TIMEOUT")
-                primary.stdout = stdout
-                primary.stderr = stderr
-                _append_error_notes(primary, errors)
-                _append_command_metadata(primary, result)
-                add_stream_notes(
-                    primary,
-                    "command",
-                    result.stdout,
-                    result.stderr,
-                )
-                self._emit_result("hosted-detached-command", result)
-                raise primary from None
-            result = CommandResult(argv, process.returncode, stdout, stderr)
-            self._emit_result("hosted-detached-command", result)
-            return result
-        except OSError as error:
-            stdout = _output_bytes(getattr(error, "stdout", None))
-            stderr = _output_bytes(getattr(error, "stderr", None))
-            result = CommandResult(argv, -1, stdout, stderr)
-            primary = HostedAdapterError("COMMAND_UNAVAILABLE")
-            primary.stdout = stdout
-            primary.stderr = stderr
-            _append_command_metadata(primary, result)
-            add_stream_notes(
-                primary,
-                "command",
-                stdout,
-                stderr,
-            )
-            self._emit_result("hosted-detached-command", result)
-            raise primary from None
+        return self._run_captured(
+            command,
+            timeout_seconds=timeout_seconds,
+            input_bytes=None,
+            detached=True,
+        )
 
 def _require_scratch_file(path: Path) -> None:
     if not path.is_file():
@@ -937,11 +879,7 @@ class RoutingProofMixin:
         if setup_timeout is not None:
             deadline = time.monotonic() + timeout
         try:
-            self._command(
-                ("connect-profile", str(self.profile), self._selected_connection_index()),
-                self._remaining(deadline, "CONNECT_TIMEOUT"),
-                "CONNECT_FAILED",
-            )
+            self._start_selected(self._remaining(deadline, "CONNECT_TIMEOUT"), "CONNECT_FAILED")
             self._emit_progress(
                 "native-state", kind="vpn-session", state="connect-issued"
             )
@@ -967,11 +905,7 @@ class RoutingProofMixin:
         if setup_timeout is not None:
             deadline = time.monotonic() + timeout
         try:
-            self._command(
-                ("connect-profile", str(self.profile), self._selected_connection_index()),
-                self._remaining(deadline, "RECONNECT_TIMEOUT"),
-                "RECONNECT_CONNECT_FAILED",
-            )
+            self._start_selected(self._remaining(deadline, "RECONNECT_TIMEOUT"), "RECONNECT_CONNECT_FAILED")
             if not self._connected(self._remaining(deadline, "RECONNECT_TIMEOUT")):
                 raise ScenarioExecutionError("RECONNECT_NOT_ESTABLISHED")
         except Exception as error:
@@ -1027,15 +961,8 @@ class RoutingProofMixin:
         if not self._routing_proof_enabled:
             return super()._cleanup_verified(timeout)
         deadline = time.monotonic() + timeout
-        result = self._command(
-            ("status", "--json"),
-            self._remaining(deadline, "CLEANUP_STATUS_FAILED"),
-            "CLEANUP_STATUS_FAILED",
-        )
-        try:
-            disconnected = json.loads(result.stdout_text).get("state") == "Disconnected"
-        except (AttributeError, TypeError, ValueError) as error:
-            raise ScenarioExecutionError("CLEANUP_STATUS_INVALID") from error
+        snapshot = self._snapshot(self._remaining(deadline, "CLEANUP_STATUS_FAILED"), "CLEANUP_STATUS_FAILED")
+        disconnected = snapshot.get("cleanup_complete") is True and snapshot.get("state") in ("IDLE", "CONFIGURED", "FAILED")
         if not disconnected:
             return False
         if self._routing_firewall_active:
@@ -1110,6 +1037,9 @@ class HostedCLIAdapter:
         self._tunneled_ips: set[str] = set()
         self._connections: tuple[ConnectionIdentity, ...] = ()
         self._selected_connection: ConnectionIdentity | None = None
+        self._accepted_session_id: str | None = None
+        self._accepted_config_digest: str | None = None
+        self._started_generation: int | None = None
         self._progress_sink: Callable[[str, dict[str, object]], None] | None = None
 
     def set_progress_sink(
@@ -1156,13 +1086,17 @@ class HostedCLIAdapter:
 
     def _read_connections(self, timeout: float) -> tuple[ConnectionIdentity, ...]:
         result = self._command(
-            ("profile-inventory", str(self.profile)),
+            ("configure", str(self.profile)),
             timeout,
             "CONNECTION_INVENTORY_REJECTED",
         )
         try:
-            value = json.loads(result.stdout_text)
+            value = self._json_result(result, "CONNECTION_INVENTORY_INVALID")
             if not isinstance(value, dict) or "profiles" not in value:
+                raise ValueError
+            session_id = value.get("session_id")
+            digest = value.get("digest")
+            if not isinstance(session_id, str) or not session_id or not isinstance(digest, str) or not digest:
                 raise ValueError
             profiles = value["profiles"]
             if not isinstance(profiles, list) or not profiles:
@@ -1178,7 +1112,66 @@ class HostedCLIAdapter:
                 raise ValueError
         except (KeyError, TypeError, ValueError) as error:
             raise ScenarioExecutionError("CONNECTION_INVENTORY_INVALID") from error
+        self._accepted_session_id = session_id
+        self._accepted_config_digest = digest
+        self._started_generation = None
         return connections
+
+    @staticmethod
+    def _json_result(result: CommandResult, failure: str) -> dict[str, object]:
+        try:
+            response = json.loads(result.stdout_text)
+            if not isinstance(response, dict) or response.get("ok") is not True:
+                raise ValueError("CLI response is not successful")
+            value = response["result"]
+            if not isinstance(value, dict):
+                raise ValueError("CLI result is not an object")
+            return value
+        except (KeyError, TypeError, ValueError) as error:
+            failure_error = ScenarioExecutionError(failure)
+            _append_command_result_notes(failure_error, result)
+            raise failure_error from error
+
+    def _snapshot(self, timeout: float, failure: str = "STATUS_FAILED") -> dict[str, object]:
+        result = self._command(("snapshot",), timeout, failure)
+        return self._json_result(result, failure)
+
+    def _start_selected(self, timeout: float, failure: str) -> None:
+        if self._accepted_session_id is None or self._accepted_config_digest is None:
+            raise ScenarioExecutionError("CONFIGURATION_NOT_ACCEPTED")
+        result = self._command(
+            (
+                "start", "--profile", self._selected_connection_index(),
+                "--session-id", self._accepted_session_id,
+                "--config-digest", self._accepted_config_digest,
+            ),
+            timeout, failure,
+        )
+        snapshot = self._json_result(result, failure)
+        generation = snapshot.get("generation")
+        if snapshot.get("state") != "CONNECTED" or type(generation) is not int or generation <= 0:
+            raise ScenarioExecutionError(failure)
+        self._started_generation = generation
+
+    def _reconfigure_after_service_restart(self, timeout: float) -> None:
+        selected = self._selected_connection
+        connections = self._read_connections(timeout)
+        if selected not in connections:
+            raise ScenarioExecutionError("PROCESS_LOSS_PROFILE_CHANGED")
+        self._connections = connections
+
+    def _stop(self, timeout: float, failure: str) -> None:
+        arguments = ["stop"]
+        if self._accepted_session_id is not None and self._started_generation is not None:
+            arguments.extend((
+                "--session-id", self._accepted_session_id,
+                "--generation", str(self._started_generation),
+            ))
+        result = self._command(tuple(arguments), timeout, failure)
+        snapshot = self._json_result(result, failure)
+        if snapshot.get("cleanup_complete") is not True:
+            raise ScenarioExecutionError(failure)
+        self._started_generation = None
 
     @property
     def capabilities(self) -> frozenset[Capability]:
@@ -1200,7 +1193,6 @@ class HostedCLIAdapter:
         """Explain capabilities that this hosted shell cannot safely provide."""
 
         return {
-            Capability.NETWORK_TRANSITION: "HOSTED_RUNNER_UPLINK_TOGGLE_UNSUPPORTED",
             Capability.PROCESS_LOSS: "HOSTED_SERVICE_CONTROL_UNAVAILABLE",
         }
 
@@ -1212,8 +1204,7 @@ class HostedCLIAdapter:
         if operation == "connect":
             deadline = time.monotonic() + timeout
             self._capture_baseline(self._remaining(deadline, "CONNECT_TIMEOUT"))
-            self._command(("connect-profile", str(self.profile), self._selected_connection_index()),
-                          self._remaining(deadline, "CONNECT_TIMEOUT"), "CONNECT_FAILED")
+            self._start_selected(self._remaining(deadline, "CONNECT_TIMEOUT"), "CONNECT_FAILED")
             self._emit_progress(
                 "native-state",
                 kind="vpn-session",
@@ -1313,8 +1304,9 @@ class HostedCLIAdapter:
             return value
 
         try:
-            if self._connected(remaining()):
-                self._command(("disconnect",), remaining(), "RESET_FAILED")
+            snapshot = self._snapshot(remaining(), "RESET_FAILED")
+            if snapshot.get("cleanup_complete") is not True:
+                self._stop(remaining(), "RESET_FAILED")
             if self._baseline_ip is not None and not self._cleanup_verified(remaining()):
                 raise HostedAdapterError("RESET_CLEANUP_UNVERIFIED")
         finally:
@@ -1357,11 +1349,13 @@ class HostedCLIAdapter:
         selected = self._selected_connection
         if selected is None or selected not in self._connections:
             return False
-        result = self._command(
-            ("check-config", str(self.profile)), timeout, "CONFIGURE_REJECTED"
+        snapshot = self._snapshot(timeout, "CONFIGURE_REJECTED")
+        return (
+            snapshot.get("session_id") == self._accepted_session_id
+            and snapshot.get("digest") == self._accepted_config_digest
+            and snapshot.get("configured") is True
+            and len(snapshot.get("profiles", ())) == len(self._connections)
         )
-        match = re.search(r"(?:^|\s)profiles=([1-9][0-9]*)\s", result.stdout_text)
-        return match is not None and int(match.group(1)) == len(self._connections)
 
     def _capture_baseline(self, timeout: float) -> None:
         self._tunneled_ips.clear()
@@ -1376,7 +1370,7 @@ class HostedCLIAdapter:
 
         The native-window full lane must prove that its visible recovery action
         reconnects the VPN.  Calling ``_process_loss`` here would restart the
-        service and then use ``connect-profile`` as a hidden recovery shortcut.
+        service and then use CLI Start as a hidden recovery shortcut.
         Keep the destructive service operation separate; the native UI owns
         configuration and Connect, while the caller performs the independent
         tunnel, routing, stability, and throughput observations afterward.
@@ -1442,12 +1436,7 @@ class HostedCLIAdapter:
         return self._routing_identity_changed(timeout)
 
     def _connected(self, timeout: float) -> bool:
-        result = self._command(("status", "--json"), timeout, "STATUS_FAILED")
-        try:
-            value = json.loads(result.stdout_text)
-        except (TypeError, ValueError) as error:
-            raise ScenarioExecutionError("STATUS_INVALID") from error
-        return isinstance(value, dict) and value.get("state") == "Connected"
+        return self._snapshot(timeout).get("state") == "CONNECTED"
 
     def _external_ip(self, timeout: float) -> str:
         if self.identity_url is None:
@@ -1546,11 +1535,7 @@ class HostedCLIAdapter:
                 raise ScenarioExecutionError("RECONNECT_TIMEOUT")
             return value
 
-        self._command(
-            ("connect-profile", str(self.profile), self._selected_connection_index()),
-            remaining(),
-            "RECONNECT_CONNECT_FAILED",
-        )
+        self._start_selected(remaining(), "RECONNECT_CONNECT_FAILED")
         if not self._connected(remaining()):
             raise ScenarioExecutionError("RECONNECT_NOT_ESTABLISHED")
         return {
@@ -1630,7 +1615,7 @@ class HostedCLIAdapter:
                 raise ScenarioExecutionError("DISCONNECT_TIMEOUT")
             return value
 
-        self._command(("disconnect",), remaining(), "DISCONNECT_FAILED")
+        self._stop(remaining(), "DISCONNECT_FAILED")
         return self._cleanup_verified(remaining())
 
     def _cleanup_verified(self, timeout: float) -> bool:
@@ -1641,14 +1626,8 @@ class HostedCLIAdapter:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
-            result = self._command(
-                ("status", "--json"), remaining, "CLEANUP_STATUS_FAILED"
-            )
-            try:
-                value = json.loads(result.stdout_text)
-            except (TypeError, ValueError) as error:
-                raise ScenarioExecutionError("CLEANUP_STATUS_INVALID") from error
-            if isinstance(value, dict) and value.get("state") == "Disconnected":
+            value = self._snapshot(remaining, "CLEANUP_STATUS_FAILED")
+            if value.get("cleanup_complete") is True and value.get("state") in ("IDLE", "CONFIGURED", "FAILED"):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False

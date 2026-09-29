@@ -1,3 +1,0 @@
-* Add Version 1.0.5
-* Delete MinGW
-* Fix build deps

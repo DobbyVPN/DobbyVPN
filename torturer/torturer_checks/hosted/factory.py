@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .android import AndroidCompositeHostedAdapter, AndroidHostedAdapter
+from .android import AndroidHostedAdapter
 from .cli import CommandRunner
 from .linux import LinuxHostedAdapter
 from .macos import MacOSHostedAdapter
@@ -34,13 +34,12 @@ def adapter_for_platform(
     service_identity_file: Path | None = None,
     network_interface: str | None = None,
     routing_firewall_helper: Path | None = None,
-    network_transition_helper: Path | None = None,
+    android_ui_mode: str = "protocol-matrix",
 ) -> (
     LinuxHostedAdapter
     | WindowsHostedAdapter
     | MacOSHostedAdapter
     | AndroidHostedAdapter
-    | AndroidCompositeHostedAdapter
 ):
     if platform == "android":
         for name, value in (
@@ -48,7 +47,6 @@ def adapter_for_platform(
             ("service_pipe", service_pipe), ("service_socket", service_socket), ("service_library_path", service_library_path),
             ("service_pid_file", service_pid_file), ("service_identity_file", service_identity_file),
             ("network_interface", network_interface), ("routing_firewall_helper", routing_firewall_helper),
-            ("network_transition_helper", network_transition_helper),
         ):
             if value is not None:
                 raise ValueError(f"android adapter received unexpected {name}")
@@ -62,13 +60,14 @@ def adapter_for_platform(
             download_url=PUBLIC_DOWNLOAD_URL,
             upload_url=PUBLIC_UPLOAD_URL,
         )
-        return AndroidCompositeHostedAdapter(
-            gui_auto=AndroidHostedAdapter(**common, ui_mode="gui-auto"),
-            protocol_matrix=AndroidHostedAdapter(**common, ui_mode="protocol-matrix"),
-        )
+        if android_ui_mode not in {"gui-auto", "protocol-matrix"}:
+            raise ValueError("unsupported Android adapter lane")
+        return AndroidHostedAdapter(**common, ui_mode=android_ui_mode)
 
     if platform not in {"linux", "windows", "macos"}:
         raise ValueError("unsupported hosted platform")
+    if android_ui_mode != "protocol-matrix":
+        raise ValueError("android_ui_mode is only valid for Android")
     if cli is None:
         raise ValueError("hosted desktop adapter requires --cli")
 
@@ -87,8 +86,6 @@ def adapter_for_platform(
         network_interface=network_interface,
     )
     if platform == "linux":
-        if network_transition_helper is not None:
-            raise ValueError("linux adapter received unexpected network_transition_helper")
         return LinuxHostedAdapter(
             **common,
             service_socket=service_socket,
@@ -96,7 +93,7 @@ def adapter_for_platform(
             routing_firewall_helper=routing_firewall_helper,
         )
     if platform == "windows":
-        if service_socket is not None or routing_firewall_helper is not None or network_transition_helper is not None:
+        if service_socket is not None or routing_firewall_helper is not None:
             raise ValueError("windows adapter received an unexpected platform helper")
         return WindowsHostedAdapter(**common, service_pipe=service_pipe)
     if service_pipe is not None:
@@ -105,7 +102,6 @@ def adapter_for_platform(
         **common,
         service_socket=service_socket,
         routing_firewall_helper=routing_firewall_helper,
-        network_transition_helper=network_transition_helper,
     )
 
 

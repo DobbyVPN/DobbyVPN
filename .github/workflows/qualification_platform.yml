@@ -188,7 +188,7 @@ jobs:
                 ;;
               *) printf 'unsupported desktop platform=%s\n' "$PLATFORM" >&2; exit 1 ;;
             esac
-            run_timed desktop-package-validation python3 .github/scripts/desktop_platform.py describe \
+            run_timed desktop-package-validation python3 .github/scripts/desktop/desktop_package.py describe \
               --platform "$PLATFORM" --arch "$architecture" --version "$version" \
               --source-sha "$DOBBYVPN_COMMIT_SHA" --package "$package" \
               --output "$DESKTOP_PACKAGE_DESCRIPTOR"
@@ -198,7 +198,7 @@ jobs:
               --run-dir "$RUN_DIR"
               --output "$INSTALLED_DESCRIPTOR"
             )
-            run_timed desktop-package-install python3 .github/scripts/desktop_platform.py "${install_arguments[@]}"
+            run_timed desktop-package-install python3 .github/scripts/desktop/desktop_package.py "${install_arguments[@]}"
             installed_values=()
             while IFS= read -r installed_value; do
               installed_values+=("$installed_value")
@@ -250,7 +250,7 @@ jobs:
               apksigner_bin="$sdk_root/build-tools/36.0.0/apksigner"
               keytool_bin="$JAVA_HOME/bin/keytool"
               test -x "$keytool_bin"
-              run_timed android-temporary-test-signature python3 .github/scripts/android_apk_signing.py sign-test \
+              run_timed android-temporary-test-signature python3 .github/scripts/android/android_apk_signing.py sign-test \
                 --unsigned-app "$unsigned_app" --unsigned-companion "$unsigned_companion" \
                 --signed-app "$signed_app" --signed-companion "$signed_companion" \
                 --apksigner "$apksigner_bin" --keytool "$keytool_bin"
@@ -617,7 +617,7 @@ jobs:
               export DOBBY_LOG_PATH="$RUN_DIR/service.log"
               export DOBBY_LOG_ROOT="$RUN_DIR"
             fi
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 "$GITHUB_WORKSPACE/.github/scripts/desktop_platform.py" "${release_args[@]}"
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 "$GITHUB_WORKSPACE/.github/scripts/desktop/desktop_package.py" "${release_args[@]}"
           fi
 
       - name: Stop Linux qualification service
@@ -675,7 +675,7 @@ jobs:
             printf 'No installed package descriptor was created; package removal was not needed.\n'
             exit 0
           fi
-          python3 .github/scripts/desktop_platform.py uninstall \
+          python3 .github/scripts/desktop/desktop_package.py uninstall \
             --installed-descriptor "$INSTALLED_DESCRIPTOR" --run-dir "$RUN_DIR"
 
       - name: Remove Android standalone probe staging

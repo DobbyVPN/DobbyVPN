@@ -47,7 +47,7 @@ class TimingProgressTests(unittest.TestCase):
             _prepare_routing_probe=prepare,
             _selected_connection_index=lambda: "0",
             _remaining=lambda deadline, _failure: deadline - clock[0],
-            _command=lambda _command, budget, _failure: command_budgets.append(budget),
+            _start_selected=lambda budget, _failure: command_budgets.append(budget),
             _connected=lambda _budget: True,
             _emit_progress=lambda *_args, **_kwargs: None,
         )
@@ -163,7 +163,7 @@ class TimingProgressTests(unittest.TestCase):
             root = Path(directory)
             work_dir = root / "work"
             contract.app_path(work_dir).mkdir(parents=True)
-            (root / "candidate" / "swift_module" / "iosApp.xcodeproj").mkdir(
+            (root / "candidate" / "apple" / "iosApp.xcodeproj").mkdir(
                 parents=True
             )
             events_output = StringIO()
@@ -247,7 +247,6 @@ class TimingProgressTests(unittest.TestCase):
         scenario = ScenarioDefinition(
             id="functional.timing",
             steps=(ScenarioStep("configure", "configure", 5),),
-            required_capabilities=frozenset(),
             assertion_ids=("configure.accepted",),
             max_duration_seconds=5,
         )
@@ -270,7 +269,6 @@ class TimingProgressTests(unittest.TestCase):
         scenario = ScenarioDefinition(
             id="functional.timing",
             steps=(ScenarioStep("routing", "observe_routing_identity", 5),),
-            required_capabilities=frozenset(),
             assertion_ids=("routing.verified",),
             max_duration_seconds=5,
         )

@@ -137,8 +137,8 @@ jobs:
             return "$status"
           }
           test "$(git rev-parse HEAD | tee /dev/stderr)" = "$SOURCE_SHA"
-          python3 .github/scripts/version_metadata.py --version-file VERSION --github-output "$GITHUB_OUTPUT"
-          version_name="$(python3 .github/scripts/version_metadata.py \
+          python3 .github/scripts/release/version_metadata.py --version-file VERSION --github-output "$GITHUB_OUTPUT"
+          version_name="$(python3 .github/scripts/release/version_metadata.py \
             --version-file VERSION --field version_name | tee /dev/stderr)"
           tag="v$version_name"
           tag_ref="refs/tags/$tag"
@@ -185,7 +185,7 @@ jobs:
           ruby-version: '3.3'
           bundler-cache: false
       - name: Install Ruby dependencies
-        run: bundle install --jobs 4 --retry 3
+        run: cd publishing && bundle install --jobs 4 --retry 3
       - name: Set release metadata
         run: |
           set -euo pipefail
@@ -209,13 +209,13 @@ jobs:
           CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
           PROVISION_DOBBY_BASE64: ${{ secrets.PROVISION_DOBBY_BASE64 }}
           PROVISION_DOBBY_TUNNEL_BASE64: ${{ secrets.PROVISION_DOBBY_TUNNEL_BASE64 }}
-        run: bundle exec fastlane ios prepare_signing
+        run: cd publishing && bundle exec fastlane ios prepare_signing
       - name: Sign and export selected archive without compiling
         env:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          bash go_module/scripts/package_ios_app.sh iosexport \
+          bash core/scripts/package_ios_app.sh iosexport \
             selected-release/DobbyVPN.ipa \
             selected-release/DobbyVPN.xcarchive.tar.gz
       - name: Verify signed IPA entitlements and profile binding
@@ -237,7 +237,7 @@ jobs:
           codesign --display --entitlements :- "${tunnels[0]}" > "$work/tunnel-entitlements.plist"
           security cms -D -i "${apps[0]}/embedded.mobileprovision" > "$work/app-profile.plist"
           security cms -D -i "${tunnels[0]}/embedded.mobileprovision" > "$work/tunnel-profile.plist"
-          python3 .github/scripts/verify_ios_app_group.py \
+          python3 .github/scripts/apple/verify_ios_app_group.py \
             --app-entitlements "$work/app-entitlements.plist" \
             --app-profile "$work/app-profile.plist" \
             --tunnel-entitlements "$work/tunnel-entitlements.plist" \
@@ -255,6 +255,7 @@ jobs:
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
           APP_STORE_IPA_PATH: ${{ github.workspace }}/selected-release/DobbyVPN.ipa
         run: |
+          cd publishing
           bundle exec ruby <<'RUBY'
           require "spaceship"
           require "net/http"
@@ -324,7 +325,7 @@ jobs:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-        run: bundle exec fastlane ios submit_app_store_review
+        run: cd publishing && bundle exec fastlane ios submit_app_store_review
 
   promote:
     name: Publish selected Release packages
@@ -443,25 +444,25 @@ jobs:
           fi
           test -n "$apkanalyzer" && test -x "$apkanalyzer"
 
-          python3 .github/scripts/verify_android_reproducibility.py verify-provenance \
+          python3 .github/scripts/android/verify_android_reproducibility.py verify-provenance \
             --apk "$unsigned" --provenance "$provenance" \
             --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
             --version-code "$ANDROID_VERSION_CODE"
-          python3 .github/scripts/verify_android_apk_source.py \
+          python3 .github/scripts/android/verify_android_apk_source.py \
             --apk "$unsigned" --source-sha "$RELEASE_SOURCE_SHA" \
             --repository "$GITHUB_REPOSITORY" --apkanalyzer "$apkanalyzer" \
             --test-companion "$companion"
 
-          python3 .github/scripts/android_apk_signing.py sign-release \
+          python3 .github/scripts/android/android_apk_signing.py sign-release \
             --unsigned-apk "$unsigned" --signed-apk "$signed" --apksigner "$apksigner"
 
-          python3 .github/scripts/android_apk_signing.py finalize-provenance \
+          python3 .github/scripts/android/android_apk_signing.py finalize-provenance \
             --provenance "$provenance" --unsigned-apk "$unsigned" --signed-apk "$signed" \
             --test-companion "$companion" --source-sha "$RELEASE_SOURCE_SHA" \
             --version-name "$RELEASE_VERSION" --version-code "$ANDROID_VERSION_CODE" \
             --apksigner "$apksigner"
 
-          python3 .github/scripts/verify_android_reproducibility.py verify-publication \
+          python3 .github/scripts/android/verify_android_reproducibility.py verify-publication \
             --unsigned-apk "$unsigned" --signed-apk "$signed" --provenance "$provenance" \
             --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
             --version-code "$ANDROID_VERSION_CODE" \
@@ -474,7 +475,7 @@ jobs:
         run: |
           set -euo pipefail
           printf 'versionName=%s\nversionCode=%s\n' "$RELEASE_VERSION" "$ANDROID_VERSION_CODE" > release/version.txt
-          python3 .github/scripts/release_provenance.py create \
+          python3 .github/scripts/release/release_provenance.py create \
             --directory release --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
             --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
             --release-run-number "$RELEASE_RUN_NUMBER" --android-version-code "$ANDROID_VERSION_CODE" \
@@ -499,7 +500,7 @@ jobs:
             echo "GitHub Release $tag already exists; checking it against the selected Release run."
             mkdir "$RUNNER_TEMP/existing-release"
             gh release download "$tag" --dir "$RUNNER_TEMP/existing-release"
-            python3 .github/scripts/release_provenance.py verify \
+            python3 .github/scripts/release/release_provenance.py verify \
               --directory "$RUNNER_TEMP/existing-release" --tag "$tag" --version "$RELEASE_VERSION" \
               --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
               --release-run-number "$RELEASE_RUN_NUMBER" \
@@ -534,7 +535,7 @@ jobs:
           set -euo pipefail
           mkdir -p published
           gh release download "v$RELEASE_VERSION" --dir published --pattern '*'
-          python3 .github/scripts/release_provenance.py verify \
+          python3 .github/scripts/release/release_provenance.py verify \
             --directory published --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
             --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
             --release-run-number "$RELEASE_RUN_NUMBER" --android-version-code "$ANDROID_VERSION_CODE" \
@@ -560,4 +561,4 @@ jobs:
       - name: Remove older workflow runs and caches
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/actions_retention.py --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" --delete-caches --delete-intermediate-artifacts
+        run: python3 .github/scripts/release/actions_retention.py --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" --delete-caches --delete-intermediate-artifacts

@@ -52,7 +52,7 @@ jobs:
             macos:amd64) package=dobbyVPN-macos-amd64.pkg ;;
             *) exit 1 ;;
           esac
-          python3 .github/scripts/installer_migration.py \
+          python3 .github/scripts/desktop/installer_migration.py \
             --platform "$PLATFORM" \
             --package "$RUNNER_TEMP/dobbyvpn-installer-migration/package/$package" \
             --current-version "$EXPECTED_VERSION" \

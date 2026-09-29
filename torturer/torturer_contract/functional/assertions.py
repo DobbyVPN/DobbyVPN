@@ -61,7 +61,6 @@ _ASSERTION_KEYS: dict[str, str] = {
     "cleanup.restored": "cleanup_verified",
     "lifecycle.restart": "restart_verified",
     "reconnect.completed": "reconnect_completed",
-    "network.transition": "network_transition_verified",
     "process_loss.recovered": "process_loss_verified",
 }
 

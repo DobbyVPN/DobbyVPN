@@ -20,7 +20,7 @@ import sys
 from typing import Any
 
 from .diagnostics import add_exception_notes, add_stream_notes, output_text
-from .local_vm import LocalVMError
+from .local_vm import LocalVMError, _run_logged
 
 
 class MacOSInteractiveDesktopUnavailable(LocalVMError):
@@ -92,14 +92,6 @@ def stage_native_ui_bundle(executable: str | Path) -> Path:
     """Validate and return the native app bundle built for this candidate."""
 
     return _validate_native_ui_bundle(Path(executable))
-
-
-def _run_logged(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-    """Delegate command logging to the common local-VM command runner."""
-
-    from .local_vm import _run_logged as run_logged
-
-    return run_logged(*args, **kwargs)
 
 
 def _probe(

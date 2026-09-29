@@ -86,10 +86,36 @@ class DiagnosticPreservationTests(unittest.TestCase):
             manifest = json.loads((output / "manifest.json").read_text())
             self.assertEqual(manifest["files"][0], records[0])
 
+    def test_hosted_collection_copies_png_bytes_without_decoding_them(self) -> None:
+        collector = _load_script(
+            "dobbyvpn_collect_diagnostics_png",
+            PRODUCT_ROOT / ".github/scripts/collect_diagnostics.py",
+        )
+        payload = b"\x89PNG\r\n\x1a\noriginal screenshot bytes"
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            source = root / "source"
+            source.mkdir()
+            (source / "screen.png").write_bytes(payload)
+            output = root / "diagnostics"
+            stdout = StringIO()
+            stderr = BinaryStderr()
+
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                records = collector.collect([source], output)
+
+            self.assertEqual((output / "source/screen.png").read_bytes(), payload)
+            self.assertEqual(records[0]["kind"], "binary")
+            self.assertEqual(records[0]["mime_type"], "image/png")
+            self.assertEqual(records[0]["bytes"], len(payload))
+            self.assertEqual(records[0]["sha256"], collector._sha256(payload))
+            self.assertNotIn("width", records[0])
+            self.assertNotIn("height", records[0])
+
     def test_clipboard_payload_is_kept_out_of_diagnostics(self) -> None:
         smoke = _load_script(
             "dobbyvpn_native_ui_smoke",
-            PRODUCT_ROOT / ".github/scripts/native_ui_smoke.py",
+            PRODUCT_ROOT / ".github/scripts/desktop/native_ui_smoke.py",
         )
         payload = b"clipboard-profile-value"
         destination = BinaryStderr()
@@ -113,7 +139,7 @@ class DiagnosticPreservationTests(unittest.TestCase):
     def test_native_ui_subprocess_streams_are_forwarded_byte_for_byte(self) -> None:
         smoke = _load_script(
             "dobbyvpn_native_ui_smoke_streams",
-            PRODUCT_ROOT / ".github/scripts/native_ui_smoke.py",
+            PRODUCT_ROOT / ".github/scripts/desktop/native_ui_smoke.py",
         )
         stdout = b'Password="native-profile-value"\x00\xff\n'
         stderr = b"token=native-token\n"

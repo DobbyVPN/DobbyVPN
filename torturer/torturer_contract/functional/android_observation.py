@@ -28,7 +28,6 @@ class AndroidProfileObservation:
     stability_verified: bool
     stability_sample_count: int
     stability_sample_interval_seconds: float
-    network_transition_verified: bool
     process_loss_verified: bool
     latency_ms: float
     download_mbps: float
@@ -67,7 +66,7 @@ class AndroidProfileObservation:
         for name in (
             "configured", "connected", "tunnel_interface",
             "routing_verified", "stability_verified", "disconnect_clean",
-            "network_transition_verified", "process_loss_verified",
+            "process_loss_verified",
             "restart_verified", "reconnect_completed", "second_tunnel_interface",
             "second_routing_verified", "final_disconnect_clean",
             "cleanup_verified",
@@ -100,7 +99,7 @@ class AndroidProfileObservation:
             "configured", "connected",
             "connections",
             "tunnel_interface", "routing_verified",
-            "stability_verified", "network_transition_verified",
+            "stability_verified",
             "stability_sample_count", "stability_sample_interval_seconds",
             "process_loss_verified", "latency_ms", "download_mbps",
             "upload_mbps", "disconnect_clean", "restart_verified", "reconnect_completed",
@@ -141,7 +140,6 @@ class AndroidProfileObservation:
             stability_verified=value["stability_verified"],
             stability_sample_count=value["stability_sample_count"],
             stability_sample_interval_seconds=value["stability_sample_interval_seconds"],
-            network_transition_verified=value["network_transition_verified"],
             process_loss_verified=value["process_loss_verified"],
             latency_ms=value["latency_ms"],
             download_mbps=value["download_mbps"],
@@ -181,7 +179,6 @@ class AndroidProfileObservation:
             "stability_verified": self.stability_verified,
             "stability_sample_count": self.stability_sample_count,
             "stability_sample_interval_seconds": self.stability_sample_interval_seconds,
-            "network_transition_verified": self.network_transition_verified,
             "process_loss_verified": self.process_loss_verified,
             "latency_ms": self.latency_ms,
             "download_mbps": self.download_mbps,

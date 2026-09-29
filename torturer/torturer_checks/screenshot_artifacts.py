@@ -1,78 +1,112 @@
-"""Integrity checks for optional rendered UI screenshot artifacts."""
+"""Image and byte-integrity helpers for test screenshots."""
 
 from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
-import struct
-import zlib
+import re
 from typing import Any
 
 
-PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+MAX_SCREENSHOT_PIXELS = 64 * 1024 * 1024
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class ScreenshotIntegrityError(ValueError):
     """A screenshot is missing, malformed, or inconsistent with its marker."""
 
 
-def png_metadata(path: Path) -> dict[str, Any]:
-    """Read and validate one complete PNG, returning manifest-ready metadata.
-
-    This validates the complete chunk framing and CRCs, not just the eight-byte
-    signature. The caller can compare the returned bytes/hash/dimensions with
-    the producer marker before adding the file to the current-run manifest.
-    """
-
+def _regular_file(path: Path) -> None:
     if path.is_symlink() or not path.is_file():
         raise ScreenshotIntegrityError(f"screenshot is not a regular file: {path}")
+
+
+def file_metadata(path: Path) -> dict[str, Any]:
+    """Return exact file size and SHA-256 without decoding or rewriting it."""
+
+    _regular_file(path)
+    digest = sha256()
+    size = 0
     try:
-        payload = path.read_bytes()
+        with path.open("rb") as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(block)
+                size += len(block)
     except OSError as error:
         raise ScreenshotIntegrityError(f"screenshot could not be read: {path}") from error
-    if len(payload) < len(PNG_SIGNATURE) + 12 or not payload.startswith(PNG_SIGNATURE):
-        raise ScreenshotIntegrityError(f"screenshot PNG signature is invalid: {path}")
+    return {"path": str(path), "bytes": size, "sha256": digest.hexdigest()}
 
-    offset = len(PNG_SIGNATURE)
-    width: int | None = None
-    height: int | None = None
-    saw_iend = False
-    while offset < len(payload):
-        if len(payload) - offset < 12:
-            raise ScreenshotIntegrityError(f"screenshot PNG chunk is truncated: {path}")
-        length = struct.unpack(">I", payload[offset:offset + 4])[0]
-        chunk_type = payload[offset + 4:offset + 8]
-        end = offset + 12 + length
-        if end > len(payload):
-            raise ScreenshotIntegrityError(f"screenshot PNG chunk exceeds file: {path}")
-        chunk_data = payload[offset + 8:offset + 8 + length]
-        expected_crc = struct.unpack(">I", payload[offset + 8 + length:end])[0]
-        if zlib.crc32(chunk_type + chunk_data) & 0xFFFFFFFF != expected_crc:
-            raise ScreenshotIntegrityError(f"screenshot PNG CRC is invalid: {path}")
-        if chunk_type == b"IHDR":
-            if offset != len(PNG_SIGNATURE) or length != 13:
-                raise ScreenshotIntegrityError(f"screenshot PNG IHDR is invalid: {path}")
-            width, height = struct.unpack(">II", chunk_data[:8])
-            if width <= 0 or height <= 0:
-                raise ScreenshotIntegrityError(f"screenshot PNG dimensions are invalid: {path}")
-        elif chunk_type == b"IEND":
-            if length != 0 or width is None or height is None:
-                raise ScreenshotIntegrityError(f"screenshot PNG IEND is invalid: {path}")
-            saw_iend = True
-            if end != len(payload):
-                raise ScreenshotIntegrityError(f"screenshot PNG has trailing bytes: {path}")
-            break
-        offset = end
-    if not saw_iend or width is None or height is None:
-        raise ScreenshotIntegrityError(f"screenshot PNG has no complete IEND: {path}")
-    return {
-        "path": str(path),
+
+def assert_files_identical(source: Path, destination: Path) -> None:
+    """Prove a screenshot copy retained the producer's original bytes."""
+
+    expected = file_metadata(source)
+    observed = file_metadata(destination)
+    if (observed["bytes"], observed["sha256"]) != (
+        expected["bytes"], expected["sha256"],
+    ):
+        raise ScreenshotIntegrityError(
+            "screenshot copy changed bytes: "
+            f"source={source} destination={destination}"
+        )
+
+
+def _decode_png(path: Path):
+    """Decode one PNG with Pillow and return its loaded pixels."""
+
+    _regular_file(path)
+    try:
+        from PIL import Image
+    except ImportError as error:
+        raise ScreenshotIntegrityError("Pillow is required to validate screenshots") from error
+
+    try:
+        with Image.open(path) as probe:
+            if probe.format != "PNG":
+                raise ScreenshotIntegrityError(f"screenshot {path} is not a PNG")
+            width, height = probe.size
+            if width <= 0 or height <= 0 or width * height > MAX_SCREENSHOT_PIXELS:
+                raise ScreenshotIntegrityError(f"screenshot {path} dimensions are invalid")
+            probe.verify()
+        with Image.open(path) as image:
+            if image.format != "PNG":
+                raise ScreenshotIntegrityError(f"screenshot {path} is not a PNG")
+            image.load()
+            return image.copy()
+    except ScreenshotIntegrityError:
+        raise
+    except (OSError, ValueError, SyntaxError) as error:
+        raise ScreenshotIntegrityError(
+            f"screenshot {path} could not be decoded as a complete PNG"
+        ) from error
+
+
+def png_metadata(path: Path) -> dict[str, Any]:
+    """Fully decode one produced PNG and return manifest-ready metadata."""
+
+    image = _decode_png(path)
+    metadata = file_metadata(path)
+    metadata.update({
         "mime": "image/png",
-        "bytes": len(payload),
-        "sha256": sha256(payload).hexdigest(),
-        "width": width,
-        "height": height,
-    }
+        "width": image.width,
+        "height": image.height,
+    })
+    return metadata
+
+
+def nonblank_png_dimensions(path: Path) -> tuple[int, int]:
+    """Decode and require visible, nonuniform pixels in a rendered screenshot."""
+
+    image = _decode_png(path)
+    rgb = image.convert("RGB")
+    extrema = rgb.getextrema()
+    if all(low == 0 and high == 0 for low, high in extrema):
+        raise ScreenshotIntegrityError(f"screenshot {path} is blank")
+    if all(low == high for low, high in extrema):
+        raise ScreenshotIntegrityError(f"screenshot {path} is uniformly blank")
+    if image.convert("RGBA").getchannel("A").getextrema()[1] == 0:
+        raise ScreenshotIntegrityError(f"screenshot {path} has no visible pixels")
+    return image.width, image.height
 
 
 def assert_marker_matches(
@@ -80,22 +114,29 @@ def assert_marker_matches(
     *,
     bytes_count: int,
     sha256_value: str,
-    width: int,
-    height: int,
 ) -> None:
-    """Reject a pulled artifact whose producer metadata does not match it."""
+    """Compare a pulled screenshot to producer size and digest metadata."""
 
-    expected = {
-        "bytes": bytes_count,
-        "sha256": sha256_value,
-        "width": width,
-        "height": height,
-    }
+    expected = {"bytes": bytes_count, "sha256": sha256_value}
     observed = {key: metadata.get(key) for key in expected}
-    if observed != expected:
+    if (
+        type(bytes_count) is not int
+        or bytes_count <= 0
+        or not isinstance(sha256_value, str)
+        or _SHA256.fullmatch(sha256_value) is None
+        or observed != expected
+    ):
         raise ScreenshotIntegrityError(
             f"screenshot marker mismatch: expected={expected!r} observed={observed!r}"
         )
 
 
-__all__ = ["ScreenshotIntegrityError", "assert_marker_matches", "png_metadata"]
+__all__ = [
+    "MAX_SCREENSHOT_PIXELS",
+    "ScreenshotIntegrityError",
+    "assert_files_identical",
+    "assert_marker_matches",
+    "file_metadata",
+    "nonblank_png_dimensions",
+    "png_metadata",
+]

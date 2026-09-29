@@ -52,6 +52,7 @@ _RELEASE_WORKFLOW = ".github/workflows/release.yml"
 # process (see hosted/native_ui.py).
 _NATIVE_UI_TASK_TIMEOUT_RESERVE_SECONDS = 90.0
 _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS = 900.0
+_SCREENSHOT_DECODER_INSTALL_TIMEOUT_SECONDS = 180.0
 
 # The native desktop journey runs in an interactive user session rather than
 # the SSH worker's process environment.  Keep only values with a concrete
@@ -119,6 +120,45 @@ def _prepare_desktop_ui_home(run_dir: Path) -> str:
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     home.chmod(0o700)
     return str(home)
+
+
+def _install_screenshot_decoder(
+    run_dir: Path,
+    logs: Path,
+    timeout: float,
+) -> Path:
+    """Install the pinned screenshot decoder into this disposable run."""
+
+    source = run_dir / "source"
+    requirements = source / ".github" / "scripts" / "requirements-native-ui.txt"
+    if requirements.is_symlink() or not requirements.is_file():
+        raise LocalVMError("pinned native UI Python requirements are missing")
+    target = run_dir / "screenshot-python"
+    if target.exists() or target.is_symlink():
+        raise LocalVMError("screenshot Python package directory already exists")
+    target.mkdir(mode=0o700)
+    _run_logged(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--only-binary=:all:",
+            "--target",
+            str(target),
+            "--requirement",
+            str(requirements),
+        ],
+        cwd=source,
+        logs=logs,
+        label="install-screenshot-decoder",
+        timeout=min(timeout, _SCREENSHOT_DECODER_INSTALL_TIMEOUT_SECONDS),
+    )
+    package_path = str(target)
+    if package_path not in sys.path:
+        sys.path.insert(0, package_path)
+    return target
 
 
 def _positive_timeout(value: str) -> float:
@@ -352,28 +392,11 @@ def _write_probe_streams(
     stderr_path.write_bytes(_diagnostic_bytes(stderr))
 
 
-def _forward_probe_streams(
-    label: str,
-    stdout: bytes | str | None,
-    stderr: bytes | str | None,
-) -> None:
-    """Forward a probe that has no current-run log directory."""
-
-    for name, value in (("stdout", stdout), ("stderr", stderr)):
-        rendered = _decode_diagnostic_stream(_diagnostic_bytes(value))
-        sys.stderr.write(f"[{label} {name} begin]\n")
-        sys.stderr.write(rendered)
-        if rendered and not rendered.endswith("\n"):
-            sys.stderr.write("\n")
-        sys.stderr.write(f"[{label} {name} end]\n")
-    sys.stderr.flush()
-
-
 def _run_probe_logged(
     command: list[str],
     *,
     cwd: Path,
-    logs: Path | None,
+    logs: Path,
     label: str,
     timeout: float,
     environment: dict[str, str] | None = None,
@@ -399,7 +422,7 @@ def _run_probe_logged_impl(
     command: list[str],
     *,
     cwd: Path,
-    logs: Path | None,
+    logs: Path,
     label: str,
     timeout: float,
     environment: dict[str, str] | None = None,
@@ -410,83 +433,52 @@ def _run_probe_logged_impl(
     The normal command runner streams to files as the process runs.  These
     probes are intentionally synchronous because their output is consumed as
     one small value, but they still need the same no-loss diagnostic contract.
-    Production callers always provide the current run's ``logs`` directory;
-    the ``None`` path keeps focused helper callers backwards-compatible.
+    The probe output is small enough to capture synchronously, then is written
+    to its current run's stdout and stderr logs.
     """
 
-    if logs is None:
+    logs.mkdir(parents=True, exist_ok=True)
+    if not _IDENTITY.fullmatch(label):
+        raise LocalVMError("command label is invalid")
+    stdout_path, stderr_path = _next_command_logs(logs, label)
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd),
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = getattr(error, "stdout", None) or getattr(error, "output", None)
+        stderr = getattr(error, "stderr", None)
         try:
-            result = subprocess.run(
-                command,
-                cwd=str(cwd),
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=False,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            _forward_probe_streams(
-                label,
-                getattr(error, "stdout", None) or getattr(error, "output", None),
-                getattr(error, "stderr", None),
-            )
-            failure = LocalVMError(f"{label}: command timed out")
-            _add_command_stream_notes(
-                failure,
-                label,
-                getattr(error, "stdout", None) or getattr(error, "output", None),
-                getattr(error, "stderr", None),
-            )
-            raise failure from error
-        except OSError as error:
-            raise LocalVMError(f"{label}: command could not start: {error}") from error
-        _forward_probe_streams(label, result.stdout, result.stderr)
-    else:
-        logs.mkdir(parents=True, exist_ok=True)
-        if not _IDENTITY.fullmatch(label):
-            raise LocalVMError("command label is invalid")
-        stdout_path, stderr_path = _next_command_logs(logs, label)
-        try:
-            result = subprocess.run(
-                command,
-                cwd=str(cwd),
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=False,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as error:
-            stdout = getattr(error, "stdout", None) or getattr(error, "output", None)
-            stderr = getattr(error, "stderr", None)
-            try:
-                _write_probe_streams(stdout_path, stderr_path, stdout, stderr)
-            except OSError as log_error:
-                failure = LocalVMError(f"{label}: command timed out")
-                _add_command_stream_notes(failure, label, stdout, stderr)
-                failure.add_note(f"{label}_log_write: {type(log_error).__name__}: {log_error}")
-                raise failure from error
+            _write_probe_streams(stdout_path, stderr_path, stdout, stderr)
+        except OSError as log_error:
             failure = LocalVMError(f"{label}: command timed out")
             _add_command_stream_notes(failure, label, stdout, stderr)
+            failure.add_note(f"{label}_log_write: {type(log_error).__name__}: {log_error}")
             raise failure from error
-        except OSError as error:
-            try:
-                _write_probe_streams(stdout_path, stderr_path, b"", b"")
-            except OSError as log_error:
-                error.add_note(f"{label}_log_write: {type(log_error).__name__}: {log_error}")
-            raise LocalVMError(f"{label}: command could not start: {error}") from error
+        failure = LocalVMError(f"{label}: command timed out")
+        _add_command_stream_notes(failure, label, stdout, stderr)
+        raise failure from error
+    except OSError as error:
         try:
-            _write_probe_streams(stdout_path, stderr_path, result.stdout, result.stderr)
-        except OSError as error:
-            failure = LocalVMError(f"{label}: command output could not be retained")
-            failure.add_note(f"{label}_log_write: {type(error).__name__}: {error}")
-            _add_command_stream_notes(failure, label, result.stdout, result.stderr)
-            raise failure from error
+            _write_probe_streams(stdout_path, stderr_path, b"", b"")
+        except OSError as log_error:
+            error.add_note(f"{label}_log_write: {type(log_error).__name__}: {log_error}")
+        raise LocalVMError(f"{label}: command could not start: {error}") from error
+    try:
+        _write_probe_streams(stdout_path, stderr_path, result.stdout, result.stderr)
+    except OSError as error:
+        failure = LocalVMError(f"{label}: command output could not be retained")
+        failure.add_note(f"{label}_log_write: {type(error).__name__}: {error}")
+        _add_command_stream_notes(failure, label, result.stdout, result.stderr)
+        raise failure from error
 
     if check and result.returncode != 0:
         failure = LocalVMError(f"{label}: command exited {result.returncode}")
@@ -499,8 +491,8 @@ def _terminate_logged_process(
     process: subprocess.Popen[bytes],
     label: str,
     *,
-    cwd: Path | None = None,
-    logs: Path | None = None,
+    cwd: Path,
+    logs: Path,
 ) -> None:
     """Stop a timed-out command group and retain cleanup failures."""
 
@@ -509,7 +501,7 @@ def _terminate_logged_process(
         try:
             result = _run_probe_logged(
                 ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                cwd=cwd or Path.cwd(),
+                cwd=cwd,
                 logs=logs,
                 label=f"{label}-taskkill",
                 timeout=5,
@@ -681,17 +673,6 @@ def _run_logged_impl(
     return completed
 
 
-def _descriptor(run_dir: Path) -> dict[str, Any]:
-    path = run_dir / "candidate.json"
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise LocalVMError("local candidate descriptor is unreadable") from error
-    if not isinstance(value, dict):
-        raise LocalVMError("local candidate descriptor is invalid")
-    return value
-
-
 def _candidate_path(
     descriptor: dict[str, Any], name: str, *, required: bool = True
 ) -> Path | None:
@@ -811,7 +792,7 @@ def _validate_release_inputs(
     source: Path,
     manifest_path: Path,
     *,
-    logs: Path | None = None,
+    logs: Path,
 ) -> tuple[dict[str, Any], dict[tuple[str, str], Path]]:
     if manifest_path.is_symlink():
         raise LocalVMError("Release manifest must be a regular file")
@@ -832,7 +813,7 @@ def _validate_release_inputs(
             result = _run_probe_logged(
                 ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
                 cwd=source,
-                logs=logs if logs is not None else run_dir / "logs",
+                logs=logs,
                 label="release-source-revision",
                 timeout=30,
             )
@@ -867,31 +848,43 @@ def _validate_release_inputs(
     return manifest, _release_artifact_map(run_dir, manifest, str(manifest.get("platform")))
 
 
-def _write_candidate_descriptor(run_dir: Path, descriptor: dict[str, Any]) -> dict[str, Any]:
-    _write_json(run_dir / "candidate.json", descriptor)
-    return descriptor
-
-
-def _prepare_candidate(run_dir: Path, platform: str, logs: Path, timeout: float, *, architecture: str | None, skip_deps: bool, source_sha: str | None = None, source_tree: str | None = None) -> None:
+def _prepare_candidate(
+    run_dir: Path,
+    platform: str,
+    *,
+    architecture: str | None,
+    skip_deps: bool,
+    source_sha: str | None = None,
+    source_tree: str | None = None,
+) -> dict[str, str]:
+    """Call the candidate builder directly and render paths into platform state."""
     source = run_dir / "source"
-    command = [
-        sys.executable, str(source / ".github/scripts/local_candidate.py"),
-        "prepare", "--request-root", str(run_dir), "--source-root", str(source),
-        "--platform", platform, "--output", str(run_dir / "candidate.json"),
-    ]
-    if architecture:
-        command.extend(("--architecture", architecture))
-    if skip_deps:
-        command.append("--skip-deps")
-    if platform == "android" and source_sha and source_tree:
-        command.extend(("--source-sha", source_sha, "--source-tree", source_tree))
-    _run_logged(command, cwd=source, logs=logs, label="candidate-prepare", timeout=timeout)
+    scripts = str(source / ".github" / "scripts")
+    inserted = scripts not in sys.path
+    if inserted:
+        sys.path.insert(0, scripts)
+    try:
+        from local_candidate import prepare_candidate
+
+        candidate = prepare_candidate(
+            request_root=run_dir,
+            source_root=source,
+            platform=platform,
+            architecture=architecture,
+            skip_deps=skip_deps,
+            source_sha=source_sha,
+            source_tree=source_tree,
+        )
+    finally:
+        if inserted:
+            sys.path.remove(scripts)
+    return candidate.to_dict()
 
 
 def _run_platform_source_checks(run_dir: Path, platform: str, logs: Path, timeout: float) -> None:
     """Run the same platform source commands used by CI on the selected source."""
     commands = {
-        "linux": ("go-tests", "go-native-runtime", "lint-go"),
+        "linux": ("go-tests", "go-native-runtime", "lint-go", "python-tests"),
         "android": ("lint-android",),
         "windows": ("go-native-runtime",),
         "macos": ("go-native-runtime", "swift-unit", "lint-swift"),
@@ -915,7 +908,7 @@ def _prepare_desktop_package(
 ) -> dict[str, Any]:
     """Build and install the same native package used by hosted Release."""
     source = run_dir / "source"
-    script = source / ".github" / "scripts" / "desktop_platform.py"
+    script = source / ".github" / "scripts" / "desktop" / "desktop_package.py"
     output = run_dir / "output" / "desktop-package"
     version = (source / "VERSION").read_text(encoding="utf-8").strip()
     control_pipe_sid = (
@@ -938,7 +931,7 @@ def _prepare_desktop_package(
             else "dobbyVPN-macos-amd64.pkg"
         )
         migration = [
-            sys.executable, str(source / ".github" / "scripts" / "installer_migration.py"),
+            sys.executable, str(source / ".github" / "scripts" / "desktop" / "installer_migration.py"),
             "--platform", platform, "--package", str(output / package_name),
             "--current-version", version,
             "--log-dir", str(logs / "installer-migration"),
@@ -1025,15 +1018,14 @@ def _wait_linux_service(
     control_socket: Path,
     timeout: float,
     *,
-    logs: Path | None = None,
+    logs: Path,
 ) -> None:
     deadline = time.monotonic() + min(timeout, 30)
     last_probe_error: OSError | None = None
     while time.monotonic() < deadline:
-        pid_kwargs: dict[str, object] = {}
-        if logs is not None:
-            pid_kwargs.update(logs=logs, cwd=service.parent)
-        if _pid_matches(pid, str(service.resolve()), **pid_kwargs) and control_socket.is_socket():
+        if _pid_matches(
+            pid, str(service.resolve()), logs=logs, cwd=service.parent
+        ) and control_socket.is_socket():
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
                     probe.settimeout(min(0.2, max(0.01, deadline - time.monotonic())))
@@ -1207,7 +1199,7 @@ def _start_macos(
         raise LocalVMError("macOS candidate service paths are incomplete")
     source = run_dir / "source"
     resources = service.parent
-    plist = source / "installer/macos/vpnservice.plist"
+    plist = source / "apple/installer/vpnservice.plist"
     if not plist.is_file():
         raise LocalVMError("macOS service plist is missing")
     logs.mkdir(parents=True, exist_ok=True)
@@ -1224,7 +1216,7 @@ def _start_macos(
             f"DOBBY_LOG_PATH={logs / 'service.log'}",
             f"DOBBY_SERVICE_STDOUT_PATH={logs / 'service.stdout.log'}",
             f"DOBBY_SERVICE_STDERR_PATH={logs / 'service.stderr.log'}",
-            "/bin/bash", str(source / "installer/macos/postinstall.sh"),
+            "/bin/bash", str(source / "apple/installer/postinstall.sh"),
         ],
         cwd=run_dir, logs=logs, label="service-start", timeout=timeout,
     )
@@ -1519,7 +1511,7 @@ def _functional_command(
         if not isinstance(runtime, dict) or not isinstance(runtime.get("pid"), int):
             raise LocalVMError("installed desktop service runtime PID is unavailable")
         command = [
-            sys.executable, str(run_dir / "source" / ".github" / "scripts" / "desktop_platform.py"),
+            sys.executable, str(run_dir / "source" / ".github" / "scripts" / "desktop" / "desktop_package.py"),
             "test", "--mode", "local", "--platform", platform,
             "--installed-descriptor", str(run_dir / "installed.json"),
             "--profile", str(run_dir / "profile"), "--suite", suite,
@@ -1558,8 +1550,8 @@ def _functional_command(
         if platform == "linux":
             command.extend(("--routing-firewall-helper", str(Path(__file__).resolve().parents[1] / "helpers/local/linux/routing-probe-firewall"),))
         elif platform == "macos":
-            helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/network-transition"
-            command.extend(("--routing-firewall-helper", str(helper), "--network-transition-helper", str(helper)))
+            helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/routing-firewall"
+            command.extend(("--routing-firewall-helper", str(helper)))
     for scenario in scenarios or []:
         command.extend(("--scenario", scenario))
     return command
@@ -1575,7 +1567,7 @@ def _native_ui_command(
     """Build the real-window journey command for desktop full guests."""
     if platform not in {"windows", "macos"}:
         raise LocalVMError(f"native GUI qualification is unsupported on {platform}")
-    smoke = run_dir / "source" / ".github" / "scripts" / "native_ui_smoke.py"
+    smoke = run_dir / "source" / ".github" / "scripts" / "desktop" / "native_ui_smoke.py"
     module = run_dir / "source" / "torturer" / "torturer_checks" / "hosted" / "native_ui.py"
     if not smoke.is_file():
         raise LocalVMError("native desktop UI qualification script is missing")
@@ -1615,7 +1607,7 @@ def _native_ui_command(
     if runtime.get("network_interface") is not None:
         command.extend(("--network-interface", str(runtime["network_interface"])))
     if platform == "macos":
-        helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/network-transition"
+        helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/routing-firewall"
         command.extend(("--routing-firewall-helper", str(helper)))
     return command
 
@@ -1731,6 +1723,7 @@ def run(args: argparse.Namespace) -> int:
         "status": "preparing",
     }
     _write_json(run_dir / "platform.json", state)
+    screenshot_python: Path | None = None
     try:
         if args.source_checks:
             state["source_checks_attempted"] = True
@@ -1740,6 +1733,12 @@ def run(args: argparse.Namespace) -> int:
             state["source_checks"] = "passed"
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
+        if args.platform == "ios-simulator" or (
+            args.suite == "full" and args.platform in {"windows", "macos"}
+        ):
+            screenshot_python = _install_screenshot_decoder(
+                run_dir, logs, args.timeout,
+            )
         if args.platform == "macos" and args.suite == "full":
             # Full macOS is the only lane that spends time building/installing
             # a desktop candidate. Fail early when this worker is not attached
@@ -1759,7 +1758,7 @@ def run(args: argparse.Namespace) -> int:
                 timeout=min(args.timeout, 30.0),
             )
             preflight_native_ui_capabilities(
-                source / ".github" / "scripts" / "native_ui_smoke.py",
+                source / ".github" / "scripts" / "desktop" / "native_ui_smoke.py",
                 run_dir=run_dir,
                 logs=logs,
                 timeout=min(args.timeout, 30.0),
@@ -1803,13 +1802,11 @@ def run(args: argparse.Namespace) -> int:
             state["status"] = "candidate-prepared"
             _write_json(run_dir / "platform.json", state)
         else:
-            _timed_call(
+            descriptor = _timed_call(
                 "candidate-build",
                 lambda: _prepare_candidate(
                     run_dir,
                     args.platform,
-                    logs,
-                    args.timeout,
                     architecture=args.architecture,
                     skip_deps=args.skip_deps,
                     source_sha=args.source_sha,
@@ -1817,7 +1814,6 @@ def run(args: argparse.Namespace) -> int:
                 ),
                 platform=args.platform,
             )
-            descriptor = _descriptor(run_dir)
             state["candidate"] = descriptor
             state["status"] = "candidate-prepared"
             _write_json(run_dir / "platform.json", state)
@@ -1998,6 +1994,8 @@ def run(args: argparse.Namespace) -> int:
             state["runtime"] = runtime
             _write_json(run_dir / "platform.json", state)
             native_environment = _native_ui_environment(args.platform, runtime)
+            if screenshot_python is not None:
+                native_environment["PYTHONPATH"] = str(screenshot_python)
             native_task_timeout = min(
                 args.timeout, _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS,
             )
@@ -2066,8 +2064,8 @@ def _pid_matches(
     pid: int,
     binary: str | None,
     *,
-    logs: Path | None = None,
-    cwd: Path | None = None,
+    logs: Path,
+    cwd: Path,
 ) -> bool:
     if pid <= 0 or not binary or os.name == "nt":
         return False
@@ -2078,7 +2076,7 @@ def _pid_matches(
     command = ["sudo", "-n", "readlink", "-f", f"/proc/{pid}/exe"]
     observed = _run_probe_logged(
         command,
-        cwd=cwd or Path.cwd(),
+        cwd=cwd,
         logs=logs,
         label="service-pid-executable",
         timeout=5,
@@ -2115,18 +2113,15 @@ def _checked_process_group(
     pid: int,
     binary: str | None,
     *,
-    logs: Path | None = None,
-    cwd: Path | None = None,
+    logs: Path,
+    cwd: Path,
 ) -> str | None:
-    pid_kwargs: dict[str, object] = {}
-    if logs is not None:
-        pid_kwargs.update(logs=logs, cwd=cwd or Path.cwd())
-    if not _pid_matches(pid, binary, **pid_kwargs):
+    if not _pid_matches(pid, binary, logs=logs, cwd=cwd):
         return None
     command = ["sudo", "-n", "ps", "-o", "pgid=", "-p", str(pid)]
     observed = _run_probe_logged(
         command,
-        cwd=cwd or Path.cwd(),
+        cwd=cwd,
         logs=logs,
         label="service-pid-group",
         timeout=5,
@@ -2158,13 +2153,13 @@ def _signal_process_group(
     process_group: str,
     signal_name: str,
     *,
-    logs: Path | None = None,
-    cwd: Path | None = None,
+    logs: Path,
+    cwd: Path,
 ) -> bool:
     command = ["sudo", "-n", "kill", signal_name, "--", f"-{process_group}"]
     result = _run_probe_logged(
         command,
-        cwd=cwd or Path.cwd(),
+        cwd=cwd,
         logs=logs,
         label="service-pid-signal",
         timeout=5,
@@ -2189,38 +2184,37 @@ def _stop_pid(
     binary: str | None,
     timeout: float,
     *,
-    logs: Path | None = None,
-    cwd: Path | None = None,
+    logs: Path,
+    cwd: Path,
 ) -> bool:
     if not _pid_alive(pid):
         return True
-    group_kwargs: dict[str, object] = {}
-    if logs is not None:
-        group_kwargs.update(logs=logs, cwd=cwd or Path.cwd())
-    process_group = _checked_process_group(pid, binary, **group_kwargs)
+    process_group = _checked_process_group(pid, binary, logs=logs, cwd=cwd)
     if process_group is None:
         return False
     if not _signal_process_group(
         process_group,
         "-TERM",
-        **group_kwargs,
+        logs=logs,
+        cwd=cwd,
     ) and _pid_alive(pid):
         raise LocalVMError("could not terminate service process group")
     deadline = time.monotonic() + min(timeout, 3)
     while time.monotonic() < deadline:
-        if not _pid_matches(pid, binary, **group_kwargs):
+        if not _pid_matches(pid, binary, logs=logs, cwd=cwd):
             return True
         time.sleep(0.05)
-    if _pid_matches(pid, binary, **group_kwargs):
+    if _pid_matches(pid, binary, logs=logs, cwd=cwd):
         if not _signal_process_group(
             process_group,
             "-KILL",
-            **group_kwargs,
+            logs=logs,
+            cwd=cwd,
         ) and _pid_alive(pid):
             raise LocalVMError("could not kill service process group")
     deadline = time.monotonic() + min(timeout, 5)
     while time.monotonic() < deadline:
-        if not _pid_matches(pid, binary, **group_kwargs):
+        if not _pid_matches(pid, binary, logs=logs, cwd=cwd):
             return True
         time.sleep(0.05)
     return False
@@ -2382,11 +2376,8 @@ def cleanup(args: argparse.Namespace) -> int:
                 errors=errors,
             )
     elif args.platform == "macos":
-        helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/network-transition"
+        helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/routing-firewall"
         _cleanup_logged(["sudo", "-n", str(helper), "routing-remove"], cwd=run_dir, logs=logs, label="cleanup-routing", timeout=args.timeout, errors=errors)
-        interface = runtime.get("network_interface")
-        if isinstance(interface, str):
-            _cleanup_logged(["sudo", "-n", "/sbin/ifconfig", interface, "up"], cwd=run_dir, logs=logs, label="cleanup-uplink", timeout=args.timeout, errors=errors)
         if release is not None:
             # The package's fixed uninstaller owns launchd, its plist/socket,
             # receipt, app bundle, and uninstaller path.  Do not reproduce its
@@ -2443,7 +2434,7 @@ def cleanup(args: argparse.Namespace) -> int:
         source = run_dir / "source"
         _cleanup_logged(
             [
-                sys.executable, str(source / ".github" / "scripts" / "desktop_platform.py"),
+                sys.executable, str(source / ".github" / "scripts" / "desktop" / "desktop_package.py"),
                 "uninstall", "--installed-descriptor", str(installed_descriptor),
                 "--run-dir", str(run_dir),
             ],

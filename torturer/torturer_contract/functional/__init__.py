@@ -29,8 +29,7 @@ from .results import (
 from .scenarios import (
     ScenarioDefinition,
     ScenarioStep,
-    get_scenario,
-    test_set,
+    select_scenarios,
 )
 
 __all__ = [
@@ -49,6 +48,5 @@ __all__ = [
     "ScenarioStep",
     "evaluate_assertion",
     "evaluate_assertions",
-    "get_scenario",
-    "test_set",
+    "select_scenarios",
 ]

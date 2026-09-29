@@ -28,6 +28,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  python_tests:
+    name: python-tests
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Run Python unit tests
+        run: python3 .github/scripts/source_checks.py python-tests
+
   go:
     name: Go unit and race tests
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
@@ -216,6 +229,14 @@ jobs:
           go-version-file: .go-version
           cache: false
 
+      - name: Install pinned screenshot decoder
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/dobbyvpn-screenshot-python"
+          python3 -m pip install --disable-pip-version-check --only-binary=:all: \
+            --no-deps --target "$package_dir" \
+            --requirement .github/scripts/requirements-native-ui.txt
+
       - name: Verify pinned Go installation
         run: |
           set -euo pipefail
@@ -239,14 +260,14 @@ jobs:
             ndk;28.1.13356709
 
       - name: Download Go modules for the Android backend
-        working-directory: go_module
+        working-directory: core
         run: go mod download
 
       - name: Build Android app and instrumentation companion, then verify native ABI
         run: |
           set -euo pipefail
           build_root="$RUNNER_TEMP/dobbyvpn-android-ci"
-          .github/scripts/android_build_check.sh \
+          .github/scripts/android/android_build_check.sh \
             --source-root "$GITHUB_WORKSPACE" \
             --source-sha "$GITHUB_SHA" \
             --output "$build_root/app-release-unsigned.apk" \
@@ -271,7 +292,7 @@ jobs:
           cache: false
 
       - name: Build TrustTunnel-enabled Go runtime for iOS Simulator
-        working-directory: go_module
+        working-directory: core
         run: |
           set -euo pipefail
           mobile_version='v0.0.0-20260520154334-0e4426e1883d'
@@ -286,7 +307,7 @@ jobs:
 
       - name: Build and launch app on iPhone Simulator
         env:
-          PYTHONPATH: torturer
+          PYTHONPATH: ${{ runner.temp }}/dobbyvpn-screenshot-python:${{ github.workspace }}/torturer
         run: |
           set -euo pipefail
           python3 torturer/tests/ios_simulator/run_app_contract.py \
@@ -322,14 +343,14 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 .github/scripts/version_metadata.py \
+          python3 .github/scripts/release/version_metadata.py \
             --version-file VERSION --github-output "$GITHUB_OUTPUT"
 
   focused_desktop_build:
     name: Build selected desktop mini candidate
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini') }}
     needs: [ci_selected_version]
-    uses: ./.github/workflows/desktop_platform.yml
+    uses: ./.github/workflows/desktop_package.yml
     with:
       platform: ${{ inputs.platform == 'linux-mini' && 'linux' || inputs.platform == 'windows-mini' && 'windows' || 'macos' }}
       architecture: ${{ inputs.platform == 'macos-mini' && 'arm64' || 'amd64' }}
@@ -434,6 +455,7 @@ jobs:
     name: Complete CI
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') }}
     needs:
+      - python_tests
       - go
       - go_native_runtime
       - go_native_windows
@@ -450,6 +472,7 @@ jobs:
     steps:
       - name: Require every full CI job
         env:
+          PYTHON_TESTS_RESULT: ${{ needs.python_tests.result }}
           GO_RESULT: ${{ needs.go.result }}
           GO_NATIVE_RUNTIME_RESULT: ${{ needs.go_native_runtime.result }}
           GO_NATIVE_WINDOWS_RESULT: ${{ needs.go_native_windows.result }}
@@ -465,6 +488,7 @@ jobs:
         run: |
           set -euo pipefail
           for result in \
+            "$PYTHON_TESTS_RESULT" \
             "$GO_RESULT" \
             "$GO_NATIVE_RUNTIME_RESULT" \
             "$GO_NATIVE_WINDOWS_RESULT" \
@@ -518,7 +542,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 .github/scripts/actions_retention.py \
+          python3 .github/scripts/release/actions_retention.py \
             --repository "$GITHUB_REPOSITORY" \
             --current-run-id "$GITHUB_RUN_ID" \
             --delete-caches \

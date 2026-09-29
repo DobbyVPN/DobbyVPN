@@ -28,7 +28,7 @@ jobs:
       - name: Require CI success for the exact Release commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/require_ci.py --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA"
+        run: python3 .github/scripts/release/require_ci.py --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA"
 
   # Marketing version (x.y.z) is manual via the repo VERSION file.
   prepare_version:
@@ -62,16 +62,16 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 .github/scripts/version_metadata.py \
+          python3 .github/scripts/release/version_metadata.py \
             --version-file VERSION \
             --github-output "$GITHUB_OUTPUT"
           version_name="$(
-            python3 .github/scripts/version_metadata.py \
+            python3 .github/scripts/release/version_metadata.py \
               --version-file VERSION \
               --field version_name
           )"
           android_version_code="$(
-            python3 .github/scripts/version_metadata.py \
+            python3 .github/scripts/release/version_metadata.py \
               --version-file VERSION \
               --field android_version_code
           )"
@@ -79,7 +79,7 @@ jobs:
 
   ios_libraries_build:
     needs: [verification, prepare_version]
-    uses: ./.github/workflows/ios_libs_generate.yml
+    uses: ./.github/workflows/ios_runtime_framework.yml
     with:
       source_sha: ${{ github.sha }}
 
@@ -112,7 +112,7 @@ jobs:
       android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
   build_linux:
     needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_platform.yml
+    uses: ./.github/workflows/desktop_package.yml
     with:
       platform: linux
       architecture: amd64
@@ -121,7 +121,7 @@ jobs:
 
   build_windows:
     needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_platform.yml
+    uses: ./.github/workflows/desktop_package.yml
     with:
       platform: windows
       architecture: amd64
@@ -130,7 +130,7 @@ jobs:
 
   build_macos_arm:
     needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_platform.yml
+    uses: ./.github/workflows/desktop_package.yml
     with:
       platform: macos
       architecture: arm64
@@ -139,7 +139,7 @@ jobs:
 
   build_macos_intel:
     needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_platform.yml
+    uses: ./.github/workflows/desktop_package.yml
     with:
       platform: macos
       architecture: amd64
@@ -281,7 +281,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 .github/scripts/actions_retention.py \
+          python3 .github/scripts/release/actions_retention.py \
             --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" \
             --delete-caches --delete-intermediate-artifacts \
             --keep-artifact DobbyVPN.xcarchive.tar.gz \

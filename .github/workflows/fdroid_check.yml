@@ -67,7 +67,7 @@ jobs:
       - name: Sign a disposable F-Droid reference APK
         run: |
           set -euo pipefail
-          python3 .github/scripts/android_apk_signing.py sign-test \
+          python3 .github/scripts/android/android_apk_signing.py sign-test \
             --unsigned-app "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-unsign.apk" \
             --unsigned-companion "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-android-test-companion-unsigned.apk" \
             --signed-app "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-sign.apk" \
@@ -116,7 +116,7 @@ jobs:
             --env VERSION_CODE \
             --env FDROID_DIAGNOSTIC_DIR=/workspace/diagnostics \
             "$FDROID_IMAGE" \
-            /workspace/product/.github/scripts/fdroid_release_check.sh \
+            /workspace/product/.github/scripts/android/fdroid_release_check.sh \
               --fdroiddata /workspace/fdroiddata \
               --fdroidserver /workspace/fdroidserver \
               --reference-apk "/workspace/reference/DobbyVPN-v${VERSION_NAME}-sign.apk" \

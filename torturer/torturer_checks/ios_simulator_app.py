@@ -34,12 +34,15 @@ from torturer_checks.ios_simulator import (
     simctl_terminate_command,
     xcodebuild_ui_test_command,
 )
-from torturer_checks.screenshot_artifacts import png_metadata
+from torturer_checks.screenshot_artifacts import (
+    assert_files_identical,
+    png_metadata,
+)
 
 
 _RUNTIME = re.compile(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-(\d+(?:-\d+)*)\Z")
 _SDK_VERSION = re.compile(r"\A\s*(\d+)\.(\d+)(?:\.\d+)?\s*\Z")
-_PROJECT_PATH = Path("swift_module/iosApp.xcodeproj")
+_PROJECT_PATH = Path("apple/iosApp.xcodeproj")
 _CONFIGURATION = "Release"
 _APP_PRODUCT = "Dobby-Vpn-Simulator.app"
 _BUNDLE_IDENTIFIER = "vpn.dobby.app"
@@ -801,6 +804,7 @@ def _retain_xctest_screenshots(
                 try:
                     shutil.copy2(source, screenshot)
                     screenshot.chmod(0o600)
+                    assert_files_identical(source, screenshot)
                     png_metadata(screenshot)
                 except (OSError, ValueError) as error:
                     raise IOSSimulatorAppContractError(
@@ -881,7 +885,7 @@ def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path,
         if source.name == "ui-screenshots":
             retained.append(_copy_complete_directory(source, destination, label="iOS UI screenshots"))
             for screenshot in destination.iterdir():
-                png_metadata(screenshot)
+                assert_files_identical(source / screenshot.name, screenshot)
                 screenshot.chmod(0o600)
             destination.chmod(0o700)
             continue
@@ -1443,7 +1447,7 @@ def prepare_ios_simulator_candidate(
     candidate_root = Path(candidate_root).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     app_path = contract.app_path(work_dir)
-    go_root = candidate_root / "go_module"
+    go_root = candidate_root / "core"
     def build_app() -> None:
         _require_success(
             runner,

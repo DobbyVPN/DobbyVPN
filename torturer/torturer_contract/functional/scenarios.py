@@ -14,6 +14,19 @@ from .capabilities import Capability
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9._-]*$")
 
+_CAPABILITY_BY_OPERATION = {
+    "configure": Capability.CONFIGURE,
+    "connect": Capability.CONNECT,
+    "observe_tunnel": Capability.TUNNEL_INTERFACE,
+    "observe_routing_identity": Capability.ROUTING_IDENTITY,
+    "measure_stability": Capability.TRAFFIC_MEASUREMENT,
+    "measure_throughput": Capability.TRAFFIC_MEASUREMENT,
+    "disconnect": Capability.DISCONNECT,
+    "inspect_cleanup": Capability.RESOURCE_CLEANUP,
+    "reconnect": Capability.RECONNECT,
+    "process_loss": Capability.PROCESS_LOSS,
+}
+
 
 @dataclass(frozen=True)
 class ScenarioStep:
@@ -31,13 +44,13 @@ class ScenarioStep:
         if self.timeout_seconds <= 0:
             raise ValueError("scenario step timeout must be positive")
 
+
 @dataclass(frozen=True)
 class ScenarioDefinition:
     """A scenario and its canonical pass criteria."""
 
     id: str
     steps: tuple[ScenarioStep, ...]
-    required_capabilities: frozenset[Capability]
     assertion_ids: tuple[str, ...]
     max_duration_seconds: int
 
@@ -46,6 +59,14 @@ class ScenarioDefinition:
             raise ValueError(f"invalid scenario id: {self.id!r}")
         if not self.steps:
             raise ValueError("scenario must contain at least one step")
+        unknown_operations = sorted(
+            {step.operation for step in self.steps} - _CAPABILITY_BY_OPERATION.keys()
+        )
+        if unknown_operations:
+            raise ValueError(
+                "scenario has operations without capabilities: "
+                + ", ".join(unknown_operations)
+            )
         step_ids = [step.id for step in self.steps]
         if len(step_ids) != len(set(step_ids)):
             raise ValueError(f"scenario has duplicate step ids: {self.id}")
@@ -57,6 +78,13 @@ class ScenarioDefinition:
             raise ValueError("scenario maximum duration must be positive")
         if sum(step.timeout_seconds for step in self.steps) > self.max_duration_seconds:
             raise ValueError(f"scenario step bounds exceed scenario bound: {self.id}")
+
+    @property
+    def required_capabilities(self) -> frozenset[Capability]:
+        """Capabilities implied by the semantic operations in this scenario."""
+
+        return frozenset(_CAPABILITY_BY_OPERATION[step.operation] for step in self.steps)
+
 
 def _step(id: str, operation: str, timeout: int = 8) -> ScenarioStep:
     return ScenarioStep(id=id, operation=operation, timeout_seconds=timeout)
@@ -76,35 +104,18 @@ _COMMON_CONNECT = (
 )
 
 
-_QUALIFICATION_SCENARIO_IDS = (
-    "functional.configure",
-    "functional.core-connection",
-    "functional.start-stop-start",
-    "functional.product-process-loss",
-)
-
 _DISABLED_SCENARIO_IDS = frozenset({"functional.network-transition"})
 
 SUITE_NAMES = ("mini", "full")
 
-# The full lane is cumulative at the caller level: desktop callers add their
-# native-window journeys to this shared functional lane.  The semantic
-# scenario membership is intentionally the same as mini until deferred
-# network-transition coverage is re-admitted by policy.
-_SUITE_SCENARIO_IDS: dict[str, tuple[str, ...]] = {
-    "mini": _QUALIFICATION_SCENARIO_IDS,
-    "full": _QUALIFICATION_SCENARIO_IDS,
-}
 
-
-TEST_SET: tuple[ScenarioDefinition, ...] = (
+SCENARIOS: tuple[ScenarioDefinition, ...] = (
     ScenarioDefinition(
         id="functional.configure",
         # A software-emulated Android instrumentation process needs a larger
         # bounded cold-start and finalization allowance than native desktop
         # candidates. Faster platforms still return as soon as they finish.
         steps=(_step("configure", "configure", 60),),
-        required_capabilities=frozenset({Capability.CONFIGURE}),
         assertion_ids=("configure.accepted",),
         max_duration_seconds=160,
     ),
@@ -116,17 +127,6 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             _step("throughput", "measure_throughput", 30),
             _step("disconnect", "disconnect", 10),
             _step("cleanup", "inspect_cleanup", 15),
-        ),
-        required_capabilities=frozenset(
-            {
-                Capability.CONFIGURE,
-                Capability.CONNECT,
-                Capability.TUNNEL_INTERFACE,
-                Capability.ROUTING_IDENTITY,
-                Capability.TRAFFIC_MEASUREMENT,
-                Capability.DISCONNECT,
-                Capability.RESOURCE_CLEANUP,
-            }
         ),
         assertion_ids=(
             "configure.accepted",
@@ -150,17 +150,6 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             _step("final-disconnect", "disconnect", 10),
             _step("cleanup", "inspect_cleanup", 15),
         ),
-        required_capabilities=frozenset(
-            {
-                Capability.CONFIGURE,
-                Capability.CONNECT,
-                Capability.TUNNEL_INTERFACE,
-                Capability.ROUTING_IDENTITY,
-                Capability.DISCONNECT,
-                Capability.RECONNECT,
-                Capability.RESOURCE_CLEANUP,
-            }
-        ),
         assertion_ids=(
             "configure.accepted",
             "tunnel.established",
@@ -183,17 +172,6 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
             _step("disconnect", "disconnect", 10),
             _step("cleanup", "inspect_cleanup", 15),
         ),
-        required_capabilities=frozenset(
-            {
-                Capability.CONFIGURE,
-                Capability.CONNECT,
-                Capability.TUNNEL_INTERFACE,
-                Capability.ROUTING_IDENTITY,
-                Capability.PROCESS_LOSS,
-                Capability.DISCONNECT,
-                Capability.RESOURCE_CLEANUP,
-            }
-        ),
         assertion_ids=(
             "configure.accepted",
             "tunnel.established",
@@ -210,30 +188,6 @@ TEST_SET: tuple[ScenarioDefinition, ...] = (
 )
 
 
-def test_set() -> tuple[ScenarioDefinition, ...]:
-    """Return every scenario definition available for execution."""
-
-    return TEST_SET
-
-
-def suite_set(suite: str = "mini") -> tuple[ScenarioDefinition, ...]:
-    """Return the canonical scenario membership for ``suite``.
-
-    ``full`` is cumulative with respect to the caller's additional journeys
-    (for example, native desktop-window actions); the shared semantic lane
-    remains the mini membership while deferred scenarios are out of scope.
-    """
-
-    try:
-        scenario_ids = _SUITE_SCENARIO_IDS[suite]
-    except KeyError as error:
-        raise ValueError(
-            f"unknown suite {suite!r}; expected one of {', '.join(SUITE_NAMES)}"
-        ) from error
-    by_id = {scenario.id: scenario for scenario in TEST_SET}
-    return tuple(by_id[scenario_id] for scenario_id in scenario_ids)
-
-
 def select_scenarios(
     *,
     suite: str = "mini",
@@ -245,9 +199,12 @@ def select_scenarios(
     disabled scenarios fail clearly instead of being silently skipped.
     """
 
-    suite_set(suite)  # validate the suite even when diagnostics are selected
+    if suite not in SUITE_NAMES:
+        raise ValueError(
+            f"unknown suite {suite!r}; expected one of {', '.join(SUITE_NAMES)}"
+        )
     if not scenario_ids:
-        return suite_set(suite)
+        return SCENARIOS
     disabled = [
         scenario_id
         for scenario_id in scenario_ids
@@ -257,7 +214,11 @@ def select_scenarios(
         raise ValueError(
             "scenario is disabled until further notice: " + ", ".join(disabled)
         )
-    scenarios = tuple(get_scenario(value) for value in scenario_ids)
+    by_id = {scenario.id: scenario for scenario in SCENARIOS}
+    unknown = [scenario_id for scenario_id in scenario_ids if scenario_id not in by_id]
+    if unknown:
+        raise KeyError(f"unknown scenario: {unknown[0]!r}")
+    scenarios = tuple(by_id[value] for value in scenario_ids)
     if len({scenario.id for scenario in scenarios}) != len(scenarios):
         raise ValueError("scenario-id values must be unique")
     return scenarios
@@ -279,7 +240,10 @@ def validate_suite(
     from doing installation/build work.
     """
 
-    suite_set(suite)
+    if suite not in SUITE_NAMES:
+        raise ValueError(
+            f"unknown suite {suite!r}; expected one of {', '.join(SUITE_NAMES)}"
+        )
     if suite == "mini":
         return
     if platform in {"android", "ios", "ios-simulator"}:
@@ -298,12 +262,3 @@ def validate_suite(
         )
     if platform not in {"windows", "macos"}:
         raise ValueError(f"FULL_SUITE_UNSUPPORTED_PLATFORM: {platform}")
-
-
-def get_scenario(scenario_id: str) -> ScenarioDefinition:
-    """Return one scenario or raise ``KeyError`` for an unknown id."""
-
-    for scenario in TEST_SET:
-        if scenario.id == scenario_id:
-            return scenario
-    raise KeyError(f"unknown scenario: {scenario_id!r}")

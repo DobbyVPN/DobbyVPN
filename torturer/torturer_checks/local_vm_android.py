@@ -23,8 +23,9 @@ from .android_instrumentation import (
 from .screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
-    png_metadata,
+    file_metadata,
 )
+from .local_vm import _run_logged
 
 _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
@@ -50,12 +51,6 @@ def _error(message: str) -> Exception:
     from .local_vm import LocalVMError
 
     return LocalVMError(message)
-
-
-def _run_logged(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-    from .local_vm import _run_logged as run_logged
-
-    return run_logged(*args, **kwargs)
 
 
 def _save_state(run_dir: Path, runtime: dict[str, Any], status: str = "starting") -> None:
@@ -498,15 +493,13 @@ def _collect_rendered_screenshots(
         if pulled.returncode != 0:
             raise _error(
                 f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: pull failed for {label}"
-            )
+        )
         try:
-            metadata = png_metadata(local)
+            metadata = file_metadata(local)
             assert_marker_matches(
                 metadata,
                 bytes_count=expected_bytes,
                 sha256_value=expected_sha256,
-                width=expected_width,
-                height=expected_height,
             )
         except (ScreenshotIntegrityError, OSError) as error:
             try:

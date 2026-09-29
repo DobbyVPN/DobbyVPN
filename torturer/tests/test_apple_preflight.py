@@ -21,7 +21,7 @@ PRODUCT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_smoke_script():
-    path = PRODUCT_ROOT / ".github/scripts/native_ui_smoke.py"
+    path = PRODUCT_ROOT / ".github/scripts/desktop/native_ui_smoke.py"
     spec = importlib.util.spec_from_file_location("dobbyvpn_native_ui_smoke_apple_test", path)
     if spec is None or spec.loader is None:
         raise AssertionError(f"could not load {path}")
@@ -152,7 +152,7 @@ class ApplePreflightTests(unittest.TestCase):
                 if release:
                     service.touch()
                 else:
-                    plist = run_dir / "source" / "installer/macos/vpnservice.plist"
+                    plist = run_dir / "source" / "apple/installer/vpnservice.plist"
                     plist.parent.mkdir(parents=True)
                     plist.touch()
                 descriptor = {
@@ -208,7 +208,7 @@ class ApplePreflightTests(unittest.TestCase):
     def test_capability_compile_failure_keeps_non_aqua_classification_and_streams(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            script = root / ".github" / "scripts" / "native_ui_smoke.py"
+            script = root / ".github" / "scripts" / "desktop" / "native_ui_smoke.py"
             script.parent.mkdir(parents=True)
             script.write_text("# test\n", encoding="utf-8")
             stdout = b"preflight stdout\n"
@@ -238,7 +238,7 @@ class ApplePreflightTests(unittest.TestCase):
     def test_outer_preflight_timeout_keeps_original_diagnostic_notes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            script = root / ".github" / "scripts" / "native_ui_smoke.py"
+            script = root / ".github" / "scripts" / "desktop" / "native_ui_smoke.py"
             script.parent.mkdir(parents=True)
             script.write_text("# test\n", encoding="utf-8")
             original = local_vm_macos.LocalVMError("command timed out")
@@ -305,7 +305,7 @@ class ApplePreflightTests(unittest.TestCase):
             work_dir = root / "work"
             contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
             contract.app_path(work_dir).mkdir(parents=True)
-            (root / "candidate" / "swift_module" / "iosApp.xcodeproj").mkdir(parents=True)
+            (root / "candidate" / "apple" / "iosApp.xcodeproj").mkdir(parents=True)
             budget = ios_simulator_app.RunBudget(
                 max_seconds=345,
                 cleanup_reserve_seconds=120,

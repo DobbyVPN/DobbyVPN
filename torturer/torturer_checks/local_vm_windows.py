@@ -18,7 +18,7 @@ import time
 from typing import Any
 import uuid
 
-from .local_vm import LocalVMError
+from .local_vm import LocalVMError, _run_logged
 
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
@@ -76,14 +76,6 @@ class WindowsInteractiveDesktopUnavailable(LocalVMError):
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"{self.reason_code}: {detail}")
-
-
-def _run_logged(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-    """Delegate logging/validation to the common local-VM command runner."""
-
-    from .local_vm import _run_logged as run_logged
-
-    return run_logged(*args, **kwargs)
 
 
 def _save_state(run_dir: Path, runtime: dict[str, Any], status: str = "starting") -> None:

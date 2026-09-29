@@ -27,19 +27,10 @@ its session snapshot. Inline TOML is kept only in the current UI session.
 Product logs remain complete and unsanitized; the native frontends read the
 local log files and can export their contents.
 
-See the [architecture contract](docs/ARCHITECTURE.md) for component ownership,
-local control, URL persistence, and platform boundaries.
-
-The product Go toolchain is pinned in .go-version. Build and test instructions
-are in [TESTING.md](TESTING.md), and the complete functional coverage contract
-is in [torturer/docs/contract.md](torturer/docs/contract.md). The private owner
-Harness runs local checks against disposable guests; its setup and commands
-are documented in the private owner workspace.
-
-Windows and macOS package builds and local desktop build commands are described
-in [.github/scripts/README.md](.github/scripts/README.md). Release qualifies the
-packages it builds. It does not publish them. Publication is a separate manual
-step and requires an explicit owner request.
+The product Go toolchain is pinned in .go-version. The private owner Harness
+runs local checks against disposable guests. Release qualifies the packages it
+builds. Publication is a separate manual step and requires an explicit owner
+request.
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
@@ -101,10 +92,14 @@ IPs = [
 
 DobbyVPN probes configured variants one by one when the VPN starts and
 activates the working variant with the lowest average latency, breaking ties
-by configuration order. Automatic selection is the GUI behavior. The CLI's
-`connect-profile` command and the test harness can select a profile index
-through the same session runtime; this operator/test mode skips automatic
-selection and does not switch to another profile after a health failure.
+by configuration order. Automatic selection is the GUI behavior. On desktop,
+`dobby-cli configure <file-or-https-url>` accepts a TOML file or HTTPS
+subscription URL and returns the ordered backend profile inventory as JSON.
+`dobby-cli start --profile <index> --session-id <id> --config-digest <digest>`
+starts one accepted profile; `stop --session-id <id> --generation <number>`
+ends that generation. Session commands always emit JSON. This operator/test
+mode skips automatic selection and does not switch to another profile after a
+health failure.
 
 After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs
@@ -188,8 +183,7 @@ address = "127.0.0.1:10808"
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
 
-See [TESTING.md](TESTING.md) for contributor checks. Pushes and pull requests
-run checks. Release starts manually and qualifies its packages with the
+Pushes and pull requests run checks. Release starts manually and qualifies its packages with the
 functional suite in `torturer/`. A separate manual Publish step uses the
 successful Release run's tested artifacts. If Release fails, fix the cause and
 start a new Release run; rerunning the old run is unsupported.

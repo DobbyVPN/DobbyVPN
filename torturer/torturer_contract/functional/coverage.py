@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any
 
 from .results import ConnectionIdentity
-from .scenarios import ScenarioDefinition, suite_set
+from .scenarios import ScenarioDefinition, select_scenarios
 
 
 def coverage_contract(
@@ -25,7 +25,7 @@ def coverage_contract(
     diagnostics but never qualify, even when the caller lists every scenario.
     """
 
-    required_scenarios = suite_set(suite)
+    required_scenarios = select_scenarios(suite=suite)
     required_ids = {scenario.id for scenario in required_scenarios}
     selected_ids = {scenario.id for scenario in selected_scenarios}
     connection_keys = {

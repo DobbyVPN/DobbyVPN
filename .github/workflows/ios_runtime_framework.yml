@@ -1,0 +1,93 @@
+name: Build iOS VPN Libraries
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Lowercase full source commit SHA to build.
+        type: string
+        required: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  build_ios_lib:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          test "$(xcodebuild -version | tee /dev/stderr | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Download Go modules
+        working-directory: core
+        run: go mod download
+
+      - name: Install pinned Go mobile runtime tools
+        run: |
+          set -euo pipefail
+          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
+          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
+          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
+          gopath="$(go env GOPATH)"
+          echo "$gopath/bin" >> "$GITHUB_PATH"
+          for tool in gomobile gobind; do
+            test -x "$gopath/bin/$tool"
+            metadata_stdout="$RUNNER_TEMP/$tool-version.stdout"
+            metadata_stderr="$RUNNER_TEMP/$tool-version.stderr"
+            set +e
+            go version -m "$gopath/bin/$tool" >"$metadata_stdout" 2>"$metadata_stderr"
+            metadata_status=$?
+            set -e
+            cat "$metadata_stdout"
+            cat "$metadata_stderr" >&2
+            test "$metadata_status" -eq 0
+            tool_metadata="$(cat "$metadata_stdout")"
+            [[ "$tool_metadata" == *"$mobile_version"* ]]
+          done
+
+      - name: Verify pinned Go mobile runtime dependency
+        working-directory: core
+        run: |
+          test "$(go list -m -f '{{.Version}}' golang.org/x/mobile)" = 'v0.0.0-20260520154334-0e4426e1883d'
+          go mod download golang.org/x/mobile
+
+      - name: Build iOS Go runtime XCFramework
+        working-directory: core
+        run: ./scripts/build_ios_xcframework.sh
+
+      - name: Verify Go bootstrap preserved candidate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Upload iOS runtime XCFramework
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: DobbyVPNRuntime.xcframework
+          path: core/DobbyVPNRuntime.xcframework
+          if-no-files-found: error
+          retention-days: 3

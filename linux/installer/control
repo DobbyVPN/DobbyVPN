@@ -1,0 +1,8 @@
+Package: dobby-vpn
+Version: @VERSION@
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: DobbyVPN team
+Description: DobbyVPN Go backend and command line client
+ Shared Go VPN backend and operator CLI for Linux.

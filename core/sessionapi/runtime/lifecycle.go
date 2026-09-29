@@ -1,0 +1,667 @@
+// Package runtime owns one transactional protocol/runtime lease for the session manager.
+// It is deliberately owned by Go: callers never interpret profile TOML or
+// normalized protocol payloads.
+package runtime
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"core/dnscache"
+	"core/log"
+	"core/probe"
+	"core/protocol"
+	"core/sessionapi"
+	"core/tunnel"
+)
+
+const category = "sessionapi/runtime"
+
+// defaultProbeTimeout gives a newly-created mobile tunnel enough time for the
+// operating system to publish its VPN route and for tun2socks to establish the
+// first protected TCP flows.  The probe still requires the same two-of-three
+// endpoint quorum; this is only a bounded startup allowance.  Steady-state
+// health checks continue to use their own context deadlines.
+const defaultProbeTimeout = 15 * time.Second
+
+// TunnelProvider is the deliberately narrow mobile boundary. Acquire must
+// return a newly allocated TUN for this exact SessionRef; a provider must not
+// retain or reuse a TUN from an earlier generation. ProtectSocket is passed to
+// custom device factories so platform dial hooks can correlate protection with
+// the session which owns the socket.
+type TunnelProvider interface {
+	Acquire(context.Context, sessionapi.SessionRef) (TunnelLease, error)
+	ProtectSocket(context.Context, sessionapi.SessionRef, int) error
+}
+
+type TunnelLease interface {
+	io.ReadWriteCloser
+	Fd() uintptr
+	Release(context.Context) error
+}
+
+// InputProvider owns the Go-only routing and DNS preparation inputs. It must
+// return a lease which reverses exactly its session's changes. The built-in
+// implementation owns tunnel's process-global exclusion policy; Runtime
+// serializes all leases so no other runtime lease can overwrite that policy.
+type InputProvider interface {
+	Apply(context.Context, sessionapi.SessionRef, []string) (InputLease, error)
+}
+
+type InputLease interface{ Release(context.Context) error }
+
+// DeviceFactory receives only the normalized config for every protocol.
+type DeviceFactory func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error)
+
+type SocketProtector func(context.Context, int) error
+
+type CoreFactory func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore
+
+type sessionCore interface {
+	Connect() error
+	Disconnect() error
+}
+
+// connectCanceler is implemented by native runtimes whose Connect operation
+// owns a mutex while calling a platform API that does not accept a context.
+// Requesting cancellation must not call Disconnect: the latter may need the
+// same mutex and would deadlock behind the in-flight startup.  Connect remains
+// the sole owner of native mutations until it returns, after which the normal
+// lease rollback calls Disconnect.
+type connectCanceler interface{ CancelConnect() }
+
+// errConnectCancellationPending means Connect still owns the native startup
+// operation.  The acquired lease must be transferred to its caller so the
+// caller can fence later generations and run the ordinary LIFO cleanup only
+// after Connect has stopped mutating native resources.
+var errConnectCancellationPending = errors.New("native session connect cancellation pending")
+
+type ProbeFunc func(context.Context, string) (int64, error)
+
+// ConnectedHealthFunc runs one connected-readiness check for a specific lease.
+// It must return promptly when ctx is canceled; the monitor uses that guarantee
+// to stop before runtime resources are released.
+type ConnectedHealthFunc func(context.Context, sessionapi.SessionRef, string) error
+
+type Options struct {
+	Tunnel                  TunnelProvider
+	Inputs                  InputProvider
+	NewDevice               DeviceFactory
+	NewCore                 CoreFactory
+	Probe                   ProbeFunc
+	ProbeTimeout            time.Duration
+	InitialReadiness        ConnectedHealthFunc
+	ReadinessAttempts       int
+	ReadinessAttemptTimeout time.Duration
+	ReadinessRetryInterval  time.Duration
+	ConnectedHealth         ConnectedHealthFunc
+	HealthInterval          time.Duration
+	HealthFailureThreshold  int
+}
+
+// New returns a session Runtime. Its operation mutex deliberately serializes all
+// runs: platform routing and native tunnel resources are process-wide, so
+// parallel profile probes would not be isolated.
+func New(options Options) sessionapi.Runtime {
+	r := &runtime{options: options}
+	if r.options.Inputs == nil {
+		r.options.Inputs = defaultInputs{}
+	}
+	if r.options.NewDevice == nil {
+		r.options.NewDevice = unsupportedDevice
+	}
+	if r.options.NewCore == nil {
+		r.options.NewCore = newPlatformCore
+	}
+	if r.options.Probe == nil {
+		r.options.Probe = defaultProbe
+	}
+	if r.options.ProbeTimeout <= 0 {
+		r.options.ProbeTimeout = defaultProbeTimeout
+	}
+	if r.options.ConnectedHealth == nil {
+		r.options.ConnectedHealth = defaultConnectedHealth
+	}
+	if r.options.InitialReadiness == nil {
+		r.options.InitialReadiness = r.options.ConnectedHealth
+	}
+	if r.options.ReadinessAttempts <= 0 {
+		r.options.ReadinessAttempts = 6
+	}
+	if r.options.ReadinessAttemptTimeout <= 0 {
+		r.options.ReadinessAttemptTimeout = 5 * time.Second
+	}
+	if r.options.ReadinessRetryInterval <= 0 {
+		r.options.ReadinessRetryInterval = 200 * time.Millisecond
+	}
+	if r.options.HealthInterval <= 0 {
+		r.options.HealthInterval = 10 * time.Second
+	}
+	if r.options.HealthFailureThreshold <= 0 {
+		r.options.HealthFailureThreshold = defaultHealthFailureThreshold()
+	}
+	configureTestSeams(&r.options)
+	return r
+}
+
+func defaultHealthFailureThreshold() int {
+	// A slow saturated link can briefly starve independent health requests even
+	// while the active transfer is still making progress. Require three complete
+	// failed cycles before teardown on every platform; successful checks still
+	// reset the consecutive-failure count immediately.
+	return 3
+}
+
+type runtime struct {
+	mu      sync.Mutex
+	active  bool
+	options Options
+}
+
+func markCleanupFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &sessionapi.CleanupFailure{Err: err}
+}
+
+// The native core also closes its device. A single wrapper lets the attempt
+// register ownership immediately without asking each core to coordinate it.
+type ownedDevice struct {
+	protocol.ProtocolDevice
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (d *ownedDevice) Close() error {
+	d.closeOnce.Do(func() { d.closeErr = d.ProtocolDevice.Close() })
+	return d.closeErr
+}
+
+func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active {
+		return nil, errors.New("another runtime lease is active")
+	}
+	r.active = true
+	lease, err := r.startLocked(ctx, ref, profile)
+	if err != nil {
+		if lease != nil && errors.Is(err, errConnectCancellationPending) {
+			// The native startup is still the sole owner of its TUN/device.
+			// Keep r.active asserted until the transferred lease is stopped;
+			// the manager will retain it in the generation ledger even though
+			// Start returns the cancellation to its caller now.
+			lease.setOnDone(func(cleanupErr error) {
+				r.mu.Lock()
+				if cleanupErr == nil {
+					r.active = false
+				}
+				r.mu.Unlock()
+			})
+			return lease, err
+		}
+		var cleanupFailure *sessionapi.CleanupFailure
+		if !errors.As(err, &cleanupFailure) {
+			r.active = false
+		}
+		return nil, err
+	}
+	if err := waitForInitialReadiness(
+		ctx,
+		ref,
+		lease.proxyAddr,
+		r.options.InitialReadiness,
+		r.options.ReadinessAttempts,
+		r.options.ReadinessAttemptTimeout,
+		r.options.ReadinessRetryInterval,
+	); err != nil {
+		log.Debugf(category, "initial readiness failed generation=%d; rolling back runtime lease", ref.Generation)
+		cleanupErr := lease.Stop(context.Background())
+		if cleanupErr == nil {
+			r.active = false
+		}
+		if cleanupErr != nil {
+			log.Debugf(category, "initial readiness rollback failed generation=%d", ref.Generation)
+		} else {
+			log.Debugf(category, "initial readiness rollback complete generation=%d", ref.Generation)
+		}
+		return nil, errors.Join(fmt.Errorf("wait for initial tunnel readiness: %w", err), markCleanupFailure(cleanupErr))
+	}
+	lease.setOnDone(func(cleanupErr error) {
+		r.mu.Lock()
+		if cleanupErr == nil {
+			r.active = false
+		}
+		r.mu.Unlock()
+	})
+	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, r.options.HealthInterval, r.options.HealthFailureThreshold)
+	return lease, nil
+}
+
+func (r *runtime) Probe(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (result sessionapi.ProbeResult, err error) {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return sessionapi.ProbeResult{}, contextErr
+	}
+	r.mu.Lock()
+	if r.active {
+		r.mu.Unlock()
+		return sessionapi.ProbeResult{}, errors.New("another runtime lease is active")
+	}
+	r.active = true
+
+	// A probe owns an ordinary, fresh runtime lease. It is always stopped before
+	// returning, even when the health seam or context fails.
+	lease, err := r.startLocked(ctx, ref, profile)
+	if err != nil {
+		if lease != nil {
+			// Probe has no generation ledger to retain a partially-started
+			// lease.  Stop waits for the native startup goroutine and then
+			// releases its dependent resources in LIFO order.
+			err = errors.Join(err, markCleanupFailure(lease.Stop(context.Background())))
+		}
+		var cleanupFailure *sessionapi.CleanupFailure
+		if !errors.As(err, &cleanupFailure) {
+			r.active = false
+		}
+		r.mu.Unlock()
+		return sessionapi.ProbeResult{}, err
+	}
+	lease.setOnDone(func(cleanupErr error) {
+		r.mu.Lock()
+		if cleanupErr == nil {
+			r.active = false
+		}
+		r.mu.Unlock()
+	})
+	r.mu.Unlock()
+	defer func() {
+		if cleanupErr := lease.Stop(context.Background()); cleanupErr != nil {
+			result = sessionapi.ProbeResult{}
+			err = errors.Join(err, fmt.Errorf("cleanup runtime probe: %w", markCleanupFailure(cleanupErr)))
+		}
+	}()
+
+	probeCtx, cancel := context.WithTimeout(ctx, r.options.ProbeTimeout)
+	defer cancel()
+	latency, probeErr := probeUntilReady(
+		probeCtx,
+		ref,
+		lease.proxyAddr,
+		r.options.Probe,
+		r.options.ReadinessAttempts,
+		r.options.ReadinessRetryInterval,
+	)
+	if probeErr != nil {
+		return sessionapi.ProbeResult{}, probeErr
+	}
+	return sessionapi.ProbeResult{LatencyMillis: latency}, nil
+}
+
+// probeUntilReady gives Android's newly established VPN route the same bounded
+// readiness tolerance as the final session start. Fast protocol devices can
+// begin their first request a few milliseconds before ConnectivityService has
+// published the VPN network; a failed quorum is retried inside the existing
+// overall ProbeTimeout rather than being misclassified as a dead profile.
+func probeUntilReady(
+	ctx context.Context,
+	ref sessionapi.SessionRef,
+	proxyAddr string,
+	probeFn ProbeFunc,
+	attempts int,
+	retryInterval time.Duration,
+) (int64, error) {
+	var attemptErrors []error
+	if attempts < 1 {
+		return 0, errors.New("runtime health probe has no attempts configured")
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return 0, errors.Join(err, errors.Join(attemptErrors...))
+		}
+		startedAt := time.Now()
+		latency, err := probeFn(ctx, proxyAddr)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if err != nil {
+				err = fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err)
+			}
+			return 0, errors.Join(ctxErr, err, errors.Join(attemptErrors...))
+		}
+		if err == nil && latency >= 0 {
+			log.Debugf(category, "runtime probe readiness succeeded generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
+			return latency, nil
+		}
+		if err == nil {
+			err = fmt.Errorf("probe returned invalid latency %d", latency)
+		}
+		attemptErrors = append(attemptErrors, fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err))
+		log.Debugf(category, "runtime probe readiness failed generation=%d attempt=%d/%d elapsed=%s error=%v", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond), err)
+		if attempt == attempts {
+			return 0, fmt.Errorf("runtime health probe did not reach quorum: %w", errors.Join(attemptErrors...))
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return 0, errors.Join(ctx.Err(), errors.Join(attemptErrors...))
+		case <-timer.C:
+		}
+	}
+	return 0, fmt.Errorf("runtime health probe did not reach quorum: %w", errors.Join(attemptErrors...))
+}
+
+func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (*lease, error) {
+	if len(profile.NormalizedConfig) == 0 {
+		return nil, errors.New("runtime profile has no normalized config")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Protocol bootstrap lookups share a process cache with the dialer. Reset it
+	// at the attempt boundary so a reconnect resolves a fresh endpoint.
+	dnscache.Clear()
+
+	owned := &lease{}
+	fail := func(cause error) (*lease, error) {
+		if errors.Is(cause, errConnectCancellationPending) {
+			// Connect was asked to stop but has not returned yet.  Returning the
+			// still-owned lease lets the manager retain this generation and run
+			// Stop after the native operation is quiescent; releasing the TUN or
+			// routing inputs here would race a blocked platform call.
+			return owned, cause
+		}
+		return nil, errors.Join(cause, markCleanupFailure(owned.Stop(context.Background())))
+	}
+
+	inputs, err := r.options.Inputs.Apply(ctx, ref, profile.ExcludeCIDRs)
+	if err != nil {
+		return fail(fmt.Errorf("prepare Go routing/DNS inputs: %w", err))
+	}
+	if inputs == nil {
+		return fail(errors.New("prepare Go routing/DNS inputs returned nil lease"))
+	}
+	owned.push(inputs.Release)
+	protect := func(protectCtx context.Context, fd int) error {
+		if r.options.Tunnel == nil {
+			return nil // desktop protocol devices use their existing routing path.
+		}
+		if protectErr := r.options.Tunnel.ProtectSocket(protectCtx, ref, fd); protectErr != nil {
+			return fmt.Errorf("protect socket for session generation %d: %w", ref.Generation, protectErr)
+		}
+		return nil
+	}
+	device, err := r.options.NewDevice(ctx, ref, profile, protect)
+	if device != nil {
+		device = &ownedDevice{ProtocolDevice: device}
+		owned.push(func(context.Context) error { return device.Close() })
+	}
+	if err != nil {
+		return fail(fmt.Errorf("create protocol device: %w", err))
+	}
+	if device == nil {
+		return fail(errors.New("create protocol device returned nil"))
+	}
+	owned.proxyAddr = device.GetProxyAddr()
+	if owned.proxyAddr == "" {
+		return fail(errors.New("protocol device returned an empty local SOCKS address"))
+	}
+
+	var tun TunnelLease
+	if mobileRuntime {
+		if r.options.Tunnel == nil {
+			return fail(errors.New("mobile runtime requires a TunnelProvider"))
+		}
+		tun, err = r.options.Tunnel.Acquire(ctx, ref)
+		if err != nil {
+			return fail(fmt.Errorf("acquire fresh TUN: %w", err))
+		}
+		// Acquisition is recorded immediately, before any later construction.
+		if tun == nil {
+			return fail(errors.New("acquire fresh TUN returned nil lease"))
+		}
+		owned.push(tun.Release)
+	}
+
+	client := r.options.NewCore(device, tun)
+	if client == nil {
+		return fail(errors.New("create native session runtime returned nil"))
+	}
+	// A partially connected native runtime can own a device/engine, so register its
+	// rollback before Connect rather than only after Connect reports success.
+	owned.push(func(context.Context) error { return client.Disconnect() })
+	if err := connectContext(ctx, client); err != nil {
+		return fail(fmt.Errorf("connect transactional native session runtime: %w", err))
+	}
+	// The native runtime is stopped before the input lease and mobile TUN in strict LIFO
+	// order. This preserves the tun2socks/device dependency chain.
+	log.Debugf(category, "runtime connected protocol=%s generation=%d", profile.Summary.Protocol, ref.Generation)
+	return owned, nil
+}
+
+func waitForInitialReadiness(
+	ctx context.Context,
+	ref sessionapi.SessionRef,
+	proxyAddr string,
+	check ConnectedHealthFunc,
+	attempts int,
+	attemptTimeout time.Duration,
+	retryInterval time.Duration,
+) error {
+	var attemptErrors []error
+	if attempts < 1 {
+		return errors.New("initial readiness has no attempts configured")
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, errors.Join(attemptErrors...))
+		}
+		startedAt := time.Now()
+		log.Debugf(category, "initial readiness attempt begin generation=%d attempt=%d/%d timeout=%s", ref.Generation, attempt, attempts, attemptTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		err := check(attemptCtx, ref, proxyAddr)
+		cancel()
+		if err == nil {
+			log.Debugf(category, "initial readiness attempt succeeded generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
+			return nil
+		}
+		outcome := "check_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			outcome = "timeout"
+		} else if errors.Is(err, context.Canceled) {
+			outcome = "canceled"
+		}
+		log.Debugf(category, "initial readiness attempt failed generation=%d attempt=%d/%d outcome=%s elapsed=%s error=%v", ref.Generation, attempt, attempts, outcome, time.Since(startedAt).Truncate(time.Millisecond), err)
+		attemptErrors = append(attemptErrors, fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return errors.Join(ctxErr, errors.Join(attemptErrors...))
+		}
+		if attempt == attempts {
+			break
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return errors.Join(ctx.Err(), errors.Join(attemptErrors...))
+		case <-timer.C:
+		}
+	}
+	return fmt.Errorf("readiness failed after %d attempts: %w", attempts, errors.Join(attemptErrors...))
+}
+
+func connectContext(ctx context.Context, client sessionCore) error {
+	result := make(chan error, 1)
+	go func() { result <- client.Connect() }()
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		var cancelErr error
+		if canceler, ok := client.(connectCanceler); ok {
+			// Native startup owns the lifecycle mutex while it is inside a
+			// non-context-aware platform call.  Its cancellation request is
+			// deliberately lock-free; cleanup remains serialized by Connect and
+			// the rollback below after Connect has returned.
+			canceler.CancelConnect()
+			// Do not run the lease rollback from this stack while Connect is
+			// still active.  startLocked transfers ownership to its caller;
+			// the caller fences the generation and invokes Stop after Connect
+			// has returned.
+			return errors.Join(ctx.Err(), errConnectCancellationPending)
+		} else {
+			cancelErr = client.Disconnect()
+		}
+		// Do not return a failed start while Connect can still publish a late
+		// successful core. Waiting for its result preserves the ownership
+		// ordering: dependent TUN/input resources are released only after the
+		// native operation has stopped mutating them.
+		connectErr := <-result
+		return errors.Join(ctx.Err(), cancelErr, connectErr)
+	}
+}
+
+type lease struct {
+	proxyAddr    string
+	stopOnce     sync.Once
+	undo         []func(context.Context) error
+	onDone       func(error)
+	cleanupErr   error
+	healthCancel context.CancelFunc
+	healthDone   chan struct{}
+	healthFailed chan error
+}
+
+func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
+func (l *lease) setOnDone(fn func(error))            { l.onDone = fn }
+
+// HealthFailures implements HealthMonitoringLease. It is closed after the
+// lease has stopped, so the manager watcher cannot outlive its runtime lease.
+func (l *lease) HealthFailures() <-chan error { return l.healthFailed }
+
+func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.SessionRef, proxyAddr string, check ConnectedHealthFunc, interval time.Duration, threshold int) {
+	ctx, cancel := context.WithCancel(parent)
+	l.healthCancel = cancel
+	l.healthDone = make(chan struct{})
+	l.healthFailed = make(chan error, 1)
+	go func() {
+		defer close(l.healthDone)
+		defer close(l.healthFailed)
+		var failures []error
+		for {
+			if err := check(ctx, ref, proxyAddr); err != nil {
+				failures = append(failures, err)
+				if len(failures) >= threshold {
+					cause := errors.Join(failures...)
+					select {
+					case l.healthFailed <- cause:
+					case <-ctx.Done():
+					}
+					return
+				}
+			} else {
+				failures = nil
+			}
+			if interval <= 0 {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				continue
+			}
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+}
+
+func (l *lease) Stop(ctx context.Context) error {
+	// sync.Once also makes concurrent Stop calls wait for the one cleanup run.
+	// The lease is fully initialized before it is returned, so Stop is its only
+	// writer from that point on.
+	l.stopOnce.Do(func() {
+		if l.healthCancel != nil {
+			l.healthCancel()
+		}
+		if l.healthDone != nil {
+			<-l.healthDone
+		}
+		var errs []error
+		for i := len(l.undo) - 1; i >= 0; i-- {
+			if err := l.undo[i](ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		l.cleanupErr = errors.Join(errs...)
+		if l.onDone != nil {
+			l.onDone(l.cleanupErr)
+		}
+	})
+	return l.cleanupErr
+}
+
+type defaultInputs struct{}
+
+func (defaultInputs) Apply(ctx context.Context, _ sessionapi.SessionRef, cidrs []string) (InputLease, error) {
+	routes, err := tunnel.AcquireBypassPolicy(ctx, cidrs)
+	if err != nil {
+		return nil, fmt.Errorf("acquire exclusion policy: %w", err)
+	}
+	return routingInputs{routes: routes}, nil
+}
+
+type routingInputs struct{ routes *tunnel.BypassPolicyLease }
+
+func (l routingInputs) Release(context.Context) error { l.routes.Release(); return nil }
+
+func unsupportedDevice(_ context.Context, _ sessionapi.SessionRef, _ sessionapi.RuntimeProfile, _ SocketProtector) (protocol.ProtocolDevice, error) {
+	return nil, errors.New("native protocol device factory is not installed")
+}
+
+func defaultProbe(ctx context.Context, proxyAddr string) (int64, error) {
+	timeout, err := probeTimeout(ctx)
+	if err != nil {
+		return 0, err
+	}
+	latency, probeErr := probe.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond), proxyAddr)
+	return latency, errors.Join(probeErr, ctx.Err())
+}
+
+func probeTimeout(ctx context.Context) (time.Duration, error) {
+	const defaultTimeout = 5 * time.Second
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return defaultTimeout, nil
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, ctx.Err()
+	}
+	return remaining, nil
+}
+
+func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
+	_, err := defaultProbe(ctx, proxyAddr)
+	return err
+}

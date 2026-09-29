@@ -24,7 +24,7 @@ from torturer_contract.functional.coverage import (
 from torturer_contract.functional.results import (
     RunProvenance,
 )
-from torturer_contract.functional.scenarios import validate_suite
+from torturer_contract.functional.scenarios import select_scenarios, validate_suite
 
 from .hosted.cli import (
     HostedAdapterError,
@@ -35,7 +35,6 @@ from .hosted.factory import adapter_for_platform
 from .hosted.run import (
     _execute_lane,
     _emit_progress_event,
-    _select_scenarios,
     _write_json,
 )
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -95,7 +94,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--service-identity-file", type=Path)
     parser.add_argument("--network-interface")
     parser.add_argument("--routing-firewall-helper", type=Path)
-    parser.add_argument("--network-transition-helper", type=Path)
     return parser
 
 
@@ -149,10 +147,9 @@ def main(argv: list[str] | None = None) -> int:
         else "arm64" if args.platform == "macos" and host_platform.machine().lower() in {"aarch64", "arm64"}
         else _ARCHITECTURES[args.platform]
     )
-    selected = _select_scenarios(
-        args.scenario_ids,
-        platform=args.platform,
+    selected = select_scenarios(
         suite=args.suite,
+        scenario_ids=args.scenario_ids,
     )
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", local_architecture) is None:
         raise ValueError("architecture has an invalid format")
@@ -193,7 +190,6 @@ def main(argv: list[str] | None = None) -> int:
         service_identity_file=args.service_identity_file,
         network_interface=args.network_interface,
         routing_firewall_helper=args.routing_firewall_helper,
-        network_transition_helper=args.network_transition_helper,
     )
     set_progress_sink = getattr(adapter, "set_progress_sink", None)
     if callable(set_progress_sink):

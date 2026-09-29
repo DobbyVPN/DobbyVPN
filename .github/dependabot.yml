@@ -1,13 +1,13 @@
 version: 2
 updates:
   - package-ecosystem: gomod
-    directory: /go_module
+    directory: /core
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
 
   - package-ecosystem: gradle
-    directory: /android_module
+    directory: /android
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

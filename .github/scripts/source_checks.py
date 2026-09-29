@@ -24,9 +24,9 @@ from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[2]
-GO_MODULE = ROOT / "go_module"
+GO_MODULE = ROOT / "core"
 SCRIPT_DIR = ROOT / ".github" / "scripts"
-GO_VERSION = (ROOT / ".go-version").read_text(encoding="utf-8").strip()
+sys.path.insert(0, str(SCRIPT_DIR / "desktop"))
 
 # Release asset digests pin the downloaded executable archives. These versions
 # intentionally match the existing CI tool versions, except Trivy and SwiftLint
@@ -99,12 +99,10 @@ def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = No
         raise SystemExit(result.returncode)
 
 
-def go_environment() -> dict[str, str]:
-    environment = os.environ.copy()
-    environment["GOTOOLCHAIN"] = "local"
+def go_environment(go_executable: Path) -> dict[str, str]:
     import desktop_build
 
-    return desktop_build.child_environment([shutil.which("go") or "go"], environment)
+    return desktop_build.child_environment([str(go_executable)])
 
 
 def capture(
@@ -143,6 +141,40 @@ def require_platform(expected: str) -> None:
     actual = host_os()
     if actual != expected:
         raise CheckError(f"this check requires {expected}; current host is {actual}")
+
+
+def python_tests() -> None:
+    """Run the product functional-support and source-check unit suites."""
+    requirements = SCRIPT_DIR / "requirements-native-ui.txt"
+    with tempfile.TemporaryDirectory(prefix="dobbyvpn-python-tests-") as package_dir:
+        run(
+            [
+                sys.executable, "-m", "pip", "install",
+                "--disable-pip-version-check", "--only-binary=:all:", "--no-deps",
+                "--target", package_dir, "--requirement", str(requirements),
+            ]
+        )
+        environment = os.environ.copy()
+        python_paths = [package_dir, str(ROOT / "torturer")]
+        existing = environment.get("PYTHONPATH")
+        if existing:
+            python_paths.append(existing)
+        environment["PYTHONPATH"] = os.pathsep.join(python_paths)
+        run(
+            [
+                sys.executable, "-m", "unittest", "discover",
+                "-s", "torturer/tests", "-p", "test_*.py",
+            ],
+            env=environment,
+        )
+        for suite in ("android", "release"):
+            run(
+                [
+                    sys.executable, "-m", "unittest", "discover",
+                    "-s", str(SCRIPT_DIR / suite), "-p", "test_*.py",
+                ],
+                env=environment,
+            )
 
 
 def require_command(name: str, purpose: str) -> str:
@@ -227,48 +259,34 @@ class Tools:
 
 
 def ensure_go() -> Path:
-    # Use the existing pinned Go installer and tool cache owned by desktop_build.
-    # Calling it in this process also keeps the selected GOROOT and CGO settings
-    # available to the test command that follows.
+    """Use desktop_build's pinned Go preparation and keep its exact path."""
     import desktop_build
 
-    desktop_build.install_go(skip_deps=False)
-    go = shutil.which("go")
-    if not go:
-        raise CheckError("pinned Go installer completed without putting `go` on PATH")
-    version = capture([go, "env", "GOVERSION"], env=go_environment()).strip()
-    if version != f"go{GO_VERSION}":
-        raise CheckError(f"expected Go go{GO_VERSION}, found {version or '<empty>'}")
-    return Path(go).resolve()
+    return desktop_build.prepare_go(skip_deps=False)
 
 
-def prepare_linux_go_test_dependencies() -> None:
+def prepare_linux_go_test_dependencies() -> Path:
     require_platform("linux")
     import desktop_build
 
-    desktop_build.prepare_go_test_dependencies(skip_deps=False, run_go_mod_tidy=False)
+    return desktop_build.prepare_go_test_dependencies(skip_deps=False, run_go_mod_tidy=False)
 
 
 def prepare_go_source_checks() -> Path:
-    go = ensure_go()
-    if host_os() == "linux":
-        prepare_linux_go_test_dependencies()
-    else:
-        import desktop_build
+    import desktop_build
 
-        desktop_build.ensure_compiler(host_os(), skip_deps=False)
-        desktop_build.configure_go_module_proxy()
-        run([str(go), "mod", "download"], cwd=GO_MODULE)
+    if host_os() == "linux":
+        return prepare_linux_go_test_dependencies()
+    go = desktop_build.prepare_toolchain(host_os(), skip_deps=False)
+    desktop_build.go_mod_download(go, run_tidy=False)
     return go
 
 
 def prepare_native_runtime_check() -> Path:
-    go = ensure_go()
     import desktop_build
 
-    desktop_build.ensure_compiler(host_os(), skip_deps=False)
-    desktop_build.configure_go_module_proxy()
-    run([str(go), "mod", "download"], cwd=GO_MODULE, env=go_environment())
+    go = desktop_build.prepare_toolchain(host_os(), skip_deps=False)
+    desktop_build.go_mod_download(go, run_tidy=False)
     return go
 
 
@@ -305,12 +323,12 @@ def go_unit(args: argparse.Namespace) -> None:
                 "-coverpkg=./...", f"-coverprofile={profile}", "./...",
             ],
             cwd=GO_MODULE,
-            env=go_environment(),
+            env=go_environment(go),
         )
         report = capture(
             [str(go), "tool", "cover", f"-func={profile}"],
             cwd=GO_MODULE,
-            env=go_environment(),
+            env=go_environment(go),
         )
         write_step_summary("Unified Go coverage", report)
     finally:
@@ -324,13 +342,13 @@ def go_race() -> None:
     run(
         [str(go), "test", "-p", "1", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
         cwd=GO_MODULE,
-        env=go_environment(),
+        env=go_environment(go),
     )
 
 
 def go_native_runtime() -> None:
     go = prepare_native_runtime_check()
-    run([str(go), "test", "-v", "-race", *NATIVE_GO_PACKAGES], cwd=GO_MODULE, env=go_environment())
+    run([str(go), "test", "-v", "-race", *NATIVE_GO_PACKAGES], cwd=GO_MODULE, env=go_environment(go))
 
 
 def go_tests(args: argparse.Namespace) -> None:
@@ -345,18 +363,18 @@ def go_tests(args: argparse.Namespace) -> None:
                 "-coverpkg=./...", f"-coverprofile={profile}", "./...",
             ],
             cwd=GO_MODULE,
-            env=go_environment(),
+            env=go_environment(go),
         )
         report = capture(
             [str(go), "tool", "cover", f"-func={profile}"],
             cwd=GO_MODULE,
-            env=go_environment(),
+            env=go_environment(go),
         )
         write_step_summary("Unified Go coverage", report)
         run(
             [str(go), "test", "-p", "1", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
             cwd=GO_MODULE,
-            env=go_environment(),
+            env=go_environment(go),
         )
     finally:
         if temporary is not None:
@@ -369,8 +387,8 @@ def swift_unit(args: argparse.Namespace) -> None:
     xcrun = require_command("xcrun", "Swift lifecycle coverage export")
     output, temporary = coverage_dir(args, "swift")
     try:
-        run([swift, "test", "-v", "--enable-code-coverage", "--package-path", str(ROOT / "swift_module")])
-        bin_path = capture([swift, "build", "--show-bin-path", "--package-path", str(ROOT / "swift_module")]).strip()
+        run([swift, "test", "-v", "--enable-code-coverage", "--package-path", str(ROOT / "apple")])
+        bin_path = capture([swift, "build", "--show-bin-path", "--package-path", str(ROOT / "apple")]).strip()
         build_path = Path(bin_path)
         profiles = list(build_path.glob("**/codecov/default.profdata"))
         tests = [path for path in build_path.glob("**/*.xctest/Contents/MacOS/*PackageTests") if os.access(path, os.X_OK)]
@@ -389,9 +407,9 @@ def swift_unit(args: argparse.Namespace) -> None:
         run(
             [
                 sys.executable,
-                str(SCRIPT_DIR / "check_swift_coverage.py"),
+                str(SCRIPT_DIR / "apple" / "check_swift_coverage.py"),
                 "--lcov", str(lcov),
-                "--source-root", str(ROOT / "swift_module" / "CommonDI"),
+                "--source-root", str(ROOT / "apple" / "CommonDI"),
                 "--summary", str(summary),
             ]
         )
@@ -409,20 +427,20 @@ def lint_go(tools: Tools) -> None:
     run(
         [str(linter), "run", "--output.text.path", "stdout", "--config", ".golangci.yml", "./..."],
         cwd=GO_MODULE,
-        env=go_environment(),
+        env=go_environment(go),
     )
 
 
 def require_android_sdk() -> Path:
     candidates = [os.environ.get("ANDROID_SDK_ROOT"), os.environ.get("ANDROID_HOME")]
-    local_properties = ROOT / "android_module" / "local.properties"
+    local_properties = ROOT / "android" / "local.properties"
     if local_properties.is_file():
         match = re.search(r"^sdk\.dir=(.+)$", local_properties.read_text(encoding="utf-8"), re.MULTILINE)
         if match:
             candidates.append(match.group(1).replace("\\:", ":").replace("\\\\", "\\"))
     sdk = next((Path(value).expanduser() for value in candidates if value and value.strip()), None)
     if sdk is None or not sdk.is_dir():
-        raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or android_module/local.properties")
+        raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or android/local.properties")
     ndk = sdk / "ndk" / "28.1.13356709"
     if not ndk.is_dir():
         raise CheckError(f"Android Lint requires NDK 28.1.13356709 at {ndk}")
@@ -447,16 +465,16 @@ def lint_android() -> None:
     build_tools = sdk / "build-tools" / "36.0.0"
     if not build_tools.is_dir():
         raise CheckError(f"Android Lint requires build-tools 36.0.0 at {build_tools}")
-    gradle = ROOT / "android_module" / "gradlew"
+    gradle = ROOT / "android" / "gradlew"
     if not gradle.is_file():
         raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
-    run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "android_module")
+    run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "android")
 
 
 def lint_swift(tools: Tools) -> None:
     require_platform("darwin")
     swiftlint = tools.get("swiftlint")
-    run([str(swiftlint), "lint", "--config", ".swiftlint.yml"], cwd=ROOT / "swift_module")
+    run([str(swiftlint), "lint", "--config", ".swiftlint.yml"], cwd=ROOT / "apple")
 
 
 def trivy_scan(tools: Tools) -> None:
@@ -464,7 +482,7 @@ def trivy_scan(tools: Tools) -> None:
     trivy = tools.get("trivy")
     cache_dir = tools.root / "trivy-cache"
     ignore = ROOT / ".trivyignore"
-    for target in (ROOT / "go_module", ROOT / "android_module"):
+    for target in (ROOT / "core", ROOT / "android"):
         run(
             [
                 str(trivy), "fs", "--cache-dir", str(cache_dir),
@@ -519,12 +537,13 @@ def golangci_cache_paths() -> list[Path]:
 def clean_caches() -> None:
     import desktop_build
 
-    go_bin = desktop_build.find_go()
-    go = shutil.which("go")
-    if go_bin is not None:
-        go = str(go_bin / ("go.exe" if host_os() == "windows" else "go"))
-    if go:
-        run([go, "clean", "-cache", "-testcache"], cwd=GO_MODULE, env=go_environment())
+    go_executable = desktop_build.find_go()
+    if go_executable is not None:
+        run(
+            [str(go_executable), "clean", "-cache", "-testcache"],
+            cwd=GO_MODULE,
+            env=go_environment(go_executable),
+        )
     else:
         log("Go is unavailable; there is no Go build/test cache to clean")
 
@@ -541,8 +560,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "check",
         choices=(
-            "go-tests", "go-unit", "go-race", "go-native-runtime", "swift-unit",
-            "lint-go", "lint-android", "lint-swift", "security", "actionlint", "cache-clean",
+            "python-tests", "go-tests", "go-unit", "go-race", "go-native-runtime",
+            "swift-unit", "lint-go", "lint-android", "lint-swift", "security",
+            "actionlint", "cache-clean",
         ),
     )
     parser.add_argument("--output-dir", type=Path, help="Keep coverage outputs in this directory")
@@ -569,6 +589,8 @@ def main() -> int:
             go_native_runtime()
         elif args.check == "swift-unit":
             swift_unit(args)
+        elif args.check == "python-tests":
+            python_tests()
         elif args.check == "lint-go":
             assert tools is not None
             lint_go(tools)

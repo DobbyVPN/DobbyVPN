@@ -16,7 +16,6 @@ class Capability(str, Enum):
     DISCONNECT = "disconnect"
     RESOURCE_CLEANUP = "resource_cleanup"
     RECONNECT = "reconnect"
-    NETWORK_TRANSITION = "network_transition"
     PROCESS_LOSS = "process_loss"
 
 

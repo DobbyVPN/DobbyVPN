@@ -25,10 +25,8 @@ from .cli import (
     HostedCLIAdapter,
     HostedServiceProcessController,
     RoutingProofMixin,
-    _allocate_scratch_path,
     _append_command_result_notes,
     _call_with_deadline,
-    _ensure_directory,
 )
 from torturer_checks.windows_job import (
     WindowsJobError,
@@ -1028,20 +1026,13 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
     @property
     def capabilities(self) -> frozenset[Capability]:
         result = set(super().capabilities)
-        if self.local_mode and self.network_interface is not None:
-            result.add(Capability.NETWORK_TRANSITION)
         if self.service is not None:
             result.add(Capability.PROCESS_LOSS)
         return frozenset(result)
 
     @property
     def capability_unavailable_reasons(self) -> dict[Capability, str]:
-        reasons = dict(super().capability_unavailable_reasons)
-        if not (self.local_mode and self.network_interface is not None):
-            reasons[Capability.NETWORK_TRANSITION] = "HOSTED_WINDOWS_UPLINK_TOGGLE_UNSUPPORTED"
-        else:
-            reasons.pop(Capability.NETWORK_TRANSITION, None)
-        return reasons
+        return dict(super().capability_unavailable_reasons)
 
     def finalize(
         self, timeout_seconds: float = 30.0, *, deadline: float | None = None
@@ -1073,11 +1064,6 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             return {}
         if self._routing_proof_enabled and step.operation == "reconnect":
             return self._reconnect_with_routing_probe(float(step.timeout_seconds), setup_timeout=60.0)
-        if step.operation == "network_transition":
-            self._emit_progress("native-state", kind="uplink", state="transition-started")
-            result = self._network_transition(float(step.timeout_seconds))
-            self._emit_progress("native-state", kind="uplink", state="restored")
-            return result
         if step.operation == "process_loss":
             self._emit_progress("native-state", kind="vpn-service", state="loss-started")
             result = self._process_loss(float(step.timeout_seconds))
@@ -1252,231 +1238,15 @@ if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
             raise error
         return received, sent
 
-    def _network_command(
-        self, script: str, timeout: float, failure: str, *arguments: str
-    ):
-        if self.network_interface is None:
-            raise CapabilityUnavailable()
-        command = WindowsServiceProcessController._powershell(
-            script, self.network_interface, *arguments
-        )
-        try:
-            result = self.runner.run(command, timeout_seconds=timeout)
-        except HostedAdapterError as error:
-            raise ScenarioExecutionError(error.code) from error
-        if result.timed_out or result.returncode != 0:
-            error = ScenarioExecutionError(failure)
-            _append_command_result_notes(error, result)
-            raise error
-        return result
-
-    def _network_transition(self, timeout: float) -> dict[str, object]:
-        """Disable and restore the measured private-VM uplink by interface index."""
-
-        if not self.local_mode or self.network_interface is None:
-            raise CapabilityUnavailable()
-        deadline = time.monotonic() + timeout
-        raw_directory = getattr(self.runner, "raw_directory", None)
-        if not isinstance(raw_directory, Path):
-            raise ScenarioExecutionError("NETWORK_REPAIR_STATE_UNAVAILABLE")
-        try:
-            _ensure_directory(raw_directory)
-            repair_id = os.urandom(8).hex()
-            repair_path = _allocate_scratch_path(
-                raw_directory,
-                f"windows-uplink-repair-{repair_id}",
-                ".ps1",
-            )
-            repair_task = f"dobbyvpn-uplink-repair-{repair_id}"
-            # Only the scenario removes the task/script. Self-deletion raced
-            # its cleanup after successful restoration on the Windows VM.
-            repair_payload = r'''param([int]$InterfaceIndex)
-$ErrorActionPreference = "Stop"
-& {
-  Get-NetAdapter -InterfaceIndex $InterfaceIndex -ErrorAction Stop |
-    Enable-NetAdapter -Confirm:$false -ErrorAction Stop
-}
-'''.encode("utf-8")
-            descriptor = os.open(
-                repair_path,
-                os.O_WRONLY | os.O_TRUNC,
-            )
-            try:
-                remaining = memoryview(repair_payload)
-                while remaining:
-                    written = os.write(descriptor, remaining)
-                    if written <= 0:
-                        raise OSError("short repair-script write")
-                    remaining = remaining[written:]
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        except (OSError, HostedAdapterError) as error:
-            raise ScenarioExecutionError("NETWORK_REPAIR_STATE_UNAVAILABLE") from error
-        register_repair = r'''$ErrorActionPreference = "Stop"
-$index = [int]$args[0]
-$taskName = [string]$args[1]
-$scriptPath = [IO.Path]::GetFullPath([string]$args[2])
-if ($taskName -notmatch '^dobbyvpn-uplink-repair-[0-9a-f]{16}$') { throw "task name invalid" }
-if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "repair script missing" }
-$actionArguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $scriptPath.Replace('"', '""') + '" -InterfaceIndex ' + $index
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArguments
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(3)
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force
-if ($null -eq (Get-ScheduledTask -TaskName $taskName -ErrorAction Stop)) { throw "repair task missing" }
-'''
-        remove_repair = r'''$ErrorActionPreference = "Stop"
-$taskName = [string]$args[1]
-$task = Get-ScheduledTask -TaskName $taskName -ErrorAction Continue
-if ($null -ne $task) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop }
-if ($null -ne (Get-ScheduledTask -TaskName $taskName -ErrorAction Continue)) {
-  throw "repair task remains registered"
-}
-'''
-        disable = r'''$ErrorActionPreference = "Stop"
-$index = [int]$args[0]
-$adapter = Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop
-if ($adapter.Status -ne "Up") { throw "uplink is not up" }
-$adapter | Disable-NetAdapter -Confirm:$false -ErrorAction Stop
-'''
-        disabled_probe = r'''$ErrorActionPreference = "Stop"
-$index = [int]$args[0]
-$adapter = Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop
-if ($adapter.Status -eq "Up") { throw "uplink remained up" }
-'''
-        enable = r'''$ErrorActionPreference = "Stop"
-$index = [int]$args[0]
-Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop |
-  Enable-NetAdapter -Confirm:$false -ErrorAction Stop
-'''
-        enabled_probe = r'''$ErrorActionPreference = "Stop"
-$index = [int]$args[0]
-while ($true) {
-  $adapter = Get-NetAdapter -InterfaceIndex $index -ErrorAction Stop
-  if ($adapter.Status -eq "Up") { break }
-  Start-Sleep -Milliseconds 100
-}
-'''
-        disabled = False
-        # Registration can time out after Task Scheduler has accepted the
-        # task. Treat the task as potentially present until removal proves
-        # that it is gone, so the repair script is never unlinked underneath
-        # a registered task.
-        repair_scheduled = False
-        primary_error: Exception | None = None
-        try:
-            repair_scheduled = True
-            self._network_command(
-                register_repair,
-                self._remaining(deadline, "NETWORK_REPAIR_SCHEDULE_FAILED"),
-                "NETWORK_REPAIR_SCHEDULE_FAILED",
-                repair_task,
-                str(repair_path.resolve(strict=True)),
-            )
-            self._network_command(
-                disable, self._remaining(deadline, "NETWORK_DOWN_FAILED"),
-                "NETWORK_DOWN_FAILED",
-            )
-            disabled = True
-            self._network_command(
-                disabled_probe,
-                self._remaining(deadline, "NETWORK_DOWN_UNVERIFIED"),
-                "NETWORK_DOWN_UNVERIFIED",
-            )
-        except Exception as error:
-            primary_error = error
-        finally:
-            if disabled:
-                restored = False
-                try:
-                    self._network_command(
-                        enable,
-                        self._remaining(deadline, "NETWORK_UP_FAILED"),
-                        "NETWORK_UP_FAILED",
-                    )
-                    self._network_command(
-                        enabled_probe,
-                        self._remaining(deadline, "NETWORK_UP_UNVERIFIED"),
-                        "NETWORK_UP_UNVERIFIED",
-                    )
-                    restored = True
-                except Exception as restore_error:
-                    if primary_error is None:
-                        primary_error = restore_error
-                    else:
-                        primary_error.add_note(
-                            f"network_repair_error={type(restore_error).__name__}"
-                        )
-                if restored:
-                    try:
-                        self._network_command(
-                            remove_repair,
-                            self._remaining(deadline, "NETWORK_REPAIR_CLEANUP_FAILED"),
-                            "NETWORK_REPAIR_CLEANUP_FAILED",
-                            repair_task,
-                            str(repair_path),
-                        )
-                        repair_scheduled = False
-                    except Exception as repair_error:
-                        if primary_error is None:
-                            primary_error = repair_error
-                        else:
-                            primary_error.add_note(
-                                f"network_repair_cleanup_error={type(repair_error).__name__}"
-                            )
-            elif repair_scheduled:
-                # The uplink was never disabled, so removing the unused
-                # scheduled repair is safe and required for idle proof.
-                try:
-                    self._network_command(
-                        remove_repair,
-                        self._remaining(deadline, "NETWORK_REPAIR_CLEANUP_FAILED"),
-                        "NETWORK_REPAIR_CLEANUP_FAILED",
-                        repair_task,
-                        str(repair_path),
-                    )
-                    repair_scheduled = False
-                except Exception as repair_error:
-                    if primary_error is None:
-                        primary_error = repair_error
-                    else:
-                        primary_error.add_note(
-                            f"network_repair_cleanup_error={type(repair_error).__name__}"
-                        )
-        if not repair_scheduled:
-            try:
-                repair_path.unlink(missing_ok=True)
-            except OSError as cleanup_error:
-                if primary_error is None:
-                    primary_error = ScenarioExecutionError("NETWORK_REPAIR_CLEANUP_FAILED")
-                primary_error.add_note(
-                    f"network_repair_file_cleanup_error={type(cleanup_error).__name__}"
-                )
-        if primary_error is not None:
-            raise primary_error
-        while time.monotonic() < deadline:
-            remaining = self._remaining(deadline, "NETWORK_TUNNEL_NOT_RESTORED")
-            try:
-                if self._connected(remaining) and self._wait_for_routing_verified(
-                    self._remaining(deadline, "NETWORK_ROUTING_NOT_RESTORED")
-                ):
-                    return {"network_transition_verified": True}
-            except ScenarioExecutionError as error:
-                if error.reason_code not in {
-                    "STATUS_FAILED", "STATUS_INVALID", "EXTERNAL_IDENTITY_FAILED",
-                    "EXTERNAL_IDENTITY_INVALID",
-                }:
-                    raise
-            time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
-        raise ScenarioExecutionError("NETWORK_ROUTING_NOT_RESTORED")
-
     def _process_loss(self, timeout: float) -> dict[str, object]:
         if self.service is None:
             raise CapabilityUnavailable()
         deadline = time.monotonic() + timeout
         self.service.restart_after_loss(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
-        self._command(
-            ("connect-profile", str(self.profile), self._selected_connection_index()),
+        self._reconfigure_after_service_restart(
+            self._remaining(deadline, "PROCESS_LOSS_TIMEOUT")
+        )
+        self._start_selected(
             self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"),
             "PROCESS_LOSS_CONNECT_FAILED",
         )

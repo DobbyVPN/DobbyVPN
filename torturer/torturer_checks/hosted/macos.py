@@ -22,10 +22,8 @@ from .cli import (
     HostedCLIAdapter,
     HostedServiceProcessController,
     RoutingProofMixin,
-    _allocate_scratch_path,
     _append_command_result_notes,
     _call_with_deadline,
-    _discard_scratch_file,
 )
 
 
@@ -382,7 +380,6 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         service_socket: Path | None = None,
         network_interface: str | None = None,
         routing_firewall_helper: Path | None = None,
-        network_transition_helper: Path | None = None,
     ) -> None:
         super().__init__(
             cli=cli,
@@ -417,33 +414,13 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             enabled=routing_firewall_helper is not None,
             network_interface=network_interface,
         )
-        self.network_transition_helper = network_transition_helper
-        raw_directory = getattr(runner, "raw_directory", None)
-        if network_transition_helper is not None and not isinstance(raw_directory, Path):
-            raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
-        self.raw_directory = raw_directory
 
     @property
     def capabilities(self) -> frozenset[Capability]:
         result = set(super().capabilities)
         if self.service is not None:
             result.add(Capability.PROCESS_LOSS)
-        if (
-            self.local_mode
-            and self.network_interface is not None
-            and self.network_transition_helper is not None
-        ):
-            result.add(Capability.NETWORK_TRANSITION)
         return frozenset(result)
-
-    @property
-    def capability_unavailable_reasons(self) -> dict[Capability, str]:
-        reasons = dict(super().capability_unavailable_reasons)
-        if Capability.NETWORK_TRANSITION in self.capabilities:
-            reasons.pop(Capability.NETWORK_TRANSITION, None)
-        else:
-            reasons[Capability.NETWORK_TRANSITION] = "HOSTED_MACOS_UPLINK_TOGGLE_UNSUPPORTED"
-        return reasons
 
     def finalize(
         self, timeout_seconds: float = 30.0, *, deadline: float | None = None
@@ -476,19 +453,14 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             result = self._process_loss(float(step.timeout_seconds))
             self._emit_progress("native-state", kind="vpn-service", state="recovered")
             return result
-        if step.operation == "network_transition":
-            self._emit_progress("native-state", kind="physical-uplink", state="loss-started")
-            result = self._network_transition(float(step.timeout_seconds))
-            self._emit_progress("native-state", kind="physical-uplink", state="recovered")
-            return result
         return super().execute(step)
 
     @staticmethod
     def _is_control_failure(arguments: tuple[str, ...], error: BaseException) -> bool:
-        if arguments[:1] == ("status",):
+        if arguments[:1] in {("status",), ("snapshot",)}:
             return True
         if arguments[:1] not in {
-            ("connect",), ("connect-profile",), ("disconnect",), ("verify-session",)
+            ("configure",), ("start",), ("stop",)
         }:
             return False
         details = "\n".join(getattr(error, "__notes__", ())).lower()
@@ -639,168 +611,15 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             raise ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE")
         return received, sent
 
-    def _network_command(
-        self, command: tuple[str, ...], timeout: float, failure: str
-    ):
-        try:
-            result = self.runner.run(command, timeout_seconds=timeout)
-        except HostedAdapterError as error:
-            raise ScenarioExecutionError(error.code) from error
-        if result.timed_out or result.returncode != 0:
-            error = ScenarioExecutionError(failure)
-            _append_command_result_notes(error, result)
-            raise error
-        return result
-
-    def _interface_is_up(self, timeout: float) -> bool:
-        if self.network_interface is None:
-            raise CapabilityUnavailable()
-        result = self._network_command(
-            ("/sbin/ifconfig", self.network_interface),
-            timeout,
-            "NETWORK_INTERFACE_PROBE_FAILED",
-        )
-        first_line = result.stdout_text.splitlines()[0] if result.stdout_text.splitlines() else ""
-        match = re.search(r"\bflags=[0-9]+<([^>]*)>", first_line)
-        if match is None:
-            raise ScenarioExecutionError("NETWORK_INTERFACE_STATE_INVALID")
-        return "UP" in match.group(1).split(",")
-
-    def _discard_network_repair_scratch(self, paths: tuple[Path, ...]) -> None:
-        for path in paths:
-            _discard_scratch_file(path)
-
-    def _forward_network_repair_streams(
-        self, stdout: Path, stderr: Path
-    ) -> Exception | None:
-        streams: dict[str, bytes] = {}
-        failures: list[str] = []
-        for name, path in (("stdout", stdout), ("stderr", stderr)):
-            try:
-                streams[name] = path.read_bytes()
-            except OSError as error:
-                failures.append(
-                    f"network_repair_{name}_read_error={type(error).__name__}: {error}"
-                )
-        try:
-            emit_streams(
-                "macos-network-repair-restore",
-                streams.get("stdout", b""),
-                streams.get("stderr", b""),
-            )
-        except Exception as error:
-            failures.append(
-                f"network_repair_stream_forward_error={type(error).__name__}: {error}"
-            )
-        if not failures:
-            return None
-        failure = ScenarioExecutionError("NETWORK_REPAIR_DIAGNOSTIC_COLLECTION_FAILED")
-        for detail in failures:
-            failure.add_note(detail)
-        return failure
-
-    def _network_transition(self, timeout: float) -> dict[str, object]:
-        if (
-            not self.local_mode
-            or self.network_interface is None
-            or self.network_transition_helper is None
-            or not isinstance(self.raw_directory, Path)
-        ):
-            raise CapabilityUnavailable()
-        deadline = time.monotonic() + timeout
-        state = _allocate_scratch_path(
-            self.raw_directory, "macos-network-repair", ".state"
-        )
-        stdout = _allocate_scratch_path(
-            self.raw_directory, "macos-network-repair", ".stdout.tmp",
-        )
-        stderr = _allocate_scratch_path(
-            self.raw_directory, "macos-network-repair", ".stderr.tmp",
-        )
-        primary: Exception | None = None
-        try:
-            self._network_command(
-                (
-                    "sudo", "-n", str(self.network_transition_helper), "arm",
-                    self.network_interface, str(state), str(stdout), str(stderr),
-                ),
-                self._remaining(deadline, "NETWORK_DOWN_FAILED"),
-                "NETWORK_DOWN_FAILED",
-            )
-            if self._interface_is_up(
-                self._remaining(deadline, "NETWORK_LOSS_NOT_OBSERVED")
-            ):
-                raise ScenarioExecutionError("NETWORK_LOSS_NOT_OBSERVED")
-        except Exception as error:
-            primary = error
-        finally:
-            if state.stat().st_size:
-                try:
-                    self._network_command(
-                        (
-                            "sudo", "-n", str(self.network_transition_helper),
-                            "finish", str(state),
-                        ),
-                        self._remaining(deadline, "NETWORK_UP_FAILED"),
-                        "NETWORK_UP_FAILED",
-                    )
-                except Exception as error:
-                    if primary is None:
-                        primary = error
-                    else:
-                        add_exception_notes(
-                            primary,
-                            "network_uplink_restoration",
-                            error,
-                        )
-            collection_error = self._forward_network_repair_streams(stdout, stderr)
-            if collection_error is not None:
-                if primary is None:
-                    primary = collection_error
-                else:
-                    add_exception_notes(
-                        primary,
-                        "network_repair_diagnostic_collection",
-                        collection_error,
-                    )
-            retained_streams = collection_error is not None
-            try:
-                scratch_paths = (state,) if retained_streams else (state, stdout, stderr)
-                self._discard_network_repair_scratch(scratch_paths)
-            except Exception as error:
-                if primary is None:
-                    primary = error
-                else:
-                    primary.add_note(
-                        "Network repair scratch cleanup also failed: "
-                        + f"{type(error).__name__}: {error}"
-                    )
-            if retained_streams and primary is not None:
-                primary.add_note(
-                    f"Network repair streams retained after collection failure: "
-                    f"stdout={stdout} stderr={stderr}"
-                )
-        if primary is not None:
-            raise primary
-        while not self._interface_is_up(
-            self._remaining(deadline, "NETWORK_UP_FAILED")
-        ):
-            time.sleep(min(0.1, self._remaining(deadline, "NETWORK_UP_FAILED")))
-        if not self._connected(self._remaining(deadline, "NETWORK_TUNNEL_NOT_RESTORED")):
-            raise ScenarioExecutionError("NETWORK_TUNNEL_NOT_RESTORED")
-        if not self._wait_for_routing_verified(
-            self._remaining(deadline, "NETWORK_ROUTING_NOT_RESTORED")
-        ):
-            raise ScenarioExecutionError("NETWORK_ROUTING_NOT_RESTORED")
-        return {"network_transition_verified": True}
-
     def _process_loss(self, timeout: float) -> dict[str, object]:
         if self.service is None:
             raise CapabilityUnavailable()
         deadline = time.monotonic() + timeout
         self.service.restart_after_loss(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
-        self._command(
-            ("connect-profile", str(self.profile), self._selected_connection_index()),
+        self._reconfigure_after_service_restart(
+            self._remaining(deadline, "PROCESS_LOSS_TIMEOUT")
+        )
+        self._start_selected(
             self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"),
             "PROCESS_LOSS_CONNECT_FAILED",
         )

@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
-"""Build a local DobbyVPN candidate and write its output paths.
-
-This is an intentionally small adapter around the product's existing build
-helpers. It owns no VPN operations or result semantics; the local VM helpers
-consume the paths in the descriptor to start the candidate.
-"""
+"""Build one local candidate and return its validated paths."""
 
 from __future__ import annotations
 
-import argparse
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import platform as host_platform
 import re
-import shutil
 import subprocess
 import sys
 import time
-import traceback
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "android"))
 from android_apk_signing import find_android_tool, sign_test_pair
 
 
@@ -51,7 +45,32 @@ ARCHITECTURE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 class CandidateError(ValueError):
-    """Raised when a candidate request or its resulting descriptor is invalid."""
+    """Raised when a candidate request or one of its paths is invalid."""
+
+
+@dataclass(frozen=True)
+class CandidatePaths:
+    app: Path | None = None
+    test_companion: Path | None = None
+    service: Path | None = None
+    cli: Path | None = None
+    ui: Path | None = None
+    network: Path | None = None
+
+    def to_dict(self) -> dict[str, str]:
+        """Render validated paths only when recording platform state."""
+        return {
+            name: str(path)
+            for name, path in (
+                ("app", self.app),
+                ("test_companion", self.test_companion),
+                ("service", self.service),
+                ("cli", self.cli),
+                ("ui", self.ui),
+                ("network", self.network),
+            )
+            if path is not None
+        }
 
 
 def _retain_captured_stream(stream: Any, output: bytes) -> None:
@@ -167,14 +186,14 @@ def _run(
 
 
 def _desktop_helper(source_root: Path) -> Path:
-    helper = source_root / ".github" / "scripts" / "desktop_build.py"
+    helper = source_root / ".github" / "scripts" / "desktop" / "desktop_build.py"
     if not helper.is_file():
         raise CandidateError("desktop build helper is missing")
     return helper
 
 
 def _android_helper(source_root: Path) -> Path:
-    helper = source_root / ".github" / "scripts" / "android_build_driver.sh"
+    helper = source_root / ".github" / "scripts" / "android" / "android_build_driver.sh"
     if not helper.is_file():
         raise CandidateError("Android build driver is missing")
     return helper
@@ -232,7 +251,7 @@ def _build_android(
     source_tree: str | None,
 ) -> Path:
     helper = _android_helper(source_root)
-    build_check = source_root / ".github" / "scripts" / "android_build_check.sh"
+    build_check = source_root / ".github" / "scripts" / "android" / "android_build_check.sh"
     output = candidate_root / "dobbyvpn-release-unsigned.apk"
     companion_output = candidate_root / "dobbyvpn-test-companion-unsigned.apk"
     signed_output = candidate_root / "dobbyvpn-release.apk"
@@ -278,29 +297,16 @@ def _build_android(
         # Android lint preflight installs this exact Go version through the
         # shared desktop tool bootstrap. Re-select it in this process because
         # PATH changes made by the preflight subprocess do not propagate here.
-        sys.path.insert(0, str(source_root / ".github" / "scripts"))
+        sys.path.insert(0, str(source_root / ".github" / "scripts" / "desktop"))
         import desktop_build
 
-        desktop_build.install_go(skip_deps=True)
-        go_binary = shutil.which("go")
-        if not go_binary:
-            raise CandidateError("pinned Go executable is unavailable after Android preflight")
-        go_version = subprocess.run(
-            [go_binary, "env", "GOVERSION"],
-            cwd=str(source_root),
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-        ).stdout.strip()
-        expected_go = "go" + (source_root / ".go-version").read_text(encoding="utf-8").strip()
-        if go_version != expected_go:
-            raise CandidateError(f"expected {expected_go}, found {go_version}")
+        go_binary = str(desktop_build.install_go(skip_deps=True))
 
         go_path = Path.home() / "go"
         go_path.mkdir(parents=True, exist_ok=True)
         environment["GO_BIN"] = str(Path(go_binary).resolve())
         environment["GOPATH"] = str(go_path)
-        environment["GRADLE_BIN"] = str(source_root / "android_module" / "gradlew")
+        environment["GRADLE_BIN"] = str(source_root / "android" / "gradlew")
         label = "Android Release-mode candidate build"
         command = driver_command
 
@@ -314,7 +320,7 @@ def _build_android(
         provenance = candidate_root / "android-provenance.json"
         version_code_match = re.search(
             r"^versionCode=([1-9][0-9]*)$",
-            (source_root / "android_module" / "gradle.properties").read_text(encoding="utf-8"),
+            (source_root / "android" / "gradle.properties").read_text(encoding="utf-8"),
             re.MULTILINE,
         )
         if version_code_match is None:
@@ -322,7 +328,7 @@ def _build_android(
         _run(
             [
                 sys.executable,
-                str(source_root / ".github" / "scripts" / "android_apk_signing.py"),
+                str(source_root / ".github" / "scripts" / "android" / "android_apk_signing.py"),
                 "create-provenance",
                 "--profile", "local-complete",
                 "--output", str(provenance),
@@ -353,7 +359,7 @@ def _build_android(
     return signed_output
 
 
-def _descriptor(
+def _candidate_paths(
     *,
     request_root: Path,
     platform: str,
@@ -363,29 +369,25 @@ def _descriptor(
     ui_path: Path | None,
     service_path: Path | None,
     network_path: Path,
-) -> dict[str, Any]:
-    """Return only paths consumed by the local VM helpers.
-
-    The builder and runner already know the platform, identities, logs, and
-    source checkout.  Repeating those facts here made the descriptor a second
-    protocol rather than a useful handoff of build outputs.
-    """
-    result: dict[str, Any] = {}
+) -> CandidatePaths:
+    """Return the validated paths consumed by the local VM helpers."""
     if platform == "android":
         if app_path is None:
             raise CandidateError("Android application is missing")
         if test_companion_path is None:
             raise CandidateError("Android test companion is missing")
-        result["app"] = str(_regular_file(app_path, request_root, "Android app"))
-        result["test_companion"] = str(
-            _regular_file(test_companion_path, request_root, "Android test companion")
+        return CandidatePaths(
+            app=_regular_file(app_path, request_root, "Android app"),
+            test_companion=_regular_file(
+                test_companion_path, request_root, "Android test companion"
+            ),
         )
-        return result
 
     if service_path is None or cli_path is None:
         raise CandidateError("desktop candidate paths are incomplete")
-    result["service"] = str(_regular_file(service_path, request_root, "service"))
-    result["cli"] = str(_regular_file(cli_path, request_root, "CLI"))
+    service = _regular_file(service_path, request_root, "service")
+    cli = _regular_file(cli_path, request_root, "CLI")
+    ui: Path | None = None
     if platform in {"windows", "macos"}:
         if ui_path is None:
             raise CandidateError("desktop native UI path is missing")
@@ -395,20 +397,13 @@ def _descriptor(
                 raise CandidateError("macOS desktop UI must be an application bundle")
         else:
             ui_path = _regular_file(ui_path, request_root, "desktop UI")
-        result["ui"] = str(ui_path)
-    result["network"] = str(_confined(network_path, request_root, "network interface"))
-    return result
-
-
-def _write_descriptor(path: Path, request_root: Path, document: dict[str, Any]) -> None:
-    path = _confined(path, request_root, "descriptor")
-    try:
-        path.write_text(
-            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
-    except OSError as error:
-        raise CandidateError(f"could not write descriptor: {error}") from error
+        ui = ui_path
+    return CandidatePaths(
+        service=service,
+        cli=cli,
+        ui=ui,
+        network=_confined(network_path, request_root, "network interface"),
+    )
 
 
 def prepare_candidate(
@@ -416,13 +411,12 @@ def prepare_candidate(
     request_root: Path,
     source_root: Path,
     platform: str,
-    output: Path,
     architecture: str | None = None,
     candidate_root: Path | None = None,
     skip_deps: bool = False,
     source_sha: str | None = None,
     source_tree: str | None = None,
-) -> dict[str, Any]:
+) -> CandidatePaths:
     request_root = _existing_directory(request_root, "request root")
     source_root = _existing_directory(source_root, "source root")
     # Android's driver confines all of its output to the source checkout.  A
@@ -452,7 +446,6 @@ def prepare_candidate(
     if not candidate_root.is_relative_to(source_root):
         raise CandidateError("candidate root must be below source root")
     candidate_root = _new_directory(candidate_root, request_root, "candidate root")
-    output = _confined(Path(output), request_root, "descriptor")
     test_companion_path: Path | None = None
     ui_path: Path | None = None
     if platform in DESKTOP_PLATFORMS:
@@ -463,8 +456,8 @@ def prepare_candidate(
             architecture,
             skip_deps,
         )
-        service_path = source_root / "go_module" / SERVICE_NAMES[platform]
-        cli_path = source_root / "go_module" / CLI_NAMES[platform]
+        service_path = source_root / "core" / SERVICE_NAMES[platform]
+        cli_path = source_root / "core" / CLI_NAMES[platform]
         ui_path = (
             candidate_root / "frontend" / UI_NAMES[platform]
             if platform == "windows"
@@ -495,7 +488,7 @@ def prepare_candidate(
     )
     network_path = network_root / "s"
 
-    descriptor = _descriptor(
+    return _candidate_paths(
         request_root=request_root,
         platform=platform,
         app_path=app_path,
@@ -505,45 +498,3 @@ def prepare_candidate(
         service_path=service_path,
         network_path=network_path,
     )
-    _write_descriptor(output, request_root, descriptor)
-    return descriptor
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Prepare a local DobbyVPN candidate descriptor.")
-    parser.add_argument("prepare", choices=("prepare",), help="build and describe one candidate")
-    parser.add_argument("--request-root", type=Path, required=True)
-    parser.add_argument("--source-root", type=Path, required=True)
-    parser.add_argument("--platform", choices=PLATFORMS, required=True)
-    parser.add_argument("--architecture", type=str)
-    parser.add_argument("--candidate-root", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--skip-deps", action="store_true")
-    parser.add_argument("--source-sha")
-    parser.add_argument("--source-tree")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    try:
-        descriptor = prepare_candidate(
-            request_root=args.request_root,
-            source_root=args.source_root,
-            platform=args.platform,
-            output=args.output,
-            architecture=args.architecture,
-            candidate_root=args.candidate_root,
-            skip_deps=args.skip_deps,
-            source_sha=args.source_sha,
-            source_tree=args.source_tree,
-        )
-    except CandidateError as error:
-        traceback.print_exception(error)
-        return 2
-    print(json.dumps(descriptor, sort_keys=True, separators=(",", ":")))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -55,7 +55,6 @@ def _parser() -> argparse.ArgumentParser:
     test.add_argument("--service-identity-file", type=Path)
     test.add_argument("--network-interface")
     test.add_argument("--routing-firewall-helper", type=Path)
-    test.add_argument("--network-transition-helper", type=Path)
     return parser
 
 
@@ -132,14 +131,9 @@ def _functional_arguments(args: argparse.Namespace, installed: dict[str, Any]) -
     if args.platform == "linux" and routing_helper is None:
         routing_helper = helper_root / "linux" / "routing-probe-firewall"
     if args.platform == "macos" and routing_helper is None:
-        routing_helper = helper_root / "macos" / "network-transition"
+        routing_helper = helper_root / "macos" / "routing-firewall"
     if routing_helper is not None:
         argv.extend(("--routing-firewall-helper", str(routing_helper)))
-    transition_helper = args.network_transition_helper
-    if args.platform == "macos" and transition_helper is None:
-        transition_helper = helper_root / "macos" / "network-transition"
-    if transition_helper is not None:
-        argv.extend(("--network-transition-helper", str(transition_helper)))
     source_sha = installed.get("source_sha")
     if isinstance(source_sha, str) and source_sha:
         argv.extend(("--source-sha", source_sha))

@@ -35,7 +35,6 @@ _INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _LINUX_PROCESS_CENSUS = (
     "ps", "-axo", "pid=,ppid=,pgid=,state="
 )
-_NETWORK_REPAIR_UNIT = "dobbyvpn-uplink-repair"
 _LINUX_PROCESS_STAT_SCRIPT = r'''\
 set -eu
 pid=$1
@@ -957,18 +956,13 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
     @property
     def capabilities(self) -> frozenset[Capability]:
         result = set(super().capabilities)
-        if self.network_interface is not None:
-            result.add(Capability.NETWORK_TRANSITION)
         if self.service is not None:
             result.add(Capability.PROCESS_LOSS)
         return frozenset(result)
 
     @property
     def capability_unavailable_reasons(self) -> dict[Capability, str]:
-        reasons = dict(super().capability_unavailable_reasons)
-        if self.network_interface is None:
-            reasons[Capability.NETWORK_TRANSITION] = "HOSTED_LINUX_INTERFACE_REQUIRED"
-        return reasons
+        return dict(super().capability_unavailable_reasons)
 
     def execute(self, step: ScenarioStep) -> dict[str, object]:
         if (
@@ -982,11 +976,6 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             and step.operation == "reconnect"
         ):
             return self._reconnect_with_routing_probe(float(step.timeout_seconds))
-        if step.operation == "network_transition":
-            self._emit_progress("native-state", kind="uplink", state="transition-started")
-            result = self._network_transition(float(step.timeout_seconds))
-            self._emit_progress("native-state", kind="uplink", state="restored")
-            return result
         if step.operation == "process_loss":
             self._emit_progress("native-state", kind="vpn-service", state="loss-started")
             result = self._process_loss(float(step.timeout_seconds))
@@ -1135,141 +1124,18 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                         (("service_scratch_cleanup", cleanup_error),),
                     )
 
-    def _network_transition(self, timeout: float) -> dict[str, object]:
-        if self.network_interface is None:
-            raise CapabilityUnavailable()
-        deadline = time.monotonic() + timeout
-        down_succeeded = False
-        repair_unit = _NETWORK_REPAIR_UNIT
-        repair = self._privileged(
-            (
-                "/usr/bin/systemd-run", "--collect", f"--unit={repair_unit}",
-                "--on-active=3s", "/usr/sbin/ip", "link", "set", "dev",
-                self.network_interface, "up",
-            ),
-            self._remaining(deadline, "NETWORK_REPAIR_SCHEDULE_FAILED"),
-            "NETWORK_REPAIR_SCHEDULE_FAILED",
-        )
-        if repair.returncode != 0 or repair.timed_out:
-            raise ScenarioExecutionError("NETWORK_REPAIR_SCHEDULE_FAILED")
-        repair_due = time.monotonic() + 3.2
-        primary_error: Exception | None = None
-        try:
-            down = self._privileged(
-                ("/usr/sbin/ip", "link", "set", "dev", self.network_interface, "down"),
-                self._remaining(deadline, "NETWORK_DOWN_FAILED"),
-                "NETWORK_DOWN_FAILED",
-            )
-            if down.returncode != 0:
-                raise ScenarioExecutionError("NETWORK_DOWN_FAILED")
-            down_succeeded = True
-            time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
-        except Exception as error:
-            primary_error = error
-        finally:
-            if down_succeeded:
-                try:
-                    up = self._privileged(
-                        ("/usr/sbin/ip", "link", "set", "dev", self.network_interface, "up"),
-                        self._remaining(deadline, "NETWORK_UP_FAILED"),
-                        "NETWORK_UP_FAILED",
-                    )
-                    if up.returncode != 0:
-                        raise ScenarioExecutionError("NETWORK_UP_FAILED")
-                except Exception as error:
-                    if primary_error is None:
-                        primary_error = error
-                    else:
-                        primary_error.add_note(
-                            f"network_uplink_restoration_error={type(error).__name__}"
-                        )
-            # Always let the fixed, one-shot emergency repair fire.  Its
-            # --collect unit then disappears without a privileged stop path.
-            cleanup_script = r'''
-          unit=$1
-          while true; do
-            timer_state=$(systemctl show "$unit.timer" --property=LoadState --value) || exit 1
-            service_state=$(systemctl show "$unit.service" --property=LoadState --value) || exit 1
-            printf 'timer LoadState=%s\nservice LoadState=%s\n' "$timer_state" "$service_state"
-            if [ "$timer_state" = not-found ] && [ "$service_state" = not-found ]; then exit 0; fi
-            sleep 0.1
-          done
-            '''
-            try:
-                time.sleep(min(
-                    max(0.0, repair_due - time.monotonic()),
-                    max(0.0, deadline - time.monotonic()),
-                ))
-                cleanup = self.runner.run(
-                    (
-                        "sh", "-c", cleanup_script,
-                        "dobbyvpn-repair-cleanup", repair_unit,
-                    ),
-                    timeout_seconds=self._remaining(
-                        deadline, "NETWORK_REPAIR_CLEANUP_FAILED"
-                    ),
-                )
-                if cleanup.returncode != 0 or cleanup.timed_out:
-                    raise ScenarioExecutionError("NETWORK_REPAIR_CLEANUP_FAILED")
-            except HostedAdapterError as error:
-                cleanup_error: Exception = ScenarioExecutionError(error.code)
-                cleanup_error.__cause__ = error
-                if primary_error is None:
-                    primary_error = cleanup_error
-                else:
-                    primary_error.add_note(
-                        f"network_repair_cleanup_error={type(cleanup_error).__name__}"
-                    )
-            except Exception as cleanup_error:
-                if primary_error is None:
-                    primary_error = cleanup_error
-                else:
-                    primary_error.add_note(
-                        f"network_repair_cleanup_error={type(cleanup_error).__name__}"
-                    )
-        if primary_error is not None:
-            raise primary_error
-        last_error: ScenarioExecutionError | None = None
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                if not self._connected(remaining):
-                    last_error = ScenarioExecutionError("NETWORK_TUNNEL_NOT_RESTORED")
-                elif self._routing_verified(remaining):
-                    return {"network_transition_verified": time.monotonic() <= deadline}
-                else:
-                    last_error = ScenarioExecutionError("NETWORK_ROUTING_NOT_RESTORED")
-            except ScenarioExecutionError as error:
-                if error.reason_code not in {
-                    "STATUS_FAILED",
-                    "STATUS_INVALID",
-                    "EXTERNAL_IDENTITY_FAILED",
-                    "EXTERNAL_IDENTITY_INVALID",
-                    "ROUTING_PROBE_FAILED",
-                }:
-                    raise
-                last_error = error
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(0.5, remaining))
-        raise last_error or ScenarioExecutionError("NETWORK_ROUTING_NOT_RESTORED")
-
-    def _privileged(self, args: tuple[str, ...], timeout: float, failure: str):
-        try:
-            return self.runner.run(("sudo", "-n", *args), timeout_seconds=timeout)
-        except HostedAdapterError as error:
-            raise ScenarioExecutionError(error.code) from error
-
     def _process_loss(self, timeout: float) -> dict[str, object]:
         if self.service is None:
             raise CapabilityUnavailable()
         deadline = time.monotonic() + timeout
         self.service.restart_after_loss(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"))
-        self._command(("connect-profile", str(self.profile), self._selected_connection_index()),
-                      self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"), "PROCESS_LOSS_CONNECT_FAILED")
+        self._reconfigure_after_service_restart(
+            self._remaining(deadline, "PROCESS_LOSS_TIMEOUT")
+        )
+        self._start_selected(
+            self._remaining(deadline, "PROCESS_LOSS_TIMEOUT"),
+            "PROCESS_LOSS_CONNECT_FAILED",
+        )
         if not self._connected(self._remaining(deadline, "PROCESS_LOSS_TIMEOUT")):
             raise ScenarioExecutionError("PROCESS_LOSS_NOT_RECOVERED")
         if not self._wait_for_routing_verified(

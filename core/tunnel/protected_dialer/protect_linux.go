@@ -1,0 +1,54 @@
+//go:build linux && !(android || ios)
+
+package protected_dialer
+
+import (
+	"fmt"
+	"math"
+	"syscall"
+
+	"core/log"
+)
+
+var linuxSocketMark int
+
+func SetLinuxSocketMark(mark int) {
+	linuxSocketMark = mark
+	log.Debugf(Category, "[Linux-Protect] SO_MARK=%d", mark)
+}
+
+type linuxProtector struct{}
+
+func (l *linuxProtector) Protect(fdU uintptr, network string) error {
+	if linuxSocketMark == 0 {
+		return ErrSocketProtectionUnavailable
+	}
+
+	fd, err := UintptrToInt(fdU)
+	if err != nil {
+		log.Debugf(Category, "[Linux-Protect] Protect fd err=%v", err)
+		return err
+	}
+
+	if err := syscall.SetsockoptInt(
+		fd,
+		syscall.SOL_SOCKET,
+		syscall.SO_MARK,
+		linuxSocketMark,
+	); err != nil {
+		log.Debugf(Category, "[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
+		return err
+	}
+	return nil
+}
+
+func init() {
+	protector = &linuxProtector{}
+}
+
+func UintptrToInt(u uintptr) (int, error) {
+	if u > uintptr(math.MaxInt) {
+		return 0, fmt.Errorf("uintptr value %d overflows int", u)
+	}
+	return int(u), nil
+}

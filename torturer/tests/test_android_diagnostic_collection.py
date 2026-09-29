@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from torturer_checks import local_vm_android
-from torturer_contract.functional.scenarios import select_scenarios, suite_set
+from torturer_contract.functional.scenarios import select_scenarios
 
 
 class AndroidDiagnosticCollectionTests(unittest.TestCase):
@@ -171,7 +171,7 @@ class DisabledFunctionalScenarioTests(unittest.TestCase):
         for suite in ("mini", "full"):
             self.assertNotIn(
                 "functional.network-transition",
-                {scenario.id for scenario in suite_set(suite)},
+                {scenario.id for scenario in select_scenarios(suite=suite)},
             )
 
     def test_network_transition_manual_selection_fails_explicitly(self) -> None:

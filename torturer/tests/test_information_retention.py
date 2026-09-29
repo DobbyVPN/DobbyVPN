@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr
+from contextlib import nullcontext, redirect_stderr
 from io import BytesIO, StringIO
 import json
 from pathlib import Path
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_checks import ios_simulator_app
-from torturer_checks.hosted import android, macos, native_ui
+from torturer_checks.hosted import macos, native_ui
 from torturer_checks.hosted.cli import CommandResult
 from torturer_checks.windows_job import (
     WindowsJobCloseResult,
@@ -66,78 +66,37 @@ class InformationRetentionTests(unittest.TestCase):
         self.assertEqual(caught.exception.stderr, stderr)
         self.assertIn("stderr closed", "\n".join(caught.exception.__notes__))
 
-    def test_macos_restore_streams_are_forwarded_before_scratch_cleanup(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            adapter = object.__new__(macos.MacOSHostedAdapter)
-            adapter.local_mode = True
-            adapter.network_interface = "en0"
-            adapter.network_transition_helper = root / "network-transition"
-            adapter.raw_directory = root
+    def test_macos_routing_firewall_failures_retain_command_diagnostics(self) -> None:
+        adapter = object.__new__(macos.MacOSHostedAdapter)
+        adapter.routing_firewall_helper = Path("/tmp/routing-firewall")
+        adapter.network_interface = "en0"
+        adapter._routing_probe_address = "198.51.100.9"
+        adapter.runner = mock.Mock()
 
-            def allocate(directory: Path, prefix: str, suffix: str) -> Path:
-                path = directory / f"{prefix}{suffix}"
-                path.touch()
-                return path
+        for action in ("block", "remove"):
+            with self.subTest(action=action):
+                stdout = f"{action} helper stdout\x00\xff".encode("latin-1")
+                stderr = f"{action} helper stderr\xfe".encode("latin-1")
+                argv = ["sudo", "-n", str(adapter.routing_firewall_helper), f"routing-{action}"]
+                if action == "block":
+                    argv.extend((adapter.network_interface, adapter._routing_probe_address))
+                result = CommandResult(
+                    command=tuple(argv), returncode=1, stdout=stdout, stderr=stderr
+                )
+                adapter.runner.run.return_value = result
+                with mock.patch("torturer_checks.hosted.cli.emit_streams") as emit:
+                    with self.assertRaises(ScenarioExecutionError) as caught:
+                        adapter._firewall(action, 5)
 
-            def command(arguments, _timeout, _failure_code):
-                if arguments[3] == "arm":
-                    Path(arguments[5]).write_text("restore_status=1\n", encoding="ascii")
-                    Path(arguments[6]).write_bytes(b"restore stdout\x00\xff\n")
-                    Path(arguments[7]).write_bytes(b"restore stderr\n")
-                    raise ScenarioExecutionError("NETWORK_DOWN_FAILED")
-                return SimpleNamespace(stdout_text="", stderr_text="")
-
-            adapter._network_command = command
-            forwarded = BinaryStderr()
-            with mock.patch.object(
-                macos, "_allocate_scratch_path", side_effect=allocate
-            ):
-                with redirect_stderr(forwarded):
-                    with self.assertRaises(ScenarioExecutionError):
-                        adapter._network_transition(5)
-
-            output = forwarded.buffer.getvalue()
-            self.assertIn(b"restore stdout\x00\xff", output)
-            self.assertIn(b"restore stderr", output)
-            self.assertEqual(list(root.iterdir()), [])
-
-    def test_macos_restore_streams_survive_delivery_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            adapter = object.__new__(macos.MacOSHostedAdapter)
-            adapter.local_mode = True
-            adapter.network_interface = "en0"
-            adapter.network_transition_helper = root / "network-transition"
-            adapter.raw_directory = root
-
-            def allocate(directory: Path, prefix: str, suffix: str) -> Path:
-                path = directory / f"{prefix}{suffix}"
-                path.touch()
-                return path
-
-            def command(arguments, _timeout, _failure_code):
-                if arguments[3] == "arm":
-                    Path(arguments[5]).write_text("restore_status=1\n", encoding="ascii")
-                    Path(arguments[6]).write_bytes(b"restore stdout\x00\xff\n")
-                    Path(arguments[7]).write_bytes(b"restore stderr\n")
-                    raise ScenarioExecutionError("NETWORK_DOWN_FAILED")
-                return SimpleNamespace(stdout_text="", stderr_text="")
-
-            adapter._network_command = command
-            with (
-                mock.patch.object(macos, "_allocate_scratch_path", side_effect=allocate),
-                mock.patch.object(macos, "emit_streams", side_effect=OSError("output pipe closed")),
-            ):
-                with self.assertRaises(ScenarioExecutionError) as caught:
-                    adapter._network_transition(5)
-
-            stdout = root / "macos-network-repair.stdout.tmp"
-            stderr = root / "macos-network-repair.stderr.tmp"
-            self.assertEqual(stdout.read_bytes(), b"restore stdout\x00\xff\n")
-            self.assertEqual(stderr.read_bytes(), b"restore stderr\n")
-            self.assertIn(str(stdout), "\n".join(caught.exception.__notes__))
-            self.assertIn(str(stderr), "\n".join(caught.exception.__notes__))
+                self.assertEqual(
+                    caught.exception.reason_code,
+                    f"ROUTING_FIREWALL_{action.upper()}_FAILED",
+                )
+                notes = "\n".join(caught.exception.__notes__)
+                self.assertIn(stdout.decode("utf-8", errors="backslashreplace"), notes)
+                self.assertIn(stderr.decode("utf-8", errors="backslashreplace"), notes)
+                emit.assert_called_once_with("command", stdout, stderr)
+                adapter.runner.run.assert_called_with(argv, timeout_seconds=5)
 
     def test_macos_missing_socket_retains_service_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -151,7 +110,7 @@ class InformationRetentionTests(unittest.TestCase):
                 (root / filename).write_bytes(payload)
 
             cli_failure = CommandResult(
-                command=("dobby-cli", "status", "--json"),
+                command=("dobby-cli", "snapshot"),
                 returncode=1,
                 stdout=b"",
                 stderr=(
@@ -180,7 +139,7 @@ class InformationRetentionTests(unittest.TestCase):
             forwarded = BinaryStderr()
             with redirect_stderr(forwarded):
                 with self.assertRaises(ScenarioExecutionError) as caught:
-                    adapter._command(("status", "--json"), 5.0, "STATUS_FAILED")
+                    adapter._command(("snapshot",), 5.0, "STATUS_FAILED")
 
             self.assertEqual(caught.exception.reason_code, "STATUS_FAILED")
             notes = "\n".join(caught.exception.__notes__)
@@ -238,31 +197,34 @@ class InformationRetentionTests(unittest.TestCase):
                 service_identity_file=None,
                 network_interface=None,
                 routing_firewall_helper=None,
-                network_transition_helper=None,
                 timeout=5,
             )
             base = mock.Mock()
-            base.discover_connections.return_value = (object(),)
-            native_process = mock.Mock()
-
-            def request(operation, **_kwargs):
-                if operation == "configure":
-                    return {}
-                raise native_ui.NativeUIJourneyError("connect failed")
-
-            native_process.request.side_effect = request
+            base._snapshot.return_value = {"configured": True, "profiles": [{"index": 0}]}
+            controller = mock.Mock()
+            controller.bounded_by.side_effect = lambda _timeout: nullcontext()
+            controller.configure.return_value = {"input_verified": True}
+            controller.connect.side_effect = native_ui.NativeUIJourneyError("connect failed")
+            controller.capture.return_value = {}
+            smoke = SimpleNamespace(
+                verify_interactive_session=mock.Mock(),
+                NativeUIController=mock.Mock(return_value=controller),
+            )
 
             with (
                 mock.patch.object(native_ui, "_ensure_directory"),
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
-                mock.patch.object(native_ui, "_NativeUIProcess", return_value=native_process),
+                mock.patch.object(native_ui, "_load_native_ui_smoke", return_value=smoke),
             ):
                 with self.assertRaises(native_ui.NativeUIJourneyError) as caught:
                     native_ui.run_journey(args)
 
             failure = caught.exception
             self.assertEqual(failure.native_ui_checks, {"configure_native": True})
+            base.discover_connections.assert_not_called()
+            controller.connect.assert_called_once()
+            controller.close_for_cleanup.assert_called_once()
 
             with (
                 mock.patch.object(native_ui, "build_parser", return_value=SimpleNamespace(
@@ -310,24 +272,6 @@ class InformationRetentionTests(unittest.TestCase):
         self.assertIn("cleanup stderr", notes)
         self.assertIn(final_stdout, forwarded.buffer.getvalue())
         self.assertIn(final_stderr, forwarded.buffer.getvalue())
-
-    def test_android_composite_keeps_child_details_without_stream_duplication(self) -> None:
-        child = android.HostedAdapterError("CHILD_OPERATION_FAILED")
-        child.code = "ANDROID_CHILD_CODE"
-        child.add_note("provider detail=control service rejected reset")
-        child.add_note("adb_stdout:\nlarge output already emitted")
-        aggregate = None
-        try:
-            android._composite_failure("reset", [("gui-auto", child)])
-        except android.HostedAdapterError as error:
-            aggregate = error
-
-        self.assertIsNotNone(aggregate)
-        assert aggregate is not None
-        notes = "\n".join(aggregate.__notes__)
-        self.assertIn("ANDROID_CHILD_CODE", notes)
-        self.assertIn("control service rejected reset", notes)
-        self.assertNotIn("large output already emitted", notes)
 
     def test_windows_job_close_result_has_explicit_outcome_and_diagnostics(self) -> None:
         class FakeJob:

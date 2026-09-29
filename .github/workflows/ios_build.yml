@@ -50,27 +50,27 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: DobbyVPNRuntime.xcframework
-          path: swift_module/DobbyVPNRuntime.xcframework
+          path: apple/DobbyVPNRuntime.xcframework
 
       - name: Analyze production iOS app and tunnel without signing
         run: |
           set -euo pipefail
-          bash go_module/scripts/package_ios_app.sh \
+          bash core/scripts/package_ios_app.sh \
             iosanalyze "$RUNNER_TEMP/dobbyvpn-ios-analysis" \
-            swift_module/DobbyVPNRuntime.xcframework
+            apple/DobbyVPNRuntime.xcframework
 
       - name: Archive production iOS app and tunnel without signing
         run: |
           set -euo pipefail
-          mkdir -p swift_module/build/release
-          bash go_module/scripts/package_ios_app.sh \
-            iosarchive swift_module/build/release/DobbyVPN.xcarchive.tar.gz \
-            swift_module/DobbyVPNRuntime.xcframework
+          mkdir -p apple/build/release
+          bash core/scripts/package_ios_app.sh \
+            iosarchive apple/build/release/DobbyVPN.xcarchive.tar.gz \
+            apple/DobbyVPNRuntime.xcframework
 
       - name: Upload unsigned iOS archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: DobbyVPN.xcarchive.tar.gz
-          path: swift_module/build/release/DobbyVPN.xcarchive.tar.gz
+          path: apple/build/release/DobbyVPN.xcarchive.tar.gz
           if-no-files-found: error
           retention-days: 90

@@ -1,0 +1,13 @@
+[Unit]
+Description=DobbyVPN Go backend
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=/opt/dobbyvpn/lib
+ExecStart=/opt/dobbyvpn/bin/dobbyvpn-backend
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

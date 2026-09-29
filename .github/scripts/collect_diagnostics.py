@@ -9,68 +9,14 @@ import json
 import mimetypes
 import os
 from pathlib import Path
-import struct
 import sys
-import zlib
 
 
 _TEXT_SUFFIXES = frozenset({".json", ".jsonl", ".log", ".txt", ".out", ".err", ".xml", ".md"})
-_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 class CollectionError(RuntimeError):
     pass
-
-
-def _png_dimensions(payload: bytes) -> tuple[int, int]:
-    if not payload.startswith(_PNG_SIGNATURE):
-        raise CollectionError("PNG signature is invalid")
-    offset = len(_PNG_SIGNATURE)
-    width = height = None
-    saw_idat = False
-    saw_iend = False
-    while offset < len(payload):
-        if len(payload) - offset < 12:
-            raise CollectionError("PNG chunk framing is truncated")
-        length = struct.unpack_from(">I", payload, offset)[0]
-        offset += 4
-        kind = payload[offset:offset + 4]
-        offset += 4
-        end = offset + length
-        if end + 4 > len(payload):
-            raise CollectionError("PNG chunk payload is truncated")
-        chunk = payload[offset:end]
-        offset = end
-        expected_crc = struct.unpack_from(">I", payload, offset)[0]
-        offset += 4
-        if zlib.crc32(kind + chunk) & 0xFFFFFFFF != expected_crc:
-            raise CollectionError("PNG chunk checksum is invalid")
-        if width is None and kind != b"IHDR":
-            raise CollectionError("PNG does not begin with IHDR")
-        if kind == b"IHDR":
-            if width is not None or len(chunk) != 13:
-                raise CollectionError("PNG IHDR is invalid")
-            width, height, bit_depth, color_type, compression, filtering, interlace = struct.unpack(
-                ">IIBBBBB", chunk
-            )
-            if (
-                width <= 0 or height <= 0 or bit_depth != 8
-                or color_type not in {2, 6}
-                or compression != 0 or filtering != 0 or interlace != 0
-            ):
-                raise CollectionError("PNG IHDR encoding is unsupported")
-        elif kind == b"IDAT":
-            saw_idat = True
-        elif kind == b"IEND":
-            if chunk:
-                raise CollectionError("PNG IEND is invalid")
-            saw_iend = True
-            if offset != len(payload):
-                raise CollectionError("PNG has trailing bytes after IEND")
-            break
-    if width is None or height is None or not saw_idat or not saw_iend:
-        raise CollectionError("PNG is missing a complete IDAT/IEND stream")
-    return width, height
 
 
 def _sha256(payload: bytes) -> str:
@@ -164,11 +110,9 @@ def collect(sources: list[Path], output: Path) -> list[dict[str, object]]:
                 raise CollectionError(
                     f"diagnostics source file could not be read: {relative}"
                 ) from error
-            width = height = None
             if path.suffix.lower() == ".png":
                 kind = "binary"
                 mime = "image/png"
-                width, height = _png_dimensions(payload)
                 stored = payload
             elif _looks_text(path, payload):
                 kind = "text"
@@ -193,8 +137,6 @@ def collect(sources: list[Path], output: Path) -> list[dict[str, object]]:
                 "bytes": len(stored),
                 "sha256": _sha256(stored),
             }
-            if width is not None and height is not None:
-                record.update(width=width, height=height)
             records.append(record)
             print(json.dumps(record, sort_keys=True))
             if kind == "text":

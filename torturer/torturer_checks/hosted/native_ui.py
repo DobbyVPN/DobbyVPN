@@ -11,16 +11,12 @@ interactive scheduled-task boundary.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import os
 from pathlib import Path
-import queue
-import re
-import subprocess
 import sys
-import threading
-import time
 from typing import Any
 
 from torturer_contract.functional.scenarios import ScenarioStep
@@ -29,12 +25,10 @@ from .cli import SubprocessRunner, _ensure_directory
 from .factory import adapter_for_platform
 
 
-# The hosted journey waits for the smoke driver's response. Keep a small
-# explicit reserve inside that response deadline so cleanup can complete
-# before the caller's task deadline. The result JSON records the journey.
+# Keep each native action below the hosted journey's step deadline, leaving
+# time for screenshots and exact UI-process cleanup.
 _REQUEST_TIMEOUT = 300.0
 _SMOKE_DIAGNOSTIC_RESERVE_SECONDS = 30.0
-_CONTEXT_VALUE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class NativeUIJourneyError(RuntimeError):
@@ -130,14 +124,7 @@ def _ui_path_is_launchable(platform: str, path: Path) -> bool:
 
 
 def _smoke_timeout(response_timeout: float) -> float:
-    """Bound the real-window driver below its response deadline.
-
-    ``native_ui_smoke.py`` owns the actual HWND/accessibility wait. If it
-    receives the same timeout as ``_NativeUIProcess._response``, the outer
-    reader can time out and kill the task before cleanup. Keep one bounded
-    reserve for the response and cleanup path while preserving a positive
-    timeout for focused/unit-test invocations.
-    """
+    """Keep native UI work below its hosted step deadline for cleanup."""
 
     if response_timeout <= 0:
         raise ValueError("native UI response timeout must be positive")
@@ -145,300 +132,102 @@ def _smoke_timeout(response_timeout: float) -> float:
     return min(_REQUEST_TIMEOUT, response_timeout - reserve)
 
 
-class _NativeUIProcess:
-    """Client for native_ui_smoke.py's bounded JSON command boundary."""
+def _load_native_ui_smoke(script: Path) -> Any:
+    spec = importlib.util.spec_from_file_location("dobbyvpn_native_ui_smoke_runtime", script)
+    if spec is None or spec.loader is None:
+        raise NativeUIJourneyError(f"could not load native UI driver {script}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
 
-    def __init__(self, *, script: Path, platform: str, binary: Path, profile: Path,
-                 timeout: float, raw_directory: Path) -> None:
-        self.script = script
-        self.platform = platform
-        self.binary = binary
-        self.profile = profile
-        self.timeout = timeout
-        # Keep the constructor boundary stable for callers that provide a
-        # disposable raw-log root; the macOS app launcher writes complete
-        # stdout/stderr streams there when LaunchServices detaches the app.
-        self.raw_directory = raw_directory
-        self.process: subprocess.Popen[bytes] | None = None
-        self._responses: queue.Queue[bytes | str | None] = queue.Queue()
-        self._reader: threading.Thread | None = None
-        self._stderr_reader: threading.Thread | None = None
-        self._stdout_done = threading.Event()
-        self._stderr_done = threading.Event()
-        self._lock = threading.Lock()
-        self._diagnostic_lock = threading.Lock()
-        self._diagnostic_started: set[str] = set()
-        self._diagnostic_has_output: set[str] = set()
-        self._diagnostic_ends_newline: dict[str, bool] = {}
-        self._operation = "start"
-        self._stage = "launching-driver"
 
-    def _error(self, message: str) -> NativeUIJourneyError:
-        operation = self._operation
-        stage = self._stage
-        return NativeUIJourneyError(
-            f"{message} (operation={operation}, stage={stage})",
+def _native_ui_action(
+    controller: Any,
+    operation: str,
+    stage: str,
+    timeout: float,
+    action: Any,
+    *,
+    milestone: str | None = None,
+) -> dict[str, object]:
+    reserve = min(_SMOKE_DIAGNOSTIC_RESERVE_SECONDS, timeout / 3.0)
+    work_timeout = timeout - reserve
+    try:
+        with controller.bounded_by(work_timeout):
+            result = action()
+            if not isinstance(result, dict):
+                raise NativeUIJourneyError(f"native UI {operation} returned an invalid result")
+    except Exception as error:
+        failure = NativeUIJourneyError(
+            f"{type(error).__name__}: {error}",
             operation=operation,
             stage=stage,
         )
-
-    @staticmethod
-    def _write_pipe(stream: Any, payload: bytes) -> None:
-        """Write bytes to the binary production pipe and test doubles."""
-
+        for note in getattr(error, "__notes__", ()):
+            failure.add_note(note)
         try:
-            stream.write(payload)
-        except TypeError:
-            # A few focused tests use StringIO as a minimal stdin double. The
-            # real process is always started with text=False and takes the
-            # byte path above; retaining this fallback does not reintroduce a
-            # text-mode subprocess boundary.
-            stream.write(payload.decode("utf-8", errors="backslashreplace"))
-
-    def _diagnostic_chunk(
-        self,
-        name: str,
-        payload: bytes | str | None = None,
-        *,
-        finish: bool = False,
-    ) -> None:
-        """Forward raw bytes with boundaries while preserving protocol output."""
-        with self._diagnostic_lock:
-            binary = getattr(sys.stderr, "buffer", None)
-
-            def write(value: bytes) -> None:
-                if binary is not None:
-                    binary.write(value)
-                else:
-                    sys.stderr.write(value.decode("utf-8", errors="backslashreplace"))
-
-            if name not in self._diagnostic_started:
-                write(f"[native-ui {name} begin]\n".encode("utf-8"))
-                self._diagnostic_started.add(name)
-            if payload:
-                raw = payload if isinstance(payload, bytes) else payload.encode("utf-8")
-                write(raw)
-                self._diagnostic_has_output.add(name)
-                self._diagnostic_ends_newline[name] = raw.endswith(b"\n")
-            if finish:
-                if (
-                    name in self._diagnostic_has_output
-                    and not self._diagnostic_ends_newline.get(name, False)
-                ):
-                    write(b"\n")
-                write(f"[native-ui {name} end]\n".encode("utf-8"))
-            if binary is not None:
-                binary.flush()
-            else:
-                sys.stderr.flush()
-
-    def start(self) -> None:
-        if self.process is not None:
-            return
-        child_environment = os.environ.copy()
-        child_environment["DOBBYVPN_NATIVE_UI_LOG_DIR"] = str(self.raw_directory)
-        self.process = subprocess.Popen(
-            [
-                sys.executable,
-                str(self.script),
-                "--platform", self.platform,
-                "--ui", str(self.binary),
-                "--profile", str(self.profile),
-                "--timeout", str(_smoke_timeout(self.timeout)),
-                "--serve",
-            ],
-            cwd=str(self.script.parents[2]),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            # JSON responses on stdout are the protocol. Native-driver stderr
-            # is drained separately and both complete streams are forwarded to
-            # the invoking process unchanged.
-            stderr=subprocess.PIPE,
-            text=False,
-            bufsize=0,
-            env=child_environment,
-            start_new_session=(os.name != "nt"),
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
-        )
-
-        def read() -> None:
-            process = self.process
-            if process is None or process.stdout is None:
-                self._responses.put(None)
-                self._stdout_done.set()
-                return
-            try:
-                for line in process.stdout:
-                    self._diagnostic_chunk("stdout", line)
-                    self._responses.put(line)
-            finally:
-                self._diagnostic_chunk("stdout", finish=True)
-                self._responses.put(None)
-                self._stdout_done.set()
-
-        self._reader = threading.Thread(target=read, name="dobbyvpn-native-ui-reader", daemon=True)
-        self._reader.start()
-
-        def read_stderr() -> None:
-            process = self.process
-            stderr = None if process is None else process.stderr
-            try:
-                if stderr is not None:
-                    for chunk in stderr:
-                        self._diagnostic_chunk("stderr", chunk)
-            finally:
-                self._diagnostic_chunk("stderr", finish=True)
-                self._stderr_done.set()
-
-        self._stderr_reader = threading.Thread(
-            target=read_stderr,
-            name="dobbyvpn-native-ui-stderr-reader",
-            daemon=True,
-        )
-        self._stderr_reader.start()
-        self._operation = "start"
-        self._stage = "waiting-for-ready-window"
-        response = self._response(self.timeout)
-        if response.get("ok") is not True or response.get("event") != "ready":
-            operation = self._operation
-            stage = self._stage
-            primary = NativeUIJourneyError(
-                "native UI did not become ready: "
-                + str(response.get("error", response))
-                + f" (operation={operation}, stage={stage})",
-                operation=operation,
-                stage=stage,
+            with controller.bounded_by(reserve):
+                screenshot = controller.capture(f"failure-{operation}")
+            failure.add_note(
+                "native-ui-failure-screenshot: "
+                + json.dumps(screenshot, sort_keys=True, separators=(",", ":"))
             )
+        except Exception as screenshot_error:
+            failure.add_note(
+                "native-ui-failure-screenshot: "
+                f"{type(screenshot_error).__name__}: {screenshot_error}"
+            )
+        raise failure from error
+    if milestone is not None:
+        try:
+            with controller.bounded_by(reserve):
+                screenshot = controller.capture(milestone)
+        except Exception as screenshot_error:
+            result = {**result, "screenshot_error": str(screenshot_error)}
+        else:
+            if screenshot is not None:
+                result = {**result, "screenshot": screenshot}
+    return result
+
+
+def _start_native_ui(controller: Any, timeout: float) -> None:
+    reserve = min(_SMOKE_DIAGNOSTIC_RESERVE_SECONDS, timeout / 3.0)
+    work_timeout = timeout - reserve
+    try:
+        with controller.bounded_by(work_timeout):
+            controller.start()
+    except BaseException as error:
+        with controller.bounded_by(reserve):
             try:
-                self.close()
+                screenshot = controller.capture("failure-start")
+                error.add_note(
+                    "native-ui-failure-screenshot: "
+                    + json.dumps(screenshot, sort_keys=True, separators=(",", ":"))
+                )
+            except BaseException as screenshot_error:
+                error.add_note(
+                    "native-ui-failure-screenshot: "
+                    f"{type(screenshot_error).__name__}: {screenshot_error}"
+                )
+            try:
+                controller.close_for_cleanup()
             except BaseException as cleanup_error:
-                # Preserve the response/window-discovery failure as the
-                # primary diagnosis.  Cleanup is still reported as a note,
-                # never allowed to replace the original error.
-                primary.add_note(
+                error.add_note(
                     f"native-ui-cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
                 )
-            raise primary
-
-    def _response(self, timeout: float) -> dict[str, object]:
-        try:
-            deadline = time.monotonic() + max(0.1, timeout)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise queue.Empty
-                line = self._responses.get(timeout=remaining)
-                if line is None:
-                    break
-                try:
-                    value = json.loads(line)
-                except (TypeError, ValueError) as error:
-                    raise self._error("native UI response is not valid JSON") from error
-                if not isinstance(value, dict):
-                    raise self._error("native UI response is not an object")
-                if value.get("event") == "progress":
-                    operation = value.get("operation")
-                    stage = value.get("stage")
-                    if isinstance(operation, str) and _CONTEXT_VALUE.fullmatch(operation):
-                        self._operation = operation
-                    if isinstance(stage, str) and _CONTEXT_VALUE.fullmatch(stage):
-                        self._stage = stage
-                    continue
-                return value
-        except queue.Empty as error:
-            raise self._error("native UI response timed out") from error
-        if line is None:
-            process = self.process
-            code = None if process is None else process.poll()
-            self._stderr_done.wait(timeout=1.0)
-            raise self._error(
-                f"native UI process exited before responding (code={code})"
-            )
-        # The loop above either returns a response or raises.  Keep this
-        # defensive branch so a future queue implementation cannot silently
-        # turn a missing response into a successful operation.
-        raise self._error("native UI response was empty")
-
-    def request(self, operation: str, *, timeout: float | None = None) -> dict[str, object]:
-        limit = self.timeout if timeout is None else timeout
-        with self._lock:
-            if self.process is None:
-                self.start()
-            process = self.process
-            if process is None or process.stdin is None:
-                raise self._error("native UI process is unavailable")
-            self._operation = operation
-            self._stage = "waiting-for-operation"
-            try:
-                self._write_pipe(
-                    process.stdin,
-                    json.dumps({"op": operation}, separators=(",", ":")).encode("utf-8")
-                    + b"\n",
-                )
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as error:
-                raise self._error("native UI command pipe failed") from error
-            response = self._response(limit)
-            if response.get("ok") is not True:
-                raise self._error(str(response.get("error", "native UI action failed")))
-            return response
-
-    def close(self) -> None:
-        process = self.process
-        if process is None:
-            return
-        errors: list[BaseException] = []
-        try:
-            if process.poll() is None and process.stdin is not None:
-                try:
-                    self._write_pipe(process.stdin, b'{"op":"close"}\n')
-                    process.stdin.flush()
-                    response = self._response(min(self.timeout, 15.0))
-                    if response.get("ok") is not True:
-                        errors.append(
-                            self._error(
-                                str(response.get("error", "native UI cleanup failed"))
-                            )
-                        )
-                except BaseException as error:
-                    errors.append(error)
-            if process.poll() is None:
-                try:
-                    process.wait(timeout=min(self.timeout, 5.0))
-                except subprocess.TimeoutExpired:
-                    if os.name != "nt":
-                        try:
-                            os.killpg(process.pid, 15)
-                        except (ProcessLookupError, PermissionError):
-                            process.terminate()
-                    else:
-                        process.terminate()
-                    try:
-                        process.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        try:
-                            process.wait(timeout=1)
-                        except BaseException as error:
-                            errors.append(error)
-                except BaseException as error:
-                    errors.append(error)
-        finally:
-            self._stdout_done.wait(timeout=max(1.0, min(self.timeout, 15.0)))
-            self._stderr_done.wait(timeout=max(1.0, min(self.timeout, 15.0)))
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None:
-                    try:
-                        stream.close()
-                    except OSError as error:
-                        errors.append(error)
-            self.process = None
-            self._stderr_reader = None
-        if errors:
-            failure = self._error("native UI cleanup failed")
-            for error in errors:
-                failure.add_note(f"cleanup_error={type(error).__name__}: {error}")
-            raise failure
+        failure = NativeUIJourneyError(
+            f"{type(error).__name__}: {error}",
+            operation="start",
+            stage="window-discovery",
+        )
+        for note in getattr(error, "__notes__", ()):
+            failure.add_note(note)
+        raise failure from error
 
 
 def _step(identifier: str, operation: str, timeout: float) -> ScenarioStep:
@@ -532,25 +321,31 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         service_identity_file=args.service_identity_file,
         network_interface=args.network_interface,
         routing_firewall_helper=args.routing_firewall_helper,
-        network_transition_helper=args.network_transition_helper,
     )
-    ui = _NativeUIProcess(
-        script=args.smoke_script,
-        platform=args.platform,
-        binary=args.ui,
-        profile=args.profile,
-        timeout=min(args.timeout, _REQUEST_TIMEOUT),
-        raw_directory=args.raw_log_dir,
-    )
+    previous_log_directory = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
+    os.environ["DOBBYVPN_NATIVE_UI_LOG_DIR"] = str(args.raw_log_dir)
+    ui: Any | None = None
+    request_timeout = min(args.timeout, _REQUEST_TIMEOUT)
     checks: dict[str, object] = {}
     primary: BaseException | None = None
     try:
-        connections = tuple(base.discover_connections(timeout_seconds=min(30.0, args.timeout)))
-        if not connections:
-            raise NativeUIJourneyError("base adapter reported no connections")
-        base.select_connection(connections[0])
-        ui.start()
-        ui.request("configure")
+        smoke = _load_native_ui_smoke(args.smoke_script)
+        smoke.verify_interactive_session(args.platform)
+        ui = smoke.NativeUIController(
+            args.platform,
+            args.ui,
+            args.profile,
+            _smoke_timeout(request_timeout),
+            screenshot_dir=args.raw_log_dir / "screenshots",
+        )
+        _start_native_ui(ui, request_timeout)
+        _native_ui_action(
+            ui, "configure", "native-input", request_timeout,
+            ui.configure, milestone="configured",
+        )
+        accepted = base._snapshot(min(30.0, args.timeout), "NATIVE_CONFIGURE_STATUS_FAILED")
+        if accepted.get("configured") is not True or not accepted.get("profiles"):
+            raise NativeUIJourneyError("native UI did not establish an accepted configuration")
         checks["configure_native"] = True
 
         # The base adapter prepares its independent observation/proof state;
@@ -561,11 +356,20 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if not callable(prepare):
             raise NativeUIJourneyError("base adapter has no native connect preparation")
         prepare(args.timeout)
-        ui.request("connect")
+        _native_ui_action(
+            ui, "connect", "visible-connect", request_timeout,
+            ui.connect, milestone="connected",
+        )
+        active = base._snapshot(min(30.0, args.timeout), "NATIVE_CONNECT_STATUS_FAILED")
+        if active.get("active_profile") is None:
+            raise NativeUIJourneyError("native UI Auto selection reported no active profile")
         checks["connect_native"] = True
         _record_native_observations(base, checks, args.timeout)
 
-        ui.request("disconnect")
+        _native_ui_action(
+            ui, "disconnect", "visible-disconnect", request_timeout,
+            ui.disconnect, milestone="disconnected",
+        )
         checks["disconnect_native"] = True
         connected = getattr(base, "_connected", None)
         if not callable(connected) or connected(args.timeout):
@@ -576,20 +380,32 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         checks["disconnect_clean"] = True
 
         prepare(args.timeout)
-        ui.request("reconnect")
+        _native_ui_action(
+            ui, "reconnect", "visible-reconnect", request_timeout,
+            ui.connect, milestone="reconnected",
+        )
         checks["reconnect_native"] = True
         if not connected(args.timeout):
             raise NativeUIJourneyError("base adapter did not observe native reconnect")
         checks["reconnect_completed"] = True
         _record_native_observations(base, checks, args.timeout, prefix="reconnect")
 
-        settings = ui.request("settings")
+        settings = _native_ui_action(
+            ui, "settings", "settings-window", request_timeout,
+            ui.settings, milestone="settings",
+        )
         checks["settings_version"] = settings.get("settings_version") is True
         checks["settings_source_commit"] = settings.get("settings_source_commit") is True
 
-        ui.request("close-window")
+        _native_ui_action(
+            ui, "close-window", "close-window", request_timeout,
+            ui.close, milestone="closed",
+        )
         checks["close_window"] = True
-        ui.request("reopen")
+        _native_ui_action(
+            ui, "reopen", "window-reopen", request_timeout,
+            ui.reopen, milestone="reopened",
+        )
         checks["reopen_connected"] = True
         if not connected(args.timeout):
             raise NativeUIJourneyError("base adapter did not observe service continuity after UI reopen")
@@ -597,7 +413,10 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         loss = _restart_service_for_native_ui(base, args.timeout)
         checks.update(loss)
         prepare(args.timeout)
-        recovery = ui.request("process_loss_recovery", timeout=args.timeout)
+        recovery = _native_ui_action(
+            ui, "process_loss_recovery", "process-loss-recovery", args.timeout,
+            ui.recover_after_process_loss, milestone="process-recovered",
+        )
         checks["ui_process_loss_recovered"] = recovery.get("status") == "Connected"
         checks["ui_reconnecting_observed"] = recovery.get("reconnecting_seen") is True
         if "reconnecting_probe_error" in recovery:
@@ -608,7 +427,10 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             )
         _record_native_observations(base, checks, args.timeout, prefix="process_loss")
 
-        ui.request("disconnect")
+        _native_ui_action(
+            ui, "disconnect", "visible-disconnect", request_timeout,
+            ui.disconnect, milestone="disconnected",
+        )
         checks["final_disconnect_native"] = True
         if connected(args.timeout):
             raise NativeUIJourneyError("base adapter still reports a tunnel after final native Disconnect")
@@ -622,10 +444,12 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         raise
     finally:
         cleanup_errors: list[str] = []
-        try:
-            ui.close()
-        except BaseException as error:
-            cleanup_errors.append(f"native-ui: {_exception_details(error)}")
+        if ui is not None:
+            try:
+                with ui.bounded_by(min(request_timeout, 15.0)):
+                    ui.close_for_cleanup()
+            except BaseException as error:
+                cleanup_errors.append(f"native-ui: {_exception_details(error)}")
         try:
             base.reset(timeout_seconds=min(args.timeout, 30.0))
         except BaseException as error:
@@ -634,6 +458,10 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             base.finalize(timeout_seconds=min(args.timeout, 30.0))
         except BaseException as error:
             cleanup_errors.append(f"base-finalize: {_exception_details(error)}")
+        if previous_log_directory is None:
+            os.environ.pop("DOBBYVPN_NATIVE_UI_LOG_DIR", None)
+        else:
+            os.environ["DOBBYVPN_NATIVE_UI_LOG_DIR"] = previous_log_directory
         if cleanup_errors and primary is not None:
             for value in cleanup_errors:
                 primary.add_note(value)
@@ -665,7 +493,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--service-identity-file", type=_path)
     parser.add_argument("--network-interface")
     parser.add_argument("--routing-firewall-helper", type=_path)
-    parser.add_argument("--network-transition-helper", type=_path)
     return parser
 
 
