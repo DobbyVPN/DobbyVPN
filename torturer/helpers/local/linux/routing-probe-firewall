@@ -15,19 +15,6 @@ if [ "$#" -lt 1 ]; then
     exit 2
 fi
 
-if [ -f "$uplink_file" ] && [ ! -L "$uplink_file" ]; then
-    uplink=$(sed -n '1p' "$uplink_file")
-else
-    uplink=
-fi
-case "$uplink" in
-    ''|*[!A-Za-z0-9._:-]*)
-        echo 'uplink interface is unavailable' >&2
-        exit 2
-        ;;
-esac
-[ "${#uplink}" -le 32 ] || exit 2
-
 remove_table() {
     if nft list table inet "$table"; then
         nft delete table inet "$table"
@@ -43,6 +30,20 @@ case "$1" in
         [ "$#" -eq 2 ] || exit 2
         address=$2
         python3 -c 'import ipaddress,sys; value=ipaddress.ip_address(sys.argv[1]); raise SystemExit(0 if value.version == 4 and value.is_global else 1)' "$address"
+        if [ -f "$uplink_file" ] && [ ! -L "$uplink_file" ]; then
+            uplink=$(sed -n '1p' "$uplink_file")
+        else
+            # Hosted runners have no owner-local interface file. Resolve the
+            # physical route before the VPN connects and the rule is added.
+            uplink=$(/usr/sbin/ip -o -4 route get "$address" | awk 'NR == 1 { for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
+        fi
+        case "$uplink" in
+            ''|*[!A-Za-z0-9._:-]*)
+                echo 'uplink interface is unavailable' >&2
+                exit 2
+                ;;
+        esac
+        [ "${#uplink}" -le 32 ] || exit 2
         remove_table
         trap 'remove_table' EXIT INT TERM
         nft add table inet "$table"
