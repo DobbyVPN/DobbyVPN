@@ -2182,7 +2182,7 @@ def _macos_pasteboard_change_count() -> int:
             check=False,
             text=True,
             capture_output=True,
-            timeout=5,
+            timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise NativeUISmokeError(

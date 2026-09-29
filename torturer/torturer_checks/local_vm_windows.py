@@ -1058,7 +1058,7 @@ if ($adapter.Status -ne "Up") { throw "uplink is not up" }
 Write-Output ([string]$indices[0])
 '''
     result = _powershell(
-        script, cwd=run_dir, logs=logs, label="network-interface", timeout=min(timeout, 15.0)
+        script, cwd=run_dir, logs=logs, label="network-interface", timeout=min(timeout, 30.0)
     )
     value = result.stdout.decode("ascii", errors="strict").strip()
     if not _INTERFACE.fullmatch(value):
