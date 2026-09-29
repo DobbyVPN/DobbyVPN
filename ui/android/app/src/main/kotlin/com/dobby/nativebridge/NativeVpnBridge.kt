@@ -304,7 +304,7 @@ object NativeVpnBridge {
 
     @JvmStatic
     fun sourceURLPath(context: Context): String =
-        File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE).absolutePath
+        File(File(context.filesDir.canonicalFile, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE).absolutePath
 
     private fun diagnosticsDirectory(context: Context): File =
         File(context.applicationContext.filesDir, DIAGNOSTIC_DIRECTORY).also { it.mkdirs() }
