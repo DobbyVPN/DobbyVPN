@@ -39,14 +39,18 @@ def _true(observations: Mapping[str, object], key: str) -> bool:
     return observations.get(key) is True
 
 
+def is_positive_metric(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(number) and number > MIN_METRIC_VALUE
+
+
 def _positive(observations: Mapping[str, object], key: str) -> bool:
-    value = observations.get(key)
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-        and float(value) > MIN_METRIC_VALUE
-    )
+    return is_positive_metric(observations.get(key))
 
 
 _ASSERTION_KEYS: dict[str, str] = {

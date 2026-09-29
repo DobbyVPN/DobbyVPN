@@ -122,7 +122,7 @@ func TestStartJSONAcceptsSourceInRequestOrSeparateMailbox(t *testing.T) {
 		sessionID := jsonSessionID(t, initial)
 		params := `{"session_id":"` + sessionID + `","expected_sequence":` +
 			strconv.FormatInt(int64Field(t, initial, "sequence"), 10) +
-			`,"mode":"PROFILE_INDEX","index":0`
+			`,"mode":"AUTO_SELECT","index":0`
 		const source = "https://configs.invalid/new"
 		var started string
 		if separate {

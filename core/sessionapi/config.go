@@ -43,9 +43,6 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	if len(profiles) == 0 {
-		return parsedConfig{}, failure(FailureMalformedConfig, "configuration contains no protocol profiles")
-	}
 	digest := sha256.Sum256(raw)
 	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles}, nil
 }

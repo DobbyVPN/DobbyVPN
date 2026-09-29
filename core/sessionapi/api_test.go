@@ -123,7 +123,7 @@ func TestStartAcceptsChangedSourceBeforeRuntimeFailure(t *testing.T) {
 	})
 	initial := snapshotForTest(t, m, "")
 	started, err := m.Start(context.Background(), initial.SessionID, initial.Sequence, StartTarget{
-		Mode: ProfileIndex, Index: 0, Source: []byte("https://configs.invalid/new"),
+		Mode: AutoSelect, Source: []byte("https://configs.invalid/new"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +141,27 @@ func TestStartAcceptsChangedSourceBeforeRuntimeFailure(t *testing.T) {
 	defer s.mu.Unlock()
 	if s.activeTarget.Source != nil {
 		t.Fatal("recovery target retained source bytes")
+	}
+}
+
+func TestStartRejectsIndexedChangedSourceWithoutReplacingAcceptedConfiguration(t *testing.T) {
+	store := &managerTestSourceStore{}
+	m := NewManager(ManagerOptions{Loader: acceptedSourceURLLoader{}, SourceStore: store})
+	initial := snapshotForTest(t, m, "")
+	if _, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("https://configs.invalid/old")); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotForTest(t, m, initial.SessionID)
+	_, err := m.Start(context.Background(), before.SessionID, before.Sequence, StartTarget{
+		Mode: ProfileIndex, Index: 1, Source: []byte("https://configs.invalid/new"),
+	})
+	if CodeOf(err) != FailureInvalidArgument {
+		t.Fatalf("indexed Start with changed source = %v", err)
+	}
+	after := snapshotForTest(t, m, initial.SessionID)
+	if after.Sequence != before.Sequence || after.Digest != before.Digest ||
+		after.SourceURL != before.SourceURL || string(store.value) != before.SourceURL {
+		t.Fatalf("rejected indexed Start changed accepted configuration: before %#v, after %#v, stored %q", before, after, store.value)
 	}
 }
 

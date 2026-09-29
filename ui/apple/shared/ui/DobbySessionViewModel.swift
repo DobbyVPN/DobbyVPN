@@ -159,17 +159,6 @@ public final class DobbySessionViewModel: ObservableObject {
                 case let .failure(failure):
                     if let refreshed = snapshotAfterFailure {
                         self.snapshot = refreshed
-                        let isConflict: Bool
-                        if let clientError = failure as? DobbyClientError,
-                           case let .command(code, _) = clientError {
-                            isConflict = code == "CONFLICT"
-                        } else {
-                            isConflict = false
-                        }
-                        if submitSource && action == "START" && !isConflict &&
-                            refreshed.configured && refreshed.sequence > current.sequence {
-                            self.markSourceAccepted(source)
-                        }
                     }
                     self.error = failure.localizedDescription
                     self.refreshSnapshot()

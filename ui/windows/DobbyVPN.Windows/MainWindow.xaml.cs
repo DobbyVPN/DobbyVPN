@@ -152,8 +152,6 @@ public sealed partial class MainWindow : Window
     private async void ConnectionButton_Click(object sender, RoutedEventArgs e)
     {
         if (_busy || _snapshot is null || _snapshot.PrimaryAction is not ("START" or "STOP")) return;
-        Snapshot? startSnapshot = null;
-        string? submittedSource = null;
         _busy = true;
         ConnectionButton.IsEnabled = false;
         SourceEditor.IsEnabled = false;
@@ -161,7 +159,6 @@ public sealed partial class MainWindow : Window
         try
         {
             var current = _snapshot;
-            startSnapshot = current;
             if (current.PrimaryAction == "STOP")
             {
                 await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation });
@@ -172,7 +169,6 @@ public sealed partial class MainWindow : Window
                 var includeSource = !current.Configured || _sourceDirty;
                 if (includeSource && string.IsNullOrWhiteSpace(source))
                     throw new InvalidOperationException("Enter an HTTPS connection URL or inline configuration.");
-                if (includeSource) submittedSource = source;
                 var parameters = new Dictionary<string, object>
                 {
                     ["session_id"] = current.SessionId,
@@ -182,24 +178,12 @@ public sealed partial class MainWindow : Window
                 };
                 if (includeSource) parameters["source"] = source;
                 await CallAsync<JsonElement>("Start", parameters);
-                if (submittedSource is not null) MarkSourceAccepted(submittedSource);
+                if (includeSource) MarkSourceAccepted(source);
             }
             await RefreshSnapshotAsync();
         }
         catch (Exception error)
         {
-            var isConflict = error is BackendCommandException commandError && commandError.Code == "CONFLICT";
-            if (submittedSource is not null && startSnapshot is not null && !isConflict)
-            {
-                try
-                {
-                    var refreshed = await ReadSnapshotAsync();
-                    _snapshot = refreshed;
-                    if (refreshed.Configured && refreshed.Sequence > startSnapshot.Sequence)
-                        MarkSourceAccepted(submittedSource);
-                }
-                catch { }
-            }
             ErrorText.Text = error.Message;
         }
         finally

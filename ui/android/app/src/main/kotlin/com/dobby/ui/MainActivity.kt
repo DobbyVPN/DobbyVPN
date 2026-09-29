@@ -207,16 +207,37 @@ private class SessionController(private val activity: MainActivity) {
     private fun prepareAndStart(currentUI: ScreenState) {
         try {
             if (latest.sessionId.isEmpty()) refreshSnapshot()
-            val current = latest
+            var current = latest
             if (current.sessionId.isEmpty()) throw IllegalStateException("Go session is not ready")
-            val source = if (!current.configured || currentUI.sourceDirty) currentUI.source.trim() else null
-            if (source != null && source.isEmpty()) {
-                report("Enter an HTTPS connection URL or inline configuration")
-                return
+            if (!current.configured || currentUI.sourceDirty) {
+                val source = currentUI.source.trim()
+                if (source.isEmpty()) {
+                    report("Enter an HTTPS connection URL or inline configuration")
+                    return
+                }
+                val response = JSONObject(
+                    NativeGoSession.configure(current.sessionId, current.sequence, source.toByteArray(Charsets.UTF_8)),
+                )
+                requireOK(response)
+                val configured = response.getJSONObject("result")
+                current = current.copy(
+                    sequence = configured.optLong("sequence", current.sequence),
+                    configured = true,
+                    sourceUrl = if (configured.optString("source_kind").equals("URL", true)) source else "",
+                    state = "CONFIGURED",
+                )
+                latest = current
+                main.post {
+                    state = state.copy(
+                        source = if (current.sourceUrl.isNotEmpty()) current.sourceUrl else source,
+                        sourceDirty = false,
+                        session = current,
+                    )
+                }
             }
 
             when (NativeVpnBridge.prepare(activity)) {
-                1 -> startCurrent(current, source)
+                1 -> startCurrent(current)
                 0 -> {
                     pendingPermission = true
                     main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
@@ -228,38 +249,22 @@ private class SessionController(private val activity: MainActivity) {
         }
     }
 
-    private fun startCurrent(current: SessionData, source: String?) {
+    private fun startCurrent(current: SessionData) {
         val response = JSONObject(
             NativeGoSession.start(
                 current.sessionId,
                 current.sequence,
                 "AUTO_SELECT",
                 0,
-                source?.toByteArray(Charsets.UTF_8),
+                null,
             ),
         )
-        if (!response.optBoolean("ok")) {
-            val code = response.optJSONObject("error")?.optString("code").orEmpty()
-            val message = try {
-                requireOK(response)
-                "Go backend command failed"
-            } catch (failure: Exception) {
-                commandError(failure)
-            }
-            refreshSnapshot()
-            if (source != null && code != "CONFLICT" && latest.configured && latest.sequence > current.sequence) {
-                acceptSource(source)
-            }
-            report(message)
-            return
-        }
-
+        requireOK(response)
         val result = response.getJSONObject("result")
         latest = current.copy(
             sequence = result.optLong("sequence", current.sequence),
             generation = result.optLong("generation", current.generation),
         )
-        if (source != null) acceptSource(source)
         refreshSnapshot(clearBusy = true)
     }
 
@@ -339,12 +344,6 @@ private class SessionController(private val activity: MainActivity) {
 
     private fun commandError(failure: Exception, fallback: String = "Go backend command failed"): String =
         failure.message?.takeIf(String::isNotBlank) ?: fallback
-
-    private fun acceptSource(source: String) {
-        main.post {
-            state = state.copy(source = source, sourceDirty = false, session = latest)
-        }
-    }
 
     private fun report(message: String) {
         main.post { state = state.copy(busy = false, error = message) }

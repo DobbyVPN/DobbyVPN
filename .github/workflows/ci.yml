@@ -403,6 +403,7 @@ jobs:
     uses: ./.github/workflows/qualification_platform.yml
     with:
       platform: ${{ inputs.platform == 'linux-mini' && 'linux' || inputs.platform == 'windows-mini' && 'windows' || 'macos' }}
+      architecture: ${{ inputs.platform == 'macos-mini' && 'arm64' || '' }}
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   android_mini:

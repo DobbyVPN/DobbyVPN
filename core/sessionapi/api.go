@@ -120,7 +120,7 @@ const (
 type StartTarget struct {
 	Mode  StartMode
 	Index int
-	// Nil reuses the accepted configuration; non-nil replaces it before startup.
+	// Nil reuses the accepted configuration; non-nil replaces it before AUTO_SELECT startup.
 	Source []byte
 }
 
@@ -457,8 +457,8 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	source := target.Source
 	target.Source = nil
 	if source != nil {
-		if target.Mode != AutoSelect && target.Mode != ProfileIndex {
-			return StartResult{}, failure(FailureInvalidArgument, "start mode must be AUTO_SELECT or PROFILE_INDEX")
+		if target.Mode != AutoSelect {
+			return StartResult{}, failure(FailureInvalidArgument, "a source can only be started with AUTO_SELECT")
 		}
 		configured, err := m.Configure(requestCtx, sessionID, expectedSequence, source)
 		if err != nil {
@@ -490,7 +490,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	s.generation++
 	generation := s.generation
 	// Accepted work outlives the request and is canceled by Stop or recovery.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, false, false, nil, "", ""
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.failureMessageAfterCleanup = ""

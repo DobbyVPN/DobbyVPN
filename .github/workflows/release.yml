@@ -195,13 +195,17 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_macos:
-    needs: [build_macos_arm, render_start]
+    needs: [build_macos_arm, build_macos_intel, render_start]
+    strategy:
+      matrix:
+        architecture: [arm64, amd64]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
       contents: read
       actions: read
     with:
       platform: macos
+      architecture: ${{ matrix.architecture }}
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_android:

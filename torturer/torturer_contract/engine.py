@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-import math
 import time
 from typing import Protocol
 
-from .assertions import evaluate_assertions
+from .assertions import evaluate_assertions, is_positive_metric
 from .capabilities import Capability
 from .results import ConnectionIdentity, RunProvenance, ScenarioResult
 from .scenarios import ScenarioDefinition
@@ -97,6 +96,12 @@ class FunctionalEngine:
             cleanup_required = "cleanup.restored" in scenario.assertion_ids
             cleanup_verified = observations.get("cleanup_verified") is True
             metrics = self._metrics(observations)
+            if not all(assertion.passed for assertion in assertions):
+                outcome = "failed"
+                reason_code = "ASSERTION_FAILED"
+            else:
+                outcome = "passed"
+                reason_code = None
         except CapabilityUnavailable:
             return self._result(
                 scenario,
@@ -117,12 +122,6 @@ class FunctionalEngine:
             if cleanup_provider is not None:
                 cleanup_provider(primary_error)
             raise
-        if not all(assertion.passed for assertion in assertions):
-            outcome = "failed"
-            reason_code = "ASSERTION_FAILED"
-        else:
-            outcome = "passed"
-            reason_code = None
         return self._result(
             scenario,
             provenance,
@@ -188,12 +187,7 @@ class FunctionalEngine:
             "stability_sample_interval_seconds",
         ):
             value = observations.get(key)
-            if (
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and math.isfinite(float(value))
-                and value > 0
-            ):
+            if is_positive_metric(value):
                 # Results keep only positive measurements. A failed
                 # assertion still records its stable outcome and failure code;
                 # invalid telemetry must not prevent that result from being

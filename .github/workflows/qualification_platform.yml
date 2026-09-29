@@ -7,6 +7,11 @@ on:
         description: Platform to qualify.
         required: true
         type: string
+      architecture:
+        description: Native package architecture for macOS qualification.
+        required: false
+        type: string
+        default: ''
       render_artifact_name:
         description: Artifact containing the shared Render VPN profile.
         required: true
@@ -14,14 +19,15 @@ on:
 
 jobs:
   qualification:
-    name: Hosted mini / ${{ inputs.platform }}
-    runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    name: Hosted mini / ${{ inputs.platform }} / ${{ inputs.architecture || 'default' }}
+    runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && inputs.architecture == 'amd64' && 'macos-15-intel' || inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
       contents: read
       actions: read
     env:
       PLATFORM: ${{ inputs.platform }}
+      ARCHITECTURE: ${{ inputs.architecture }}
       DOBBYVPN_COMMIT_SHA: ${{ github.sha }}
     steps:
       - name: Reject hosted mini reruns before package qualification
@@ -107,7 +113,14 @@ jobs:
           case "$PLATFORM" in
             linux) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb" ;;
             windows) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi" ;;
-            macos) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg" ;;
+            macos)
+              case "$ARCHITECTURE" in
+                arm64) package=dobbyVPN-macos-aarch64.pkg ;;
+                amd64) package=dobbyVPN-macos-amd64.pkg ;;
+                *) echo "unsupported macOS package architecture: $ARCHITECTURE" >&2; exit 1 ;;
+              esac
+              test -f "$GITHUB_WORKSPACE/release-packages/$package"
+              ;;
             android)
               version="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")"
               test -s "$GITHUB_WORKSPACE/release-packages/DobbyVPN-v${version}-unsign.apk"
@@ -190,9 +203,18 @@ jobs:
                 package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi"
                 ;;
               macos)
-                test "$(uname -m)" = arm64
-                architecture=arm64
-                package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg"
+                architecture="$ARCHITECTURE"
+                case "$architecture" in
+                  arm64)
+                    test "$(uname -m)" = arm64
+                    package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-aarch64.pkg"
+                    ;;
+                  amd64)
+                    test "$(uname -m)" = x86_64
+                    package="$GITHUB_WORKSPACE/release-packages/dobbyVPN-macos-amd64.pkg"
+                    ;;
+                  *) exit 1 ;;
+                esac
                 ;;
               *) printf 'unsupported desktop platform=%s\n' "$PLATFORM" >&2; exit 1 ;;
             esac
@@ -776,7 +798,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dobbyvpn-qualification-${{ inputs.platform }}
+          name: dobbyvpn-qualification-${{ inputs.platform }}-${{ inputs.architecture || 'default' }}
           path: ${{ env.ARTIFACT_DIR }}
           if-no-files-found: error
           include-hidden-files: true

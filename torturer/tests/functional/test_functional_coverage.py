@@ -8,12 +8,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_runner import functional
+from torturer_contract.capabilities import Capability
 from torturer_contract.coverage import (
     coverage_contract,
     qualification_exit_code,
 )
-from torturer_contract.results import ConnectionIdentity
-from torturer_contract.scenarios import select_scenarios
+from torturer_contract.engine import FunctionalEngine
+from torturer_contract.results import ConnectionIdentity, RunProvenance
+from torturer_contract.scenarios import ScenarioDefinition, ScenarioStep, select_scenarios
 
 
 def _matrix_results(connections, scenarios):
@@ -26,6 +28,36 @@ def _matrix_results(connections, scenarios):
         for connection in connections
         for scenario in scenarios
     ]
+
+
+class FunctionalMetricTests(unittest.TestCase):
+    def test_oversized_metric_fails_without_skipping_cleanup(self) -> None:
+        scenario = ScenarioDefinition(
+            id="functional.metric-overflow",
+            steps=(ScenarioStep("throughput", "measure_throughput", 1),),
+            assertion_ids=("traffic.metrics_positive",),
+            max_duration_seconds=5,
+        )
+        adapter = SimpleNamespace(
+            capabilities=frozenset({Capability.TRAFFIC_MEASUREMENT}),
+            execute_scenario=lambda _scenario: {
+                "latency_ms": 10**1000,
+                "download_mbps": 1.0,
+                "upload_mbps": 2.0,
+            },
+        )
+        cleanup_errors: list[BaseException | None] = []
+        result = FunctionalEngine().run(
+            scenario,
+            adapter,
+            RunProvenance("linux", "test", "amd64"),
+            ConnectionIdentity(0, "OUTLINE"),
+            cleanup_provider=cleanup_errors.append,
+        )
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.failure_code, "ASSERTION_FAILED")
+        self.assertEqual(result.measurements, {"download_mbps": 1.0, "upload_mbps": 2.0})
+        self.assertEqual(cleanup_errors, [None])
 
 
 class FunctionalCoverageTests(unittest.TestCase):
