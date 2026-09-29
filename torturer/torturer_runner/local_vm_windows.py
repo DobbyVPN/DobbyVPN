@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 from typing import Any
 import uuid
@@ -183,15 +184,6 @@ try {
 # session even while the user's Explorer processes are still present.  Resolve
 # the configured account to a SID and use the unique Explorer session as the
 # exact target for the console handoff.
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class DobbyVpnWts {
-  [DllImport("kernel32.dll")]
-  public static extern uint WTSGetActiveConsoleSessionId();
-}
-'@
-
 function Get-ConfiguredExplorerProbe {
   $explorerProcesses = @()
   try {
@@ -228,7 +220,12 @@ function Get-ConfiguredExplorerProbe {
 }
 
 function Get-ActiveConsoleSessionId {
-  [uint32][DobbyVpnWts]::WTSGetActiveConsoleSessionId()
+  # Use the runner's Python to call Win32 directly, without compiling a C# type.
+  $value = & $env:DOBBYVPN_PREFLIGHT_PYTHON -I -S -c 'import ctypes; api = ctypes.WinDLL("kernel32").WTSGetActiveConsoleSessionId; api.restype = ctypes.c_uint32; print(api())'
+  if ($LASTEXITCODE -ne 0 -or [string]$value -notmatch '^[0-9]+$') {
+    throw "could not read the active console session"
+  }
+  [uint32]$value
 }
 
 $probe = Get-ConfiguredExplorerProbe
@@ -287,6 +284,7 @@ def _preflight_interactive_desktop(
 
     environment = os.environ.copy()
     environment["DOBBYVPN_CONTROL_PIPE_USER"] = user
+    environment["DOBBYVPN_PREFLIGHT_PYTHON"] = sys.executable
     try:
         result = _powershell(
             _NATIVE_UI_PREFLIGHT_SCRIPT,
