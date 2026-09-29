@@ -5,12 +5,16 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.ConnectivityManager;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Process;
 import android.os.SystemClock;
+
+import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -262,17 +266,64 @@ public final class AndroidRoutingProbeProvider extends ContentProvider {
         return failureResult(REQUEST_ERROR_CODE, defaultNetworkTransport());
     }
 
-    private static Bundle failureResult(
+    private Bundle failureResult(
             String errorCode, String defaultTransport, Throwable failure) {
         Bundle result = failureResult(errorCode, defaultTransport);
         result.putString(KEY_ERROR_DETAIL, throwableDetail(failure));
         return result;
     }
 
-    private static String throwableDetail(Throwable failure) {
+    private String throwableDetail(Throwable failure) {
         StringWriter detail = new StringWriter();
         failure.printStackTrace(new PrintWriter(detail));
-        return detail.toString();
+        return detail.toString() + resolverState();
+    }
+
+    /** Add local resolver state only when the request already failed. */
+    private String resolverState() {
+        try {
+            JSONObject state = new JSONObject();
+            ConnectivityManager connectivity = connectivityManager();
+            Network active = connectivity == null ? null : connectivity.getActiveNetwork();
+            state.put("default_network_present", active != null);
+            state.put(
+                    "default_network_transport",
+                    networkTransport(connectivity, active));
+
+            NetworkCapabilities capabilities = connectivity == null || active == null
+                    ? null : connectivity.getNetworkCapabilities(active);
+            state.put(
+                    "default_network_internet_capable",
+                    capabilities != null
+                            && capabilities.hasCapability(
+                                    NetworkCapabilities.NET_CAPABILITY_INTERNET));
+            state.put(
+                    "default_network_validated",
+                    capabilities != null
+                            && capabilities.hasCapability(
+                                    NetworkCapabilities.NET_CAPABILITY_VALIDATED));
+
+            LinkProperties properties = connectivity == null || active == null
+                    ? null : connectivity.getLinkProperties(active);
+            state.put("link_properties_available", properties != null);
+            if (properties != null) {
+                state.put("dns_server_count", properties.getDnsServers().size());
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    state.put("private_dns_active", properties.isPrivateDnsActive());
+                    state.put(
+                            "private_dns_server_configured",
+                            properties.getPrivateDnsServerName() != null
+                                    && !properties.getPrivateDnsServerName().isEmpty());
+                }
+            }
+            return "\nandroid_network_resolver_state=" + state;
+        } catch (Exception unavailable) {
+            StringWriter detail = new StringWriter();
+            unavailable.printStackTrace(new PrintWriter(detail));
+            return "\nandroid_network_resolver_state=unavailable"
+                    + "\nandroid_network_resolver_state_collection_error:\n"
+                    + detail;
+        }
     }
 
     private static Bundle failureResult(String errorCode, String defaultTransport) {
