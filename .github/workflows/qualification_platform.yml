@@ -199,7 +199,10 @@ jobs:
               --output "$INSTALLED_DESCRIPTOR"
             )
             run_timed desktop-package-install python3 .github/scripts/desktop_platform.py "${install_arguments[@]}"
-            mapfile -t installed_values < <(python3 - "$INSTALLED_DESCRIPTOR" <<'PY'
+            installed_values=()
+            while IFS= read -r installed_value; do
+              installed_values+=("$installed_value")
+            done < <(python3 - "$INSTALLED_DESCRIPTOR" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -298,8 +301,8 @@ jobs:
               run_timed android-emulator-root adb root
               run_timed android-emulator-root-ready timeout 120s adb wait-for-device
               run_timed android-emulator-root-verify bash -c 'test "$(adb shell id -u | tr -d "\r")" = 0'
-              signed="$ANDROID_SIGNED_APP"
-              companion="$ANDROID_SIGNED_COMPANION"
+              signed="$signed_app"
+              companion="$signed_companion"
               test -f "$signed"; test -f "$companion"
               test -x "$apksigner_bin"
               signed_cert_stdout="$RUN_DIR/apksigner-signed.stdout.log"
@@ -615,7 +618,7 @@ jobs:
               export DOBBY_LOG_PATH="$RUN_DIR/service.log"
               export DOBBY_LOG_ROOT="$RUN_DIR"
             fi
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 .github/scripts/desktop_platform.py "${release_args[@]}"
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 "$GITHUB_WORKSPACE/.github/scripts/desktop_platform.py" "${release_args[@]}"
           fi
 
       - name: Stop Linux qualification service

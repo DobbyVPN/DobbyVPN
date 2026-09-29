@@ -333,8 +333,29 @@ rm -rf "$fdroid_home/srclibs" "$fdroid_home/fdroiddata"
 ln -s "$fdroiddata_dir/srclibs" "$fdroid_home/srclibs"
 ln -s "$fdroiddata_dir" "$fdroid_home/fdroiddata"
 
-apt-get install -y sudo openjdk-21-jdk-headless
+apt-get install -y sudo openjdk-21-jdk-headless binutils
 chown -R vagrant "$fdroid_home/build" "$fdroid_home/metadata" "$fdroid_home/tmp" "$fdroid_home/logs"
+
+# The reference APK is signed with a disposable test key. Keep the validated
+# upstream metadata intact and match that key only in the temporary build copy.
+apksigner_bin="$ANDROID_SDK_ROOT/build-tools/31.0.0/apksigner"
+test -x "$apksigner_bin"
+test_fingerprint="$("$apksigner_bin" verify --print-certs "$reference_apk" \
+  | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')"
+[[ "$test_fingerprint" =~ ^[0-9a-f]{64}$ ]]
+python3 - "$fdroid_home/metadata/com.dobby.vpn.yml" "$test_fingerprint" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+path = Path(sys.argv[1])
+metadata = yaml.safe_load(path.read_text(encoding="utf-8"))
+if not isinstance(metadata, dict) or not metadata.get("AllowedAPKSigningKeys"):
+    raise SystemExit("F-Droid metadata has no allowed signing key")
+metadata["AllowedAPKSigningKeys"] = sys.argv[2]
+path.write_text(yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True), encoding="utf-8")
+PY
 
 (
   cd "$fdroid_home"

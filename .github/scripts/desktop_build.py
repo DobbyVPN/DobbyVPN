@@ -1142,7 +1142,7 @@ def build_native_ui(target_platform: str, arch: str | None, output: Path) -> Pat
         run([
             "dotnet", "publish", str(project), "--configuration", "Release",
             "--runtime", "win-x64", "--self-contained", "true",
-            f"-p:Version={version}", f"-p:SourceCommit={commit}",
+            "-p:Platform=x64", f"-p:Version={version}", f"-p:SourceCommit={commit}",
             "--output", str(output),
         ], cwd=ROOT_DIR)
         executable = output / "DobbyVPN.exe"

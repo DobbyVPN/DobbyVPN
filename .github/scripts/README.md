@@ -114,8 +114,9 @@ Release verifies Android APK reproducibility and source identity. The F-Droid
 check updates a temporary metadata candidate, then uses fdroidserver's build
 server to build the same Kotlin/Compose app and Go backend from the candidate
 source. It compares the resulting unsigned APK with the Release app's payload;
-the check uses a disposable test-signed reference APK, not the production
-signing key.
+the check uses a disposable test-signed reference APK and matches its key in
+the temporary F-Droid build metadata. The upstream production key remains in
+the validated source metadata; Publish checks production signing separately.
 
 The Android recipe pins the Go toolchain and Compose dependencies used by the
 product build. Historical changelogs remain as published release records.
