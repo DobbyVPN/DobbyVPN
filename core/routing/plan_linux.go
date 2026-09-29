@@ -234,7 +234,7 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 			Type:     unix.RTN_BLACKHOLE,
 		}
 		created := false
-		_, err := p.Acquire("ipv6-block "+subnet, func() error {
+		_, err = p.Acquire("ipv6-block "+subnet, func() error {
 			if err := linuxRouteOperation("add", &route, linuxRouteAdd); err != nil {
 				if linuxAlreadyExists(err) {
 					return nil

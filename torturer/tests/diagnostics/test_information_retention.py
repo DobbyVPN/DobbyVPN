@@ -204,6 +204,7 @@ class InformationRetentionTests(unittest.TestCase):
             controller.bounded_by.side_effect = lambda _timeout: nullcontext()
             controller.configure.return_value = {"input_verified": True}
             args.ui_helper = root / "native-helper"
+            args.ui_helper.write_text("test", encoding="utf-8")
             controller.connect.side_effect = native_ui.NativeUIJourneyError("connect failed")
             controller.capture.return_value = {}
             smoke = SimpleNamespace(

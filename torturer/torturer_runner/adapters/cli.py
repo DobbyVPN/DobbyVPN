@@ -139,6 +139,16 @@ def _append_command_result_notes(
     )
 
 
+def _append_error_notes(
+    error: BaseException,
+    errors: Sequence[tuple[str, BaseException]],
+) -> None:
+    """Retain secondary failures on the primary exception."""
+
+    for label, secondary in errors:
+        add_exception_notes(error, label, secondary)
+
+
 def _append_command_metadata(error: BaseException, result: CommandResult) -> None:
     error.add_note(f"command_returncode={result.returncode}")
     error.add_note(f"command_timed_out={result.timed_out}")
