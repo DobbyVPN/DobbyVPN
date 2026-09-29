@@ -43,12 +43,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	var ownedEngine *tunnel.Engine
 	protocolOpened := false
 	defer func() {
-		app.mu.Lock()
-		app.currentDevice = nil
-		app.running = false
-		app.engine = nil
-		app.mu.Unlock()
-
 		log.Debugf(Category, "Closing Windows routing plan before stopping tun2socks")
 		routeErr := routePlan.Close()
 
@@ -155,9 +149,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	app.mu.Lock()
-	app.engine = ownedEngine
-	app.mu.Unlock()
 	log.Debugf(Category, "[Windows] tunnel.StartOwnedEngine OK elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	stepStartedAt = time.Now()
@@ -194,15 +185,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 
 	log.Debugf(Category, "Routing successfully configured elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
-
-	app.mu.Lock()
-	app.currentDevice = app.ProtocolDevice
-	app.gatewayIP = gatewayIP.String()
-	app.uplinkIface = netInterface.Name
-	app.tunIface = tunInterface.Name
-	app.serverIP = serverIP.String()
-	app.running = true
-	app.mu.Unlock()
 
 	// Signal successful initialization - connection is ready
 	log.Debugf(Category, "[Windows] App initialization ready total=%s", time.Since(startedAt).Truncate(time.Millisecond))

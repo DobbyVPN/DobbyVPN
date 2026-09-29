@@ -35,6 +35,8 @@ import sys
 import time
 from typing import Any
 
+from .diagnostics import output_text
+
 PLATFORMS = ("linux", "windows", "macos", "android", "ios-simulator")
 SUITES = ("mini", "full")
 DESKTOP_PLATFORMS = frozenset(("linux", "windows", "macos"))
@@ -325,6 +327,15 @@ def _read_state(run_dir: Path) -> dict[str, Any] | None:
     return value
 
 
+def _save_state(run_dir: Path, platform: str, runtime: dict[str, Any]) -> None:
+    state = _read_state(run_dir)
+    if state is None:
+        state = {"platform": platform}
+    state["runtime"] = runtime
+    state["status"] = "starting"
+    _write_json(run_dir / "platform.json", state)
+
+
 def _command_log(logs: Path, label: str, stream: str) -> Path:
     if not _IDENTITY.fullmatch(label):
         raise LocalVMError("command label is invalid")
@@ -351,12 +362,6 @@ def _next_command_logs(logs: Path, label: str) -> tuple[Path, Path]:
         sequence += 1
 
 
-def _decode_diagnostic_stream(value: bytes) -> str:
-    """Render arbitrary command bytes without dropping invalid UTF-8."""
-
-    return value.decode("utf-8", errors="backslashreplace")
-
-
 def _diagnostic_bytes(value: object) -> bytes:
     """Normalize subprocess output for retained logs and exception notes."""
 
@@ -377,8 +382,8 @@ def _add_command_stream_notes(
 
     output = _diagnostic_bytes(stdout)
     failure = _diagnostic_bytes(stderr)
-    error.add_note(f"{label}_stdout:\n{_decode_diagnostic_stream(output)}")
-    error.add_note(f"{label}_stderr:\n{_decode_diagnostic_stream(failure)}")
+    error.add_note(f"{label}_stdout:\n{output_text(output)}")
+    error.add_note(f"{label}_stderr:\n{output_text(failure)}")
 
 
 def _write_probe_streams(
@@ -514,8 +519,8 @@ def _terminate_logged_process(
             if result.returncode != 0:
                 failures.append(
                     "taskkill exited "
-                    f"{result.returncode}: stdout={_decode_diagnostic_stream(result.stdout)} "
-                    f"stderr={_decode_diagnostic_stream(result.stderr)}"
+                    f"{result.returncode}: stdout={output_text(result.stdout)} "
+                    f"stderr={output_text(result.stderr)}"
                 )
     else:
         try:
@@ -655,8 +660,8 @@ def _run_logged_impl(
         raise LocalVMError(f"{label}: command could not start: {launch_error}") from launch_error
     if timeout_error is not None:
         failure = LocalVMError(f"{label}: command timed out")
-        failure.add_note(f"{label}_stdout:\n{_decode_diagnostic_stream(stdout)}")
-        failure.add_note(f"{label}_stderr:\n{_decode_diagnostic_stream(stderr)}")
+        failure.add_note(f"{label}_stdout:\n{output_text(stdout)}")
+        failure.add_note(f"{label}_stderr:\n{output_text(stderr)}")
         if cleanup_error is not None:
             failure.add_note(f"{label}_cleanup: {type(cleanup_error).__name__}: {cleanup_error}")
         raise failure from timeout_error
@@ -668,8 +673,8 @@ def _run_logged_impl(
     )
     if check and completed.returncode != 0:
         failure = LocalVMError(f"{label}: command exited {completed.returncode}")
-        failure.add_note(f"{label}_stdout:\n{_decode_diagnostic_stream(stdout)}")
-        failure.add_note(f"{label}_stderr:\n{_decode_diagnostic_stream(stderr)}")
+        failure.add_note(f"{label}_stdout:\n{output_text(stdout)}")
+        failure.add_note(f"{label}_stderr:\n{output_text(stderr)}")
         raise failure
     return completed
 

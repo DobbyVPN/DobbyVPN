@@ -174,17 +174,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		closeOnce.Do(func() {
 			log.Debugf(Category, "[Linux][Lifecycle] Shutting down...")
 
-			app.mu.Lock()
-			currentDevice := app.currentDevice
-			if currentDevice == nil && protocolOpened {
-				currentDevice = app.ProtocolDevice
-			}
-			app.currentDevice = nil
-			app.running = false
-			ownedEngine = app.engine
-			app.engine = nil
-			app.mu.Unlock()
-
 			routeErr := routePlan.Close()
 
 			var engineErr error
@@ -192,8 +181,8 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 				engineErr = ownedEngine.Stop()
 			}
 			var deviceErr error
-			if currentDevice != nil {
-				deviceErr = currentDevice.Close()
+			if protocolOpened {
+				deviceErr = app.ProtocolDevice.Close()
 			}
 			tunErr := tun.Close()
 			cleanupErr = errors.Join(routeErr, engineErr, deviceErr, tunErr)
@@ -253,10 +242,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	app.mu.Lock()
-	app.engine = ownedEngine
-	app.mu.Unlock()
-
 	log.Debugf(Category, "[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
 
 	time.Sleep(300 * time.Millisecond)
@@ -279,15 +264,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-
-	app.mu.Lock()
-	app.currentDevice = app.ProtocolDevice
-	app.gatewayIP = gatewayIP.String()
-	app.uplinkIface = uplinkIface
-	app.tunIface = app.RoutingConfig.TunDeviceName
-	app.serverIP = serverIP.String()
-	app.running = true
-	app.mu.Unlock()
 
 	log.Debugf(Category, "[Linux][Step 10][OK] Default route switched to VPN")
 

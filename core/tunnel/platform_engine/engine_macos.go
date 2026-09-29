@@ -14,7 +14,7 @@ import (
 	"core/log"
 )
 
-var LastIface string
+var lastIface string
 
 const (
 	macOSTunReleaseTimeout = 5 * time.Second
@@ -26,7 +26,7 @@ func startPlatformEngine(cfg interface{}) error {
 	proxyAddr := c.ProxyAddr
 
 	deviceName := "utun233"
-	LastIface = deviceName
+	lastIface = deviceName
 
 	log.Debugf(Category, "[Engine][Darwin] proxy_ready=true device=%s", deviceName)
 
@@ -94,7 +94,7 @@ func startPlatformEngine(cfg interface{}) error {
 }
 
 func stopPlatformEngine(stopDevice func()) error {
-	deviceName := LastIface
+	deviceName := lastIface
 	stopDevice()
 	if deviceName == "" {
 		return nil
@@ -114,7 +114,7 @@ func stopPlatformEngine(stopDevice func()) error {
 			}
 		}
 		if !found {
-			LastIface = ""
+			lastIface = ""
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -124,4 +124,4 @@ func stopPlatformEngine(stopDevice func()) error {
 	}
 }
 
-func platformInterfaceName() string { return LastIface }
+func platformInterfaceName() string { return lastIface }

@@ -163,7 +163,7 @@ public sealed partial class MainWindow : Window
             {
                 await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation });
             }
-            else if (current.PrimaryAction == "START")
+            else
             {
                 var source = NormalizeSource(SourceEditor.Text).Trim();
                 var includeSource = !current.Configured || _sourceDirty;
@@ -180,7 +180,6 @@ public sealed partial class MainWindow : Window
                 await CallAsync<JsonElement>("Start", parameters);
                 if (includeSource) MarkSourceAccepted(source);
             }
-            await RefreshSnapshotAsync();
         }
         catch (Exception error)
         {

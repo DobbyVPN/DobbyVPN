@@ -15,8 +15,6 @@
 package internal
 
 import (
-	"sync"
-
 	"core/dnscache"
 	"core/protocol"
 	"core/tunnel"
@@ -27,15 +25,6 @@ type App struct {
 	DNSCache       *dnscache.Cache
 	BypassPolicy   *tunnel.BypassPolicy
 	RoutingConfig  *RoutingConfig
-
-	mu            sync.Mutex
-	currentDevice protocol.ProtocolDevice
-	gatewayIP     string
-	uplinkIface   string
-	tunIface      string
-	serverIP      string
-	running       bool
-	engine        *tunnel.Engine
 }
 
 type RoutingConfig struct {

@@ -67,16 +67,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	closeAll := func() error {
 		closeOnce.Do(func() {
 			log.Debugf(Category, "[Darwin][Lifecycle] stopping generation-owned resources")
-			app.mu.Lock()
-			currentDevice := app.currentDevice
-			if currentDevice == nil && protocolOpened {
-				currentDevice = app.ProtocolDevice
-			}
-			app.currentDevice = nil
-			app.running = false
-			ownedEngine = app.engine
-			app.engine = nil
-			app.mu.Unlock()
 			// Remove the session routes while the owned utun still exists, then
 			// stop the engine and protocol device.
 			routeErr := routePlan.Close()
@@ -85,8 +75,8 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 				engineErr = ownedEngine.Stop()
 			}
 			var deviceErr error
-			if currentDevice != nil {
-				deviceErr = currentDevice.Close()
+			if protocolOpened {
+				deviceErr = app.ProtocolDevice.Close()
 			}
 			cleanupErr = errors.Join(routeErr, engineErr, deviceErr)
 			if cleanupErr != nil {
@@ -138,11 +128,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	app.mu.Lock()
-	app.engine = ownedEngine
-	app.mu.Unlock()
-
-	tunName = platform_engine.LastIface
+	tunName = ownedEngine.InterfaceName()
 
 	if tunName == "" {
 		err = fmt.Errorf("tun2socks did not report a TUN interface")
@@ -161,15 +147,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	log.Debugf(Category, "[Darwin][Routing] generation-owned IPv4, IPv6, and protected routes ready")
-
-	app.mu.Lock()
-	app.currentDevice = app.ProtocolDevice
-	app.gatewayIP = gatewayIP.String()
-	app.uplinkIface = ifaceName
-	app.tunIface = tunName
-	app.serverIP = serverIP.String()
-	app.running = true
-	app.mu.Unlock()
 
 	log.Debugf(Category, "[Darwin][Lifecycle] VPN initialization completed successfully")
 

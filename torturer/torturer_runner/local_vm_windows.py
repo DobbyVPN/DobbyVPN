@@ -19,7 +19,7 @@ import time
 from typing import Any
 import uuid
 
-from .local_vm import LocalVMError, _run_logged
+from .local_vm import LocalVMError, _run_logged, _save_state
 
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
@@ -77,17 +77,6 @@ class WindowsInteractiveDesktopUnavailable(LocalVMError):
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"{self.reason_code}: {detail}")
-
-
-def _save_state(run_dir: Path, runtime: dict[str, Any], status: str = "starting") -> None:
-    from .local_vm import _read_state, _write_json
-
-    state = _read_state(run_dir)
-    if state is None:
-        state = {"platform": "windows"}
-    state["runtime"] = runtime
-    state["status"] = status
-    _write_json(run_dir / "platform.json", state)
 
 
 def _service_path(descriptor: dict[str, Any]) -> Path:
@@ -1150,14 +1139,14 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
         "network_interface": None,
     }
     # Persist ownership before probing, opening, or launching anything.
-    _save_state(run_dir, runtime)
+    _save_state(run_dir, "windows", runtime)
     logs.mkdir(parents=True, exist_ok=True)
     for path in (service_log, service_stdout, service_stderr):
         path.touch(exist_ok=True)
 
     interface = _discover_network_interface(run_dir, logs, timeout)
     runtime["network_interface"] = interface
-    _save_state(run_dir, runtime)
+    _save_state(run_dir, "windows", runtime)
 
     environment = os.environ.copy()
     environment.update({
@@ -1183,7 +1172,7 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
             "DOBBY_LOG_PATH", "DOBBY_LOG_ROOT", "DOBBY_LOG_PRECREATED", "GODEBUG",
         )
     }
-    _save_state(run_dir, runtime)
+    _save_state(run_dir, "windows", runtime)
 
     try:
         with service_stdout.open("ab") as stdout, service_stderr.open("ab") as stderr:
@@ -1201,12 +1190,12 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
         runtime["pid"] = pid
         # Persist immediately after Popen: an identity probe failure must
         # still leave enough information for a safe exact cleanup.
-        _save_state(run_dir, runtime)
+        _save_state(run_dir, "windows", runtime)
         identity = _query_identity(pid, binary, run_dir=run_dir, logs=logs, timeout=timeout)
         pid_file.write_text(f"{pid}\n", encoding="ascii")
         identity_file.write_text(identity + "\n", encoding="ascii")
         runtime["identity"] = identity
-        _save_state(run_dir, runtime)
+        _save_state(run_dir, "windows", runtime)
         _wait_ready(run_dir, logs, timeout)
         return runtime
     except Exception:

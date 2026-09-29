@@ -25,7 +25,7 @@ from .screenshot_artifacts import (
     assert_marker_matches,
     file_metadata,
 )
-from .local_vm import _run_logged
+from .local_vm import _run_logged, _save_state
 
 _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
@@ -51,17 +51,6 @@ def _error(message: str) -> Exception:
     from .local_vm import LocalVMError
 
     return LocalVMError(message)
-
-
-def _save_state(run_dir: Path, runtime: dict[str, Any], status: str = "starting") -> None:
-    from .local_vm import _read_state, _write_json
-
-    state = _read_state(run_dir)
-    if state is None:
-        state = {"platform": "android"}
-    state["runtime"] = runtime
-    state["status"] = status
-    _write_json(run_dir / "platform.json", state)
 
 
 def _apk(descriptor: dict[str, Any], name: str) -> Path:
@@ -163,7 +152,7 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     }
     # This must precede even get-state/root: cleanup can recover a setup that
     # fails after an APK install but before start() returns.
-    _save_state(run_dir, runtime)
+    _save_state(run_dir, "android", runtime)
     logs.mkdir(parents=True, exist_ok=True)
     device = _adb_call(adb, serial, ["get-state"], run_dir=run_dir, logs=logs,
                        label="android-state", timeout=min(timeout, 15), environment=environment)
@@ -176,7 +165,7 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
         # Record ownership before install.  A killed ADB install can leave a
         # complete APK behind even though the command never returns.
         runtime["installed_packages"].append(package)
-        _save_state(run_dir, runtime)
+        _save_state(run_dir, "android", runtime)
         _adb_call(
             adb, serial, ["install", "--no-incremental", "-r", "-t", str(apk)],
             run_dir=run_dir, logs=logs, label=f"android-install-{label}", timeout=timeout,
