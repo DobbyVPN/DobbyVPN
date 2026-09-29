@@ -77,14 +77,15 @@ jobs:
       - name: Download trusted Gradle distribution
         run: |
           set -euo pipefail
+          gradle_version="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin gradle_version)"
           download_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle.XXXXXX")"
-          archive="$download_root/gradle-8.13-bin.zip"
+          archive="$download_root/gradle-$gradle_version-bin.zip"
           gradle_url="$(python3 .github/scripts/android/android_dependency_provenance.py \
-            --spec .github/scripts/android/dependency-spec.json --print-gradle-url)"
+            --print-pin gradle_url)"
           curl --fail --show-error --location --output "$archive" "$gradle_url"
           extraction_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle-root.XXXXXX")"
           unzip "$archive" -d "$extraction_root"
-          gradle_root="$extraction_root/gradle-8.13"
+          gradle_root="$extraction_root/gradle-$gradle_version"
           {
             echo "GRADLE_ARCHIVE=$archive"
             echo "GRADLE_ROOT=$gradle_root"
@@ -100,12 +101,12 @@ jobs:
           [[ "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
           SPEC_GO_VERSION="$(python3 .github/scripts/android/android_dependency_provenance.py \
             --spec .github/scripts/android/dependency-spec.json \
-            --print-go-version)"
+            --print-pin go_version)"
           test "$GO_VERSION" = "$SPEC_GO_VERSION"
           GO_SRC="$FDROID_COMPAT_GO_ROOT"
           GO_COMMIT="$(python3 .github/scripts/android/android_dependency_provenance.py \
             --spec .github/scripts/android/dependency-spec.json \
-            --print-go-source-commit)"
+            --print-pin go_source_commit)"
           [[ "$GO_COMMIT" =~ ^[0-9a-f]{40}$ ]]
 
           test ! -e "$GO_SRC"
@@ -120,29 +121,37 @@ jobs:
           test "$("$GO_SRC/bin/go" env GOVERSION)" = "go${GO_VERSION}"
           test "$("$GO_SRC/bin/go" env GOTOOLCHAIN)" = "local"
 
-      - name: Set up JDK 17 (Temurin)
+      - name: Read Android dependency versions
+        id: pins
+        run: |
+          set -euo pipefail
+          for pin in java_major android_compile_sdk android_build_tools android_ndk; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Set up pinned JDK (Temurin)
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
-          java-version: '17'
+          java-version: ${{ steps.pins.outputs.java_major }}
           distribution: 'temurin'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
           packages: >
-            platforms;android-35
-            platforms;android-36
-            build-tools;36.0.0
-            ndk;28.1.13356709
+            platforms;android-${{ steps.pins.outputs.android_compile_sdk }}
+            build-tools;${{ steps.pins.outputs.android_build_tools }}
+            ndk;${{ steps.pins.outputs.android_ndk }}
 
       - name: Select and verify pinned Android NDK
         run: |
           set -euo pipefail
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           test -n "$sdk_root"
-          ndk_home="$sdk_root/ndk/28.1.13356709"
+          ndk_home="$sdk_root/ndk/${{ steps.pins.outputs.android_ndk }}"
           test -f "$ndk_home/source.properties"
-          grep -Fqx 'Pkg.Revision = 28.1.13356709' "$ndk_home/source.properties"
+          grep -Fqx 'Pkg.Revision = ${{ steps.pins.outputs.android_ndk }}' "$ndk_home/source.properties"
           printf 'ANDROID_NDK_HOME=%s\n' "$ndk_home" >> "$GITHUB_ENV"
 
       - name: Prepare F-Droid-compatible source path
@@ -207,7 +216,7 @@ jobs:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
           if-no-files-found: error
-          retention-days: 90
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
 
       - name: Upload Android test companion
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -215,7 +224,7 @@ jobs:
           name: dobbyvpn-android-test-companion-unsigned.apk
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
           if-no-files-found: error
-          retention-days: 90
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
 
       - name: Upload Android provenance
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -223,4 +232,4 @@ jobs:
           name: dobbyvpn-android-provenance
           path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}

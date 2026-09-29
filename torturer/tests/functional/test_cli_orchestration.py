@@ -44,7 +44,11 @@ class CLIOrchestrationTests(unittest.TestCase):
             cli = root / "dobby-cli"
             cli.touch()
             profile = root / "mixed.toml"
-            profile.write_text("[[Outline]]\n", encoding="utf-8")
+            profile.write_text(
+                'schema_version = 2\n[[profiles]]\nprotocol = "OUTLINE"\n'
+                '[profiles.config]\nServer = "vpn.invalid"\nPort = 443\nPassword = "synthetic"\n',
+                encoding="utf-8",
+            )
             runner = AcceptedSessionRunner()
             adapter = CLIAdapter(cli=cli, profile=profile, runner=runner)
             connections = adapter.discover_connections()

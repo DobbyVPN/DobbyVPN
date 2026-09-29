@@ -3,6 +3,7 @@ package internal
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -19,7 +20,15 @@ import (
 
 // GenerateXrayConfig overwrites user's inbounds with a local SOCKS5 inbound
 // (TCP+UDP) for use by tun2socks.
-func GenerateXrayConfig(vlessConfigStr, socksListen string, socksPort, routingTableID int, uplinkIface, user, pass string) (*core.Config, error) {
+func GenerateXrayConfig(
+	vlessConfigStr, socksListen string,
+	socksPort, routingTableID int,
+	uplinkIface, user, pass string,
+	dnsCache *dnscache.Cache,
+) (*core.Config, error) {
+	if dnsCache == nil {
+		return nil, errors.New("DNS cache is required")
+	}
 
 	var userConfig map[string]interface{}
 	if err := json.Unmarshal([]byte(vlessConfigStr), &userConfig); err != nil {
@@ -60,7 +69,7 @@ func GenerateXrayConfig(vlessConfigStr, socksListen string, socksPort, routingTa
 	userConfig["inbounds"] = []interface{}{socksInbound}
 
 	ensureXrayLogConfig(userConfig)
-	if err := applyResolvedOutboundAddresses(userConfig); err != nil {
+	if err := applyResolvedOutboundAddresses(userConfig, dnsCache); err != nil {
 		return nil, err
 	}
 	applyProtectedSockopt(userConfig, routingTableID, uplinkIface)
@@ -104,7 +113,7 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	}
 }
 
-func applyResolvedOutboundAddresses(userConfig map[string]interface{}) error {
+func applyResolvedOutboundAddresses(userConfig map[string]interface{}, dnsCache *dnscache.Cache) error {
 	outbounds, ok := userConfig["outbounds"].([]interface{})
 	if !ok {
 		return nil
@@ -150,7 +159,7 @@ func applyResolvedOutboundAddresses(userConfig map[string]interface{}) error {
 				continue
 			}
 
-			ip4, ok := dnscache.LookupIPv4(address, "xray-config")
+			ip4, ok := dnsCache.LookupIPv4(address, "xray-config")
 			if !ok {
 				return fmt.Errorf("resolved Xray endpoint %q is absent from the session DNS cache", address)
 			}

@@ -120,27 +120,23 @@ func TestAutoRecoveryBudgetResetsAfterFiveStableMinutes(t *testing.T) {
 
 type blockedRecoveryRuntime struct {
 	failures     chan error
-	probeEntered chan struct{}
+	startEntered chan struct{}
 }
 
-func (r *blockedRecoveryRuntime) Probe(ctx context.Context, ref SessionRef, _ RuntimeProfile) (ProbeResult, error) {
-	if ref.Generation == 1 {
-		return ProbeResult{LatencyMillis: 1}, nil
+func (r *blockedRecoveryRuntime) Start(ctx context.Context, ref SessionRef, _ RuntimeProfile) (RuntimeLease, error) {
+	if ref.Generation != 1 {
+		select {
+		case r.startEntered <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
-	select {
-	case r.probeEntered <- struct{}{}:
-	default:
-	}
-	<-ctx.Done()
-	return ProbeResult{}, ctx.Err()
-}
-
-func (r *blockedRecoveryRuntime) Start(_ context.Context, ref SessionRef, _ RuntimeProfile) (RuntimeLease, error) {
 	return monitoringRuntimeLease{generation: ref.Generation, failures: r.failures, stopped: make(chan uint64, 1)}, nil
 }
 
 func TestStopFromRecoverySnapshotCancelsReservedGeneration(t *testing.T) {
-	runtime := &blockedRecoveryRuntime{failures: make(chan error, 1), probeEntered: make(chan struct{}, 1)}
+	runtime := &blockedRecoveryRuntime{failures: make(chan error, 1), startEntered: make(chan struct{}, 1)}
 	manager, id := newRecoveryTestManager(t, runtime, time.Now)
 	started, err := startForTest(t, manager, id, StartTarget{Mode: AutoSelect})
 	if err != nil {
@@ -149,9 +145,9 @@ func TestStopFromRecoverySnapshotCancelsReservedGeneration(t *testing.T) {
 	waitGenerationState(t, manager, id, started.Generation, StateConnected)
 	runtime.failures <- errors.New("synthetic health failure")
 	select {
-	case <-runtime.probeEntered:
+	case <-runtime.startEntered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("automatic recovery did not begin probing")
+		t.Fatal("automatic recovery did not begin candidate Start")
 	}
 	snapshot := waitGenerationState(t, manager, id, started.Generation+1, StateProbing)
 	stopped, err := manager.Stop(context.Background(), id, started.Generation)
@@ -206,10 +202,6 @@ type recoveryOriginRuntime struct {
 	blockedStopGeneration uint64
 	stopEntered           chan uint64
 	releaseStop           chan struct{}
-}
-
-func (*recoveryOriginRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
 }
 
 func (r *recoveryOriginRuntime) Start(_ context.Context, ref SessionRef, _ RuntimeProfile) (RuntimeLease, error) {
@@ -273,10 +265,6 @@ type blockingHealthLeaseRuntime struct {
 	failures    chan error
 	stopEntered chan uint64
 	releaseStop chan struct{}
-}
-
-func (*blockingHealthLeaseRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
 }
 
 func (r *blockingHealthLeaseRuntime) Start(_ context.Context, ref SessionRef, _ RuntimeProfile) (RuntimeLease, error) {

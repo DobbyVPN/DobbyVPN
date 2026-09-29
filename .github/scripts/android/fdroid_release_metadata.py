@@ -10,6 +10,13 @@ import sys
 from typing import Any
 
 import yaml
+from android_dependency_provenance import (
+    ANDROID_BUILD_TOOLS,
+    ANDROID_COMPILE_SDK,
+    ANDROID_NDK,
+    GO_VERSION,
+    JAVA_MAJOR,
+)
 
 
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -24,7 +31,7 @@ ALLOWED_FINAL_FIELDS = {
     "UpdateCheckData",
 }
 ANDROID_BUILD_SOURCES = [
-    "go@go1.26.8",
+    f"go@go{GO_VERSION}",
     "reproducible-apk-tools@v0.3.2",
 ]
 ANDROID_BUILD = [
@@ -39,17 +46,17 @@ ANDROID_BUILD = [
     'export SOURCE_DATE_EPOCH=0',
     'export PATH="$GOROOT/bin:$GOPATH/bin:$PATH"',
     'test -x "$GOROOT/bin/go"',
-    'test "$("$GOROOT/bin/go" env GOVERSION)" = "go1.26.8"',
+    f'test "$("$GOROOT/bin/go" env GOVERSION)" = "go{GO_VERSION}"',
     'go env GOROOT GOVERSION GOFLAGS GOTOOLCHAIN',
     'cd ../..',
     'pushd core',
     'go mod download',
     'popd',
-    'sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;36.0.0" "ndk;28.1.13356709"',
+    f'sdkmanager "platforms;android-{ANDROID_COMPILE_SDK}" "build-tools;{ANDROID_BUILD_TOOLS}" "ndk;{ANDROID_NDK}"',
     'export ANDROID_SDK_ROOT="$$SDK$$"',
     'export ANDROID_HOME="$$SDK$$"',
-    'export ANDROID_NDK_HOME="$$SDK$$/ndk/28.1.13356709"',
-    'export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64',
+    f'export ANDROID_NDK_HOME="$$SDK$$/ndk/{ANDROID_NDK}"',
+    f'export JAVA_HOME=/usr/lib/jvm/java-{JAVA_MAJOR}-openjdk-amd64',
     'export PATH="$JAVA_HOME/bin:$GOROOT/bin:$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$GOPATH/bin:$PATH"',
     'cd ui/android',
     'sed -i -e "s/^versionCode=.*/versionCode=$$VERCODE$$/" -e "s/^versionName=.*/versionName=$$VERSION$$/" gradle.properties',

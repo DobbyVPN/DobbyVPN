@@ -337,7 +337,7 @@ public final class NativeUiHostedProfileTest {
                             int index = command.has("profile_index")
                                     ? command.getInt("profile_index") : 0;
                             JSONObject started = requireOK(NativeGoSession.start(
-                                    sessionID, sequence, START_MODE_PROFILE_INDEX, index));
+                                    sessionID, sequence, START_MODE_PROFILE_INDEX, index, null));
                             JSONObject startedResult = started.getJSONObject("result");
                             generation = startedResult.getLong("generation");
                             sequence = startedResult.getLong("sequence");
@@ -421,7 +421,7 @@ public final class NativeUiHostedProfileTest {
                             ensureVpnReady();
                             int index = command.has("profile_index") ? command.getInt("profile_index") : 0;
                             JSONObject started = requireOK(NativeGoSession.start(
-                                    sessionID, sequence, START_MODE_PROFILE_INDEX, index));
+                                    sessionID, sequence, START_MODE_PROFILE_INDEX, index, null));
                             JSONObject startedResult = started.getJSONObject("result");
                             generation = startedResult.getLong("generation");
                             sequence = startedResult.getLong("sequence");

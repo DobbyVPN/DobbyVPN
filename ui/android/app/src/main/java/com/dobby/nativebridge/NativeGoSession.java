@@ -30,16 +30,31 @@ public final class NativeGoSession {
             NativeVpnBridge.recordNativeFailure(context, "go.logger_init_failed", error);
             throw error;
         }
-        attachNative(context);
+        String sourcePath = NativeVpnBridge.sourceURLPath(context);
+        String attachFailure = attachNative(context, sourcePath);
+        if (attachFailure == null || !attachFailure.isEmpty()) {
+            IllegalStateException error = new IllegalStateException(
+                "Go backend saved configuration storage could not be attached"
+                    + (attachFailure == null ? "" : ": " + attachFailure)
+            );
+            NativeVpnBridge.recordNativeFailure(context, "go.saved_source_attach_failed", error);
+            throw error;
+        }
     }
 
     private static native String initializeLogger(String path);
 
-    private static native void attachNative(Context context);
+    private static native String attachNative(Context context, String sourcePath);
 
     public static native String configure(String sessionId, long expectedSequence, byte[] rawConfig);
 
-    public static native String start(String sessionId, long expectedSequence, String mode, int index);
+    public static native String start(
+        String sessionId,
+        long expectedSequence,
+        String mode,
+        int index,
+        byte[] rawConfig
+    );
 
     public static native String stop(String sessionId, long generation);
 

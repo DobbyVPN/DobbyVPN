@@ -13,10 +13,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / ".github" / "scripts" / "desktop"))
 sys.path.insert(0, str(ROOT / ".github" / "scripts" / "release"))
+sys.path.insert(0, str(ROOT / ".github" / "scripts" / "android"))
 import desktop_build
+from android_dependency_provenance import MOBILE_MODULE, MOBILE_VERSION
 from version_metadata import parse_version
-
-MOBILE_VERSION = "v0.0.0-20260520154334-0e4426e1883d"
 
 
 def run(command: list[str], *, cwd: Path, environment: dict[str, str]) -> None:
@@ -62,7 +62,7 @@ def main() -> int:
     module = ROOT / "core"
     run([go, "mod", "download"], cwd=module, environment=env)
     for tool in ("gomobile", "gobind"):
-        run([go, "install", f"golang.org/x/mobile/cmd/{tool}@{MOBILE_VERSION}"], cwd=module, environment=env)
+        run([go, "install", f"{MOBILE_MODULE}/cmd/{tool}@{MOBILE_VERSION}"], cwd=module, environment=env)
     run([str(module / "scripts" / "build_ios_xcframework.sh")], cwd=module, environment=env)
     runtime = module / "DobbyVPNRuntime.xcframework"
     package = module / "scripts" / "package_ios_app.sh"

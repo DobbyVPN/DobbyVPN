@@ -15,12 +15,12 @@ func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
 
 func TestSetAndResolveCacheHit(t *testing.T) {
-	Clear()
-	if !SetIPv4("Example.COM", "203.0.113.7", "test", time.Minute) {
+	cache := New()
+	if !cache.SetIPv4("Example.COM", "203.0.113.7", "test", time.Minute) {
 		t.Fatal("SetIPv4 returned false")
 	}
 
-	ip, err := ResolveIPv4(context.Background(), "example.com", time.Nanosecond, "test")
+	ip, err := cache.ResolveIPv4(context.Background(), "example.com", time.Nanosecond, "test")
 	if err != nil {
 		t.Fatalf("ResolveIPv4 returned error: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestSetAndResolveCacheHit(t *testing.T) {
 		t.Fatalf("ip=%s, want 203.0.113.7", got)
 	}
 
-	cached, ok := LookupIPv4("EXAMPLE.com", "test-lookup")
+	cached, ok := cache.LookupIPv4("EXAMPLE.com", "test-lookup")
 	if !ok {
 		t.Fatal("LookupIPv4 returned ok=false, want true")
 	}
@@ -47,9 +47,9 @@ func TestNormalizeHost(t *testing.T) {
 }
 
 func TestResolvePreflightIPv4PinsResult(t *testing.T) {
-	Clear()
+	cache := New()
 	started := time.Now()
-	ip, err := ResolvePreflightIPv4(
+	ip, err := cache.ResolvePreflightIPv4(
 		context.Background(),
 		"203.0.113.7",
 		time.Nanosecond,
@@ -62,9 +62,9 @@ func TestResolvePreflightIPv4PinsResult(t *testing.T) {
 		t.Fatalf("ip=%s, want 203.0.113.7", got)
 	}
 
-	mu.RLock()
-	cached, ok := entries["203.0.113.7"]
-	mu.RUnlock()
+	cache.mu.RLock()
+	cached, ok := cache.entries["203.0.113.7"]
+	cache.mu.RUnlock()
 	if !ok {
 		t.Fatal("preflight result was not cached")
 	}
@@ -74,7 +74,7 @@ func TestResolvePreflightIPv4PinsResult(t *testing.T) {
 }
 
 func TestResolvePreflightIPv4RetriesOneTimeout(t *testing.T) {
-	Clear()
+	cache := New()
 	calls := 0
 	ip, err := resolvePreflightIPv4(
 		context.Background(), "vpn.example", time.Second, "test-retry",
@@ -85,6 +85,7 @@ func TestResolvePreflightIPv4RetriesOneTimeout(t *testing.T) {
 			}
 			return net.ParseIP("203.0.113.8").To4(), nil
 		},
+		cache.SetIPv4,
 	)
 	if err != nil {
 		t.Fatalf("resolvePreflightIPv4 returned error: %v", err)
@@ -92,13 +93,13 @@ func TestResolvePreflightIPv4RetriesOneTimeout(t *testing.T) {
 	if calls != 2 || ip.String() != "203.0.113.8" {
 		t.Fatalf("calls=%d ip=%v, want 2 calls and 203.0.113.8", calls, ip)
 	}
-	if cached, ok := LookupIPv4("vpn.example", "test"); !ok || !cached.Equal(ip) {
+	if cached, ok := cache.LookupIPv4("vpn.example", "test"); !ok || !cached.Equal(ip) {
 		t.Fatalf("retried result was not cached: ip=%v ok=%v", cached, ok)
 	}
 }
 
 func TestResolvePreflightIPv4DoesNotRetryPermanentFailure(t *testing.T) {
-	Clear()
+	cache := New()
 	calls := 0
 	want := errors.New("no such host")
 	_, err := resolvePreflightIPv4(
@@ -107,6 +108,7 @@ func TestResolvePreflightIPv4DoesNotRetryPermanentFailure(t *testing.T) {
 			calls++
 			return nil, want
 		},
+		cache.SetIPv4,
 	)
 	if !errors.Is(err, want) || calls != 1 {
 		t.Fatalf("err=%v calls=%d, want permanent error after one call", err, calls)

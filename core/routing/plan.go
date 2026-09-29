@@ -15,9 +15,11 @@ import (
 type Plan struct {
 	sessionID string
 
-	mu     sync.Mutex
-	closed bool
-	leases []*Lease
+	mu        sync.Mutex
+	closed    bool
+	leases    []*Lease
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Lease represents one exact route, rule, or firewall resource installed by a
@@ -72,23 +74,22 @@ func (l *Lease) Close() error {
 // from both startup rollback and normal shutdown; the underlying releases run
 // once even if those paths race.
 func (p *Plan) Close() error {
-	p.mu.Lock()
-	if p.closed {
+	p.closeOnce.Do(func() {
+		p.mu.Lock()
+		p.closed = true
+		leases := append([]*Lease(nil), p.leases...)
 		p.mu.Unlock()
-		return nil
-	}
-	p.closed = true
-	leases := append([]*Lease(nil), p.leases...)
-	p.mu.Unlock()
 
-	var errs []error
-	for index := len(leases) - 1; index >= 0; index-- {
-		lease := leases[index]
-		if err := lease.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", lease.name, err))
-			continue
+		var errs []error
+		for index := len(leases) - 1; index >= 0; index-- {
+			lease := leases[index]
+			if err := lease.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", lease.name, err))
+				continue
+			}
+			log.Debugf(Category, "[Plan] session_owned=true released=%s", lease.name)
 		}
-		log.Debugf(Category, "[Plan] session_owned=true released=%s", lease.name)
-	}
-	return errors.Join(errs...)
+		p.closeErr = errors.Join(errs...)
+	})
+	return p.closeErr
 }

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -151,6 +152,8 @@ public sealed partial class MainWindow : Window
     private async void ConnectionButton_Click(object sender, RoutedEventArgs e)
     {
         if (_busy || _snapshot is null || _snapshot.PrimaryAction is not ("START" or "STOP")) return;
+        Snapshot? startSnapshot = null;
+        string? submittedSource = null;
         _busy = true;
         ConnectionButton.IsEnabled = false;
         SourceEditor.IsEnabled = false;
@@ -158,6 +161,7 @@ public sealed partial class MainWindow : Window
         try
         {
             var current = _snapshot;
+            startSnapshot = current;
             if (current.PrimaryAction == "STOP")
             {
                 await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation });
@@ -165,36 +169,37 @@ public sealed partial class MainWindow : Window
             else if (current.PrimaryAction == "START")
             {
                 var source = NormalizeSource(SourceEditor.Text).Trim();
-                var needsConfigure = !current.Configured || _sourceDirty;
-                if (needsConfigure && string.IsNullOrWhiteSpace(source))
+                var includeSource = !current.Configured || _sourceDirty;
+                if (includeSource && string.IsNullOrWhiteSpace(source))
                     throw new InvalidOperationException("Enter an HTTPS connection URL or inline configuration.");
-                var sequence = current.Sequence;
-                if (needsConfigure)
+                if (includeSource) submittedSource = source;
+                var parameters = new Dictionary<string, object>
                 {
-                    var configured = await CallAsync<CommandSequence>("Configure", new
-                    {
-                        session_id = current.SessionId,
-                        expected_sequence = sequence,
-                        source
-                    });
-                    sequence = configured.Sequence;
-                    SetSourceText(source);
-                    _acceptedInThisWindow = source;
-                    _sourceDirty = false;
-                    _renderedSource = source;
-                }
-                await CallAsync<JsonElement>("Start", new
-                {
-                    session_id = current.SessionId,
-                    expected_sequence = sequence,
-                    mode = "AUTO_SELECT",
-                    index = 0
-                });
+                    ["session_id"] = current.SessionId,
+                    ["expected_sequence"] = current.Sequence,
+                    ["mode"] = "AUTO_SELECT",
+                    ["index"] = 0
+                };
+                if (includeSource) parameters["source"] = source;
+                await CallAsync<JsonElement>("Start", parameters);
+                if (submittedSource is not null) MarkSourceAccepted(submittedSource);
             }
             await RefreshSnapshotAsync();
         }
         catch (Exception error)
         {
+            var isConflict = error is BackendCommandException commandError && commandError.Code == "CONFLICT";
+            if (submittedSource is not null && startSnapshot is not null && !isConflict)
+            {
+                try
+                {
+                    var refreshed = await ReadSnapshotAsync();
+                    _snapshot = refreshed;
+                    if (refreshed.Configured && refreshed.Sequence > startSnapshot.Sequence)
+                        MarkSourceAccepted(submittedSource);
+                }
+                catch { }
+            }
             ErrorText.Text = error.Message;
         }
         finally
@@ -237,6 +242,14 @@ public sealed partial class MainWindow : Window
         _updatingSource = true;
         try { SourceEditor.Text = value; }
         finally { _updatingSource = false; }
+    }
+
+    private void MarkSourceAccepted(string source)
+    {
+        SetSourceText(source);
+        _acceptedInThisWindow = source;
+        _sourceDirty = false;
+        _renderedSource = source;
     }
 
     private void SetConnectionAction(string value)
@@ -300,11 +313,6 @@ public sealed partial class MainWindow : Window
     {
         [JsonPropertyName("code")] public string Code { get; init; } = "";
         [JsonPropertyName("message")] public string Message { get; init; } = "";
-    }
-
-    private sealed class CommandSequence
-    {
-        [JsonPropertyName("sequence")] public long Sequence { get; init; }
     }
 
     private sealed class BackendCommandException : InvalidOperationException

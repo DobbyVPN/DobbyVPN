@@ -61,4 +61,4 @@ jobs:
             ${{ runner.temp }}/render/profile.toml
             ${{ runner.temp }}/render/deadline_epoch.txt
           if-no-files-found: error
-          retention-days: 1
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}

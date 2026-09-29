@@ -8,7 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from torturer_contract.engine import ScenarioExecutionError
+from torturer_contract.engine import FunctionalEngine, ScenarioExecutionError
 from torturer_runner import lane as run
 from torturer_runner.adapters import linux
 from torturer_runner.adapters.cli import CommandResult, CLIAdapter
@@ -193,28 +193,34 @@ class HostedSecondaryFailureTests(unittest.TestCase):
         class Adapter:
             capabilities = frozenset()
 
+            def __init__(self) -> None:
+                self.reset_count = 0
+
             def set_progress_sink(self, _sink):
                 pass
 
             def reset(self, *, timeout_seconds):
+                self.reset_count += 1
                 raise cleanup_error
 
-        class Engine:
-            def run(self, *_args, **_kwargs):
+            def execute_scenario(self, _scenario):
                 raise primary
 
         scenario = SimpleNamespace(
             id="diagnostic-scenario",
             required_capabilities=frozenset(),
+            assertion_ids=("configure.accepted",),
+            max_duration_seconds=30,
         )
         connection = SimpleNamespace(index=0, protocol="outline")
         provenance = SimpleNamespace(platform="linux")
+        adapter = Adapter()
         progress = StringIO()
 
         with redirect_stdout(progress):
             with self.assertRaises(RuntimeError) as caught:
                 run._run_scenarios(
-                    Engine(), [scenario], Adapter(), provenance, connection
+                    FunctionalEngine(), [scenario], adapter, provenance, connection
                 )
 
         self.assertIs(caught.exception, primary)
@@ -225,6 +231,7 @@ class HostedSecondaryFailureTests(unittest.TestCase):
         self.assertIn(r"\xff", notes)
         self.assertIn("cleanup stderr", notes)
         self.assertIn('"outcome": "error"', progress.getvalue())
+        self.assertEqual(adapter.reset_count, 1)
 
     def test_adapter_finalization_error_is_fully_attached_to_primary(self) -> None:
         primary = RuntimeError("connection discovery failed")

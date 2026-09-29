@@ -13,20 +13,22 @@ public final class IOSSessionShell: NSObject {
     }
 
     /// Sends the frontend's method and parameters through the provider as JSON.
-    /// Configure bytes stay in a request-scoped Keychain mailbox because the
+    /// Source bytes stay in a request-scoped Keychain mailbox because the
     /// NetworkExtension message is a control transport, not a secret channel.
     public func call(method: String, parameters: [String: Any]) -> String {
-        let touchesConfigurationMailbox = method == "Configure"
-        if touchesConfigurationMailbox { configurationLock.lock() }
+        let hasStartSource = method == "Start" && parameters["source"] is String
+        let usesMailbox = method == "Configure" || hasStartSource
+        let providerMethod = hasStartSource ? "StartWithSource" : method
+        if usesMailbox { configurationLock.lock() }
         defer {
-            if touchesConfigurationMailbox { configurationLock.unlock() }
+            if usesMailbox { configurationLock.unlock() }
         }
 
-        let requestID = requestID(for: method)
+        let requestID = requestID(for: providerMethod)
         var forwardedParameters = parameters
         var hasConfigurationMailbox = false
 
-        if method == "Configure" {
+        if usesMailbox {
             let source = parameters["source"] as? String ?? ""
             let mailbox: IOSConfigurationMailbox
             do {
@@ -35,11 +37,11 @@ public final class IOSSessionShell: NSObject {
                     configuration: Data(source.utf8)
                 )
             } catch {
-                return failure("INTERNAL", message: "configuration mailbox could not be encoded")
+                return failure("INTERNAL", message: "source mailbox could not be encoded")
             }
             guard secrets.set(mailbox.encoded(), for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {
-                logs.writeLog(log: "iOS session configuration mailbox write returned failure request_id=\(requestID)")
-                return failure("PLATFORM_FAILED", message: "configuration mailbox write returned failure")
+                logs.writeLog(log: "iOS session source mailbox write returned failure request_id=\(requestID)")
+                return failure("PLATFORM_FAILED", message: "source mailbox write returned failure")
             }
             hasConfigurationMailbox = true
             forwardedParameters.removeValue(forKey: "source")
@@ -53,18 +55,18 @@ public final class IOSSessionShell: NSObject {
             )
         } catch {
             logs.writeLog(
-                log: "iOS session command encoding failed method=\(method):\n\(diagnosticErrorDescription(error))"
+                log: "iOS session command encoding failed method=\(providerMethod):\n\(diagnosticErrorDescription(error))"
             )
             return failure("INVALID_ARGUMENT", message: "command parameters are invalid")
         }
 
-        let result = executeResult(method: method, requestID: requestID, params: params)
+        let result = executeResult(method: providerMethod, requestID: requestID, params: params)
         if hasConfigurationMailbox,
            result.isGoResult,
            let response = result.response.data(using: .utf8),
            IOSMailboxLifecycle.mayConsumeConfigurationResponse(response) {
             // The app is the sole mailbox consumer. Transport failures retain
-            // this request's bytes for a later configure retry.
+            // this request's bytes for a later retry.
             consumeConfiguration(requestID: requestID)
         }
         return result.response

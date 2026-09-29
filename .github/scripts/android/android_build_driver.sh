@@ -217,7 +217,7 @@ elif [[ "$local_build" == 1 ]]; then
   # Cached local iteration does not emit dependency or Release provenance.
   go_build_origin='binary'
 else
-  pinned_go_commit=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-go-source-commit | tee_stderr)
+  pinned_go_commit=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin go_source_commit | tee_stderr)
   observed_go_commit=$("$git_bin" -C "$go_root" rev-parse --verify HEAD^{commit} | tee_stderr)
   [[ "$observed_go_commit" == "$pinned_go_commit" ]] || {
     echo 'Go source checkout does not match the approved source commit' >&2
@@ -226,35 +226,32 @@ else
   go_build_origin='source_tree'
 fi
 
-mobile_pin=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-mobile-version | tee_stderr)
-mobile_module=${mobile_pin%@*}
-mobile_version=${mobile_pin#*@}
-[[ "$mobile_module" == 'golang.org/x/mobile' && "$mobile_version" == 'v0.0.0-20260520154334-0e4426e1883d' ]] || {
-  echo 'dependency specification yielded an unexpected x/mobile pin' >&2
-  exit 2
-}
+mobile_version=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin mobile_version | tee_stderr)
 observed_mobile_version=$(cd "$source_root/core" && "$go_bin" list -m -f '{{.Version}}' golang.org/x/mobile | tee_stderr)
 [[ "$observed_mobile_version" == "$mobile_version" ]] || {
   echo 'Go module graph is not pinned to the approved x/mobile revision' >&2
   exit 2
 }
 
-[[ -n "${ANDROID_SDK_ROOT:-}" && -x "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" ]] || {
-  echo 'Android SDK/build-tools 36.0.0 apksigner is required' >&2
+build_tools_version=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin android_build_tools | tee_stderr)
+ndk_version=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin android_ndk | tee_stderr)
+[[ -n "${ANDROID_SDK_ROOT:-}" && -x "$ANDROID_SDK_ROOT/build-tools/$build_tools_version/apksigner" ]] || {
+  echo "Android SDK/build-tools $build_tools_version apksigner is required" >&2
   exit 2
 }
 [[ -n "${ANDROID_NDK_HOME:-}" && -f "$ANDROID_NDK_HOME/source.properties" ]] || {
-  echo 'Android NDK 28.1.13356709 is required' >&2
+  echo "Android NDK $ndk_version is required" >&2
   exit 2
 }
 ndk_properties="$(cat "$ANDROID_NDK_HOME/source.properties")"
 printf '%s\n' "$ndk_properties"
-[[ "$ndk_properties" == *'Pkg.Revision = 28.1.13356709'* ]] || {
-  echo 'Android NDK revision is not 28.1.13356709' >&2
+[[ "$ndk_properties" == *"Pkg.Revision = $ndk_version"* ]] || {
+  echo "Android NDK revision is not $ndk_version" >&2
   exit 2
 }
 gradle_version=$("$gradle_bin" --version --no-daemon | tee_stderr | awk '/^Gradle / && !seen {version=$2; seen=1} END {if (seen) print version}')
-[[ "$gradle_version" == '8.13' ]] || { echo 'Gradle version is not 8.13' >&2; exit 2; }
+expected_gradle_version=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin gradle_version | tee_stderr)
+[[ "$gradle_version" == "$expected_gradle_version" ]] || { echo "Gradle version is not $expected_gradle_version" >&2; exit 2; }
 
 build_cache=${DOBBYVPN_ANDROID_GO_CACHE:-"$source_root/.android-build/go-cache"}
 build_tmp=${DOBBYVPN_ANDROID_GO_TMPDIR:-"$source_root/.android-build/go-tmp"}
@@ -289,7 +286,8 @@ while IFS= read -r java_line; do
     break
   fi
 done <<< "$java_version_output"
-[[ "$java_version" == 17.* ]] || { echo "Java runtime must have major version 17; observed $java_version" >&2; exit 2; }
+java_major=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin java_major | tee_stderr)
+[[ "$java_version" == "$java_major".* ]] || { echo "Java runtime must have major version $java_major; observed $java_version" >&2; exit 2; }
 
 verify_source_integrity_after_build() {
   if [[ "$trusted_archive_source" == 1 ]]; then

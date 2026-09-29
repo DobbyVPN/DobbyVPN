@@ -26,6 +26,11 @@ type PlatformCallbacks interface {
 	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(sessionID string, generation int64, state string, failureCode string)
+}
+
+// SourceCallbacks is used by iOS, whose provider cannot write the app's URL
+// file directly. Android and desktop use the shared Go file store.
+type SourceCallbacks interface {
 	LoadSourceURL() string
 	SaveSourceURL(value string) bool
 	ClearSourceURL() bool
@@ -70,6 +75,19 @@ func (b *Binding) AttachSourceStore() {
 	if ok && storeOK {
 		_ = manager.AttachSourceStore(context.Background(), store)
 	}
+}
+
+func (b *Binding) AttachFileSourceStore(path string) error {
+	if path == "" {
+		return &sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "saved source path is empty"}
+	}
+	manager, ok := b.manager.(interface {
+		AttachSourceStore(context.Context, sessionapi.SourceStore) error
+	})
+	if !ok {
+		return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "source storage is unavailable"}
+	}
+	return manager.AttachSourceStore(context.Background(), sessionapi.FileSourceStore{Path: path})
 }
 
 type envelope struct {
@@ -127,6 +145,16 @@ func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, i
 }
 
 func (b *Binding) StartContext(ctx context.Context, sessionID string, expectedSequence int64, mode string, index int32) string {
+	return b.StartWithSourceContext(ctx, sessionID, expectedSequence, mode, index, nil)
+}
+
+// StartWithSource accepts a changed configuration and starts it in one backend
+// operation. A nil source reuses the accepted configuration.
+func (b *Binding) StartWithSource(sessionID string, expectedSequence int64, mode string, index int32, rawConfig []byte) string {
+	return b.StartWithSourceContext(context.Background(), sessionID, expectedSequence, mode, index, rawConfig)
+}
+
+func (b *Binding) StartWithSourceContext(ctx context.Context, sessionID string, expectedSequence int64, mode string, index int32, rawConfig []byte) string {
 	sequence, err := nonNegative(expectedSequence, "start sequence")
 	if err != nil {
 		return failed(err)
@@ -134,7 +162,9 @@ func (b *Binding) StartContext(ctx context.Context, sessionID string, expectedSe
 	if index < 0 && mode != string(sessionapi.AutoSelect) {
 		return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "profile index must be non-negative"})
 	}
-	result, err := b.manager.Start(ctx, sessionID, sequence, sessionapi.StartTarget{Mode: sessionapi.StartMode(mode), Index: int(index)})
+	result, err := b.manager.Start(ctx, sessionID, sequence, sessionapi.StartTarget{
+		Mode: sessionapi.StartMode(mode), Index: int(index), Source: bytes.Clone(rawConfig),
+	})
 	if err != nil {
 		return failed(err)
 	}
@@ -180,8 +210,8 @@ func (b *Binding) CallJSON(ctx context.Context, method string, params json.RawMe
 // CallJSONWithConfiguration dispatches the same method/params request used by
 // desktop control. iOS supplies configuration bytes separately because its
 // NetworkExtension message channel must not carry profile secrets. The
-// request's Configure parameters remain the shared JSON command; only the
-// platform-owned secret value is supplied out of band.
+// request parameters remain the shared JSON command; iOS supplies a changed
+// Start or Configure source through the platform-owned secret mailbox.
 func (b *Binding) CallJSONWithConfiguration(
 	ctx context.Context,
 	method string,
@@ -190,12 +220,12 @@ func (b *Binding) CallJSONWithConfiguration(
 	hasConfiguration bool,
 ) string {
 	var value struct {
-		SessionID        string `json:"session_id"`
-		ExpectedSequence int64  `json:"expected_sequence"`
-		Generation       int64  `json:"generation"`
-		Source           string `json:"source"`
-		Mode             string `json:"mode"`
-		Index            int32  `json:"index"`
+		SessionID        string  `json:"session_id"`
+		ExpectedSequence int64   `json:"expected_sequence"`
+		Generation       int64   `json:"generation"`
+		Source           *string `json:"source"`
+		Mode             string  `json:"mode"`
+		Index            int32   `json:"index"`
 	}
 	if len(params) != 0 {
 		decoder := json.NewDecoder(bytes.NewReader(params))
@@ -209,10 +239,22 @@ func (b *Binding) CallJSONWithConfiguration(
 		return b.SnapshotContext(ctx, value.SessionID)
 	case "Configure":
 		if hasConfiguration {
-			value.Source = string(rawConfiguration)
+			return b.ConfigureContext(ctx, value.SessionID, value.ExpectedSequence, rawConfiguration)
 		}
-		return b.ConfigureContext(ctx, value.SessionID, value.ExpectedSequence, []byte(value.Source))
+		if value.Source == nil {
+			return b.ConfigureContext(ctx, value.SessionID, value.ExpectedSequence, nil)
+		}
+		return b.ConfigureContext(ctx, value.SessionID, value.ExpectedSequence, []byte(*value.Source))
 	case "Start":
+		if hasConfiguration {
+			if rawConfiguration == nil {
+				rawConfiguration = []byte{}
+			}
+			return b.StartWithSourceContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, rawConfiguration)
+		}
+		if value.Source != nil {
+			return b.StartWithSourceContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, []byte(*value.Source))
+		}
 		return b.StartContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index)
 	case "Stop":
 		return b.StopContext(ctx, value.SessionID, value.Generation)
@@ -243,11 +285,7 @@ type configureResultDTO struct {
 	SourceKind string       `json:"source_kind"`
 	Profiles   []profileDTO `json:"profiles"`
 }
-type startResultDTO struct {
-	Generation uint64 `json:"generation"`
-	Sequence   uint64 `json:"sequence"`
-}
-type stopResultDTO struct {
+type generationResultDTO struct {
 	Generation uint64 `json:"generation"`
 	Sequence   uint64 `json:"sequence"`
 }
@@ -292,11 +330,11 @@ func configureDTO(in sessionapi.ConfigureResult) configureResultDTO {
 		Profiles: profilesDTO(in.Profiles),
 	}
 }
-func startDTO(in sessionapi.StartResult) startResultDTO {
-	return startResultDTO{Generation: in.Generation, Sequence: in.Sequence}
+func startDTO(in sessionapi.StartResult) generationResultDTO {
+	return generationResultDTO{Generation: in.Generation, Sequence: in.Sequence}
 }
-func stopDTO(in sessionapi.StopResult) stopResultDTO {
-	return stopResultDTO{Generation: in.Generation, Sequence: in.Sequence}
+func stopDTO(in sessionapi.StopResult) generationResultDTO {
+	return generationResultDTO{Generation: in.Generation, Sequence: in.Sequence}
 }
 func snapshotDTO(in sessionapi.SnapshotResult) snapshotResultDTO {
 	out := snapshotResultDTO{

@@ -5,11 +5,11 @@ package internal
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"core/log"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -133,7 +133,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
 		FD:          -1,
 		UplinkIface: "",
-	})
+	}, app.DNSCache, app.BypassPolicy)
 	if err != nil {
 		signalInit(initResult, err)
 		return err

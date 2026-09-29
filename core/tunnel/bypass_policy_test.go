@@ -3,76 +3,55 @@ package tunnel
 import (
 	"context"
 	"errors"
-	"reflect"
+	"net/netip"
 	"testing"
+
+	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 )
 
-func TestBypassPolicyLeaseRestoresExactBaseline(t *testing.T) {
-	setTestBypassCIDRs(t, "192.0.2.0/24", "2001:db8::/32")
-
-	lease, err := AcquireBypassPolicy(context.Background(), []string{"198.51.100.0/24"})
+func TestBypassPoliciesAreIsolatedPerAttempt(t *testing.T) {
+	first, err := ResolveBypassPolicy(context.Background(), []string{"198.51.100.0/24"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := currentBypassCIDRs(); !reflect.DeepEqual(got, []string{"198.51.100.0/24"}) {
-		t.Fatalf("session policy = %#v", got)
+	second, err := ResolveBypassPolicy(context.Background(), []string{"192.0.2.0/24"})
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	lease.Release()
-	lease.Release()
-	if got := currentBypassCIDRs(); !reflect.DeepEqual(got, []string{"192.0.2.0/24", "2001:db8::/32"}) {
-		t.Fatalf("restored policy = %#v", got)
+	firstDestination := &M.Metadata{DstIP: netip.MustParseAddr("198.51.100.7")}
+	secondDestination := &M.Metadata{DstIP: netip.MustParseAddr("192.0.2.7")}
+	if !first.IsBypass(firstDestination) || second.IsBypass(firstDestination) {
+		t.Fatal("first policy did not remain isolated to its own CIDR")
+	}
+	if !second.IsBypass(secondDestination) || first.IsBypass(secondDestination) {
+		t.Fatal("second policy did not remain isolated to its own CIDR")
 	}
 }
 
-func TestBypassPolicyLeaseCopiesCallerInput(t *testing.T) {
-	setTestBypassCIDRs(t)
+func TestBypassPolicyCopiesCallerInput(t *testing.T) {
 	entries := []string{"198.51.100.0/24"}
-	lease, err := AcquireBypassPolicy(context.Background(), entries)
+	policy, err := ResolveBypassPolicy(context.Background(), entries)
 	if err != nil {
 		t.Fatal(err)
 	}
 	entries[0] = "203.0.113.0/24"
-	if got := currentBypassCIDRs(); !reflect.DeepEqual(got, []string{"198.51.100.0/24"}) {
-		t.Fatalf("policy changed with caller slice = %#v", got)
+	if !policy.IsBypass(&M.Metadata{DstIP: netip.MustParseAddr("198.51.100.7")}) {
+		t.Fatal("policy changed with caller input")
 	}
-	lease.Release()
 }
 
-func setTestBypassCIDRs(t *testing.T, entries ...string) {
-	t.Helper()
-	routes, err := resolveRoutingEntries(context.Background(), entries)
+func TestCanceledBypassResolutionLeavesExistingPolicyUsable(t *testing.T) {
+	policy, err := ResolveBypassPolicy(context.Background(), []string{"192.0.2.0/24"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	routesMu.Lock()
-	defaultBypassCIDRs = cloneIPNets(routes)
-	routesMu.Unlock()
-	t.Cleanup(func() {
-		routesMu.Lock()
-		defaultBypassCIDRs = nil
-		routesMu.Unlock()
-	})
-}
-
-func TestCanceledBypassResolutionDoesNotReplacePolicy(t *testing.T) {
-	setTestBypassCIDRs(t, "192.0.2.0/24")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := AcquireBypassPolicy(ctx, []string{"vpn.example.invalid"}); !errors.Is(err, context.Canceled) {
+	if _, err := ResolveBypassPolicy(ctx, []string{"vpn.example.invalid"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled resolve error=%v", err)
 	}
-	if got := currentBypassCIDRs(); !reflect.DeepEqual(got, []string{"192.0.2.0/24"}) {
-		t.Fatalf("canceled resolve changed policy: %v", got)
+	if !policy.IsBypass(&M.Metadata{DstIP: netip.MustParseAddr("192.0.2.7")}) {
+		t.Fatal("canceled resolution changed the existing attempt policy")
 	}
-}
-
-func currentBypassCIDRs() []string {
-	routesMu.RLock()
-	defer routesMu.RUnlock()
-	result := make([]string, 0, len(defaultBypassCIDRs))
-	for _, network := range defaultBypassCIDRs {
-		result = append(result, network.String())
-	}
-	return result
 }

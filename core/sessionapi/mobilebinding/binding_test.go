@@ -13,7 +13,10 @@ import (
 	"core/sessionapi"
 )
 
-const syntheticConfig = `[[Outline]]
+const syntheticConfig = `schema_version = 2
+[[profiles]]
+protocol = "OUTLINE"
+[profiles.config]
 Server = "vpn.example.invalid"
 Port = 443
 Password = "super-secret-token"
@@ -106,6 +109,48 @@ func TestCallJSONWithEmptyMailboxLeavesConfigurationValidationToGo(t *testing.T)
 	)
 	if !strings.Contains(response, `"code":"MALFORMED_CONFIG"`) {
 		t.Fatalf("empty config was not rejected by the shared Go configuration path: %s", response)
+	}
+}
+
+func TestStartJSONAcceptsSourceInRequestOrSeparateMailbox(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
+			Loader: acceptedURLLoader{}, Runtime: &blockingRuntime{}, Platform: &recordingPlatform{},
+		})
+		binding := NewForTest(manager)
+		initial := binding.Snapshot("")
+		sessionID := jsonSessionID(t, initial)
+		params := `{"session_id":"` + sessionID + `","expected_sequence":` +
+			strconv.FormatInt(int64Field(t, initial, "sequence"), 10) +
+			`,"mode":"PROFILE_INDEX","index":0`
+		const source = "https://configs.invalid/new"
+		var started string
+		if separate {
+			started = binding.CallJSONWithConfiguration(
+				context.Background(), "Start", json.RawMessage(params+`}`), []byte(source), true,
+			)
+		} else {
+			started = binding.CallJSON(context.Background(), "Start", json.RawMessage(params+`,"source":"`+source+`"}`))
+		}
+		if !strings.Contains(started, `"ok":true`) {
+			t.Fatalf("Start separate=%t: %s", separate, started)
+		}
+		snapshot := binding.Snapshot(sessionID)
+		if !strings.Contains(snapshot, `"source_url":"`+source+`"`) {
+			t.Fatalf("Start separate=%t did not accept source: %s", separate, snapshot)
+		}
+		_ = binding.Stop(sessionID, int64Field(t, started, "generation"))
+	}
+}
+
+func TestStartWithEmptyMailboxRejectsChangedSource(t *testing.T) {
+	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
+	initial := binding.Snapshot("")
+	params := json.RawMessage(`{"session_id":"` + jsonSessionID(t, initial) + `","expected_sequence":` +
+		strconv.FormatInt(int64Field(t, initial, "sequence"), 10) + `,"mode":"AUTO_SELECT","index":0}`)
+	response := binding.CallJSONWithConfiguration(context.Background(), "Start", params, nil, true)
+	if !strings.Contains(response, `"code":"MALFORMED_CONFIG"`) {
+		t.Fatalf("empty Start source was not rejected by Go: %s", response)
 	}
 }
 
@@ -232,9 +277,6 @@ func TestTunnelOwnershipRejectsReuseUntilRelease(t *testing.T) {
 
 type blockingRuntime struct{}
 
-func (r *blockingRuntime) Probe(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile) (sessionapi.ProbeResult, error) {
-	return sessionapi.ProbeResult{}, nil
-}
 func (r *blockingRuntime) Start(ctx context.Context, _ sessionapi.SessionRef, _ sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	return blockingLease{ctx: ctx}, nil
 }

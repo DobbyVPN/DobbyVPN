@@ -113,6 +113,60 @@ func TestSnapshotCarriesOnlyAcceptedConfigurationURL(t *testing.T) {
 	}
 }
 
+func TestStartAcceptsChangedSourceBeforeRuntimeFailure(t *testing.T) {
+	store := &managerTestSourceStore{}
+	m := NewManager(ManagerOptions{
+		Loader:      acceptedSourceURLLoader{},
+		SourceStore: store,
+		Runtime:     &startErrorRuntime{err: errors.New("synthetic dial failure")},
+		Platform:    &fakePlatform{},
+	})
+	initial := snapshotForTest(t, m, "")
+	started, err := m.Start(context.Background(), initial.SessionID, initial.Sequence, StartTarget{
+		Mode: ProfileIndex, Index: 0, Source: []byte("https://configs.invalid/new"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitState(t, m, initial.SessionID, StateFailed)
+	if failed.Generation != started.Generation || failed.SourceURL != "https://configs.invalid/new" ||
+		failed.SourceKind != ConfigSourceURL || string(store.value) != failed.SourceURL {
+		t.Fatalf("changed source was not retained after runtime failure: %#v, stored %q", failed, store.value)
+	}
+	s, err := m.get(initial.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeTarget.Source != nil {
+		t.Fatal("recovery target retained source bytes")
+	}
+}
+
+func TestStartRejectsBadChangedSourceWithoutReplacingAcceptedConfiguration(t *testing.T) {
+	store := &managerTestSourceStore{}
+	m := NewManager(ManagerOptions{Loader: acceptedSourceURLLoader{}, SourceStore: store})
+	initial := snapshotForTest(t, m, "")
+	_, err := m.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("https://configs.invalid/old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotForTest(t, m, initial.SessionID)
+	_, err = m.Start(context.Background(), before.SessionID, before.Sequence, StartTarget{
+		Mode: AutoSelect, Source: []byte("https://configs.invalid/bad"),
+	})
+	if CodeOf(err) != FailureMalformedConfig {
+		t.Fatalf("Start with invalid changed source = %v", err)
+	}
+	after := snapshotForTest(t, m, initial.SessionID)
+	if after.Generation != before.Generation || after.Sequence != before.Sequence ||
+		after.SourceURL != before.SourceURL || after.Digest != before.Digest ||
+		string(store.value) != before.SourceURL {
+		t.Fatalf("invalid changed source modified accepted configuration: before %#v, after %#v, stored %q", before, after, store.value)
+	}
+}
+
 func TestSourceStoreTracksAcceptedConfigurationSource(t *testing.T) {
 	store := &managerTestSourceStore{value: []byte("https://configs.invalid/old")}
 	m := NewManager(ManagerOptions{Loader: acceptedSourceURLLoader{}, SourceStore: store})
@@ -256,7 +310,7 @@ func TestConfigurationFailuresRetainOriginalCauses(t *testing.T) {
 
 	manager = NewManager(ManagerOptions{})
 	initial = snapshotForTest(t, manager, "")
-	_, err = manager.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("[[Outline]"))
+	_, err = manager.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("[[profiles]"))
 	if CodeOf(err) != FailureMalformedConfig || errors.Unwrap(err) == nil {
 		t.Fatalf("TOML parse lost original cause: %v", err)
 	}
@@ -275,9 +329,18 @@ func (acceptedSourceURLLoader) Load(_ context.Context, source []byte) (LoadedCon
 
 func TestConfigureRejectsRemovedCloakProfiles(t *testing.T) {
 	raw := strings.Join([]string{
-		"[[Outline]]", `Description = "supported-before"`, `Server = "198.51.100.20"`, "Port = 443", `Password = "synthetic-password"`,
-		"", "[[Xray]]", `Description = "legacy-cloak"`, "Cloak = true", `Server = "cloak.invalid"`, `Password = "do-not-return"`,
-		"", "[[TrustTunnel]]", `Description = "supported-after"`, `vpn_mode = "general"`, "[TrustTunnel.endpoint]", `hostname = "vpn.invalid"`, `addresses = ["198.51.100.21:443"]`, `username = "synthetic-user"`, `password = "synthetic-password"`, "[TrustTunnel.listener.socks]", `address = "127.0.0.1:10808"`,
+		"schema_version = 2",
+		"",
+		"[[profiles]]", `protocol = "OUTLINE"`, `description = "supported-before"`,
+		"[profiles.config]", `Server = "198.51.100.20"`, "Port = 443", `Password = "synthetic-password"`,
+		"",
+		"[[profiles]]", `protocol = "XRAY"`, `description = "legacy-cloak"`,
+		"[profiles.config]", "Cloak = true", `Server = "cloak.invalid"`, `Password = "do-not-return"`,
+		"",
+		"[[profiles]]", `protocol = "TRUST_TUNNEL"`, `description = "supported-after"`,
+		"[profiles.config]", `vpn_mode = "general"`,
+		"[profiles.config.endpoint]", `hostname = "vpn.invalid"`, `addresses = ["198.51.100.21:443"]`, `username = "synthetic-user"`, `password = "synthetic-password"`,
+		"[profiles.config.listener.socks]", `address = "127.0.0.1:10808"`,
 	}, "\n")
 	m := NewManager(ManagerOptions{})
 	id, err := currentSessionForTest(t, m)
@@ -295,13 +358,16 @@ func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) 
 	const syntheticEndpoint = "198.51.100.99:8443"
 	const syntheticCredential = "cloak-secret-token"
 	tests := map[string]string{
-		"multiple Cloak sections": strings.Join([]string{
-			"[[Xray]]", "Cloak = true", `outbounds = [{"address" = "` + syntheticEndpoint + `"}]`,
-			"", "[[Outline]]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
+		"multiple Cloak profiles": strings.Join([]string{
+			"schema_version = 2", "",
+			"[[profiles]]", `protocol = "XRAY"`, "[profiles.config]", "Cloak = true", `outbounds = [{"address" = "` + syntheticEndpoint + `"}]`,
+			"", "[[profiles]]", `protocol = "OUTLINE"`, "[profiles.config]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
 		}, "\n"),
-		"all Cloak sections": strings.Join([]string{
-			"[[Outline]]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
-			"", "[[TrustTunnel]]", "Cloak = true", `hostname = "` + syntheticEndpoint + `"`, `password = "` + syntheticCredential + `"`, "[TrustTunnel.endpoint]", `addresses = ["` + syntheticEndpoint + `"]`,
+		"all Cloak profiles": strings.Join([]string{
+			"schema_version = 2", "",
+			"[[profiles]]", `protocol = "OUTLINE"`, "[profiles.config]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
+			"", "[[profiles]]", `protocol = "TRUST_TUNNEL"`, "[profiles.config]", "Cloak = true",
+			"[profiles.config.endpoint]", `hostname = "` + syntheticEndpoint + `"`, `password = "` + syntheticCredential + `"`, `addresses = ["` + syntheticEndpoint + `"]`,
 		}, "\n"),
 	}
 	for name, raw := range tests {
@@ -322,8 +388,8 @@ func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) 
 			if _, startErr := startForTest(t, m, id, StartTarget{Mode: AutoSelect}); CodeOf(startErr) != FailureNotConfigured {
 				t.Fatalf("start after rejected configure = %v", startErr)
 			}
-			if runtime.probeCalls != 0 || runtime.startCalls != 0 {
-				t.Fatalf("runtime executed for rejected input: probes=%d starts=%d", runtime.probeCalls, runtime.startCalls)
+			if runtime.startCalls != 0 {
+				t.Fatalf("runtime executed for rejected input: starts=%d", runtime.startCalls)
 			}
 			snapshot, err := m.Snapshot(context.Background(), id)
 			if err != nil {
@@ -337,7 +403,7 @@ func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) 
 }
 
 func TestOneOwnerRetainsConfigurationAcrossIdleAndRecovery(t *testing.T) {
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: &fakePlatform{}})
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{readyProfiles: map[int32]bool{0: true}}, Platform: &fakePlatform{}})
 	id := configured(t, m)
 	configuredSnapshot, err := m.Snapshot(context.Background(), id)
 	if err != nil {
@@ -461,7 +527,7 @@ func TestManagerPreservesSafeHTTPSRequirementForSubscriptionURLs(t *testing.T) {
 }
 
 func TestStaleRevisionCannotConfigureOrStart(t *testing.T) {
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: &fakePlatform{}})
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{readyProfiles: map[int32]bool{0: true}}, Platform: &fakePlatform{}})
 	initial, err := m.Snapshot(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -527,12 +593,12 @@ func TestConcurrentConfigureAtSameRevisionOnlyOneMutationWins(t *testing.T) {
 	}
 }
 
-func TestConfigureRejectsProfilesRejectedByLegacyInterpreter(t *testing.T) {
+func TestConfigureRejectsMalformedProtocolProfiles(t *testing.T) {
 	for name, raw := range map[string]string{
-		"outline password": "[[Outline]]\nServer='vpn.invalid'\nPort=443\n",
-		"outline server":   "[[Outline]]\nPassword='secret'\nPort=443\n",
-		"outline port":     "[[Outline]]\nServer='vpn.invalid'\nPassword='secret'\n",
-		"xray outbounds":   "[[Xray]]\nDescription='empty'\n",
+		"outline password": "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n[profiles.config]\nServer='vpn.invalid'\nPort=443\n",
+		"outline server":   "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n[profiles.config]\nPassword='secret'\nPort=443\n",
+		"outline port":     "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n[profiles.config]\nServer='vpn.invalid'\nPassword='secret'\n",
+		"xray outbounds":   "schema_version = 2\n[[profiles]]\nprotocol = 'XRAY'\ndescription='empty'\n[profiles.config]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := NewManager(ManagerOptions{})
@@ -547,8 +613,8 @@ func TestConfigureRejectsProfilesRejectedByLegacyInterpreter(t *testing.T) {
 	}
 }
 
-func TestAutoSelectionUsesLatencyThenSourceOrder(t *testing.T) {
-	r := &fakeRuntime{latency: map[int32]int64{0: 50, 1: 10, 2: 10, 3: 60}}
+func TestAutoSelectionUsesFirstWorkingProfileInSourceOrder(t *testing.T) {
+	r := &fakeRuntime{readyProfiles: map[int32]bool{0: true, 1: true, 2: true, 3: true}}
 	platform := &eventPlatform{events: make(chan StateChange, 32)}
 	m := NewManager(ManagerOptions{Runtime: r, Platform: platform})
 	id := configured(t, m)
@@ -557,7 +623,7 @@ func TestAutoSelectionUsesLatencyThenSourceOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := waitState(t, m, id, StateConnected)
-	if s.ActiveProfile == nil || s.ActiveProfile.Index != 1 {
+	if s.ActiveProfile == nil || s.ActiveProfile.Index != 0 {
 		t.Fatalf("active = %#v", s.ActiveProfile)
 	}
 	if s.Generation != start.Generation || s.Sequence <= 1 {
@@ -569,6 +635,28 @@ func TestAutoSelectionUsesLatencyThenSourceOrder(t *testing.T) {
 	change := waitForEvent(t, platform.events, start.Generation, StateConnected)
 	if change.SessionID != id || change.Failure != "" {
 		t.Fatalf("state callback = %#v", change)
+	}
+}
+
+func TestProfileIndexStartFailureDoesNotTryAnotherProfile(t *testing.T) {
+	order := &recordedOrder{}
+	runtime := &orderedRuntime{
+		order:       order,
+		startErrors: map[int32]error{0: errors.New("explicit candidate failed")},
+	}
+	platform := &orderedCandidatePlatform{order: order, events: make(chan StateChange, 32)}
+	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
+	id := configured(t, m)
+	if _, err := startForTest(t, m, id, StartTarget{Mode: ProfileIndex, Index: 0}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitState(t, m, id, StateFailed)
+	if snapshot.LastFailure != FailureRuntime || !strings.Contains(snapshot.LastFailureMessage, "explicit candidate failed") {
+		t.Fatalf("explicit profile failure=%#v", snapshot)
+	}
+	want := []string{"prepare-1", "start-0", "release-1"}
+	if got := order.itemsCopy(); !sameStrings(got, want) {
+		t.Fatalf("explicit candidate ordering=%v, want=%v", got, want)
 	}
 }
 
@@ -623,7 +711,7 @@ func TestStopAcknowledgesAlreadyCleanedTerminalGeneration(t *testing.T) {
 func TestPlatformAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *testing.T) {
 	want := errors.New("platform rollback failed")
 	m := NewManager(ManagerOptions{
-		Runtime:  &fakeRuntime{latency: map[int32]int64{0: 1}},
+		Runtime:  &fakeRuntime{readyProfiles: map[int32]bool{0: true}},
 		Platform: errorWithLeasePlatform{prepareErr: errors.New("prepare failed"), releaseErr: want},
 	})
 	id := configured(t, m)
@@ -636,36 +724,36 @@ func TestPlatformAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *test
 	}
 }
 
-func TestAutoSelectProbeLeaseCleanupPreservesBothCauses(t *testing.T) {
-	probeErr := errors.New("prior profile probe failed")
-	prepareErr := errors.New("probe platform setup failed")
-	releaseErr := errors.New("probe platform rollback failed")
+func TestAutoSelectStartLeaseCleanupPreservesBothCauses(t *testing.T) {
+	candidateErr := errors.New("prior profile startup failed")
+	prepareErr := errors.New("candidate platform setup failed")
+	releaseErr := errors.New("candidate platform rollback failed")
 	m := NewManager(ManagerOptions{
-		Runtime:  probeFailureRuntime{err: probeErr},
-		Platform: &failingSecondProbePlatform{prepareErr: prepareErr, releaseErr: releaseErr},
+		Runtime:  startFailureRuntime{err: candidateErr},
+		Platform: &failingSecondCandidatePlatform{prepareErr: prepareErr, releaseErr: releaseErr},
 	})
 	id := configured(t, m)
 	if _, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	for _, cause := range []string{probeErr.Error(), prepareErr.Error(), releaseErr.Error()} {
+	for _, cause := range []string{candidateErr.Error(), prepareErr.Error(), releaseErr.Error()} {
 		if !strings.Contains(snapshot.LastFailureMessage, cause) {
 			t.Fatalf("failure snapshot lost %q: %#v", cause, snapshot)
 		}
 	}
 	if snapshot.LastFailure != FailureCleanup || !snapshot.CleanupComplete {
-		t.Fatalf("probe platform failure snapshot=%#v", snapshot)
+		t.Fatalf("candidate platform failure snapshot=%#v", snapshot)
 	}
 	if _, err := m.Start(context.Background(), id, snapshot.Sequence, StartTarget{Mode: AutoSelect}); CodeOf(err) != FailureConflict {
-		t.Fatalf("restart after probe platform cleanup failure error=%v", err)
+		t.Fatalf("restart after candidate platform cleanup failure error=%v", err)
 	}
 }
 
-func TestAutoSelectProbeCauseSurvivesInSnapshot(t *testing.T) {
+func TestAutoSelectStartCauseSurvivesInSnapshot(t *testing.T) {
 	const exact = "endpoint probe returned HTTP 502: upstream unavailable"
 	m := NewManager(ManagerOptions{
-		Runtime:  probeFailureRuntime{err: errors.New(exact)},
+		Runtime:  startFailureRuntime{err: errors.New(exact)},
 		Platform: &fakePlatform{},
 	})
 	id := configured(t, m)
@@ -678,29 +766,29 @@ func TestAutoSelectProbeCauseSurvivesInSnapshot(t *testing.T) {
 	}
 }
 
-type cleanupFailProbeRuntime struct {
+type cleanupFailStartRuntime struct {
 	*fakeRuntime
-	probeCalls int
+	startCalls int
 }
 
-func (r *cleanupFailProbeRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	r.probeCalls++
-	if r.probeCalls == 1 {
-		return ProbeResult{}, &CleanupFailure{Err: errors.New("probe rollback failed")}
+func (r *cleanupFailStartRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
+	r.startCalls++
+	if r.startCalls == 1 {
+		return nil, &CleanupFailure{Err: errors.New("runtime start rollback failed")}
 	}
-	return ProbeResult{LatencyMillis: 1}, nil
+	return fakeRuntimeLease{}, nil
 }
 
-func TestAutoSelectionStopsAfterProbeRollbackFailure(t *testing.T) {
-	runtime := &cleanupFailProbeRuntime{fakeRuntime: &fakeRuntime{latency: map[int32]int64{0: 1}}}
+func TestAutoSelectionStopsAfterStartRollbackFailure(t *testing.T) {
+	runtime := &cleanupFailStartRuntime{fakeRuntime: &fakeRuntime{readyProfiles: map[int32]bool{0: true}}}
 	m := NewManager(ManagerOptions{Runtime: runtime, Platform: &fakePlatform{}})
 	id := configured(t, m)
 	if _, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	if snapshot.LastFailure != FailureCleanup || runtime.probeCalls != 1 {
-		t.Fatalf("failure=%s probe calls=%d", snapshot.LastFailure, runtime.probeCalls)
+	if snapshot.LastFailure != FailureCleanup || runtime.startCalls != 1 {
+		t.Fatalf("failure=%s start calls=%d", snapshot.LastFailure, runtime.startCalls)
 	}
 	if _, err := m.Start(context.Background(), id, snapshot.Sequence, StartTarget{Mode: AutoSelect}); CodeOf(err) != FailureConflict {
 		t.Fatalf("restart after cleanup failure error=%v", err)
@@ -708,7 +796,7 @@ func TestAutoSelectionStopsAfterProbeRollbackFailure(t *testing.T) {
 }
 
 func TestSnapshotPrimaryActionTracksStartStopAndCleanup(t *testing.T) {
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: &fakePlatform{}})
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{readyProfiles: map[int32]bool{0: true}}, Platform: &fakePlatform{}})
 	id, err := currentSessionForTest(t, m)
 	if err != nil {
 		t.Fatal(err)
@@ -770,32 +858,49 @@ func TestRuntimeStartRollbackFailureBlocksRestartWithoutReturnedLeaseError(t *te
 	}
 }
 
-func TestAutoSelectionProbesWithFreshPlatformLeaseBeforeEachRuntimeProbe(t *testing.T) {
+func TestAutoSelectionRetainsFirstSuccessfulRuntimeAndPlatformLeases(t *testing.T) {
 	order := &recordedOrder{}
-	runtime := &orderedProbeRuntime{order: order, latency: map[int32]int64{0: 40, 1: 10, 2: 30, 3: 20}}
-	platform := &orderedProbePlatform{order: order, events: make(chan StateChange, 32)}
+	runtime := &orderedRuntime{
+		order: order,
+		startErrors: map[int32]error{
+			0: errors.New("first profile is not ready"),
+			1: errors.New("second profile is not ready"),
+		},
+	}
+	platform := &orderedCandidatePlatform{order: order, events: make(chan StateChange, 32)}
 	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
 	id := configured(t, m)
-	if _, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect}); err != nil {
+	start, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect})
+	if err != nil {
 		t.Fatal(err)
 	}
-	waitForEvent(t, platform.events, 1, StateConnected)
+	connected := waitState(t, m, id, StateConnected)
+	if connected.ActiveProfile == nil || connected.ActiveProfile.Index != 2 {
+		t.Fatalf("active profile = %#v, want first ready index 2", connected.ActiveProfile)
+	}
+	waitForEvent(t, platform.events, start.Generation, StateConnected)
 	wantPrefix := []string{
-		"prepare-1", "probe-0", "release-1",
-		"prepare-2", "probe-1", "release-2",
-		"prepare-3", "probe-2", "release-3",
-		"prepare-4", "probe-3", "release-4",
-		"prepare-5", "start-1",
+		"prepare-1", "start-0", "release-1",
+		"prepare-2", "start-1", "release-2",
+		"prepare-3", "start-2",
 	}
 	if got := order.itemsCopy(); !sameStrings(got, wantPrefix) {
-		t.Fatalf("probe ordering=%v, want=%v", got, wantPrefix)
+		t.Fatalf("candidate ordering=%v, want=%v", got, wantPrefix)
+	}
+	if _, err := m.Stop(context.Background(), id, start.Generation); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, id, StateIdle)
+	wantStopped := append(wantPrefix, "stop-2", "release-3")
+	if got := order.itemsCopy(); !sameStrings(got, wantStopped) {
+		t.Fatalf("winner cleanup ordering=%v, want=%v", got, wantStopped)
 	}
 }
 
-func TestAutoSelectionReleasesProbeLeaseWhenCanceled(t *testing.T) {
+func TestAutoSelectionReleasesCandidateLeaseWhenCanceled(t *testing.T) {
 	entered := make(chan struct{}, 1)
 	released := make(chan struct{}, 1)
-	runtime := &fakeRuntime{latency: map[int32]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: entered}
+	runtime := &fakeRuntime{readyProfiles: map[int32]bool{0: true}, blockStart: make(chan struct{}), startEntered: entered}
 	platform := &releaseSignalPlatform{released: released}
 	m := NewManager(ManagerOptions{Runtime: runtime, Platform: platform})
 	id := configured(t, m)
@@ -810,14 +915,14 @@ func TestAutoSelectionReleasesProbeLeaseWhenCanceled(t *testing.T) {
 	select {
 	case <-released:
 	case <-time.After(time.Second):
-		t.Fatal("canceled probe did not release its platform lease")
+		t.Fatal("canceled candidate did not release its platform lease")
 	}
 	waitState(t, m, id, StateIdle)
 }
 
-func TestAutoSelectionReportsPlatformProbePreparationFailure(t *testing.T) {
-	platform := failingProbePlatform{events: make(chan StateChange, 8)}
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: platform})
+func TestAutoSelectionReportsPlatformPreparationFailure(t *testing.T) {
+	platform := failingPreparePlatform{events: make(chan StateChange, 8)}
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{readyProfiles: map[int32]bool{0: true}}, Platform: platform})
 	id := configured(t, m)
 	if _, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect}); err != nil {
 		t.Fatal(err)
@@ -828,8 +933,8 @@ func TestAutoSelectionReportsPlatformProbePreparationFailure(t *testing.T) {
 	}
 }
 
-func TestStopDuringProbePreventsLateConnectedAndAllowsRestartAfterCleanup(t *testing.T) {
-	r := &fakeRuntime{latency: map[int32]int64{0: 1}, blockProbe: make(chan struct{}), probeEntered: make(chan struct{}, 1)}
+func TestStopDuringCandidateStartPreventsLateConnectedAndAllowsRestartAfterCleanup(t *testing.T) {
+	r := &fakeRuntime{readyProfiles: map[int32]bool{0: true}, blockStart: make(chan struct{}), startEntered: make(chan struct{}, 1)}
 	p := &fakePlatform{}
 	m := NewManager(ManagerOptions{Runtime: r, Platform: p})
 	id := configured(t, m)
@@ -838,16 +943,16 @@ func TestStopDuringProbePreventsLateConnectedAndAllowsRestartAfterCleanup(t *tes
 		t.Fatal(err)
 	}
 	select {
-	case <-r.probeEntered:
+	case <-r.startEntered:
 	case <-time.After(time.Second):
-		t.Fatal("probe did not start")
+		t.Fatal("candidate Start did not begin")
 	}
 	if _, stopErr := m.Stop(context.Background(), id, first.Generation); stopErr != nil {
 		t.Fatal(stopErr)
 	}
 	waitState(t, m, id, StateIdle)
-	close(r.blockProbe)
-	time.Sleep(10 * time.Millisecond) // permits the deliberately stale probe completion to return
+	close(r.blockStart)
+	time.Sleep(10 * time.Millisecond) // permits the deliberately stale Start completion to return
 	if got, _ := m.Snapshot(context.Background(), id); got.State == StateConnected {
 		t.Fatalf("stale completion connected: %#v", got)
 	}
@@ -864,7 +969,7 @@ func TestStopDuringProbePreventsLateConnectedAndAllowsRestartAfterCleanup(t *tes
 func TestCleanupIsLIFOAndRunsBeforeRestart(t *testing.T) {
 	order := make([]string, 0, 2)
 	var orderMu sync.Mutex
-	r := &fakeRuntime{latency: map[int32]int64{0: 1}, stopHook: func() { orderMu.Lock(); order = append(order, "runtime"); orderMu.Unlock() }}
+	r := &fakeRuntime{readyProfiles: map[int32]bool{0: true}, stopHook: func() { orderMu.Lock(); order = append(order, "runtime"); orderMu.Unlock() }}
 	p := &fakePlatform{releaseHook: func() { orderMu.Lock(); order = append(order, "platform"); orderMu.Unlock() }}
 	m := NewManager(ManagerOptions{Runtime: r, Platform: p})
 	id := configured(t, m)
@@ -1078,7 +1183,7 @@ func TestStopReportsLatePlatformLeaseCleanupFailure(t *testing.T) {
 		released: released,
 		err:      errors.New("late platform cleanup failed"),
 	}
-	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{latency: map[int32]int64{0: 1}}, Platform: platform})
+	m := NewManager(ManagerOptions{Runtime: &fakeRuntime{readyProfiles: map[int32]bool{0: true}}, Platform: platform})
 	id := configured(t, m)
 	start, err := startForTest(t, m, id, StartTarget{Mode: ProfileIndex, Index: 0})
 	if err != nil {
@@ -1183,67 +1288,49 @@ func waitState(t *testing.T, m *Manager, id string, want State) SnapshotResult {
 }
 
 type fakeRuntime struct {
-	latency      map[int32]int64
-	blockProbe   chan struct{}
-	probeEntered chan struct{}
-	stopHook     func()
+	readyProfiles map[int32]bool
+	blockStart    chan struct{}
+	startEntered  chan struct{}
+	stopHook      func()
 }
 
 type startErrorRuntime struct{ err error }
 
-func (r *startErrorRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
-}
 func (r *startErrorRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	return nil, r.err
 }
 
-type probeFailureRuntime struct{ err error }
+type startFailureRuntime struct{ err error }
 
-func (r probeFailureRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{}, r.err
-}
-func (probeFailureRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
-	return fakeRuntimeLease{}, nil
+func (r startFailureRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
+	return nil, r.err
 }
 
-type countingRuntime struct {
-	probeCalls int
-	startCalls int
-}
-
-func (r *countingRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	r.probeCalls++
-	return ProbeResult{LatencyMillis: 1}, nil
-}
+type countingRuntime struct{ startCalls int }
 
 func (r *countingRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	r.startCalls++
 	return fakeRuntimeLease{}, nil
 }
 
-func (r *fakeRuntime) Probe(ctx context.Context, _ SessionRef, p RuntimeProfile) (ProbeResult, error) {
-	if r.probeEntered != nil {
+func (r *fakeRuntime) Start(ctx context.Context, _ SessionRef, profile RuntimeProfile) (RuntimeLease, error) {
+	if r.startEntered != nil {
 		select {
-		case r.probeEntered <- struct{}{}:
+		case r.startEntered <- struct{}{}:
 		default:
 			// A notification is already pending.
 		}
 	}
-	if r.blockProbe != nil {
+	if r.blockStart != nil {
 		select {
-		case <-r.blockProbe:
+		case <-r.blockStart:
 		case <-ctx.Done():
-			return ProbeResult{}, ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
-	latency, ok := r.latency[p.Summary.Index]
-	if !ok {
-		return ProbeResult{}, errors.New("unreachable")
+	if !r.readyProfiles[profile.Summary.Index] {
+		return nil, errors.New("profile did not become ready")
 	}
-	return ProbeResult{LatencyMillis: latency}, nil
-}
-func (r *fakeRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	return fakeRuntimeLease{r.stopHook}, nil
 }
 
@@ -1258,9 +1345,6 @@ func (l fakeRuntimeLease) Stop(context.Context) error {
 
 type cleanupErrorRuntime struct{ err error }
 
-func (*cleanupErrorRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
-}
 func (r *cleanupErrorRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	return cleanupErrorLease{err: r.err}, nil
 }
@@ -1274,9 +1358,6 @@ type errorWithLeaseRuntime struct {
 	stopErr  error
 }
 
-func (errorWithLeaseRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
-}
 func (r errorWithLeaseRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	return cleanupErrorLease{err: r.stopErr}, r.startErr
 }
@@ -1286,9 +1367,6 @@ type monitoringRuntime struct {
 	stopped  chan uint64
 }
 
-func (*monitoringRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
-}
 func (r *monitoringRuntime) Start(_ context.Context, ref SessionRef, _ RuntimeProfile) (RuntimeLease, error) {
 	return monitoringRuntimeLease{generation: ref.Generation, failures: r.failures, stopped: r.stopped}, nil
 }
@@ -1360,21 +1438,23 @@ type errorWithLeasePlatform struct {
 	releaseErr error
 }
 
-type failingSecondProbePlatform struct {
+type failingSecondCandidatePlatform struct {
 	prepareCalls int
 	prepareErr   error
 	releaseErr   error
 }
 
-func (p *failingSecondProbePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
+func (p *failingSecondCandidatePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
 	p.prepareCalls++
 	if p.prepareCalls == 1 {
 		return noopLease{}, nil
 	}
 	return cleanupErrorPlatformLease{err: p.releaseErr}, p.prepareErr
 }
-func (*failingSecondProbePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (*failingSecondProbePlatform) PublishState(context.Context, StateChange)            {}
+func (*failingSecondCandidatePlatform) ProtectSocket(context.Context, SessionRef, int) error {
+	return nil
+}
+func (*failingSecondCandidatePlatform) PublishState(context.Context, StateChange) {}
 
 func (p errorWithLeasePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
 	return cleanupErrorPlatformLease{err: p.releaseErr}, p.prepareErr
@@ -1402,34 +1482,34 @@ func (r *recordedOrder) itemsCopy() []string {
 	return append([]string(nil), r.items...)
 }
 
-type orderedProbeRuntime struct {
-	order   *recordedOrder
-	latency map[int32]int64
+type orderedRuntime struct {
+	order       *recordedOrder
+	startErrors map[int32]error
 }
 
-func (r *orderedProbeRuntime) Probe(_ context.Context, _ SessionRef, profile RuntimeProfile) (ProbeResult, error) {
-	r.order.add(fmt.Sprintf("probe-%d", profile.Summary.Index))
-	return ProbeResult{LatencyMillis: r.latency[profile.Summary.Index]}, nil
-}
-func (r *orderedProbeRuntime) Start(_ context.Context, _ SessionRef, profile RuntimeProfile) (RuntimeLease, error) {
+func (r *orderedRuntime) Start(_ context.Context, _ SessionRef, profile RuntimeProfile) (RuntimeLease, error) {
 	r.order.add(fmt.Sprintf("start-%d", profile.Summary.Index))
-	return fakeRuntimeLease{}, nil
+	if err := r.startErrors[profile.Summary.Index]; err != nil {
+		return nil, err
+	}
+	index := profile.Summary.Index
+	return fakeRuntimeLease{stop: func() { r.order.add(fmt.Sprintf("stop-%d", index)) }}, nil
 }
 
-type orderedProbePlatform struct {
+type orderedCandidatePlatform struct {
 	order    *recordedOrder
 	events   chan StateChange
 	prepared int
 }
 
-func (p *orderedProbePlatform) PrepareTunnel(_ context.Context, _ SessionRef) (PlatformLease, error) {
+func (p *orderedCandidatePlatform) PrepareTunnel(_ context.Context, _ SessionRef) (PlatformLease, error) {
 	p.prepared++
 	index := p.prepared
 	p.order.add(fmt.Sprintf("prepare-%d", index))
 	return fakePlatformLease{release: func() { p.order.add(fmt.Sprintf("release-%d", index)) }}, nil
 }
-func (*orderedProbePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (p *orderedProbePlatform) PublishState(_ context.Context, event StateChange) {
+func (*orderedCandidatePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
+func (p *orderedCandidatePlatform) PublishState(_ context.Context, event StateChange) {
 	p.events <- event
 }
 
@@ -1441,13 +1521,13 @@ func (p *releaseSignalPlatform) PrepareTunnel(context.Context, SessionRef) (Plat
 func (*releaseSignalPlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
 func (*releaseSignalPlatform) PublishState(context.Context, StateChange)            {}
 
-type failingProbePlatform struct{ events chan StateChange }
+type failingPreparePlatform struct{ events chan StateChange }
 
-func (f failingProbePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
-	return nil, errors.New("prepare probe")
+func (f failingPreparePlatform) PrepareTunnel(context.Context, SessionRef) (PlatformLease, error) {
+	return nil, errors.New("prepare candidate")
 }
-func (f failingProbePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
-func (f failingProbePlatform) PublishState(_ context.Context, event StateChange) {
+func (f failingPreparePlatform) ProtectSocket(context.Context, SessionRef, int) error { return nil }
+func (f failingPreparePlatform) PublishState(_ context.Context, event StateChange) {
 	f.events <- event
 }
 
@@ -1463,18 +1543,12 @@ type blockingRollbackRuntime struct {
 	release <-chan struct{}
 }
 
-func (blockingRollbackRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
-}
 func (r blockingRollbackRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	r.entered <- struct{}{}
 	<-r.release
 	return nil, &CleanupFailure{Err: errors.New("late runtime rollback failed")}
 }
 
-func (r blockingStartRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{LatencyMillis: 1}, nil
-}
 func (r blockingStartRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	r.entered <- struct{}{}
 	<-r.release // deliberately ignores the context, as a misbehaving core could

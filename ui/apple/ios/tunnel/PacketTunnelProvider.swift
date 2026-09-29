@@ -336,8 +336,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return VpnManagerImpl.transportFailure("INTERNAL", message: String(reflecting: error))
         }
 
+        let includesSource = command.method == "Configure" || command.method == "StartWithSource"
         var rawConfiguration: Data?
-        if command.method == "Configure" {
+        if includesSource {
             let key = SharedKeychainSecretStore.sessionConfigurationMailboxKey
             guard let bytes = secrets.data(for: key) else {
                 logs.writeLog(
@@ -376,7 +377,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         let response = GomobileProviderSessionClient.call(
-            method: command.method,
+            method: command.method == "StartWithSource" ? "Start" : command.method,
             params: command.params,
             rawConfiguration: rawConfiguration
         )

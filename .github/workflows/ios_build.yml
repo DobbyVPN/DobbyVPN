@@ -73,4 +73,4 @@ jobs:
           name: DobbyVPN.xcarchive.tar.gz
           path: ui/apple/build/release/DobbyVPN.xcarchive.tar.gz
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 7

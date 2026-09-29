@@ -8,10 +8,6 @@ permissions:
   contents: read
   actions: read
 
-concurrency:
-  group: dobbyvpn-actions-retention
-  cancel-in-progress: false
-
 jobs:
   verification:
     needs: prepare_version
@@ -264,38 +260,3 @@ jobs:
           test "$MACOS_ARM_MIGRATION_RESULT" = success
           test "$MACOS_INTEL_MIGRATION_RESULT" = success
           echo "Release hosted mini qualification passed"
-
-  retain:
-    name: Retain newest Release run
-    if: always()
-    needs: [prepare_version, verification, ios_libraries_build, android_build, fdroid_check, ios_build, build_linux, build_windows, build_macos_arm, build_macos_intel, migrate_windows, migrate_macos_arm, migrate_macos_intel, render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, qualification_result]
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Remove older workflow runs and caches
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 .github/scripts/release/actions_retention.py \
-            --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" \
-            --delete-caches --delete-intermediate-artifacts \
-            --keep-artifact DobbyVPN.xcarchive.tar.gz \
-            --keep-artifact dobbyVPN-linux.deb \
-            --keep-artifact dobbyVPN-windows-amd64.msi \
-            --keep-artifact dobbyVPN-macos-aarch64.pkg \
-            --keep-artifact dobbyVPN-macos-amd64.pkg \
-            --keep-artifact dobbyvpn-android-unsign.apk \
-            --keep-artifact dobbyvpn-android-test-companion-unsigned.apk \
-            --keep-artifact dobbyvpn-android-provenance \
-            --keep-artifact dobbyvpn-go-coverage \
-            --keep-artifact dobbyvpn-swift-coverage \
-            --keep-artifact dobbyvpn-ios-simulator-mini \
-            --keep-artifact dobbyvpn-qualification-linux \
-            --keep-artifact dobbyvpn-qualification-windows \
-            --keep-artifact dobbyvpn-qualification-macos \
-            --keep-artifact dobbyvpn-qualification-android

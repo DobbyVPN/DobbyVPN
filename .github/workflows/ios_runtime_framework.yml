@@ -90,4 +90,4 @@ jobs:
           name: DobbyVPNRuntime.xcframework
           path: core/DobbyVPNRuntime.xcframework
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 7

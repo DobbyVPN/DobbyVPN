@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestPlanClosesLeasesInReverseOrderAndOnlyOnce(t *testing.T) {
@@ -100,5 +101,35 @@ func TestLeaseCloseIsSafeForConcurrentRollbackAndNormalShutdown(t *testing.T) {
 	defer mu.Unlock()
 	if releases != 1 {
 		t.Fatalf("release executions = %d, want 1", releases)
+	}
+}
+
+func TestPlanConcurrentCloseWaitsAndReturnsCleanupFailure(t *testing.T) {
+	plan := NewPlan("generation-23")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	want := errors.New("route cleanup failed")
+	if _, err := plan.Acquire("route", func() error { return nil }, func() error {
+		close(entered)
+		<-release
+		return want
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := make(chan error, 1)
+	go func() { first <- plan.Close() }()
+	<-entered
+	second := make(chan error, 1)
+	go func() { second <- plan.Close() }()
+	select {
+	case err := <-second:
+		t.Fatalf("second Close returned before cleanup completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	for _, result := range []error{<-first, <-second, plan.Close()} {
+		if !errors.Is(result, want) {
+			t.Fatalf("Close error = %v, want cleanup failure", result)
+		}
 	}
 }

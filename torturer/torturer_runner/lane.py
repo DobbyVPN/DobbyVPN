@@ -138,13 +138,16 @@ def _run_scenarios(
                 "scenario": scenario.id,
             },
         )
-        reset_called = False
 
-        def cleanup_scenario() -> None:
-            nonlocal reset_called
-            if reset_called:
-                return
-            reset_called = True
+        def cleanup_scenario(primary_error: BaseException | None = None) -> None:
+            try:
+                perform_scenario_cleanup()
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                add_exception_notes(primary_error, "scenario_cleanup", cleanup_error)
+
+        def perform_scenario_cleanup() -> None:
             cleanup_started = time.monotonic()
             _emit_progress_event(
                 "scenario-cleanup-start",
@@ -194,14 +197,9 @@ def _run_scenarios(
                 cleanup_provider=cleanup_scenario,
             )
         except BaseException as primary_error:
-            # FunctionalEngine invokes the provider on ordinary result paths,
-            # but adapter execution errors are deliberately propagated before
-            # it can build a result.  Make the same reset guarantee hold for
-            # those paths without replacing the useful primary exception.
-            try:
-                cleanup_scenario()
-            except BaseException as cleanup_error:
-                add_exception_notes(primary_error, "scenario_cleanup", cleanup_error)
+            # FunctionalEngine owns the single cleanup invocation on every
+            # result and exception path. The provider has already attached
+            # reset diagnostics to this primary exception when needed.
             _emit_progress_event(
                 "scenario-finish",
                 {

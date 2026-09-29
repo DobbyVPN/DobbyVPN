@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"core/dnscache"
 	"core/protocol"
 	"core/sessionapi"
+	"core/tunnel"
 )
 
 func profile() sessionapi.RuntimeProfile {
@@ -45,7 +47,7 @@ type fakeInputs struct {
 	err    error
 }
 
-func (f fakeInputs) Apply(_ context.Context, _ sessionapi.SessionRef, cidrs []string) (InputLease, error) {
+func (f fakeInputs) Resolve(ctx context.Context, cidrs []string) (*tunnel.BypassPolicy, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -53,12 +55,8 @@ func (f fakeInputs) Apply(_ context.Context, _ sessionapi.SessionRef, cidrs []st
 		return nil, errors.New("runtime did not supply Go-only inputs")
 	}
 	f.record.add("inputs")
-	return inputRelease{f.record}, nil
+	return tunnel.ResolveBypassPolicy(ctx, cidrs)
 }
-
-type inputRelease struct{ record *recorded }
-
-func (l inputRelease) Release(context.Context) error { l.record.add("inputs-stop"); return nil }
 
 type fakeCore struct {
 	record        *recorded
@@ -138,10 +136,12 @@ func TestDeviceIsClosedWhenCoreConstructionFails(t *testing.T) {
 	record := &recorded{}
 	device := &closingDevice{}
 	o := options(record)
-	o.NewDevice = func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error) {
+	o.NewDevice = func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector, *dnscache.Cache) (protocol.ProtocolDevice, error) {
 		return device, nil
 	}
-	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore { return nil }
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore {
+		return nil
+	}
 	if _, err := New(o).Start(context.Background(), sessionapi.SessionRef{Generation: 1}, profile()); err == nil {
 		t.Fatal("missing core construction failure")
 	}
@@ -150,41 +150,19 @@ func TestDeviceIsClosedWhenCoreConstructionFails(t *testing.T) {
 	}
 }
 
-func TestProbeCleanupFailureBlocksAnotherRuntimeAttempt(t *testing.T) {
-	record := &recorded{}
-	device := &closingDevice{err: errors.New("device cleanup failed")}
-	o := options(record)
-	o.NewDevice = func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error) {
-		return device, nil
-	}
-	r := New(o)
-	_, err := r.Probe(context.Background(), sessionapi.SessionRef{Generation: 1}, profile())
-	var cleanupFailure *sessionapi.CleanupFailure
-	if !errors.As(err, &cleanupFailure) {
-		t.Fatalf("probe error=%v, want cleanup failure", err)
-	}
-	if device.closes != 1 {
-		t.Fatalf("device close calls=%d, want 1", device.closes)
-	}
-	if _, err := r.Probe(context.Background(), sessionapi.SessionRef{Generation: 2}, profile()); err == nil || !strings.Contains(err.Error(), "another runtime lease is active") {
-		t.Fatalf("second probe error=%v, want blocked runtime", err)
-	}
-}
-
 func options(record *recorded) Options {
 	return Options{
 		Inputs: fakeInputs{record: record},
-		NewDevice: func(_ context.Context, _ sessionapi.SessionRef, got sessionapi.RuntimeProfile, _ SocketProtector) (protocol.ProtocolDevice, error) {
+		NewDevice: func(_ context.Context, _ sessionapi.SessionRef, got sessionapi.RuntimeProfile, _ SocketProtector, _ *dnscache.Cache) (protocol.ProtocolDevice, error) {
 			if string(got.NormalizedConfig) != "normalized-only" {
 				return nil, errors.New("device did not receive normalized config")
 			}
 			record.add("device")
 			return fakeDevice{}, nil
 		},
-		NewCore: func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+		NewCore: func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore {
 			return fakeCore{record: record}
 		},
-		Probe: func(context.Context, string) (int64, error) { record.add("probe"); return 7, nil },
 		InitialReadiness: func(context.Context, sessionapi.SessionRef, string) error {
 			return nil
 		},
@@ -220,7 +198,7 @@ func TestStartWaitsForInitialReadinessAndRetries(t *testing.T) {
 	if err := lease.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"inputs", "device", "connect", "ready", "ready", "ready", "core-stop", "inputs-stop"}
+	want := []string{"inputs", "device", "connect", "ready", "ready", "ready", "core-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("order=%v, want=%v", got, want)
 	}
@@ -250,7 +228,7 @@ func TestInitialReadinessFailureRollsBackLIFO(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"inputs", "device", "connect", "ready", "ready", "core-stop", "inputs-stop"}
+	want := []string{"inputs", "device", "connect", "ready", "ready", "core-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("order=%v, want=%v", got, want)
 	}
@@ -282,7 +260,7 @@ func TestInitialReadinessCancellationRollsBackLIFO(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "first readiness detail") {
 		t.Fatalf("err=%v, want cancellation and prior readiness detail", err)
 	}
-	want := []string{"inputs", "device", "connect", "ready", "ready", "core-stop", "inputs-stop"}
+	want := []string{"inputs", "device", "connect", "ready", "ready", "core-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("order=%v, want=%v", got, want)
 	}
@@ -298,7 +276,9 @@ func TestStartCancellationTransfersLeaseUntilNativeConnectReturns(t *testing.T) 
 		cancelRequest: make(chan struct{}),
 	}
 	o := options(record)
-	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore { return core }
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore {
+		return core
+	}
 	r := New(o).(*runtime)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -359,7 +339,7 @@ func TestStartCancellationTransfersLeaseUntilNativeConnectReturns(t *testing.T) 
 	if active {
 		t.Fatal("runtime remained active after transferred lease cleanup")
 	}
-	want := []string{"inputs", "device", "connect", "connect-cancel", "core-stop", "inputs-stop"}
+	want := []string{"inputs", "device", "connect", "connect-cancel", "core-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("cleanup order=%v, want=%v", got, want)
 	}
@@ -382,7 +362,7 @@ func TestInitialReadinessAttemptTimeoutIsBounded(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("readiness timeout took %s", elapsed)
 	}
-	want := []string{"inputs", "device", "connect", "core-stop", "inputs-stop"}
+	want := []string{"inputs", "device", "connect", "core-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("order=%v, want=%v", got, want)
 	}
@@ -400,7 +380,7 @@ func TestSecondStartWaitsUntilReadinessRollbackCleanupCompletes(t *testing.T) {
 		}
 		return nil
 	}
-	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore {
 		return fakeCore{
 			record:      record,
 			stopBlock:   cleanupRelease,
@@ -672,7 +652,7 @@ func TestStartUsesNormalizedConfigAndStopsLIFOIdempotently(t *testing.T) {
 	if err := lease.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"inputs", "device", "connect", "core-stop", "inputs-stop"}
+	want := []string{"inputs", "device", "connect", "core-stop"}
 	if got := record.got(); !same(got, want) {
 		t.Fatalf("order=%v, want %v", got, want)
 	}
@@ -686,11 +666,11 @@ func TestFailureRollsBackEachAcquiredResource(t *testing.T) {
 	}{
 		{"inputs", func(o *Options) { o.Inputs = fakeInputs{record: &recorded{}, err: errors.New("inputs")} }, nil},
 		{"device", func(o *Options) {
-			o.NewDevice = func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error) {
+			o.NewDevice = func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector, *dnscache.Cache) (protocol.ProtocolDevice, error) {
 				return nil, errors.New("device")
 			}
-		}, []string{"inputs", "inputs-stop"}},
-		{"core", func(*Options) {}, []string{"inputs", "device", "connect", "core-stop", "inputs-stop"}},
+		}, []string{"inputs"}},
+		{"core", func(*Options) {}, []string{"inputs", "device", "connect", "core-stop"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -702,7 +682,7 @@ func TestFailureRollsBackEachAcquiredResource(t *testing.T) {
 				tc.edit(&o)
 			}
 			if tc.name == "core" {
-				o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+				o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore {
 					return fakeCore{record: record, connectErr: errors.New("core")}
 				}
 			}
@@ -722,13 +702,13 @@ func TestProtectionFailureIsFatal(t *testing.T) {
 	record := &recorded{}
 	o := options(record)
 	o.Tunnel = protectionProvider{err: errors.New("denied")}
-	o.NewDevice = func(ctx context.Context, ref sessionapi.SessionRef, _ sessionapi.RuntimeProfile, protect SocketProtector) (protocol.ProtocolDevice, error) {
+	o.NewDevice = func(ctx context.Context, ref sessionapi.SessionRef, _ sessionapi.RuntimeProfile, protect SocketProtector, _ *dnscache.Cache) (protocol.ProtocolDevice, error) {
 		return nil, protect(ctx, 41)
 	}
 	if _, err := New(o).Start(context.Background(), sessionapi.SessionRef{Generation: 9}, profile()); err == nil {
 		t.Fatal("Start succeeded after protection failure")
 	}
-	if got := record.got(); !same(got, []string{"inputs", "inputs-stop"}) {
+	if got := record.got(); !same(got, []string{"inputs"}) {
 		t.Fatalf("order=%v", got)
 	}
 }
@@ -742,259 +722,11 @@ func (p protectionProvider) ProtectSocket(context.Context, sessionapi.SessionRef
 	return p.err
 }
 
-func TestProbeOwnsTemporaryResourcesAndRuntimeDoesNotOverlap(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	readinessChecks := 0
-	o.InitialReadiness = func(context.Context, sessionapi.SessionRef, string) error {
-		readinessChecks++
-		return nil
-	}
-	r := New(o)
-	result, err := r.Probe(context.Background(), sessionapi.SessionRef{Generation: 1}, profile())
-	if err != nil || result.LatencyMillis != 7 {
-		t.Fatalf("Probe=%#v err=%v", result, err)
-	}
-	if readinessChecks != 0 {
-		t.Fatalf("Probe ran final-session readiness checks=%d", readinessChecks)
-	}
-	want := []string{"inputs", "device", "connect", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, want) {
-		t.Fatalf("probe order=%v", got)
-	}
-
-	lease, err := r.Start(context.Background(), sessionapi.SessionRef{Generation: 2}, profile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, overlapErr := r.Start(context.Background(), sessionapi.SessionRef{Generation: 3}, profile()); overlapErr == nil {
-		t.Fatal("overlapping Start succeeded")
-	}
-	_ = lease.Stop(context.Background())
-	if lease, err = r.Start(context.Background(), sessionapi.SessionRef{Generation: 4}, profile()); err != nil {
-		t.Fatal(err)
-	}
-	_ = lease.Stop(context.Background())
-}
-
-func TestProbeRetriesTransientReadinessFailureWithinOneLease(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	o.ReadinessAttempts = 3
-	o.ReadinessRetryInterval = time.Nanosecond
-	attempts := 0
-	var proxyAddresses []string
-	o.Probe = func(_ context.Context, proxyAddr string) (int64, error) {
-		attempts++
-		proxyAddresses = append(proxyAddresses, proxyAddr)
-		record.add("probe")
-		if attempts < 3 {
-			return 0, errors.New("endpoint not ready")
-		}
-		return 11, nil
-	}
-
-	result, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 7}, profile())
-	if err != nil || result.LatencyMillis != 11 {
-		t.Fatalf("Probe=%#v err=%v", result, err)
-	}
-	if attempts != 3 {
-		t.Fatalf("probe attempts=%d, want 3", attempts)
-	}
-	for _, proxyAddr := range proxyAddresses {
-		if proxyAddr != "127.0.0.1:1" {
-			t.Fatalf("probe received SOCKS endpoint %q, want device endpoint", proxyAddr)
-		}
-	}
-	want := []string{"inputs", "device", "connect", "probe", "probe", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, want) {
-		t.Fatalf("probe order=%v, want=%v", got, want)
-	}
-}
-
-func TestProbeExhaustsReadinessRetriesAndCleansUp(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	o.ReadinessAttempts = 2
-	o.ReadinessRetryInterval = time.Nanosecond
-	o.Probe = func(context.Context, string) (int64, error) {
-		record.add("probe")
-		return 0, errors.New("endpoint reset")
-	}
-
-	result, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 8}, profile())
-	if err == nil || !strings.Contains(err.Error(), "runtime health probe did not reach quorum") || !strings.Contains(err.Error(), "endpoint reset") {
-		t.Fatalf("Probe error=%v", err)
-	}
-	if result != (sessionapi.ProbeResult{}) {
-		t.Fatalf("Probe result=%#v, want empty result", result)
-	}
-	want := []string{"inputs", "device", "connect", "probe", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, want) {
-		t.Fatalf("probe order=%v, want=%v", got, want)
-	}
-}
-
-func TestProbeRetriesAndPreservesRealError(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	o.ReadinessAttempts = 3
-	o.ReadinessRetryInterval = time.Nanosecond
-	want := errors.New("probe transport failed")
-	attempts := 0
-	o.Probe = func(context.Context, string) (int64, error) {
-		attempts++
-		record.add("probe")
-		return 0, want
-	}
-
-	_, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 9}, profile())
-	if !errors.Is(err, want) {
-		t.Fatalf("Probe error=%v, want %v", err, want)
-	}
-	if attempts != 3 || !strings.Contains(err.Error(), "attempt 3/3") {
-		t.Fatalf("attempts=%d error=%v, want all three causes", attempts, err)
-	}
-	wantOrder := []string{"inputs", "device", "connect", "probe", "probe", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, wantOrder) {
-		t.Fatalf("probe order=%v, want=%v", got, wantOrder)
-	}
-}
-
-func TestProbeCancellationDuringRetryWaitCleansUp(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	o.ReadinessAttempts = 3
-	o.ReadinessRetryInterval = time.Hour
-	first := make(chan struct{})
-	o.Probe = func(context.Context, string) (int64, error) {
-		record.add("probe")
-		close(first)
-		return 0, errors.New("endpoint unavailable")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := New(o).Probe(ctx, sessionapi.SessionRef{Generation: 10}, profile())
-		done <- err
-	}()
-	<-first
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "endpoint unavailable") {
-		t.Fatalf("Probe error=%v, want cancellation and prior probe detail", err)
-	}
-	want := []string{"inputs", "device", "connect", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, want) {
-		t.Fatalf("probe order=%v, want=%v", got, want)
-	}
-}
-
-func TestProbeCancellationDuringAttemptPreservesEarlierFailures(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	o.ReadinessAttempts = 2
-	o.ReadinessRetryInterval = time.Nanosecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	attempts := 0
-	o.Probe = func(context.Context, string) (int64, error) {
-		attempts++
-		record.add("probe")
-		if attempts == 1 {
-			return 0, errors.New("first endpoint failure")
-		}
-		cancel()
-		return 0, errors.New("second endpoint failure")
-	}
-
-	_, err := New(o).Probe(ctx, sessionapi.SessionRef{Generation: 12}, profile())
-	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "first endpoint failure") || !strings.Contains(err.Error(), "second endpoint failure") {
-		t.Fatalf("Probe error=%v, want cancellation and both probe failures", err)
-	}
-	want := []string{"inputs", "device", "connect", "probe", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, want) {
-		t.Fatalf("probe order=%v, want=%v", got, want)
-	}
-}
-
-func TestProbeDeadlineDuringRetryWaitCleansUp(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	// Leave enough time for the test goroutine to enter the first probe before
-	// the overall deadline expires. The retry interval, rather than scheduler
-	// timing, must be what exercises the deadline path.
-	o.ProbeTimeout = 100 * time.Millisecond
-	o.ReadinessAttempts = 3
-	o.ReadinessRetryInterval = time.Hour
-	o.Probe = func(context.Context, string) (int64, error) {
-		record.add("probe")
-		return 0, errors.New("endpoint unavailable")
-	}
-
-	_, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 11}, profile())
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Probe error=%v, want deadline", err)
-	}
-	want := []string{"inputs", "device", "connect", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, want) {
-		t.Fatalf("probe order=%v, want=%v", got, want)
-	}
-}
-
-func TestProbeRejectsLatePositiveResultAfterDeadline(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	o.ProbeTimeout = 100 * time.Millisecond
-	o.Probe = func(ctx context.Context, _ string) (int64, error) {
-		record.add("probe")
-		<-ctx.Done()
-		return 7, nil
-	}
-
-	_, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 12}, profile())
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Probe error=%v, want deadline", err)
-	}
-	want := []string{"inputs", "device", "connect", "probe", "core-stop", "inputs-stop"}
-	if got := record.got(); !same(got, want) {
-		t.Fatalf("probe order=%v, want=%v", got, want)
-	}
-}
-
-func TestProbeReportsCleanupFailure(t *testing.T) {
-	record := &recorded{}
-	want := errors.New("probe cleanup failed")
-	o := options(record)
-	o.ReadinessAttempts = 2
-	o.ReadinessRetryInterval = time.Nanosecond
-	attempts := 0
-	o.Probe = func(context.Context, string) (int64, error) {
-		attempts++
-		if attempts == 1 {
-			return 0, errors.New("endpoint unavailable")
-		}
-		return 7, nil
-	}
-	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
-		return fakeCore{record: record, disconnectErr: want}
-	}
-	result, err := New(o).Probe(context.Background(), sessionapi.SessionRef{Generation: 1}, profile())
-	if !errors.Is(err, want) {
-		t.Fatalf("Probe error=%v, want %v", err, want)
-	}
-	if attempts != 2 {
-		t.Fatalf("probe attempts=%d, want 2", attempts)
-	}
-	if result != (sessionapi.ProbeResult{}) {
-		t.Fatalf("Probe result=%#v, want empty result after cleanup failure", result)
-	}
-}
-
 func TestRuntimeRejectsStartUntilPriorCleanupFinishes(t *testing.T) {
 	record := &recorded{}
 	block := make(chan struct{})
 	o := options(record)
-	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore {
+	o.NewCore = func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore {
 		return fakeCore{record: record, stopBlock: block}
 	}
 	r := New(o)
@@ -1026,41 +758,6 @@ func TestRuntimeRejectsStartUntilPriorCleanupFinishes(t *testing.T) {
 	}
 	if err := <-second; err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestProbeCancellationIsDeterministicAndCleansUp(t *testing.T) {
-	record := &recorded{}
-	o := options(record)
-	o.Probe = func(ctx context.Context, _ string) (int64, error) { <-ctx.Done(); return 0, ctx.Err() }
-	o.ProbeTimeout = time.Millisecond
-	_, err := New(o).Probe(context.Background(), sessionapi.SessionRef{}, profile())
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err=%v", err)
-	}
-	got := record.got()
-	if len(got) < 2 || got[len(got)-2] != "core-stop" || got[len(got)-1] != "inputs-stop" {
-		t.Fatalf("cleanup order=%v", got)
-	}
-}
-
-func TestProbeTimeoutUsesContextDeadline(t *testing.T) {
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(100*time.Millisecond))
-	defer cancel()
-	timeout, err := probeTimeout(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if timeout <= 0 || timeout > 100*time.Millisecond {
-		t.Fatalf("timeout=%s, want remaining context deadline", timeout)
-	}
-}
-
-func TestProbeTimeoutRejectsExpiredContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := probeTimeout(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("err=%v, want context cancellation", err)
 	}
 }
 

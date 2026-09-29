@@ -7,7 +7,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.system.Os
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.FileProvider
@@ -304,68 +303,8 @@ object NativeVpnBridge {
     fun nativeDiagnosticsUnavailable(): Boolean = nativeDiagnosticWriteFailed
 
     @JvmStatic
-    fun loadSourceURL(context: Context): String = try {
-        File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE)
-            .takeIf { it.isFile }
-            ?.readText(Charsets.UTF_8)
-            .orEmpty()
-    } catch (error: IOException) {
-        Log.e("DobbyVPN", "Saved configuration URL could not be read", error)
-        recordDiagnostic(context, "source_url.load_failed", "Saved configuration URL could not be read", error)
-        ""
-    }
-
-    @JvmStatic
-    fun saveSourceURL(context: Context, value: String): Boolean {
-        if (value.isBlank()) return false
-        val directory = File(context.filesDir, SAVED_SOURCE_DIRECTORY)
-        if (!directory.exists() && !directory.mkdirs()) {
-            val error = IOException("saved configuration directory could not be created: ${directory.absolutePath}")
-            recordDiagnostic(context, "source_url.save_failed", "Saved configuration URL could not be saved", error)
-            return false
-        }
-        val destination = File(directory, SAVED_SOURCE_FILE)
-        val temporary = try {
-            File.createTempFile("dobby-source-", ".tmp", directory)
-        } catch (error: IOException) {
-            Log.e("DobbyVPN", "Saved configuration URL temporary file could not be created", error)
-            recordDiagnostic(context, "source_url.save_failed", "Saved configuration URL temporary file could not be created", error)
-            return false
-        }
-        return try {
-            FileOutputStream(temporary).use { output ->
-                output.write(value.toByteArray(Charsets.UTF_8))
-                output.fd.sync()
-            }
-            Os.rename(temporary.absolutePath, destination.absolutePath)
-            true
-        } catch (error: Exception) {
-            Log.e("DobbyVPN", "Saved configuration URL could not be written", error)
-            recordDiagnostic(context, "source_url.save_failed", "Saved configuration URL could not be written", error)
-            false
-        } finally {
-            if (temporary.exists()) temporary.delete()
-        }
-    }
-
-    @JvmStatic
-    fun clearSourceURL(context: Context): Boolean = try {
-        val file = File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE)
-        val cleared = !file.exists() || file.delete()
-        if (!cleared) {
-            recordDiagnostic(
-                context,
-                "source_url.clear_failed",
-                "Saved configuration URL could not be cleared",
-                IOException("saved configuration URL file could not be deleted: ${file.absolutePath}"),
-            )
-        }
-        cleared
-    } catch (error: SecurityException) {
-        Log.e("DobbyVPN", "Saved configuration URL could not be cleared", error)
-        recordDiagnostic(context, "source_url.clear_failed", "Saved configuration URL could not be cleared", error)
-        false
-    }
+    fun sourceURLPath(context: Context): String =
+        File(File(context.filesDir, SAVED_SOURCE_DIRECTORY), SAVED_SOURCE_FILE).absolutePath
 
     private fun diagnosticsDirectory(context: Context): File =
         File(context.applicationContext.filesDir, DIAGNOSTIC_DIRECTORY).also { it.mkdirs() }

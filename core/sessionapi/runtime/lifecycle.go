@@ -21,13 +21,6 @@ import (
 
 const category = "sessionapi/runtime"
 
-// defaultProbeTimeout gives a newly-created mobile tunnel enough time for the
-// operating system to publish its VPN route and for tun2socks to establish the
-// first protected TCP flows.  The probe still requires the same two-of-three
-// endpoint quorum; this is only a bounded startup allowance.  Steady-state
-// health checks continue to use their own context deadlines.
-const defaultProbeTimeout = 15 * time.Second
-
 // TunnelProvider is the deliberately narrow mobile boundary. Acquire must
 // return a newly allocated TUN for this exact SessionRef; a provider must not
 // retain or reuse a TUN from an earlier generation. ProtectSocket is passed to
@@ -44,22 +37,19 @@ type TunnelLease interface {
 	Release(context.Context) error
 }
 
-// InputProvider owns the Go-only routing and DNS preparation inputs. It must
-// return a lease which reverses exactly its session's changes. The built-in
-// implementation owns tunnel's process-global exclusion policy; Runtime
-// serializes all leases so no other runtime lease can overwrite that policy.
+// InputProvider resolves the bypass CIDRs and hostnames for one start attempt.
+// Its returned policy is immutable and is carried by that attempt's tunnel.
 type InputProvider interface {
-	Apply(context.Context, sessionapi.SessionRef, []string) (InputLease, error)
+	Resolve(context.Context, []string) (*tunnel.BypassPolicy, error)
 }
 
-type InputLease interface{ Release(context.Context) error }
-
-// DeviceFactory receives only the normalized config for every protocol.
-type DeviceFactory func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector) (protocol.ProtocolDevice, error)
+// DeviceFactory receives only the normalized config for every protocol and
+// the DNS cache owned by this start attempt.
+type DeviceFactory func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector, *dnscache.Cache) (protocol.ProtocolDevice, error)
 
 type SocketProtector func(context.Context, int) error
 
-type CoreFactory func(protocol.ProtocolDevice, io.ReadWriteCloser) sessionCore
+type CoreFactory func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore
 
 type sessionCore interface {
 	Connect() error
@@ -80,8 +70,6 @@ type connectCanceler interface{ CancelConnect() }
 // after Connect has stopped mutating native resources.
 var errConnectCancellationPending = errors.New("native session connect cancellation pending")
 
-type ProbeFunc func(context.Context, string) (int64, error)
-
 // ConnectedHealthFunc runs one connected-readiness check for a specific lease.
 // It must return promptly when ctx is canceled; the monitor uses that guarantee
 // to stop before runtime resources are released.
@@ -92,8 +80,6 @@ type Options struct {
 	Inputs                  InputProvider
 	NewDevice               DeviceFactory
 	NewCore                 CoreFactory
-	Probe                   ProbeFunc
-	ProbeTimeout            time.Duration
 	InitialReadiness        ConnectedHealthFunc
 	ReadinessAttempts       int
 	ReadinessAttemptTimeout time.Duration
@@ -104,24 +90,18 @@ type Options struct {
 }
 
 // New returns a session Runtime. Its operation mutex deliberately serializes all
-// runs: platform routing and native tunnel resources are process-wide, so
-// parallel profile probes would not be isolated.
+// runs: native tunnel resources are process-wide, so parallel profile starts
+// would not be isolated.
 func New(options Options) sessionapi.Runtime {
 	r := &runtime{options: options}
 	if r.options.Inputs == nil {
-		r.options.Inputs = defaultInputs{}
+		r.options.Inputs = defaultInputProvider{}
 	}
 	if r.options.NewDevice == nil {
 		r.options.NewDevice = unsupportedDevice
 	}
 	if r.options.NewCore == nil {
 		r.options.NewCore = newPlatformCore
-	}
-	if r.options.Probe == nil {
-		r.options.Probe = defaultProbe
-	}
-	if r.options.ProbeTimeout <= 0 {
-		r.options.ProbeTimeout = defaultProbeTimeout
 	}
 	if r.options.ConnectedHealth == nil {
 		r.options.ConnectedHealth = defaultConnectedHealth
@@ -246,119 +226,6 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	return lease, nil
 }
 
-func (r *runtime) Probe(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (result sessionapi.ProbeResult, err error) {
-	if contextErr := ctx.Err(); contextErr != nil {
-		return sessionapi.ProbeResult{}, contextErr
-	}
-	r.mu.Lock()
-	if r.active {
-		r.mu.Unlock()
-		return sessionapi.ProbeResult{}, errors.New("another runtime lease is active")
-	}
-	r.active = true
-
-	// A probe owns an ordinary, fresh runtime lease. It is always stopped before
-	// returning, even when the health seam or context fails.
-	lease, err := r.startLocked(ctx, ref, profile)
-	if err != nil {
-		if lease != nil {
-			// Probe has no generation ledger to retain a partially-started
-			// lease.  Stop waits for the native startup goroutine and then
-			// releases its dependent resources in LIFO order.
-			err = errors.Join(err, markCleanupFailure(lease.Stop(context.Background())))
-		}
-		var cleanupFailure *sessionapi.CleanupFailure
-		if !errors.As(err, &cleanupFailure) {
-			r.active = false
-		}
-		r.mu.Unlock()
-		return sessionapi.ProbeResult{}, err
-	}
-	lease.setOnDone(func(cleanupErr error) {
-		r.mu.Lock()
-		if cleanupErr == nil {
-			r.active = false
-		}
-		r.mu.Unlock()
-	})
-	r.mu.Unlock()
-	defer func() {
-		if cleanupErr := lease.Stop(context.Background()); cleanupErr != nil {
-			result = sessionapi.ProbeResult{}
-			err = errors.Join(err, fmt.Errorf("cleanup runtime probe: %w", markCleanupFailure(cleanupErr)))
-		}
-	}()
-
-	probeCtx, cancel := context.WithTimeout(ctx, r.options.ProbeTimeout)
-	defer cancel()
-	latency, probeErr := probeUntilReady(
-		probeCtx,
-		ref,
-		lease.proxyAddr,
-		r.options.Probe,
-		r.options.ReadinessAttempts,
-		r.options.ReadinessRetryInterval,
-	)
-	if probeErr != nil {
-		return sessionapi.ProbeResult{}, probeErr
-	}
-	return sessionapi.ProbeResult{LatencyMillis: latency}, nil
-}
-
-// probeUntilReady gives Android's newly established VPN route the same bounded
-// readiness tolerance as the final session start. Fast protocol devices can
-// begin their first request a few milliseconds before ConnectivityService has
-// published the VPN network; a failed quorum is retried inside the existing
-// overall ProbeTimeout rather than being misclassified as a dead profile.
-func probeUntilReady(
-	ctx context.Context,
-	ref sessionapi.SessionRef,
-	proxyAddr string,
-	probeFn ProbeFunc,
-	attempts int,
-	retryInterval time.Duration,
-) (int64, error) {
-	var attemptErrors []error
-	if attempts < 1 {
-		return 0, errors.New("runtime health probe has no attempts configured")
-	}
-	for attempt := 1; attempt <= attempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return 0, errors.Join(err, errors.Join(attemptErrors...))
-		}
-		startedAt := time.Now()
-		latency, err := probeFn(ctx, proxyAddr)
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			if err != nil {
-				err = fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err)
-			}
-			return 0, errors.Join(ctxErr, err, errors.Join(attemptErrors...))
-		}
-		if err == nil && latency >= 0 {
-			log.Debugf(category, "runtime probe readiness succeeded generation=%d attempt=%d/%d elapsed=%s", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond))
-			return latency, nil
-		}
-		if err == nil {
-			err = fmt.Errorf("probe returned invalid latency %d", latency)
-		}
-		attemptErrors = append(attemptErrors, fmt.Errorf("attempt %d/%d: %w", attempt, attempts, err))
-		log.Debugf(category, "runtime probe readiness failed generation=%d attempt=%d/%d elapsed=%s error=%v", ref.Generation, attempt, attempts, time.Since(startedAt).Truncate(time.Millisecond), err)
-		if attempt == attempts {
-			return 0, fmt.Errorf("runtime health probe did not reach quorum: %w", errors.Join(attemptErrors...))
-		}
-		timer := time.NewTimer(retryInterval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return 0, errors.Join(ctx.Err(), errors.Join(attemptErrors...))
-		case <-timer.C:
-		}
-	}
-	return 0, fmt.Errorf("runtime health probe did not reach quorum: %w", errors.Join(attemptErrors...))
-}
-
 func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (*lease, error) {
 	if len(profile.NormalizedConfig) == 0 {
 		return nil, errors.New("runtime profile has no normalized config")
@@ -366,30 +233,29 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Protocol bootstrap lookups share a process cache with the dialer. Reset it
-	// at the attempt boundary so a reconnect resolves a fresh endpoint.
-	dnscache.Clear()
+	// Every start attempt owns an isolated DNS cache. Retiring the lease drops
+	// its cache along with the protocol device and native runtime.
+	dnsCache := dnscache.New()
 
 	owned := &lease{}
 	fail := func(cause error) (*lease, error) {
 		if errors.Is(cause, errConnectCancellationPending) {
 			// Connect was asked to stop but has not returned yet.  Returning the
 			// still-owned lease lets the manager retain this generation and run
-			// Stop after the native operation is quiescent; releasing the TUN or
-			// routing inputs here would race a blocked platform call.
+			// Stop after the native operation is quiescent; releasing the TUN
+			// here would race a blocked platform call.
 			return owned, cause
 		}
 		return nil, errors.Join(cause, markCleanupFailure(owned.Stop(context.Background())))
 	}
 
-	inputs, err := r.options.Inputs.Apply(ctx, ref, profile.ExcludeCIDRs)
+	bypassPolicy, err := r.options.Inputs.Resolve(ctx, profile.ExcludeCIDRs)
 	if err != nil {
-		return fail(fmt.Errorf("prepare Go routing/DNS inputs: %w", err))
+		return fail(fmt.Errorf("resolve bypass policy: %w", err))
 	}
-	if inputs == nil {
-		return fail(errors.New("prepare Go routing/DNS inputs returned nil lease"))
+	if bypassPolicy == nil {
+		return fail(errors.New("resolve bypass policy returned nil"))
 	}
-	owned.push(inputs.Release)
 	protect := func(protectCtx context.Context, fd int) error {
 		if r.options.Tunnel == nil {
 			return nil // desktop protocol devices use their existing routing path.
@@ -399,7 +265,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		}
 		return nil
 	}
-	device, err := r.options.NewDevice(ctx, ref, profile, protect)
+	device, err := r.options.NewDevice(ctx, ref, profile, protect, dnsCache)
 	if device != nil {
 		device = &ownedDevice{ProtocolDevice: device}
 		owned.push(func(context.Context) error { return device.Close() })
@@ -431,7 +297,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		owned.push(tun.Release)
 	}
 
-	client := r.options.NewCore(device, tun)
+	client := r.options.NewCore(device, tun, dnsCache, bypassPolicy)
 	if client == nil {
 		return fail(errors.New("create native session runtime returned nil"))
 	}
@@ -441,8 +307,8 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if err := connectContext(ctx, client); err != nil {
 		return fail(fmt.Errorf("connect transactional native session runtime: %w", err))
 	}
-	// The native runtime is stopped before the input lease and mobile TUN in strict LIFO
-	// order. This preserves the tun2socks/device dependency chain.
+	// The native runtime is stopped before the mobile TUN in strict LIFO order.
+	// This preserves the tun2socks/device dependency chain.
 	log.Debugf(category, "runtime connected protocol=%s generation=%d", profile.Summary.Protocol, ref.Generation)
 	return owned, nil
 }
@@ -618,34 +484,30 @@ func (l *lease) Stop(ctx context.Context) error {
 	return l.cleanupErr
 }
 
-type defaultInputs struct{}
+type defaultInputProvider struct{}
 
-func (defaultInputs) Apply(ctx context.Context, _ sessionapi.SessionRef, cidrs []string) (InputLease, error) {
-	routes, err := tunnel.AcquireBypassPolicy(ctx, cidrs)
+func (defaultInputProvider) Resolve(ctx context.Context, cidrs []string) (*tunnel.BypassPolicy, error) {
+	policy, err := tunnel.ResolveBypassPolicy(ctx, cidrs)
 	if err != nil {
-		return nil, fmt.Errorf("acquire exclusion policy: %w", err)
+		return nil, fmt.Errorf("resolve exclusion policy: %w", err)
 	}
-	return routingInputs{routes: routes}, nil
+	return policy, nil
 }
 
-type routingInputs struct{ routes *tunnel.BypassPolicyLease }
-
-func (l routingInputs) Release(context.Context) error { l.routes.Release(); return nil }
-
-func unsupportedDevice(_ context.Context, _ sessionapi.SessionRef, _ sessionapi.RuntimeProfile, _ SocketProtector) (protocol.ProtocolDevice, error) {
+func unsupportedDevice(_ context.Context, _ sessionapi.SessionRef, _ sessionapi.RuntimeProfile, _ SocketProtector, _ *dnscache.Cache) (protocol.ProtocolDevice, error) {
 	return nil, errors.New("native protocol device factory is not installed")
 }
 
-func defaultProbe(ctx context.Context, proxyAddr string) (int64, error) {
-	timeout, err := probeTimeout(ctx)
+func measureConnectedHealth(ctx context.Context, proxyAddr string) error {
+	timeout, err := connectedHealthTimeout(ctx)
 	if err != nil {
-		return 0, err
+		return err
 	}
-	latency, probeErr := probe.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond), proxyAddr)
-	return latency, errors.Join(probeErr, ctx.Err())
+	_, probeErr := probe.MeasureTunnelProbeAverageLatencyMillisWithContext(ctx, int64(timeout/time.Millisecond), proxyAddr)
+	return errors.Join(probeErr, ctx.Err())
 }
 
-func probeTimeout(ctx context.Context) (time.Duration, error) {
+func connectedHealthTimeout(ctx context.Context) (time.Duration, error) {
 	const defaultTimeout = 5 * time.Second
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -662,6 +524,5 @@ func probeTimeout(ctx context.Context) (time.Duration, error) {
 }
 
 func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
-	_, err := defaultProbe(ctx, proxyAddr)
-	return err
+	return measureConnectedHealth(ctx, proxyAddr)
 }

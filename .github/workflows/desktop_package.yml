@@ -67,4 +67,4 @@ jobs:
           name: ${{ steps.build.outputs.artifact }}
           path: ${{ steps.build.outputs.package }}
           if-no-files-found: error
-          retention-days: 90
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}

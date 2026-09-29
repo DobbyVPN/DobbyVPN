@@ -39,37 +39,49 @@ lag releases; availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
-URLs are rejected, redirects must remain HTTPS, and downloaded or inline
-configuration is limited to 1 MiB. Supported profile arrays are `Outline`,
-`Xray`, and `TrustTunnel`, with optional `[ExcludeIPs]`; any other root section or
-key rejects the whole configuration. TrustTunnel certificate verification is
-required, so keep `skip_verification = false` (or omit it). This setting is
-valid only inside `[TrustTunnel.endpoint]`; a root-level `skip_verification`
-key is rejected.
+Use schema version 2 TOML inline or fetch it from an HTTPS subscription URL.
+HTTP URLs are rejected, redirects must remain HTTPS, and downloaded or inline
+configuration is limited to 1 MiB. Add each connection variant as an ordered
+`[[profiles]]` entry with `protocol` set to `OUTLINE`, `XRAY`, or
+`TRUST_TUNNEL`; place its protocol settings under `[profiles.config]`. The
+optional root `exclude_ips` list bypasses the VPN for those destinations. Any
+other root section or key rejects the whole configuration. TrustTunnel
+certificate verification is required, so keep `skip_verification = false`
+(or omit it). This setting is valid only inside
+`[profiles.config.endpoint]`; a profile-level `skip_verification` key is
+rejected.
 
-**Connection variants** (automatic probe-based selection and failover)
+**Connection variants** (automatic first-working selection and failover)
 ```toml
-[[Outline]] # First variant
-Description = "My fast SS"
+schema_version = 2
+exclude_ips = ["200.200.200.200/32"] # Shared by all variants
+
+[[profiles]] # First variant
+protocol = "OUTLINE"
+description = "My fast SS"
+[profiles.config]
 Server = "1.1.1.1"
 Port = 443
 Password = "Qwerty123"
 DisguisePrefix = "POST "
 
-[[Xray]] # Second variant
-Description = "My VLESS Reality"
+[[profiles]] # Second variant
+protocol = "XRAY"
+description = "My VLESS Reality"
+[profiles.config]
 log = { loglevel = "info" }
 outbounds = [
 { tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
 {tag = "direct", protocol = "freedom"}]
 
-[[TrustTunnel]] # Third variant
+[[profiles]] # Third variant
+protocol = "TRUST_TUNNEL"
+[profiles.config]
 loglevel = "info"
 vpn_mode = "general"
 post_quantum_group_enabled = true
 exclusions = []
-[TrustTunnel.endpoint]
+[profiles.config.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -80,19 +92,13 @@ skip_verification = false
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-[TrustTunnel.listener.socks]
+[profiles.config.listener.socks]
 address = "127.0.0.1:10808"
-
-# Shared by all variants and kept at the end 
-[ExcludeIPs] # Optional
-IPs = [
-  "200.200.200.200/32"
-]
 ```
 
-DobbyVPN probes configured variants one by one when the VPN starts and
-activates the working variant with the lowest average latency, breaking ties
-by configuration order. Automatic selection is the GUI behavior. On desktop,
+DobbyVPN starts configured variants in order and keeps the first one whose
+tunnel becomes ready. It does not tear down and recreate that working tunnel.
+Automatic selection is the GUI behavior. On desktop,
 `dobby-cli configure <file-or-https-url>` accepts a TOML file or HTTPS
 subscription URL and returns the ordered backend profile inventory as JSON.
 `dobby-cli start --profile <index> --session-id <id> --config-digest <digest>`
@@ -105,68 +111,73 @@ After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs
 before five uninterrupted connected minutes, the session fails and the user
 must connect again manually. Five uninterrupted connected minutes reset the
-recovery allowance. The same `[[Outline]]`, `[[Xray]]`, or `[[TrustTunnel]]`
-section format works for one profile or several.
+recovery allowance. The same ordered `[[profiles]]` format works for one
+profile or several; `protocol` selects the settings under that entry's `config`
+table.
 
-`ExcludeIPs` intentionally bypasses the VPN for the listed destinations. The
+`exclude_ips` intentionally bypasses the VPN for the listed destinations. The
 traffic still enters the tunnel on some platforms before the runtime routes it
 outside the proxy; platform routing details differ. DobbyVPN does not claim a
 system-wide kill switch or leak-free recovery during tunnel teardown.
 
 **Clean ShadowSocks** (best performance)
 ```toml
-[[Outline]] # Implementation library
-Description = "My fast SS" # description - whatever you like
+schema_version = 2
+exclude_ips = ["200.200.200.200/32"] # Optional
+
+[[profiles]] # Implementation library
+protocol = "OUTLINE"
+description = "My fast SS" # whatever you like
+[profiles.config]
 Server = "1.1.1.1" # IP or DNS name for the server
 Port = 443 # ShadowSocks port
 Password = "Qwerty123" # user's 'secret' from the Outline's config - NOT the part in 'ss://' config
 DisguisePrefix = "POST " # one - for TCP & UDP for now; for options - see ref. # 1 below
-
-[ExcludeIPs] # Optional
-IPs = [
-  "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
-]
 ```
 
 **ShadowSocks via WebSocket** (caddy -> outline-ss-server) 
 ```toml
-[[Outline]] # Implementation library
-Description = "My beautiful SS in WS" # description - whatever you like
+schema_version = 2
+exclude_ips = ["200.200.200.200/32"] # Optional
+
+[[profiles]] # Implementation library
+protocol = "OUTLINE"
+description = "My beautiful SS in WS" # whatever you like
+[profiles.config]
 WebSocket = true # flag to enable WebSocket
 Server = "www.myserver.com" # DNS name of the server
 Password = "Qwerty123" # user's 'secret' from the Outline's config
 WebSocketPath = "/WS_Ooth5OoCoo7reDah5oich1gai0che2ugh8pho" # listeners.path (one for both TCP & UDP for now) 
 DisguisePrefix = "POST " # for options see ref. # 1 below
-
-[ExcludeIPs] # Optional
-IPs = [
-  "200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
-]
 ```
 
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
-[[Xray]] # Implementation library
+schema_version = 2
+exclude_ips = ["200.200.200.200/32"] # Optional
+
+[[profiles]] # Implementation library
+protocol = "XRAY"
+[profiles.config]
 log = { loglevel = "info" } # Providing DobbyVPN and xray's log level
 # Warning: Inbound field will be modified due to custom tunneling settings
 outbounds = [
 { tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
 {tag = "direct", protocol = "freedom"}]
-
-[ExcludeIPs] # Optional
-IPs = [
-	"200.200.200.200/32" # IP adress or subnet that we want to exlude from vpn-routing
-]
 ```
 
 **TrustTunnel** ([more details](https://github.com/TrustTunnel/TrustTunnel))
 ```toml
-[[TrustTunnel]]
+schema_version = 2
+
+[[profiles]]
+protocol = "TRUST_TUNNEL"
+[profiles.config]
 loglevel = "info"
 vpn_mode = "general"
 post_quantum_group_enabled = true
 exclusions = []
-[TrustTunnel.endpoint]
+[profiles.config.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -177,7 +188,7 @@ skip_verification = false
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-[TrustTunnel.listener.socks]
+[profiles.config.listener.socks]
 address = "127.0.0.1:10808"
 ```
 

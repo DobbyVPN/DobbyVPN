@@ -20,8 +20,7 @@ type SourceStore interface {
 }
 
 type FileSourceStore struct {
-	Path   string
-	Legacy string
+	Path string
 }
 
 func (s FileSourceStore) Load(ctx context.Context) ([]byte, error) {
@@ -32,26 +31,10 @@ func (s FileSourceStore) Load(ctx context.Context) ([]byte, error) {
 	if err == nil {
 		return raw, nil
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if s.Legacy == "" {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	legacy, legacyErr := s.read(s.Legacy)
-	if legacyErr != nil {
-		if errors.Is(legacyErr, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, legacyErr
-	}
-	if err := s.Save(ctx, legacy); err != nil {
-		return legacy, fmt.Errorf("migrate saved configuration URL: %w", err)
-	}
-	if err := os.Remove(s.Legacy); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return legacy, fmt.Errorf("remove migrated configuration URL: %w", err)
-	}
-	return legacy, nil
+	return nil, err
 }
 
 func (s FileSourceStore) Save(ctx context.Context, raw []byte) error {
@@ -108,16 +91,11 @@ func (s FileSourceStore) Clear(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	for _, path := range []string{s.Path, s.Legacy} {
-		if path == "" {
-			continue
-		}
-		if err := validateSourcePath(filepath.Dir(path), path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove saved configuration URL: %w", err)
-		}
+	if err := validateSourcePath(filepath.Dir(s.Path), s.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(s.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove saved configuration URL: %w", err)
 	}
 	return nil
 }

@@ -22,6 +22,10 @@ class DobbyVpnService : VpnService() {
     private var activeGeneration: Long = -1
     private var vpnInterface: ParcelFileDescriptor? = null
     private var goTunFd: Int = -1
+    private var lastClosedSession: String? = null
+    private var lastClosedGeneration: Long = -1
+    private var lastClosedFd: Int = -1
+    private var lastCloseSucceeded: Boolean? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -120,11 +124,18 @@ class DobbyVpnService : VpnService() {
         activeGeneration = generation
         vpnInterface = established
         goTunFd = detached
+        lastClosedSession = null
+        lastClosedGeneration = -1
+        lastClosedFd = -1
+        lastCloseSucceeded = null
         return detached
     }
 
     @Synchronized
     fun releaseTunnel(sessionID: String, generation: Long, fd: Int): Boolean {
+        if (sessionID == lastClosedSession && generation == lastClosedGeneration && fd == lastClosedFd) {
+            return lastCloseSucceeded ?: false
+        }
         if (sessionID != activeSession || generation != activeGeneration || fd != goTunFd) {
             NativeVpnBridge.recordNativeFailure(
                 this, "vpn.service.release_rejected",
@@ -132,8 +143,7 @@ class DobbyVpnService : VpnService() {
             )
             return false
         }
-        closeTunnel()
-        return true
+        return closeTunnel()
     }
 
     @Synchronized
@@ -173,15 +183,28 @@ class DobbyVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun closeTunnel() {
-        try { vpnInterface?.close() } catch (failure: Throwable) {
+    private fun closeTunnel(): Boolean {
+        if (vpnInterface == null) return lastCloseSucceeded ?: true
+        val closingSession = activeSession
+        val closingGeneration = activeGeneration
+        val closingFd = goTunFd
+        val closed = try {
+            vpnInterface?.close()
+            true
+        } catch (failure: Throwable) {
             Log.e(TAG, "VPN close failed", failure)
             NativeVpnBridge.recordNativeFailure(this, "vpn.service.close_failed", failure)
+            false
         }
         vpnInterface = null
         goTunFd = -1
         activeGeneration = -1
         activeSession = null
+        lastClosedSession = closingSession
+        lastClosedGeneration = closingGeneration
+        lastClosedFd = closingFd
+        lastCloseSucceeded = closed
+        return closed
     }
 
     private fun ensureForeground() {

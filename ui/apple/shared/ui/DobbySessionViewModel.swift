@@ -114,9 +114,9 @@ public final class DobbySessionViewModel: ObservableObject {
         let current = snapshot
         let action = current.primaryAction
         let source = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let configure = action == "START" && (!current.configured || sourceIsDirty)
+        let submitSource = action == "START" && (!current.configured || sourceIsDirty)
         let client = client
-        worker.async { [weak self, client, current, source, configure, action] in
+        worker.async { [weak self, client, current, source, submitSource, action] in
             let outcome = Result {
                 if action == "STOP" {
                     let response = client.call("Stop", parameters: [
@@ -125,43 +125,63 @@ public final class DobbySessionViewModel: ObservableObject {
                     ])
                     try DobbyResponse.check(response)
                 } else if action == "START" {
-                    guard !configure || !source.isEmpty else { throw DobbyClientError.noConfiguration }
-                    var sequence = current.sequence
-                    if configure {
-                        let response = client.call("Configure", parameters: [
-                            "session_id": current.sessionID,
-                            "expected_sequence": sequence,
-                            "source": source,
-                        ])
-                        let configured = try DobbyResponse.result(from: response, as: DobbyCommandSequence.self)
-                        sequence = configured.sequence
-                    }
-                    let response = client.call("Start", parameters: [
+                    guard !submitSource || !source.isEmpty else { throw DobbyClientError.noConfiguration }
+                    var parameters: [String: Any] = [
                         "session_id": current.sessionID,
-                        "expected_sequence": sequence,
+                        "expected_sequence": current.sequence,
                         "mode": "AUTO_SELECT",
                         "index": 0,
-                    ])
+                    ]
+                    if submitSource { parameters["source"] = source }
+                    let response = client.call("Start", parameters: parameters)
                     try DobbyResponse.check(response)
                 } else {
                     throw DobbyClientError.invalidResponse
                 }
+            }
+            let snapshotAfterFailure: DobbySessionSnapshot?
+            if case .failure = outcome {
+                if case let .success((value, _)) = readSnapshot(client: client, sessionID: current.sessionID) {
+                    snapshotAfterFailure = value
+                } else {
+                    snapshotAfterFailure = nil
+                }
+            } else {
+                snapshotAfterFailure = nil
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.busy = false
                 switch outcome {
                 case .success:
-                    if configure && action == "START" {
-                        self.sourceIsDirty = false
-                        self.acceptedSource = source
-                    }
+                    if submitSource && action == "START" { self.markSourceAccepted(source) }
                     self.refreshSnapshot()
                 case let .failure(failure):
+                    if let refreshed = snapshotAfterFailure {
+                        self.snapshot = refreshed
+                        let isConflict: Bool
+                        if let clientError = failure as? DobbyClientError,
+                           case let .command(code, _) = clientError {
+                            isConflict = code == "CONFLICT"
+                        } else {
+                            isConflict = false
+                        }
+                        if submitSource && action == "START" && !isConflict &&
+                            refreshed.configured && refreshed.sequence > current.sequence {
+                            self.markSourceAccepted(source)
+                        }
+                    }
                     self.error = failure.localizedDescription
+                    self.refreshSnapshot()
                 }
             }
         }
+    }
+
+    private func markSourceAccepted(_ source: String) {
+        acceptedSource = source
+        sourceIsDirty = false
+        sourceText = source
     }
 
     public func refreshLogs() {
@@ -204,8 +224,4 @@ private func readSnapshot(
     } catch {
         return .failure(error)
     }
-}
-
-private struct DobbyCommandSequence: Decodable {
-    let sequence: Int64
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"core/auth"
+	"core/dnscache"
 	log "core/log"
 	"core/xray/common"
 	"core/xray/internal"
@@ -22,10 +23,14 @@ type XrayDevice struct {
 	svrPort      int
 	socksUser    string
 	socksPass    string
+	dnsCache     *dnscache.Cache
 }
 
-func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
-	serverIPStr, err := internal.ExtractServerIP(vlessConfig)
+func NewXrayDevice(vlessConfig string, dnsCache *dnscache.Cache) (*XrayDevice, error) {
+	if dnsCache == nil {
+		return nil, errors.New("DNS cache is required")
+	}
+	serverIPStr, err := internal.ExtractServerIP(vlessConfig, dnsCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract server IP: %w", err)
 	}
@@ -54,6 +59,7 @@ func NewXrayDevice(vlessConfig string) (*XrayDevice, error) {
 		svrPort:      port,
 		socksUser:    socksUser,
 		socksPass:    socksPass,
+		dnsCache:     dnsCache,
 	}
 
 	log.Debugf(common.Category, "SOCKS bridge started proxy_ready=true server_resolved=true")
@@ -109,7 +115,7 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 	internal.SetupXrayLogging(loglevel)
 
-	xrayConfig, err := internal.GenerateXrayConfig(d.vlessConfig, "127.0.0.1", d.svrPort, routingTableID, uplinkIface, d.socksUser, d.socksPass)
+	xrayConfig, err := internal.GenerateXrayConfig(d.vlessConfig, "127.0.0.1", d.svrPort, routingTableID, uplinkIface, d.socksUser, d.socksPass, d.dnsCache)
 	if err != nil {
 		return fmt.Errorf("failed to generate xray config: %w", err)
 	}

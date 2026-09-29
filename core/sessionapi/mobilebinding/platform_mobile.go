@@ -4,9 +4,9 @@ package mobilebinding
 
 import (
 	"context"
-	"errors"
 	"core/sessionapi"
 	"core/sessionapi/runtimebridge"
+	"errors"
 )
 
 // New creates the single authoritative session manager for a mobile process.
@@ -50,10 +50,11 @@ func (p *platformAdapter) Load(ctx context.Context) ([]byte, error) {
 	p.mu.Lock()
 	callbacks := p.callbacks
 	p.mu.Unlock()
-	if callbacks == nil {
+	source, ok := callbacks.(SourceCallbacks)
+	if !ok {
 		return nil, errors.New("native source storage is unavailable")
 	}
-	value := callbacks.LoadSourceURL()
+	value := source.LoadSourceURL()
 	return []byte(value), nil
 }
 
@@ -64,7 +65,8 @@ func (p *platformAdapter) Save(ctx context.Context, value []byte) error {
 	p.mu.Lock()
 	callbacks := p.callbacks
 	p.mu.Unlock()
-	if callbacks == nil || !callbacks.SaveSourceURL(string(value)) {
+	source, ok := callbacks.(SourceCallbacks)
+	if !ok || !source.SaveSourceURL(string(value)) {
 		return errors.New("native source storage write failed")
 	}
 	return nil
@@ -77,7 +79,8 @@ func (p *platformAdapter) Clear(ctx context.Context) error {
 	p.mu.Lock()
 	callbacks := p.callbacks
 	p.mu.Unlock()
-	if callbacks == nil || !callbacks.ClearSourceURL() {
+	source, ok := callbacks.(SourceCallbacks)
+	if !ok || !source.ClearSourceURL() {
 		return errors.New("native source storage clear failed")
 	}
 	return nil

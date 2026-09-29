@@ -6,12 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
+
 	"core/common"
+	"core/dnscache"
 	"core/log"
 	"core/protocol"
 	"core/sessionapi/runtime/internal"
-	"sync"
-	"time"
+	"core/tunnel"
 )
 
 // nativeRuntime is the platform-native resource adapter used by
@@ -36,12 +39,14 @@ type nativeRuntime struct {
 // as a cleanup failure.
 const desktopShutdownTimeout = 30 * time.Second
 
-func newNativeRuntime(device protocol.ProtocolDevice) *nativeRuntime {
+func newNativeRuntime(device protocol.ProtocolDevice, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
 	cfg := common.GetNetworkConfig()
 
 	c := &nativeRuntime{
 		app: &internal.App{
 			ProtocolDevice: device,
+			DNSCache:       dnsCache,
+			BypassPolicy:   bypass,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        ownedTunName,
 				TunDeviceIP:          cfg.TunDevice,

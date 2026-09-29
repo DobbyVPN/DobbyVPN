@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"core/dnscache"
 	"core/outline"
 	vpnprotocol "core/protocol"
 	"core/sessionapi"
@@ -24,13 +25,19 @@ func New(tunnel runtime.TunnelProvider) sessionapi.Runtime {
 	})
 }
 
-func newDevice(_ context.Context, _ sessionapi.SessionRef, profile sessionapi.RuntimeProfile, _ runtime.SocketProtector) (vpnprotocol.ProtocolDevice, error) {
+func newDevice(
+	_ context.Context,
+	_ sessionapi.SessionRef,
+	profile sessionapi.RuntimeProfile,
+	_ runtime.SocketProtector,
+	dnsCache *dnscache.Cache,
+) (vpnprotocol.ProtocolDevice, error) {
 	config := string(profile.NormalizedConfig)
 	switch profile.Summary.Protocol {
 	case sessionapi.ProtocolOutline:
-		return outline.NewOutlineDevice(config)
+		return outline.NewOutlineDevice(config, dnsCache)
 	case sessionapi.ProtocolXray:
-		return xray.NewXrayDevice(config)
+		return xray.NewXrayDevice(config, dnsCache)
 	case sessionapi.ProtocolTrustTunnel:
 		return trusttunnel.NewTrustTunnelDevice(config)
 	default:

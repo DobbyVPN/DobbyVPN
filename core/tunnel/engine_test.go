@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"core/dnscache"
 	"core/tunnel/platform_engine"
 )
 
@@ -80,7 +81,7 @@ func TestSecondOwnedStartReturnsBusyBeforeTouchingPlatform(t *testing.T) {
 		engineMu.Unlock()
 	}()
 
-	_, err := StartOwnedEngine(platform_engine.EngineConfig{})
+	_, err := StartOwnedEngine(platform_engine.EngineConfig{}, dnscache.New(), nil)
 	if !errors.Is(err, ErrEngineBusy) {
 		t.Fatalf("StartOwnedEngine() error = %v, want ErrEngineBusy", err)
 	}

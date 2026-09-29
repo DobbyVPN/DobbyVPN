@@ -13,12 +13,8 @@ on:
         type: string
 
 permissions:
-  actions: write
+  actions: read
   contents: read
-
-concurrency:
-  group: dobbyvpn-actions-retention
-  cancel-in-progress: false
 
 jobs:
   resolve_release:
@@ -411,13 +407,21 @@ jobs:
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
+      - name: Read Android dependency versions
+        id: pins
+        run: |
+          set -euo pipefail
+          for pin in java_major android_build_tools; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
-          java-version: '17'
+          java-version: ${{ steps.pins.outputs.java_major }}
           distribution: temurin
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
-          packages: build-tools;36.0.0
+          packages: build-tools;${{ steps.pins.outputs.android_build_tools }}
       - name: Verify and production-sign selected Android package
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
@@ -436,7 +440,7 @@ jobs:
 
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           test -n "$sdk_root"
-          apksigner="$sdk_root/build-tools/36.0.0/apksigner"
+          apksigner="$sdk_root/build-tools/${{ steps.pins.outputs.android_build_tools }}/apksigner"
           test -x "$apksigner"
           apkanalyzer="$(command -v apkanalyzer || true)"
           if [[ -z "$apkanalyzer" ]]; then
@@ -545,20 +549,3 @@ jobs:
             --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
             --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
             --asset version.txt
-
-  retain:
-    name: Retain newest Publish run
-    if: always()
-    needs: [resolve_release, submit_testflight, promote]
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Remove older workflow runs and caches
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/release/actions_retention.py --repository "$GITHUB_REPOSITORY" --current-run-id "$GITHUB_RUN_ID" --delete-caches --delete-intermediate-artifacts

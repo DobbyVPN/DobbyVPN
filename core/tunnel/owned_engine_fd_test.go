@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"core/dnscache"
 	"core/tunnel/platform_engine"
 
 	"golang.org/x/sys/unix"
@@ -23,7 +24,7 @@ func TestFDEngineRejectsBusyBeforeDuplicatingDescriptor(t *testing.T) {
 		engineMu.Unlock()
 	})
 
-	_, err := StartOwnedFDEngine(platform_engine.EngineConfig{FD: -1})
+	_, err := StartOwnedFDEngine(platform_engine.EngineConfig{FD: -1}, dnscache.New(), nil)
 	if !errors.Is(err, ErrEngineBusy) {
 		t.Fatalf("StartOwnedFDEngine() error = %v, want ErrEngineBusy", err)
 	}
@@ -40,7 +41,9 @@ func TestFDEngineClosesRejectedDuplicateAndRetainsOriginal(t *testing.T) {
 	engineFD := -1
 	_, err = startOwnedFDEngineLocked(
 		platform_engine.EngineConfig{FD: int(reader.Fd())},
-		func(cfg platform_engine.EngineConfig) (*Engine, bool, error) {
+		dnscache.New(),
+		&BypassPolicy{},
+		func(cfg platform_engine.EngineConfig, _ *dnscache.Cache, _ *BypassPolicy) (*Engine, bool, error) {
 			engineFD = cfg.FD
 			return nil, false, want
 		},
@@ -80,7 +83,9 @@ func TestFDEngineDoesNotRecloseAcceptedDescriptor(t *testing.T) {
 	reusedFD := -1
 	_, err = startOwnedFDEngineLocked(
 		platform_engine.EngineConfig{FD: int(reader.Fd())},
-		func(cfg platform_engine.EngineConfig) (*Engine, bool, error) {
+		dnscache.New(),
+		&BypassPolicy{},
+		func(cfg platform_engine.EngineConfig, _ *dnscache.Cache, _ *BypassPolicy) (*Engine, bool, error) {
 			if closeErr := unix.Close(cfg.FD); closeErr != nil {
 				t.Fatal(closeErr)
 			}

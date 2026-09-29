@@ -55,14 +55,23 @@ jobs:
           test -f "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-unsign.apk"
           test -f "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-android-test-companion-unsigned.apk"
 
+      - name: Read Android dependency versions
+        id: pins
+        run: |
+          set -euo pipefail
+          for pin in java_major android_build_tools; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
-          java-version: '17'
+          java-version: ${{ steps.pins.outputs.java_major }}
           distribution: temurin
 
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
-          packages: build-tools;36.0.0
+          packages: build-tools;${{ steps.pins.outputs.android_build_tools }}
 
       - name: Sign a disposable F-Droid reference APK
         run: |
@@ -72,7 +81,7 @@ jobs:
             --unsigned-companion "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-android-test-companion-unsigned.apk" \
             --signed-app "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-sign.apk" \
             --signed-companion "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-android-test-companion.apk" \
-            --apksigner "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" \
+            --apksigner "$ANDROID_SDK_ROOT/build-tools/${{ steps.pins.outputs.android_build_tools }}/apksigner" \
             --keytool "$(command -v keytool)"
 
       - name: Fetch current F-Droid metadata and server

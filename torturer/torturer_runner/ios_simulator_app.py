@@ -22,6 +22,7 @@ from torturer_runner.diagnostics import (
     add_stream_notes,
     emit_streams,
     merge_output,
+    output_text,
 )
 from torturer_runner.ios_simulator import (
     IOSSimulatorContractError,
@@ -384,18 +385,11 @@ class SubprocessCommandRunner:
             raise failure from None
         result = CommandResult(
             returncode=process.returncode if process.returncode is not None else -1,
-            stdout=_decode(stdout or b""),
-            stderr=_decode(stderr or b""),
+            stdout=output_text(stdout or b""),
+            stderr=output_text(stderr or b""),
         )
         _emit_command_streams("ios-command", stdout or b"", stderr or b"")
         return result
-
-
-def _decode(payload: bytes) -> str:
-    # Keep invalid bytes visible through a reversible display form. The
-    # original byte stream remains attached to failures by diagnostics.py;
-    # replacement decoding would silently collapse distinct diagnostics.
-    return payload.decode("utf-8", errors="backslashreplace")
 
 
 def _emit_command_streams(

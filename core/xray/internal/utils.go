@@ -47,7 +47,10 @@ func XrayLogLevelName(level xrayLog.Severity) string {
 }
 
 // ExtractServerIP parses the generic VLESS JSON to find the remote server IP.
-func ExtractServerIP(configStr string) (string, error) {
+func ExtractServerIP(configStr string, dnsCache *dnscache.Cache) (string, error) {
+	if dnsCache == nil {
+		return "", errors.New("DNS cache is required")
+	}
 	var config map[string]interface{}
 	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
 		return "", fmt.Errorf("failed to unmarshal xray config while extracting server IP: %w", err)
@@ -56,7 +59,7 @@ func ExtractServerIP(configStr string) (string, error) {
 	// Assuming standard Xray config structure where outbound[0] is the proxy
 	address, ok := firstXrayServerAddress(config)
 	if ok {
-		return resolveIP(address)
+		return resolveIP(address, dnsCache)
 	}
 	return "", errors.New("could not find server address in config")
 }
@@ -116,7 +119,7 @@ func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
 }
 
 // resolveIP resolves a domain to an IP, or returns the IP if it's already one.
-func resolveIP(addr string) (string, error) {
+func resolveIP(addr string, dnsCache *dnscache.Cache) (string, error) {
 	ip := net.ParseIP(addr)
 	if ip != nil {
 		if ip4 := ip.To4(); ip4 != nil {
@@ -125,7 +128,7 @@ func resolveIP(addr string) (string, error) {
 		return "", errors.New("IPv6 address not supported; routing requires IPv4")
 	}
 
-	ip4, err := dnscache.ResolvePreflightIPv4(context.Background(), addr, dnscache.ServerResolveTimeout, "xray")
+	ip4, err := dnsCache.ResolvePreflightIPv4(context.Background(), addr, dnscache.ServerResolveTimeout, "xray")
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve xray address %q: %w", addr, err)
 	}

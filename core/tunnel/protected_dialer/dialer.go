@@ -23,6 +23,7 @@ const (
 
 type ProtectedDirectProxy struct {
 	proxy.Proxy
+	DNSCache *dnscache.Cache
 }
 
 func isLoopback(address string) bool {
@@ -91,20 +92,26 @@ func protectRawConn(network, address string, c syscall.RawConn) error {
 
 // Use the server address resolved before tunnel routing changes. Resolving it
 // again through the tunnel would make connecting depend on an already working VPN.
-func cachedDialAddress(address string) string {
+func cachedDialAddress(cache *dnscache.Cache, address string) (string, error) {
+	if cache == nil {
+		return "", fmt.Errorf("DNS cache is required for protected dialing")
+	}
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
-		return address
+		return address, nil
 	}
-	if ip, ok := dnscache.LookupIPv4(host, "protected-dialer"); ok {
-		return net.JoinHostPort(ip.String(), port)
+	if ip, ok := cache.LookupIPv4(host, "protected-dialer"); ok {
+		return net.JoinHostPort(ip.String(), port), nil
 	}
-	return address
+	return address, nil
 }
 
-func DialContextWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
+func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network, address string) (net.Conn, error) {
 	start := time.Now()
-	dialAddress := cachedDialAddress(address)
+	dialAddress, err := cachedDialAddress(cache, address)
+	if err != nil {
+		return nil, err
+	}
 	realNet := normalizeTCP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
 		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s destination=%s deadline=%s protector=%T", network, realNet, address, deadline.Format(time.RFC3339Nano), protector)
@@ -144,9 +151,12 @@ func DialContextWithProtect(ctx context.Context, network, address string) (net.C
 	return conn, nil
 }
 
-func DialUDPConnWithProtect(ctx context.Context, network, address string) (net.Conn, error) {
+func DialUDPConnWithProtect(ctx context.Context, cache *dnscache.Cache, network, address string) (net.Conn, error) {
 	start := time.Now()
-	dialAddress := cachedDialAddress(address)
+	dialAddress, err := cachedDialAddress(cache, address)
+	if err != nil {
+		return nil, err
+	}
 	realNet := normalizeUDP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
 		log.Debugf(Category, "[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=%s protector=%T", network, realNet, address, dialAddress, deadline.Format(time.RFC3339Nano), protector)
@@ -175,9 +185,12 @@ func ProtectRawConn(network, address string, c syscall.RawConn) error {
 	return protectRawConn(realNet, address, c)
 }
 
-func DialUDPWithProtect(ctx context.Context, network, address string) (net.PacketConn, error) {
+func DialUDPWithProtect(ctx context.Context, cache *dnscache.Cache, network, address string) (net.PacketConn, error) {
 	start := time.Now()
-	dialAddress := cachedDialAddress(address)
+	dialAddress, err := cachedDialAddress(cache, address)
+	if err != nil {
+		return nil, err
+	}
 	realNet := normalizeUDP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
 		log.Debugf(Category, "[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=%s protector=%T", network, realNet, address, dialAddress, deadline.Format(time.RFC3339Nano), protector)
@@ -258,11 +271,17 @@ func (c *connectedUDPConn) RemoteAddr() net.Addr {
 }
 
 func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
-	return DialContextWithProtect(ctx, metadata.Network.String(), metadata.DestinationAddress())
+	if p == nil {
+		return nil, fmt.Errorf("protected direct proxy is required")
+	}
+	return DialContextWithProtect(ctx, p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
 }
 
 func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
-	return DialUDPWithProtect(context.Background(), metadata.Network.String(), metadata.DestinationAddress())
+	if p == nil {
+		return nil, fmt.Errorf("protected direct proxy is required")
+	}
+	return DialUDPWithProtect(context.Background(), p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
 }
 
 // ProtectSocketIntErr is for integrations whose callback can signal an error

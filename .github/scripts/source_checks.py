@@ -27,6 +27,13 @@ ROOT = Path(__file__).resolve().parents[2]
 GO_MODULE = ROOT / "core"
 SCRIPT_DIR = ROOT / ".github" / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR / "desktop"))
+sys.path.insert(0, str(SCRIPT_DIR / "android"))
+from android_dependency_provenance import (
+    ANDROID_BUILD_TOOLS,
+    ANDROID_COMPILE_SDK,
+    ANDROID_NDK,
+    JAVA_MAJOR,
+)
 
 # Release asset digests pin the downloaded executable archives. These versions
 # intentionally match the existing CI tool versions, except Trivy and SwiftLint
@@ -441,12 +448,12 @@ def require_android_sdk() -> Path:
     sdk = next((Path(value).expanduser() for value in candidates if value and value.strip()), None)
     if sdk is None or not sdk.is_dir():
         raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or ui/android/local.properties")
-    ndk = sdk / "ndk" / "28.1.13356709"
+    ndk = sdk / "ndk" / ANDROID_NDK
     if not ndk.is_dir():
-        raise CheckError(f"Android Lint requires NDK 28.1.13356709 at {ndk}")
-    platform_dir = sdk / "platforms" / "android-35"
+        raise CheckError(f"Android Lint requires NDK {ANDROID_NDK} at {ndk}")
+    platform_dir = sdk / "platforms" / f"android-{ANDROID_COMPILE_SDK}"
     if not platform_dir.is_dir():
-        raise CheckError(f"Android Lint requires Android SDK platform 35 at {platform_dir}")
+        raise CheckError(f"Android Lint requires Android SDK platform {ANDROID_COMPILE_SDK} at {platform_dir}")
     return sdk
 
 
@@ -459,12 +466,12 @@ def lint_android() -> None:
     except OSError as error:
         raise CheckError(f"could not inspect Java version: {error}") from error
     java_output = probe.stderr + probe.stdout
-    if probe.returncode or not re.search(r'"17(?:\.|\")', java_output):
-        raise CheckError(f"Android Lint requires JDK 17; detected {java_output.strip() or '<no version output>'}")
+    if probe.returncode or not re.search(rf'"{JAVA_MAJOR}(?:\.|\")', java_output):
+        raise CheckError(f"Android Lint requires JDK {JAVA_MAJOR}; detected {java_output.strip() or '<no version output>'}")
     sdk = require_android_sdk()
-    build_tools = sdk / "build-tools" / "36.0.0"
+    build_tools = sdk / "build-tools" / ANDROID_BUILD_TOOLS
     if not build_tools.is_dir():
-        raise CheckError(f"Android Lint requires build-tools 36.0.0 at {build_tools}")
+        raise CheckError(f"Android Lint requires build-tools {ANDROID_BUILD_TOOLS} at {build_tools}")
     gradle = ROOT / "ui" / "android" / "gradlew"
     if not gradle.is_file():
         raise CheckError(f"Android Gradle wrapper is missing: {gradle}")

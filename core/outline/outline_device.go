@@ -37,14 +37,17 @@ type OutlineDevice struct {
 	hasUDPPath   bool
 }
 
-func NewOutlineDevice(transportConfig string) (*OutlineDevice, error) {
-	ip, err := ResolveServerIPFromConfig(transportConfig)
+func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
+	if dnsCache == nil {
+		return nil, errors.New("DNS cache is required")
+	}
+	ip, err := ResolveServerIPFromConfig(transportConfig, dnsCache)
 	if err != nil {
 		return nil, err
 	}
 
 	ctx := context.Background()
-	providers := protected_dialer.NewOutlineProviders()
+	providers := protected_dialer.NewOutlineProviders(dnsCache)
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
@@ -286,7 +289,10 @@ func (c *truncatedDNSConn) SetDeadline(t time.Time) error      { return nil }
 func (c *truncatedDNSConn) SetReadDeadline(t time.Time) error  { return nil }
 func (c *truncatedDNSConn) SetWriteDeadline(t time.Time) error { return nil }
 
-func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
+func ResolveServerIPFromConfig(transportConfig string, dnsCache *dnscache.Cache) (net.IP, error) {
+	if dnsCache == nil {
+		return nil, errors.New("DNS cache is required")
+	}
 
 	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
 		return nil, errors.New("config is required")
@@ -309,7 +315,7 @@ func ResolveServerIPFromConfig(transportConfig string) (net.IP, error) {
 		return net.ParseIP("127.0.0.1").To4(), nil
 	}
 
-	ip, err := dnscache.ResolvePreflightIPv4(context.Background(), host, dnscache.ServerResolveTimeout, "outline")
+	ip, err := dnsCache.ResolvePreflightIPv4(context.Background(), host, dnscache.ServerResolveTimeout, "outline")
 	if err != nil {
 		return nil, err
 	}

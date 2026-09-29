@@ -5,10 +5,10 @@ package internal
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -247,7 +247,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
-	})
+	}, app.DNSCache, app.BypassPolicy)
 	if err != nil {
 		log.Debugf(Category, "Can't start tun2socks: %v", err)
 		signalInit(initResult, err)

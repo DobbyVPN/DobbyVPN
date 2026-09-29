@@ -30,6 +30,7 @@ from verify_android_reproducibility import (  # noqa: E402
     verify_document,
     verify_signed_payload,
 )
+from android_dependency_provenance import ANDROID_BUILD_TOOLS  # noqa: E402
 
 CERTIFICATE_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 SIGNER_LINE = re.compile(
@@ -47,10 +48,10 @@ def find_android_tool(name: str, environment_name: str) -> Path:
     if name == "apksigner":
         sdk_root = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
         if sdk_root:
-            candidate = Path(sdk_root) / "build-tools" / "36.0.0" / "apksigner"
+            candidate = Path(sdk_root) / "build-tools" / ANDROID_BUILD_TOOLS / "apksigner"
             if candidate.is_file() and os.access(candidate, os.X_OK):
                 return candidate.resolve()
-        raise SigningError("pinned Android apksigner 36.0.0 is unavailable")
+        raise SigningError(f"pinned Android apksigner {ANDROID_BUILD_TOOLS} is unavailable")
 
     configured = os.environ.get(environment_name)
     if configured:

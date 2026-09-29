@@ -3,13 +3,26 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"core/dnscache"
+	"core/tunnel"
 )
+
+func emptyBypassPolicy(t *testing.T) *tunnel.BypassPolicy {
+	t.Helper()
+	policy, err := tunnel.ResolveBypassPolicy(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
 
 // These tests exercise the product-owned mobile runtime seam directly. They do
 // not require a device, emulator, VPN profile, or test-infrastructure change.
@@ -94,7 +107,7 @@ func connectMobileBounded(t *testing.T, c *nativeRuntime) error {
 
 func TestMobileConnectPanicRecoveryDoesNotDeadlockOrFenceNextAttempt(t *testing.T) {
 	firstTun := newMobileTestTun(t, nil)
-	c := newNativeRuntime(&panicMobileDevice{}, firstTun)
+	c := newNativeRuntime(&panicMobileDevice{}, firstTun, dnscache.New(), emptyBypassPolicy(t))
 
 	if err := connectMobileBounded(t, c); err == nil {
 		t.Fatal("Connect unexpectedly succeeded after protocol-open panic")
@@ -128,7 +141,7 @@ func TestMobileConnectPanicRecoveryDoesNotDeadlockOrFenceNextAttempt(t *testing.
 func TestMobileConnectPanicRecoveryDoesNotFenceLaterGenerationWhenCleanupFails(t *testing.T) {
 	wantCleanupErr := errors.New("test TUN cleanup failed")
 	firstTun := newMobileTestTun(t, wantCleanupErr)
-	c := newNativeRuntime(&panicMobileDevice{}, firstTun)
+	c := newNativeRuntime(&panicMobileDevice{}, firstTun, dnscache.New(), emptyBypassPolicy(t))
 
 	if err := connectMobileBounded(t, c); !errors.Is(err, wantCleanupErr) {
 		t.Fatalf("Connect error = %v, want cleanup error %v", err, wantCleanupErr)
@@ -160,7 +173,7 @@ func TestMobileConnectCancellationDoesNotMutateBlockedStartupConcurrently(t *tes
 		release: make(chan struct{}),
 	}
 	tun := newMobileTestTun(t, nil)
-	c := newNativeRuntime(device, tun)
+	c := newNativeRuntime(device, tun, dnscache.New(), emptyBypassPolicy(t))
 	result := make(chan error, 1)
 	go func() { result <- c.Connect() }()
 	<-device.opened

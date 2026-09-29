@@ -26,40 +26,44 @@ const (
 type entry struct {
 	ip        net.IP
 	expiresAt time.Time
-	source    string
 }
 
-var (
+// Cache belongs to one runtime start attempt. Its lifetime is the attempt's
+// lifetime, so retrying or replacing a session cannot reuse an earlier
+// bootstrap address.
+type Cache struct {
 	mu      sync.RWMutex
-	entries = map[string]entry{}
-)
-
-func Clear() {
-	mu.Lock()
-	defer mu.Unlock()
-	entries = map[string]entry{}
-	log.Debugf(Category, "cleared")
+	entries map[string]entry
 }
 
-func SetIPv4(host, ipString, source string, ttl time.Duration) bool {
+func New() *Cache {
+	return &Cache{entries: make(map[string]entry)}
+}
+
+func (c *Cache) SetIPv4(host, ipString, source string, ttl time.Duration) bool {
 	host = NormalizeHost(host)
 	ip := net.ParseIP(strings.TrimSpace(ipString))
-	if host == "" || ip == nil || ip.To4() == nil || ttl <= 0 {
+	if c == nil || host == "" || ip == nil || ip.To4() == nil || ttl <= 0 {
 		return false
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	entries[host] = entry{
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]entry)
+	}
+	c.entries[host] = entry{
 		ip:        append(net.IP(nil), ip.To4()...),
 		expiresAt: time.Now().Add(ttl),
-		source:    source,
 	}
 	log.Debugf(Category, "stored source=%s ttl=%s", source, ttl)
 	return true
 }
 
-func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
+func (c *Cache) ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
+	if c == nil {
+		return nil, errors.New("DNS cache is required")
+	}
 	host = NormalizeHost(host)
 	if host == "" {
 		return nil, errors.New("empty host")
@@ -72,7 +76,7 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 		return nil, errors.New("IPv6 address not supported; routing requires IPv4")
 	}
 
-	if ip, ok := LookupIPv4(host, source); ok {
+	if ip, ok := c.LookupIPv4(host, source); ok {
 		return ip, nil
 	}
 
@@ -94,7 +98,7 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 	for _, addr := range addrs {
 		if ip4 := addr.IP.To4(); ip4 != nil {
 			log.Debugf(Category, "lookup resolved source=%s elapsed=%s", source, elapsed)
-			SetIPv4(host, ip4.String(), source, time.Minute)
+			c.SetIPv4(host, ip4.String(), source, time.Minute)
 			return ip4, nil
 		}
 	}
@@ -102,10 +106,12 @@ func ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source
 	return nil, errors.New("DNS resolved only IPv6, IPv4 required")
 }
 
-// ResolvePreflightIPv4 pins a successful bootstrap lookup for one runtime
-// attempt. The runtime clears this shared dialer cache before each attempt.
-func ResolvePreflightIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
-	return resolvePreflightIPv4(ctx, host, timeout, source, ResolveIPv4)
+// ResolvePreflightIPv4 pins a successful bootstrap lookup for this attempt.
+func (c *Cache) ResolvePreflightIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
+	if c == nil {
+		return nil, errors.New("DNS cache is required")
+	}
+	return resolvePreflightIPv4(ctx, host, timeout, source, c.ResolveIPv4, c.SetIPv4)
 }
 
 func resolvePreflightIPv4(
@@ -114,12 +120,13 @@ func resolvePreflightIPv4(
 	timeout time.Duration,
 	source string,
 	resolve func(context.Context, string, time.Duration, string) (net.IP, error),
+	set func(string, string, string, time.Duration) bool,
 ) (net.IP, error) {
 	var lastErr error
 	for attempt := 1; attempt <= preflightAttempts; attempt++ {
 		ip, err := resolve(ctx, host, timeout, source)
 		if err == nil {
-			if !SetIPv4(host, ip.String(), source, PreflightCacheTTL) {
+			if !set(host, ip.String(), source, PreflightCacheTTL) {
 				return nil, errors.New("failed to cache preflight IPv4")
 			}
 			return ip, nil
@@ -143,7 +150,10 @@ func resolvePreflightIPv4(
 	return nil, lastErr
 }
 
-func LookupIPv4(host, source string) (net.IP, bool) {
+func (c *Cache) LookupIPv4(host, source string) (net.IP, bool) {
+	if c == nil {
+		return nil, false
+	}
 	host = NormalizeHost(host)
 	if host == "" {
 		return nil, false
@@ -155,7 +165,7 @@ func LookupIPv4(host, source string) (net.IP, bool) {
 		return nil, false
 	}
 
-	if ip, ok := lookup(host); ok {
+	if ip, ok := c.lookup(host); ok {
 		log.Debugf(Category, "cache hit source=%s", source)
 		return ip, true
 	}
@@ -169,20 +179,20 @@ func NormalizeHost(host string) string {
 	return host
 }
 
-func lookup(host string) (net.IP, bool) {
+func (c *Cache) lookup(host string) (net.IP, bool) {
 	now := time.Now()
-	mu.RLock()
-	cached, ok := entries[host]
-	mu.RUnlock()
+	c.mu.RLock()
+	cached, ok := c.entries[host]
+	c.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
 	if now.After(cached.expiresAt) {
-		mu.Lock()
-		if current, exists := entries[host]; exists && now.After(current.expiresAt) {
-			delete(entries, host)
+		c.mu.Lock()
+		if current, exists := c.entries[host]; exists && now.After(current.expiresAt) {
+			delete(c.entries, host)
 		}
-		mu.Unlock()
+		c.mu.Unlock()
 		return nil, false
 	}
 	return append(net.IP(nil), cached.ip...), true

@@ -5,12 +5,14 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"io"
+	"sync"
+
+	"core/dnscache"
 	"core/log"
 	"core/protocol"
 	"core/tunnel"
 	"core/tunnel/platform_engine"
-	"io"
-	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -19,9 +21,11 @@ import (
 // sessionapi/runtime. The session manager owns the externally meaningful
 // state and generation; this type only tracks local resource cleanup.
 type nativeRuntime struct {
-	device protocol.ProtocolDevice
-	tun    io.ReadWriteCloser
-	engine *tunnel.Engine
+	device       protocol.ProtocolDevice
+	tun          io.ReadWriteCloser
+	dnsCache     *dnscache.Cache
+	bypassPolicy *tunnel.BypassPolicy
+	engine       *tunnel.Engine
 	// cleanupErr retains the failed rollback for a repeated Disconnect call.
 	cleanupErr        error
 	state             lifecycleState
@@ -39,10 +43,12 @@ type nativeRuntime struct {
 	connectCancel chan struct{}
 }
 
-func newNativeRuntime(device protocol.ProtocolDevice, tun io.ReadWriteCloser) *nativeRuntime {
+func newNativeRuntime(device protocol.ProtocolDevice, tun io.ReadWriteCloser, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
 	c := &nativeRuntime{
 		device:        device,
 		tun:           tun,
+		dnsCache:      dnsCache,
+		bypassPolicy:  bypass,
 		state:         stateIdle,
 		connectCancel: make(chan struct{}),
 	}
@@ -148,7 +154,7 @@ func (c *nativeRuntime) connectLocked() (err error) {
 		ProxyAddr:   c.device.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
-	})
+	}, c.dnsCache, c.bypassPolicy)
 	if err != nil {
 		log.Debugf(nativeLogCategory, "Can't start tun2socks: %v", err)
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))

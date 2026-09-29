@@ -120,6 +120,8 @@ const (
 type StartTarget struct {
 	Mode  StartMode
 	Index int
+	// Nil reuses the accepted configuration; non-nil replaces it before startup.
+	Source []byte
 }
 
 type StartResult struct {
@@ -178,12 +180,9 @@ type RuntimeProfile struct {
 	ExcludeCIDRs []string
 }
 
-type ProbeResult struct{ LatencyMillis int64 }
-
 // Runtime owns protocol process/device work. Implementations must honor ctx;
 // cancellation is how Stop prevents a late completion from reconnecting.
 type Runtime interface {
-	Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error)
 	Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error)
 }
 
@@ -452,6 +451,21 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	if err := requestCtx.Err(); err != nil {
 		return StartResult{}, failureWithCause(FailureCanceled, "start was canceled before it was accepted", err)
 	}
+	// A GUI submits its changed source with Start. Configuration is accepted
+	// before tunnel startup, so it remains available if this attempt fails.
+	// Clear Source before storing the target for health recovery.
+	source := target.Source
+	target.Source = nil
+	if source != nil {
+		if target.Mode != AutoSelect && target.Mode != ProfileIndex {
+			return StartResult{}, failure(FailureInvalidArgument, "start mode must be AUTO_SELECT or PROFILE_INDEX")
+		}
+		configured, err := m.Configure(requestCtx, sessionID, expectedSequence, source)
+		if err != nil {
+			return StartResult{}, err
+		}
+		expectedSequence = configured.Sequence
+	}
 	s.mu.Lock()
 	if s.sequence != expectedSequence {
 		s.mu.Unlock()
@@ -475,7 +489,8 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	}
 	s.generation++
 	generation := s.generation
-	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
+	// Accepted work outlives the request and is canceled by Stop or recovery.
+	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, false, false, nil, "", ""
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.failureMessageAfterCleanup = ""
@@ -638,6 +653,12 @@ func (m *Manager) Snapshot(_ context.Context, sessionID string) (result Snapshot
 	return result, nil
 }
 
+type profileSelection struct {
+	profile       RuntimeProfile
+	platformLease PlatformLease
+	runtimeLease  RuntimeLease
+}
+
 // runStart is one lifecycle transaction whose branches all preserve generation
 // fencing and late-lease cleanup; keeping those checks together is deliberate.
 //
@@ -651,90 +672,46 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 			m.finish(s, generation, failure(FailureCanceled, "attempt stopped"))
 		}
 	}()
-	profile, err := m.selectProfile(ctx, s, generation, target)
+	if target.Mode == ProfileIndex {
+		s.mu.Lock()
+		profile := s.profiles[target.Index]
+		s.mu.Unlock()
+		if !m.advance(s, generation, StatePreparing, &profile.Summary) {
+			return
+		}
+	}
+	selection, err := m.selectProfile(ctx, s, generation, target)
 	if err != nil {
 		m.finish(s, generation, err)
 		return
 	}
-	if !m.advance(s, generation, StatePreparing, &profile.Summary) {
-		return
-	}
-	platformLease, err := m.platform.PrepareTunnel(ctx, SessionRef{s.id, generation})
-	if err == nil && platformLease == nil {
-		err = failure(FailurePlatform, "platform returned an empty tunnel lease")
-	}
-	if err != nil {
-		if platformLease != nil {
-			s.mu.Lock()
-			if s.generation == generation && s.ledger != nil && (s.state == StatePreparing || s.state == StateStopping) {
-				s.ledger.push(func(c context.Context) error { return platformLease.Release(c) })
-				s.mu.Unlock()
-			} else {
-				s.mu.Unlock()
-				err = errors.Join(err, platformLease.Release(context.Background()))
-			}
+	profile := selection.profile
+	if selection.platformLease == nil || selection.runtimeLease == nil {
+		if cleanupErr := releaseProfileSelection(selection); cleanupErr != nil {
+			m.finish(s, generation, wrapFailure(FailureCleanup, cleanupErr))
+		} else {
+			m.finish(s, generation, failure(FailureRuntime, "profile selection returned incomplete leases"))
 		}
-		m.finish(s, generation, wrapFailure(FailurePlatform, err))
 		return
 	}
 	s.mu.Lock()
-	if s.generation == generation && s.state == StateStopping && s.ledger != nil {
-		// Stop waits for this worker before draining the ledger. Retaining a
-		// lease that arrived after cancellation makes its cleanup result part of
-		// the same generation instead of silently discarding a late failure.
-		s.ledger.push(func(c context.Context) error { return platformLease.Release(c) })
+	if s.generation != generation || s.ledger == nil {
 		s.mu.Unlock()
-		return
-	}
-	if s.generation != generation || s.state != StatePreparing {
-		s.mu.Unlock()
-		if releaseErr := platformLease.Release(context.Background()); releaseErr != nil {
-			m.finish(s, generation, wrapFailure(FailureCleanup, releaseErr))
+		if cleanupErr := releaseProfileSelection(selection); cleanupErr != nil {
+			m.finish(s, generation, wrapFailure(FailureCleanup, cleanupErr))
 		}
 		return
 	}
-	s.ledger.push(func(c context.Context) error { return platformLease.Release(c) })
+	s.ledger.push(func(c context.Context) error { return selection.platformLease.Release(c) })
+	s.ledger.push(func(c context.Context) error { return selection.runtimeLease.Stop(c) })
 	s.mu.Unlock()
-	runtimeLease, err := m.runtime.Start(ctx, SessionRef{s.id, generation}, profile)
-	if err == nil && runtimeLease == nil {
-		err = failure(FailureRuntime, "runtime returned an empty lease")
-	}
-	if err != nil {
-		if runtimeLease != nil {
-			s.mu.Lock()
-			if s.generation == generation && s.ledger != nil && (s.state == StatePreparing || s.state == StateStopping) {
-				s.ledger.push(func(c context.Context) error { return runtimeLease.Stop(c) })
-				s.mu.Unlock()
-			} else {
-				s.mu.Unlock()
-				err = errors.Join(err, runtimeLease.Stop(context.Background()))
-			}
-		}
-		m.finish(s, generation, wrapFailure(FailureRuntime, err))
+	if target.Mode == AutoSelect && !m.advance(s, generation, StatePreparing, &profile.Summary) {
 		return
 	}
-	s.mu.Lock()
-	if s.generation == generation && s.state == StateStopping && s.ledger != nil {
-		// A non-cooperative runtime may finish Start after cancellation. Stop's
-		// waiter owns the ledger until this worker exits, so retain the lease and
-		// report any Stop error through the normal cleanup failure contract.
-		s.ledger.push(func(c context.Context) error { return runtimeLease.Stop(c) })
-		s.mu.Unlock()
-		return
-	}
-	if s.generation != generation || s.state != StatePreparing {
-		s.mu.Unlock()
-		if stopErr := runtimeLease.Stop(context.Background()); stopErr != nil {
-			m.finish(s, generation, wrapFailure(FailureCleanup, stopErr))
-		}
-		return
-	}
-	s.ledger.push(func(c context.Context) error { return runtimeLease.Stop(c) })
-	s.mu.Unlock()
 	if !m.advance(s, generation, StateConnected, &profile.Summary) {
 		return
 	}
-	m.waitForAttemptEnd(ctx, s, generation, runtimeLease)
+	m.waitForAttemptEnd(ctx, s, generation, selection.runtimeLease)
 }
 
 // waitForAttemptEnd keeps cleanup with the worker that acquired the lease.
@@ -760,68 +737,85 @@ func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation 
 	}
 }
 
-func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint64, target StartTarget) (RuntimeProfile, error) {
+func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint64, target StartTarget) (profileSelection, error) {
 	s.mu.Lock()
 	profiles := append([]RuntimeProfile(nil), s.profiles...)
 	s.mu.Unlock()
+	candidates := profiles
 	if target.Mode == ProfileIndex {
-		return profiles[target.Index], nil
+		if target.Index < 0 || target.Index >= len(profiles) {
+			return profileSelection{}, failure(FailureInvalidArgument, "profile index is out of range")
+		}
+		candidates = profiles[target.Index : target.Index+1]
 	}
-	type candidate struct {
-		profile RuntimeProfile
-		latency int64
-	}
-	var best *candidate
-	var probeErrors []error
-	for _, profile := range profiles {
+	var candidateErrors []error
+	for _, profile := range candidates {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return RuntimeProfile{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(probeErrors...)))
+			return profileSelection{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(candidateErrors...)))
 		}
 		ref := SessionRef{s.id, generation}
-		// A probe is a complete, isolated tunnel attempt. In particular, mobile
-		// socket protection is only valid while its platform lease is active.
+		// Startup readiness owns the leases which become the winning session.
+		// Failed candidates are fully rolled back before the next profile.
 		platformLease, prepareErr := m.platform.PrepareTunnel(ctx, ref)
 		if prepareErr == nil && platformLease == nil {
-			prepareErr = failure(FailurePlatform, "platform returned an empty tunnel lease for probe")
+			prepareErr = failure(FailurePlatform, "platform returned an empty tunnel lease")
 		}
 		if prepareErr != nil {
-			prepareErr = errors.Join(errors.Join(probeErrors...), prepareErr)
+			prepareErr = errors.Join(errors.Join(candidateErrors...), prepareErr)
 			if platformLease != nil {
 				if releaseErr := platformLease.Release(context.Background()); releaseErr != nil {
-					return RuntimeProfile{}, wrapFailure(FailureCleanup, errors.Join(prepareErr, releaseErr))
+					return profileSelection{}, wrapFailure(FailureCleanup, errors.Join(prepareErr, releaseErr))
 				}
 			}
-			return RuntimeProfile{}, wrapFailure(FailurePlatform, prepareErr)
+			return profileSelection{}, wrapFailure(FailurePlatform, prepareErr)
 		}
-		result, probeErr := m.runtime.Probe(ctx, ref, profile)
-		releaseErr := platformLease.Release(context.Background())
-		if releaseErr != nil {
-			return RuntimeProfile{}, wrapFailure(FailureCleanup, errors.Join(errors.Join(probeErrors...), probeErr, releaseErr))
+		runtimeLease, startErr := m.runtime.Start(ctx, ref, profile)
+		invalidRuntimeLease := startErr == nil && runtimeLease == nil
+		if invalidRuntimeLease {
+			startErr = failure(FailureRuntime, "runtime returned an empty lease")
 		}
-		if probeErr != nil {
-			var cleanupFailure *CleanupFailure
-			if errors.As(probeErr, &cleanupFailure) {
-				return RuntimeProfile{}, wrapFailure(FailureCleanup, errors.Join(errors.Join(probeErrors...), probeErr))
+		if startErr != nil {
+			cleanupErr := releaseProfileSelection(profileSelection{
+				platformLease: platformLease,
+				runtimeLease:  runtimeLease,
+			})
+			if cleanupErr != nil {
+				return profileSelection{}, wrapFailure(FailureCleanup, errors.Join(errors.Join(candidateErrors...), startErr, cleanupErr))
 			}
-			probeErrors = append(probeErrors, fmt.Errorf("profile %d (%s): %w", profile.Summary.Index, profile.Summary.Protocol, probeErr))
+			var cleanupFailure *CleanupFailure
+			if errors.As(startErr, &cleanupFailure) || CodeOf(startErr) == FailureCleanup {
+				return profileSelection{}, wrapFailure(FailureCleanup, errors.Join(errors.Join(candidateErrors...), startErr))
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return profileSelection{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, startErr, errors.Join(candidateErrors...)))
+			}
+			if invalidRuntimeLease || target.Mode == ProfileIndex {
+				return profileSelection{}, wrapFailure(FailureRuntime, errors.Join(errors.Join(candidateErrors...), startErr))
+			}
+			candidateErrors = append(candidateErrors, fmt.Errorf("profile %d (%s): %w", profile.Summary.Index, profile.Summary.Protocol, startErr))
 			continue
 		}
-		if result.LatencyMillis < 0 {
-			probeErrors = append(probeErrors, fmt.Errorf("profile %d (%s): probe returned invalid latency %d", profile.Summary.Index, profile.Summary.Protocol, result.LatencyMillis))
-			continue
-		}
-		if best == nil || result.LatencyMillis < best.latency || (result.LatencyMillis == best.latency && profile.Summary.Index < best.profile.Summary.Index) {
-			item := candidate{profile, result.LatencyMillis}
-			best = &item
-		}
+		return profileSelection{
+			profile:       profile,
+			platformLease: platformLease,
+			runtimeLease:  runtimeLease,
+		}, nil
 	}
-	if best == nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return RuntimeProfile{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(probeErrors...)))
-		}
-		return RuntimeProfile{}, failureWithCause(FailureProbe, "no configured profile passed its probe", errors.Join(probeErrors...))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return profileSelection{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(candidateErrors...)))
 	}
-	return best.profile, nil
+	return profileSelection{}, failureWithCause(FailureProbe, "no configured profile became ready", errors.Join(candidateErrors...))
+}
+
+func releaseProfileSelection(selection profileSelection) error {
+	var err error
+	if selection.runtimeLease != nil {
+		err = errors.Join(err, selection.runtimeLease.Stop(context.Background()))
+	}
+	if selection.platformLease != nil {
+		err = errors.Join(err, selection.platformLease.Release(context.Background()))
+	}
+	return err
 }
 
 func (m *Manager) advance(s *session, generation uint64, state State, profile *ProfileSummary) bool {
@@ -1030,9 +1024,6 @@ func (l *ledger) release(ctx context.Context) error {
 
 type unsupportedRuntime struct{}
 
-func (unsupportedRuntime) Probe(context.Context, SessionRef, RuntimeProfile) (ProbeResult, error) {
-	return ProbeResult{}, failure(FailureUnsupported, "no runtime is installed")
-}
 func (unsupportedRuntime) Start(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error) {
 	return nil, failure(FailureUnsupported, "no runtime is installed")
 }

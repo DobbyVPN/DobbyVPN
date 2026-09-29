@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"sync"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 
 	"core/log"
 )
 
-var (
-	routesMu           sync.RWMutex
-	defaultBypassCIDRs []*net.IPNet
-)
+// BypassPolicy is resolved once for one runtime attempt and is immutable after
+// construction.
+type BypassPolicy struct{ cidrs []*net.IPNet }
 
-func IsBypass(metadata *M.Metadata) bool {
+func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {
+	if p == nil {
+		return false
+	}
 	if metadata == nil {
 		return false
 	}
@@ -28,12 +29,9 @@ func IsBypass(metadata *M.Metadata) bool {
 		return false
 	}
 
-	routesMu.RLock()
-	defer routesMu.RUnlock()
-
 	stdIP := net.IP(destIP.AsSlice())
 
-	for _, route := range defaultBypassCIDRs {
+	for _, route := range p.cidrs {
 		if route.Contains(stdIP) {
 			log.Debugf(Category, "[Router] BYPASS hit for IP: %s", stdIP)
 			return true
@@ -43,41 +41,15 @@ func IsBypass(metadata *M.Metadata) bool {
 	return false
 }
 
-// BypassPolicyLease owns a temporary replacement of the process-wide bypass
-// policy. Release is idempotent and restores the exact policy which existed
-// before acquisition. Session orchestration is serialized, so leases must be
-// released in acquisition order and must not overlap.
-type BypassPolicyLease struct {
-	once     sync.Once
-	previous []*net.IPNet
-}
-
-// AcquireBypassPolicy validates and resolves the complete policy before
-// changing global state. A failed acquisition therefore leaves the baseline
-// policy untouched.
-func AcquireBypassPolicy(ctx context.Context, entries []string) (*BypassPolicyLease, error) {
-	next, err := resolveRoutingEntries(ctx, entries)
+// ResolveBypassPolicy validates and resolves every entry before returning a
+// value for this runtime attempt.
+func ResolveBypassPolicy(ctx context.Context, entries []string) (*BypassPolicy, error) {
+	cidrs, err := resolveRoutingEntries(ctx, entries)
 	if err != nil {
 		return nil, err
 	}
-	routesMu.Lock()
-	previous := cloneIPNets(defaultBypassCIDRs)
-	defaultBypassCIDRs = cloneIPNets(next)
-	routesMu.Unlock()
-	log.Debugf(Category, "[Routing] Acquired session bypass policy: %v", summarizeCIDRs(next))
-	return &BypassPolicyLease{previous: previous}, nil
-}
-
-func (l *BypassPolicyLease) Release() {
-	if l == nil {
-		return
-	}
-	l.once.Do(func() {
-		routesMu.Lock()
-		defaultBypassCIDRs = cloneIPNets(l.previous)
-		routesMu.Unlock()
-		log.Debugf(Category, "[Routing] Restored previous bypass policy")
-	})
+	log.Debugf(Category, "[Routing] Resolved attempt bypass policy: %v", summarizeCIDRs(cidrs))
+	return &BypassPolicy{cidrs: cidrs}, nil
 }
 
 func resolveRoutingEntries(ctx context.Context, entries []string) ([]*net.IPNet, error) {
@@ -103,20 +75,6 @@ func resolveRoutingEntries(ctx context.Context, entries []string) ([]*net.IPNet,
 		return nil, errors.Join(errs...)
 	}
 	return result, nil
-}
-
-func cloneIPNets(input []*net.IPNet) []*net.IPNet {
-	result := make([]*net.IPNet, 0, len(input))
-	for _, network := range input {
-		if network == nil {
-			continue
-		}
-		result = append(result, &net.IPNet{
-			IP:   append(net.IP(nil), network.IP...),
-			Mask: append(net.IPMask(nil), network.Mask...),
-		})
-	}
-	return result
 }
 
 func summarizeCIDRs(cidrs []*net.IPNet) []string {

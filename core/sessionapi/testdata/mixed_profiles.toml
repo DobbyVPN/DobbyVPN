@@ -1,30 +1,38 @@
 # All endpoints and credentials are synthetic test data.
 
-[ExcludeIPs]
-IPs = ["203.0.113.0/24"]
+schema_version = 2
+exclude_ips = ["203.0.113.0/24"]
 
-[[Outline]]
-Description = "outline-first"
+[[profiles]]
+protocol = "OUTLINE"
+description = "outline-first"
+[profiles.config]
 Server = "198.51.100.10"
 Port = 443
 Password = "synthetic-password"
 
-[[Xray]]
-Description = "xray-second"
+[[profiles]]
+protocol = "XRAY"
+description = "xray-second"
+[profiles.config]
 outbounds = [{ tag = "proxy", protocol = "vless", settings = { vnext = [] } }]
 
-[[TrustTunnel]]
+[[profiles]]
+protocol = "TRUST_TUNNEL"
+[profiles.config]
 vpn_mode = "general"
-[TrustTunnel.endpoint]
+[profiles.config.endpoint]
 hostname = "vpn.invalid"
 addresses = ["198.51.100.11:443"]
 username = "synthetic-user"
 password = "synthetic-password"
-[TrustTunnel.listener.socks]
+[profiles.config.listener.socks]
 address = "127.0.0.1:10808"
 
-[[Outline]]
-Description = "outline-last"
+[[profiles]]
+protocol = "OUTLINE"
+description = "outline-last"
+[profiles.config]
 Server = "198.51.100.12"
 Port = 8443
 Password = "synthetic-password"

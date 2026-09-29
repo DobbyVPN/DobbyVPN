@@ -11,9 +11,8 @@ import (
 )
 
 func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
-	dnscache.Clear()
-	t.Cleanup(dnscache.Clear)
-	if !dnscache.SetIPv4("vpn.invalid", "127.0.0.1", "test", time.Minute) {
+	dnsCache := dnscache.New()
+	if !dnsCache.SetIPv4("vpn.invalid", "127.0.0.1", "test", time.Minute) {
 		t.Fatal("could not set preflight address")
 	}
 	listenConfig := net.ListenConfig{}
@@ -30,8 +29,8 @@ func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	for name, dial := range map[string]func() (net.Conn, error){
-		"tcp": func() (net.Conn, error) { return DialContextWithProtect(ctx, "tcp", address) },
-		"udp": func() (net.Conn, error) { return DialUDPConnWithProtect(ctx, "udp", address) },
+		"tcp": func() (net.Conn, error) { return DialContextWithProtect(ctx, dnsCache, "tcp", address) },
+		"udp": func() (net.Conn, error) { return DialUDPConnWithProtect(ctx, dnsCache, "udp", address) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			conn, dialErr := dial()
@@ -43,7 +42,7 @@ func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
 			}
 		})
 	}
-	packet, err := DialUDPWithProtect(ctx, "udp", address)
+	packet, err := DialUDPWithProtect(ctx, dnsCache, "udp", address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +50,8 @@ func TestDialersUsePreflightAddressWithoutDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, unchanged := range []string{"uncached.invalid:443", "127.0.0.1:443", "[::1]:443", "invalid"} {
-		if got := cachedDialAddress(unchanged); got != unchanged {
+		got, err := cachedDialAddress(dnsCache, unchanged)
+		if err != nil || got != unchanged {
 			t.Errorf("cachedDialAddress(%q) = %q", unchanged, got)
 		}
 	}
@@ -73,7 +73,7 @@ func TestNonLoopbackTCPDialFailsWhenProtectionFails(t *testing.T) {
 	t.Cleanup(func() { protector = original })
 	protector = failingProtector{err: errors.New("VpnService.protect rejected socket")}
 
-	_, err := DialContextWithProtect(context.Background(), "tcp", "192.0.2.1:443")
+	_, err := DialContextWithProtect(context.Background(), dnscache.New(), "tcp", "192.0.2.1:443")
 	if !errors.Is(err, ErrSocketProtectionUnavailable) {
 		t.Fatalf("DialContextWithProtect error = %v, want socket protection error", err)
 	}
@@ -97,7 +97,7 @@ func TestLoopbackTCPDialDoesNotRequireProtection(t *testing.T) {
 		}
 	}()
 
-	conn, err := DialContextWithProtect(context.Background(), "tcp", listener.Addr().String())
+	conn, err := DialContextWithProtect(context.Background(), dnscache.New(), "tcp", listener.Addr().String())
 	if err != nil {
 		t.Fatalf("loopback dial returned protection error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestNonLoopbackUDPDialFailsWhenProtectionFails(t *testing.T) {
 	t.Cleanup(func() { protector = original })
 	protector = failingProtector{err: errors.New("VpnService.protect rejected socket")}
 
-	_, err := DialUDPWithProtect(context.Background(), "udp", "192.0.2.1:53")
+	_, err := DialUDPWithProtect(context.Background(), dnscache.New(), "udp", "192.0.2.1:53")
 	if !errors.Is(err, ErrSocketProtectionUnavailable) {
 		t.Fatalf("DialUDPWithProtect error = %v, want socket protection error", err)
 	}
@@ -130,7 +130,7 @@ func TestNonLoopbackUDPConnectionFailsWhenProtectionFails(t *testing.T) {
 	t.Cleanup(func() { protector = original })
 	protector = failingProtector{err: errors.New("VpnService.protect rejected socket")}
 
-	_, err := DialUDPConnWithProtect(context.Background(), "udp", "192.0.2.1:53")
+	_, err := DialUDPConnWithProtect(context.Background(), dnscache.New(), "udp", "192.0.2.1:53")
 	if !errors.Is(err, ErrSocketProtectionUnavailable) {
 		t.Fatalf("DialUDPConnWithProtect error = %v, want socket protection error", err)
 	}
@@ -141,7 +141,7 @@ func TestLoopbackUDPDialDoesNotRequireProtection(t *testing.T) {
 	t.Cleanup(func() { protector = original })
 	protector = failingProtector{err: errors.New("must not be called")}
 
-	conn, err := DialUDPWithProtect(context.Background(), "udp", "127.0.0.1:53")
+	conn, err := DialUDPWithProtect(context.Background(), dnscache.New(), "udp", "127.0.0.1:53")
 	if err != nil {
 		t.Fatalf("loopback UDP dial returned protection error: %v", err)
 	}

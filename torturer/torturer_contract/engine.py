@@ -35,7 +35,7 @@ class ScenarioAdapter(Protocol):
     def execute_scenario(self, scenario: ScenarioDefinition) -> Mapping[str, object]: ...
 
 
-CleanupProvider = Callable[[], object]
+CleanupProvider = Callable[[BaseException | None], None]
 
 
 def capability_unavailable_reason(
@@ -93,6 +93,10 @@ class FunctionalEngine:
             observations.update(result)
             if self._expired(started_ns, scenario.max_duration_seconds):
                 raise ScenarioExecutionError("SCENARIO_TIMEOUT")
+            assertions = evaluate_assertions(scenario.assertion_ids, observations)
+            cleanup_required = "cleanup.restored" in scenario.assertion_ids
+            cleanup_verified = observations.get("cleanup_verified") is True
+            metrics = self._metrics(observations)
         except CapabilityUnavailable:
             return self._result(
                 scenario,
@@ -109,10 +113,10 @@ class FunctionalEngine:
                 started_ns=started_ns,
                 cleanup_provider=cleanup_provider,
             )
-        assertions = evaluate_assertions(scenario.assertion_ids, observations)
-        cleanup_required = "cleanup.restored" in scenario.assertion_ids
-        cleanup_verified = observations.get("cleanup_verified") is True
-        metrics = self._metrics(observations)
+        except BaseException as primary_error:
+            if cleanup_provider is not None:
+                cleanup_provider(primary_error)
+            raise
         if not all(assertion.passed for assertion in assertions):
             outcome = "failed"
             reason_code = "ASSERTION_FAILED"
@@ -157,7 +161,7 @@ class FunctionalEngine:
         if cleanup_provider is not None:
             # Cleanup is an adapter-owned operation. Its private return value
             # is intentionally not part of the ordinary functional result.
-            cleanup_provider()
+            cleanup_provider(None)
         final_ended_ns = time.monotonic_ns()
         if final_ended_ns - started_ns > scenario.max_duration_seconds * 1_000_000_000:
             raise ScenarioExecutionError("SCENARIO_TIMEOUT")

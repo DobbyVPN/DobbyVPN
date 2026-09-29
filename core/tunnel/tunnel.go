@@ -14,6 +14,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 
+	"core/dnscache"
 	"core/log"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
@@ -50,8 +51,8 @@ const udpAssociationIdleTimeout = 10 * time.Second
 
 type DobbyProxy struct {
 	vpn    proxy.Proxy
-	vpnMu  sync.RWMutex
 	direct proxy.Proxy
+	bypass *BypassPolicy
 
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
@@ -65,64 +66,18 @@ type DobbyProxy struct {
 
 type trackedConn struct {
 	net.Conn
-	route      string
-	dest       string
-	started    time.Time
-	release    func() int64
-	once       sync.Once
-	writeMu    sync.Mutex
-	lastWrite  time.Time
-	rttSamples []time.Duration
-}
-
-func (c *trackedConn) Write(b []byte) (int, error) {
-	c.writeMu.Lock()
-	c.lastWrite = time.Now()
-	c.writeMu.Unlock()
-	return c.Conn.Write(b)
-}
-
-func (c *trackedConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	if n > 0 {
-		c.writeMu.Lock()
-		lw := c.lastWrite
-		c.writeMu.Unlock()
-		if !lw.IsZero() {
-			rtt := time.Since(lw)
-			c.writeMu.Lock()
-			c.lastWrite = time.Time{}
-			c.rttSamples = append(c.rttSamples, rtt)
-			c.writeMu.Unlock()
-		}
-	}
-	return n, err
+	route   string
+	dest    string
+	started time.Time
+	release func() int64
+	once    sync.Once
 }
 
 func (c *trackedConn) Close() error {
 	var err error
 	c.once.Do(func() {
 		active := c.release()
-		c.writeMu.Lock()
-		samples := c.rttSamples
-		c.writeMu.Unlock()
-		rttInfo := ""
-		if len(samples) > 0 {
-			var sum time.Duration
-			minRTT, maxRTT := samples[0], samples[0]
-			for _, s := range samples {
-				sum += s
-				if s < minRTT {
-					minRTT = s
-				}
-				if s > maxRTT {
-					maxRTT = s
-				}
-			}
-			avg := sum / time.Duration(len(samples))
-			rttInfo = fmt.Sprintf(" rtt(app): samples=%d min=%s avg=%s max=%s", len(samples), minRTT, avg, maxRTT)
-		}
-		log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d%s", c.route, c.dest, time.Since(c.started), active, rttInfo)
+		log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d", c.route, c.dest, time.Since(c.started), active)
 		err = c.Conn.Close()
 	})
 	return err
@@ -235,8 +190,8 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 		log.Debugf(Category, "[Router] TCP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		return nil, err
 	}
-	route, px := "VPN", p.currentVPNProxy()
-	if IsBypass(metadata) {
+	route, px := "VPN", p.vpn
+	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
 	log.Debugf(Category, "[Router] TCP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
@@ -266,8 +221,8 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 		log.Debugf(Category, "[Router] UDP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
 		return nil, err
 	}
-	route, px := "VPN", p.currentVPNProxy()
-	if IsBypass(metadata) {
+	route, px := "VPN", p.vpn
+	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
 	log.Debugf(Category, "[Router] UDP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
@@ -292,7 +247,7 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 }
 
 func (p *DobbyProxy) Addr() string {
-	return p.currentVPNProxy().Addr()
+	return p.vpn.Addr()
 }
 
 func isBlockedIPv6Destination(metadata *M.Metadata) bool {
@@ -300,26 +255,20 @@ func isBlockedIPv6Destination(metadata *M.Metadata) bool {
 }
 
 func (p *DobbyProxy) Proto() proto.Proto {
-	return p.currentVPNProxy().Proto()
-}
-
-func (p *DobbyProxy) currentVPNProxy() proxy.Proxy {
-	p.vpnMu.RLock()
-	defer p.vpnMu.RUnlock()
-	return p.vpn
+	return p.vpn.Proto()
 }
 
 // StartOwnedEngine starts tun2socks and returns the handle which exclusively
 // owns the resulting process-global engine. A second start is rejected rather
 // than stopping or reconfiguring the current session.
-func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
+func StartOwnedEngine(cfg platform_engine.EngineConfig, dnsCache *dnscache.Cache, bypass *BypassPolicy) (*Engine, error) {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 
 	if activeEngine != nil {
 		return nil, ErrEngineBusy
 	}
-	handle, _, err := startOwnedEngineLocked(cfg)
+	handle, _, err := startOwnedEngineLocked(cfg, dnsCache, bypass)
 	return handle, err
 }
 
@@ -328,7 +277,13 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 // resource embedded in cfg, including an fd-backed device, and its stop path
 // releases those resources on both later startup failure and normal shutdown.
 // Before acceptance, ownership remains with the caller.
-func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, error) {
+func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache.Cache, bypass *BypassPolicy) (*Engine, bool, error) {
+	if dnsCache == nil {
+		return nil, false, errors.New("DNS cache is required for tunnel start")
+	}
+	if bypass == nil {
+		return nil, false, errors.New("bypass policy is required for tunnel start")
+	}
 
 	handle := &Engine{stopPlatform: platform_engine.EngineStop}
 	// Reserve ownership before touching the platform engine. This closes the
@@ -356,10 +311,10 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, er
 		activeEngine = nil
 		return nil, true, errors.Join(fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer()), cleanupErr)
 	}
-
 	wrapper := &DobbyProxy{
 		vpn:    vpnOutbound,
-		direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect()},
+		direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: dnsCache},
+		bypass: bypass,
 	}
 	t.SetDialer(wrapper)
 

@@ -119,12 +119,20 @@ jobs:
           [[ "$deadline" =~ ^[0-9]+$ ]]
           printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
 
-      - name: Install JDK 17 for temporary Android test signing
+      - name: Read Android Java version
+        id: android_java
+        if: inputs.platform == 'android'
+        run: |
+          set -euo pipefail
+          value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin java_major)"
+          echo "java_major=$value" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned JDK for temporary Android test signing
         if: inputs.platform == 'android'
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ steps.android_java.outputs.java_major }}
 
       - name: Install Android tooling for selected package qualification
         if: inputs.platform == 'android'
@@ -241,13 +249,15 @@ jobs:
           case "$PLATFORM" in
             android)
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
-              run_timed android-sdk-install sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;36.0.0' 'emulator' 'system-images;android-35;google_apis;x86_64'
+              compile_sdk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_compile_sdk)"
+              build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
+              run_timed android-sdk-install sdkmanager --install 'platform-tools' "platforms;android-$compile_sdk" "build-tools;$build_tools" 'emulator' "system-images;android-$compile_sdk;google_apis;x86_64"
               unsigned_app="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-unsign.apk"
               unsigned_companion="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-android-test-companion-unsigned.apk"
               signed_app="$ANDROID_SIGNED_DIR/DobbyVPN-test.apk"
               signed_companion="$ANDROID_SIGNED_DIR/DobbyVPN-test-companion.apk"
               mkdir -p "$ANDROID_SIGNED_DIR"
-              apksigner_bin="$sdk_root/build-tools/36.0.0/apksigner"
+              apksigner_bin="$sdk_root/build-tools/$build_tools/apksigner"
               keytool_bin="$JAVA_HOME/bin/keytool"
               test -x "$keytool_bin"
               run_timed android-temporary-test-signature python3 .github/scripts/android/android_apk_signing.py sign-test \
@@ -264,7 +274,7 @@ jobs:
               export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
               mkdir -p "$ANDROID_AVD_HOME"
               printf 'Android AVD home: %s\n' "$ANDROID_AVD_HOME"
-              run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
+              run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package "system-images;android-$compile_sdk;google_apis;x86_64" --device pixel_2
               test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
               avd_list_stdout="$RUN_DIR/android-avds.stdout.log"
               avd_list_stderr="$RUN_DIR/android-avds.stderr.log"
@@ -770,7 +780,7 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}
           if-no-files-found: error
           include-hidden-files: true
-          retention-days: 1
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
 
       - name: Remove disposable qualification scratch
         if: always()

@@ -10,8 +10,7 @@ import (
 func TestFileSourceStoreLoadTreatsMissingDirectoryAsEmpty(t *testing.T) {
 	root := t.TempDir()
 	store := FileSourceStore{
-		Path:   filepath.Join(root, ".dobbyvpn", "configs", "connection-url.txt"),
-		Legacy: filepath.Join(root, ".myapp", "configs", "connection-url.txt"),
+		Path: filepath.Join(root, ".dobbyvpn", "configs", "connection-url.txt"),
 	}
 	got, err := store.Load(context.Background())
 	if err != nil || len(got) != 0 {
@@ -19,28 +18,21 @@ func TestFileSourceStoreLoadTreatsMissingDirectoryAsEmpty(t *testing.T) {
 	}
 }
 
-func TestFileSourceStoreMigratesLegacyURLOnce(t *testing.T) {
+func TestFileSourceStoreSavesAndClearsURL(t *testing.T) {
 	root := t.TempDir()
 	current := filepath.Join(root, ".dobbyvpn", "configs", "connection-url.txt")
-	legacy := filepath.Join(root, ".myapp", "configs", "connection-url.txt")
-	if err := os.MkdirAll(filepath.Dir(legacy), 0700); err != nil {
-		t.Fatal(err)
-	}
 	want := []byte("https://configs.invalid/saved")
-	if err := os.WriteFile(legacy, want, 0600); err != nil {
+	store := FileSourceStore{Path: current}
+	if err := store.Save(context.Background(), want); err != nil {
 		t.Fatal(err)
 	}
-	store := FileSourceStore{Path: current, Legacy: legacy}
 	got, err := store.Load(context.Background())
 	if err != nil || string(got) != string(want) {
 		t.Fatalf("Load() = %q, %v", got, err)
 	}
-	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
-		t.Fatalf("legacy URL remains after migration: %v", statErr)
-	}
 	info, err := os.Stat(current)
 	if err != nil || info.Mode().Perm() != 0600 {
-		t.Fatalf("migrated URL mode = %v, %v", info, err)
+		t.Fatalf("saved URL mode = %v, %v", info, err)
 	}
 	if err := store.Clear(context.Background()); err != nil {
 		t.Fatal(err)

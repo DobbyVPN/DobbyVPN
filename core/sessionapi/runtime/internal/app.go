@@ -17,12 +17,15 @@ package internal
 import (
 	"sync"
 
+	"core/dnscache"
 	"core/protocol"
 	"core/tunnel"
 )
 
 type App struct {
 	ProtocolDevice protocol.ProtocolDevice
+	DNSCache       *dnscache.Cache
+	BypassPolicy   *tunnel.BypassPolicy
 	RoutingConfig  *RoutingConfig
 
 	mu            sync.Mutex

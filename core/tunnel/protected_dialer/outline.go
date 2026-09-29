@@ -8,13 +8,14 @@ import (
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 
+	"core/dnscache"
 	"core/log"
 )
 
-type outlineStreamDialer struct{}
+type outlineStreamDialer struct{ dnsCache *dnscache.Cache }
 
-func (outlineStreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
-	conn, err := DialContextWithProtect(ctx, "tcp", addr)
+func (d outlineStreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
+	conn, err := DialContextWithProtect(ctx, d.dnsCache, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -28,18 +29,18 @@ func (outlineStreamDialer) DialStream(ctx context.Context, addr string) (transpo
 	return tcpConn, nil
 }
 
-type outlinePacketDialer struct{}
+type outlinePacketDialer struct{ dnsCache *dnscache.Cache }
 
-func (outlinePacketDialer) DialPacket(ctx context.Context, addr string) (net.Conn, error) {
-	return DialUDPConnWithProtect(ctx, "udp", addr)
+func (d outlinePacketDialer) DialPacket(ctx context.Context, addr string) (net.Conn, error) {
+	return DialUDPConnWithProtect(ctx, d.dnsCache, "udp", addr)
 }
 
-func NewOutlineProviders() *configurl.ProviderContainer {
+func NewOutlineProviders(dnsCache *dnscache.Cache) *configurl.ProviderContainer {
 	providers := &configurl.ProviderContainer{
-		StreamDialers:   configurl.NewExtensibleProvider[transport.StreamDialer](outlineStreamDialer{}),
-		PacketDialers:   configurl.NewExtensibleProvider[transport.PacketDialer](outlinePacketDialer{}),
+		StreamDialers:   configurl.NewExtensibleProvider[transport.StreamDialer](outlineStreamDialer{dnsCache}),
+		PacketDialers:   configurl.NewExtensibleProvider[transport.PacketDialer](outlinePacketDialer{dnsCache}),
 		PacketListeners: configurl.NewExtensibleProvider[transport.PacketListener](&transport.UDPListener{}),
 	}
-	log.Debugf(Category, "[Protect][Outline] SDK providers use shared protected stream/packet dialers")
+	log.Debugf(Category, "[Protect][Outline] SDK providers use attempt-scoped protected stream/packet dialers")
 	return configurl.RegisterDefaultProviders(providers)
 }
