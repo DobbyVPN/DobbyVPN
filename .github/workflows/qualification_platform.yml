@@ -1,4 +1,4 @@
-name: Release hosted mini platform
+name: Hosted mini platform qualification
 
 on:
   workflow_call:
@@ -14,7 +14,7 @@ on:
 
 jobs:
   qualification:
-    name: Release hosted mini / ${{ inputs.platform }}
+    name: Hosted mini / ${{ inputs.platform }}
     runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     permissions:
@@ -24,15 +24,15 @@ jobs:
       PLATFORM: ${{ inputs.platform }}
       DOBBYVPN_COMMIT_SHA: ${{ github.sha }}
     steps:
-      - name: Reject Release reruns before package qualification
+      - name: Reject hosted mini reruns before package qualification
         shell: bash
         run: |
           if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo "Release reruns are unsupported; dispatch a fresh Release workflow." >&2
+            echo "Hosted mini reruns are unsupported; start a fresh calling workflow run." >&2
             exit 1
           fi
 
-      - name: Check out Release source
+      - name: Check out selected source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
@@ -126,13 +126,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android tooling for Release package qualification
+      - name: Install Android tooling for selected package qualification
         if: inputs.platform == 'android'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
         with:
           packages: platform-tools
 
-      - name: Validate and install the exact native Release package
+      - name: Validate and install the exact selected native package
         shell: bash
         run: |
           set -euo pipefail
@@ -574,7 +574,7 @@ jobs:
           printf 'SERVICE_BINARY=%s\nSERVICE_PID=%s\n' "$SERVICE" "$service_pid" >> "$GITHUB_ENV"
           sleep 2
 
-      - name: Run canonical test set against exact Release package
+      - name: Run canonical test set against exact selected package
         id: functional
         working-directory: torturer
         shell: bash
