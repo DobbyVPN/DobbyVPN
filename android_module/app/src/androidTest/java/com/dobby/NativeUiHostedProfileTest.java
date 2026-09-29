@@ -1606,9 +1606,8 @@ public final class NativeUiHostedProfileTest {
             boolean directRequired = "unblocked".equals(phase);
             JSONObject directProbe = networkRequest(
                     phasePhysical, identity.toString(), directRequired);
-            JSONObject vpnProbe = "blocked".equals(phase)
-                    ? routingProviderRequest(identity.toString(), deadlineElapsedRealtime)
-                    : routingProviderRequest(identity.toString());
+            JSONObject vpnProbe = routingProviderRequest(
+                    identity.toString(), deadlineElapsedRealtime);
             JSONObject response = new JSONObject().put("phase", phase)
                     .put("direct", directProbe)
                     // Run the positive oracle in the ordinary test-APK
@@ -1676,10 +1675,6 @@ public final class NativeUiHostedProfileTest {
         } catch (Throwable failure) {
             throw new IOException("ANDROID_NETWORK_PROBE_PROVIDER_OUTPUT_INVALID", failure);
         }
-    }
-
-    private JSONObject routingProviderRequest(String endpoint) throws Exception {
-        return routingProviderRequestOnce(endpoint, 8_000);
     }
 
     private JSONObject routingProviderRequest(String endpoint, long deadlineElapsedRealtime)

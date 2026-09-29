@@ -5,7 +5,7 @@ import android.os.SystemClock;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Bounded retry for transient failures in the positive blocked-window route probe. */
+/** Bounded retry for transient failures in the positive VPN route probe. */
 final class AndroidRoutingProbeRetry {
     static final String NETWORK_REQUEST_FAILED = "ANDROID_NETWORK_REQUEST_FAILED";
     private static final int MAX_ATTEMPTS = 3;
