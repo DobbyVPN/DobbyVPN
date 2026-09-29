@@ -195,7 +195,7 @@ jobs:
           echo "APP_BUILD=${{ needs.resolve_release.outputs.android_version_code }}" >> "$GITHUB_ENV"
           echo "SOURCE_COMMIT=${{ needs.resolve_release.outputs.source_sha }}" >> "$GITHUB_ENV"
       - name: Download selected unsigned archive
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: DobbyVPN.xcarchive.tar.gz
           path: selected-release
@@ -363,49 +363,49 @@ jobs:
       # glob to download-artifact, not a list, and a broad glob would also
       # publish build intermediates.
       - name: Download Linux package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobbyVPN-linux.deb
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
       - name: Download Windows package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobbyVPN-windows-amd64.msi
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
       - name: Download macOS arm64 package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobbyVPN-macos-aarch64.pkg
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
       - name: Download macOS amd64 package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobbyVPN-macos-amd64.pkg
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
       - name: Download unsigned Android package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobbyvpn-android-unsign.apk
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
       - name: Download unsigned Android test companion
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobbyvpn-android-test-companion-unsigned.apk
           path: release
           run-id: ${{ inputs.release_run_id }}
           github-token: ${{ github.token }}
       - name: Download Android provenance
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dobbyvpn-android-provenance
           path: release
