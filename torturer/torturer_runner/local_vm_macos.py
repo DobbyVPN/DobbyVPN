@@ -16,10 +16,8 @@ import platform as host_platform
 import plistlib
 import re
 import subprocess
-import sys
 from typing import Any
 
-from .diagnostics import add_exception_notes, add_stream_notes, output_text
 from .local_vm import LocalVMError, _run_logged
 
 
@@ -32,16 +30,6 @@ class MacOSInteractiveDesktopUnavailable(LocalVMError):
         super().__init__(f"{self.reason_code}: {detail}")
 
 
-class MacOSNativeCapabilityPreflightFailed(LocalVMError):
-    """The Aqua check passed, but a separate native capability probe failed."""
-
-    reason_code = "MACOS_NATIVE_UI_CAPABILITY_PREFLIGHT_FAILED"
-
-    def __init__(self, detail: str) -> None:
-        super().__init__(f"{self.reason_code}: {detail}")
-
-
-_MACOS_CAPABILITY_PREFLIGHT_TIMEOUT_SECONDS = 90.0
 _MACOS_ACCESSIBILITY_PROBE_TIMEOUT_SECONDS = 30.0
 
 _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
@@ -121,65 +109,6 @@ def _probe(
         raise MacOSInteractiveDesktopUnavailable(
             "Aqua desktop preflight could not complete"
         ) from error
-
-
-def preflight_native_ui_capabilities(
-    smoke_script: Path,
-    *,
-    run_dir: Path,
-    logs: Path,
-    timeout: float,
-) -> None:
-    """Invoke the single-owned product-independent native capability gate."""
-
-    if timeout <= 0:
-        raise MacOSNativeCapabilityPreflightFailed(
-            "native UI capability preflight timeout is invalid"
-        )
-    if not smoke_script.is_file() or smoke_script.is_symlink():
-        raise MacOSNativeCapabilityPreflightFailed(
-            "native UI capability preflight script is unavailable"
-        )
-    # The local worker's generic preflight cap was established before the
-    # AppKit helper needed a bounded compile. Give this product-independent
-    # probe its own 90-second outer limit while keeping the compile capped at
-    # 60 seconds inside ui/smoke.py.
-    del timeout
-    try:
-        result = _run_logged(
-            [
-                sys.executable,
-                str(smoke_script),
-                "--platform", "macos",
-                "--preflight-only",
-                "--timeout", str(_MACOS_CAPABILITY_PREFLIGHT_TIMEOUT_SECONDS),
-            ],
-            cwd=smoke_script.parents[2],
-            logs=logs,
-            label="macos-native-capability-preflight",
-            timeout=_MACOS_CAPABILITY_PREFLIGHT_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except Exception as error:
-        detail = [
-            "macOS native capability preflight could not complete: "
-            f"{type(error).__name__}: {error}"
-        ]
-        detail.extend(getattr(error, "__notes__", ()))
-        failure = MacOSNativeCapabilityPreflightFailed(
-            "\n".join(detail)
-        )
-        add_exception_notes(failure, "preflight", error)
-        raise failure from error
-    if result.returncode != 0:
-        failure = MacOSNativeCapabilityPreflightFailed(
-            "macOS native capability preflight exited with status "
-            f"{result.returncode}\n"
-            f"stdout:\n{output_text(result.stdout)}"
-            f"\nstderr:\n{output_text(result.stderr)}"
-        )
-        add_stream_notes(failure, "preflight", result.stdout, result.stderr)
-        raise failure
 
 
 def _parse_console_user_state(stdout: bytes) -> tuple[str, int] | None:
@@ -353,12 +282,6 @@ def run_interactive_ui(
 
     console_user, console_uid = preflight_interactive_desktop(
         run_dir=run_dir, logs=logs, timeout=timeout
-    )
-    preflight_native_ui_capabilities(
-        Path(__file__).resolve().parent / "ui" / "smoke.py",
-        run_dir=run_dir,
-        logs=logs,
-        timeout=timeout,
     )
     filtered_environment = _filtered_native_ui_environment(environment)
     asuser_command = [

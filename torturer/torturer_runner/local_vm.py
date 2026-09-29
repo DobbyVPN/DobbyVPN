@@ -1740,25 +1740,13 @@ def run(args: argparse.Namespace) -> int:
                 run_dir, logs, args.timeout,
             )
         if args.platform == "macos" and args.suite == "full":
-            # Full macOS is the only lane that spends time building/installing
-            # a desktop candidate. Fail early when this worker is not attached
-            # to the Aqua console or lacks any native capability required by
-            # the eventual exact-window run. The native command boundary
-            # repeats the same product-independent gate after the mini phase.
-            from .local_vm_macos import (
-                preflight_interactive_desktop,
-                preflight_native_ui_capabilities,
-            )
+            # Fail early when this worker is not attached to the Aqua console.
+            # The native UI journey then proves input and capture against the app.
+            from .local_vm_macos import preflight_interactive_desktop
 
             state["status"] = "desktop-preflight"
             _write_json(run_dir / "platform.json", state)
             preflight_interactive_desktop(
-                run_dir=run_dir,
-                logs=logs,
-                timeout=min(args.timeout, 30.0),
-            )
-            preflight_native_ui_capabilities(
-                source / "torturer" / "torturer_runner" / "ui" / "smoke.py",
                 run_dir=run_dir,
                 logs=logs,
                 timeout=min(args.timeout, 30.0),

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from contextlib import redirect_stdout
-from io import StringIO
 from pathlib import Path
 import socket
 import subprocess
@@ -12,7 +10,6 @@ from unittest import mock
 from torturer_runner import local_vm, local_vm_macos
 from torturer_runner.adapters.cli import CommandResult
 from torturer_runner.adapters.macos import MacOSAdapter
-from torturer_runner.ui import smoke
 
 
 class MacOSPreflightTests(unittest.TestCase):
@@ -154,91 +151,6 @@ class MacOSPreflightTests(unittest.TestCase):
                 wait.assert_called_once_with(
                     418, Path("/var/run/dobbyvpn/control.sock"), run_dir, logs, 12,
                 )
-
-    def test_appkit_compile_is_bounded_at_sixty_seconds(self) -> None:
-        completed = subprocess.CompletedProcess(
-            ["clang"], 1, stdout=b"compiler stdout\n", stderr=b"compiler stderr\n",
-        )
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            source = root / "probe.m"
-            source.write_text("// synthetic test source\n", encoding="utf-8")
-            with (
-                mock.patch.object(smoke, "_MACOS_REFERENCE_EVENT_HELPER_SOURCE", source),
-                mock.patch.object(smoke.shutil, "which", return_value="/usr/bin/clang"),
-                mock.patch.object(smoke, "_native_run", return_value=completed) as run,
-            ):
-                with self.assertRaises(smoke.NativeUISmokeError) as caught:
-                    smoke._macos_build_reference_event_helper(root / "temporary")
-
-        self.assertEqual(run.call_args.kwargs["timeout"], 60)
-        self.assertIn("compiler stdout", str(caught.exception))
-        self.assertIn("compiler stderr", str(caught.exception))
-
-    def test_native_smoke_preflight_defaults_to_ninety_seconds(self) -> None:
-        with (
-            mock.patch.object(smoke, "preflight_macos_capabilities", return_value="ready") as preflight,
-            redirect_stdout(StringIO()),
-        ):
-            self.assertEqual(
-                smoke.main(["--platform", "macos", "--preflight-only"]),
-                0,
-            )
-
-        preflight.assert_called_once_with(90.0)
-
-    def test_capability_compile_failure_keeps_non_aqua_classification_and_streams(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            script = root / "torturer" / "torturer_runner" / "ui" / "smoke.py"
-            script.parent.mkdir(parents=True)
-            script.write_text("# test\n", encoding="utf-8")
-            stdout = b"preflight stdout\n"
-            stderr = b"AppKit compile timed out; complete compiler diagnostic\n"
-            completed = subprocess.CompletedProcess(["python"], 1, stdout, stderr)
-            with mock.patch.object(local_vm_macos, "_run_logged", return_value=completed) as run:
-                with self.assertRaises(
-                    local_vm_macos.MacOSNativeCapabilityPreflightFailed
-                ) as caught:
-                    local_vm_macos.preflight_native_ui_capabilities(
-                        script, run_dir=root, logs=root / "logs", timeout=30,
-                    )
-
-        self.assertEqual(
-            caught.exception.reason_code,
-            "MACOS_NATIVE_UI_CAPABILITY_PREFLIGHT_FAILED",
-        )
-        self.assertNotEqual(
-            caught.exception.reason_code,
-            local_vm_macos.MacOSInteractiveDesktopUnavailable.reason_code,
-        )
-        self.assertIn(stderr.decode(), str(caught.exception))
-        self.assertIn(stdout.decode(), "\n".join(caught.exception.__notes__))
-        self.assertEqual(run.call_args.kwargs["timeout"], 90)
-        self.assertEqual(run.call_args.args[0][-1], "90.0")
-
-    def test_outer_preflight_timeout_keeps_original_diagnostic_notes(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            script = root / "torturer" / "torturer_runner" / "ui" / "smoke.py"
-            script.parent.mkdir(parents=True)
-            script.write_text("# test\n", encoding="utf-8")
-            original = local_vm_macos.LocalVMError("command timed out")
-            original.add_note("preflight_stdout:\npartial native probe output\n")
-            with mock.patch.object(local_vm_macos, "_run_logged", side_effect=original):
-                with self.assertRaises(
-                    local_vm_macos.MacOSNativeCapabilityPreflightFailed
-                ) as caught:
-                    local_vm_macos.preflight_native_ui_capabilities(
-                        script, run_dir=root, logs=root / "logs", timeout=30,
-                    )
-
-        self.assertIn("partial native probe output", str(caught.exception))
-        self.assertEqual(
-            caught.exception.reason_code,
-            "MACOS_NATIVE_UI_CAPABILITY_PREFLIGHT_FAILED",
-        )
-
 
 
 if __name__ == "__main__":

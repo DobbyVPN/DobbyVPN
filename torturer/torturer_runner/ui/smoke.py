@@ -16,14 +16,12 @@ import math
 import os
 from pathlib import Path
 import plistlib
-import queue
 import re
 import signal
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from typing import TypeVar
 
@@ -281,311 +279,6 @@ try {
     return _validate_nonblank_png(path)
 
 
-def _macos_post_reference_click(x: int, y: int) -> None:
-    """Post a bounded HID click for the disposable AppKit reference control."""
-
-    graphics, core = _macos_core_graphics()
-    point = _MacCGPoint(float(x), float(y))
-    for event_type in (1, 2):
-        event = graphics.CGEventCreateMouseEvent(None, event_type, point, 0)
-        if not event:
-            raise NativeUISmokeError(
-                f"macOS CoreGraphics could not create reference event at ({x},{y})"
-            )
-        try:
-            graphics.CGEventPost(0, event)
-        finally:
-            core.CFRelease(event)
-        time.sleep(0.05)
-
-
-_MACOS_REFERENCE_EVENT_HELPER_SOURCE = Path(__file__).resolve().with_name("macos_reference_event_probe.m")
-
-
-def _macos_build_reference_event_helper(temporary: Path) -> Path:
-    """Build a disposable bundled AppKit probe with a real active window."""
-
-    source = _MACOS_REFERENCE_EVENT_HELPER_SOURCE
-    if not source.is_file() or source.is_symlink():
-        raise NativeUISmokeError("macOS AppKit reference helper source is unavailable")
-    compiler = shutil.which("clang") or "/usr/bin/clang"
-    bundle = temporary / "DobbyVPN Native Event Probe.app"
-    executable = bundle / "Contents" / "MacOS" / "DobbyVPN Native Event Probe"
-    executable.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = {
-        "CFBundleExecutable": "DobbyVPN Native Event Probe",
-        "CFBundleIdentifier": "com.dobbyvpn.native-event-probe",
-        "CFBundleName": "DobbyVPN Native Event Probe",
-        "CFBundlePackageType": "APPL",
-        "LSMinimumSystemVersion": "12.0",
-    }
-    with (bundle / "Contents" / "Info.plist").open("wb") as stream:
-        plistlib.dump(info, stream, sort_keys=True)
-    try:
-        result = _native_run(
-            [
-                compiler,
-                "-x", "objective-c", "-fobjc-arc", "-framework", "Cocoa",
-                "-o", str(executable), str(source),
-            ],
-            check=False,
-            text=True,
-            capture_output=True,
-            stream_label="macOS AppKit reference helper compile",
-            timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise NativeUISmokeError(
-            f"macOS AppKit reference helper could not compile: {error}"
-        ) from error
-    if result.returncode != 0:
-        raise NativeUISmokeError(
-            _subprocess_failure("macOS AppKit reference helper compilation failed", result)
-        )
-    try:
-        executable.chmod(0o700)
-    except OSError as error:
-        raise NativeUISmokeError(
-            f"macOS AppKit reference helper could not become executable: {error}"
-        ) from error
-    return executable
-
-
-def _macos_reference_event_preflight(timeout: float = 12.0) -> None:
-    """Prove AX, HID event posting, Screen Recording, and unobstructed Aqua.
-
-    The reference window is owned by a disposable, product-independent AppKit
-    helper bundle, so a product AX tree cannot make this gate pass accidentally
-    and the helper is a real activatable GUI application.  No TCC database is
-    edited and the process is always terminated by this function's finally
-    block.
-    """
-
-    if sys.platform != "darwin":
-        # Unit tests and static checks run on Linux; the real native boundary
-        # is only meaningful on the Aqua host.
-        return
-    if timeout <= 0:
-        raise NativeUISmokeError("macOS reference event preflight timeout is invalid")
-    reference_temporary = tempfile.TemporaryDirectory(
-        prefix="dobbyvpn-macos-reference-helper-"
-    )
-    try:
-        executable = _macos_build_reference_event_helper(Path(reference_temporary.name))
-        process = subprocess.Popen(
-            [str(executable)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-        )
-    except BaseException as error:
-        try:
-            reference_temporary.cleanup()
-        except BaseException as cleanup_error:
-            raise NativeUISmokeError(
-                "macOS AppKit reference helper cleanup failed after start error: "
-                f"{cleanup_error}; original error: {error}"
-            ) from error
-        if isinstance(error, NativeUISmokeError):
-            raise
-        raise NativeUISmokeError(
-            f"macOS AppKit reference control could not start: {error}"
-        ) from error
-    ready_line: str | None = None
-    consumed_stdout: list[str] = []
-    consumed_stderr: list[str] = []
-    deadline = time.monotonic() + min(timeout, 20.0)
-    primary_error: BaseException | None = None
-    cleanup_errors: list[str] = []
-    stdout_queue: queue.Queue[bytes | str | None] = queue.Queue()
-    reader_errors: list[str] = []
-    reader_lock = threading.Lock()
-
-    def render_chunk(chunk: bytes | str) -> str:
-        if isinstance(chunk, bytes):
-            return chunk.decode("utf-8", errors="backslashreplace")
-        return str(chunk)
-
-    def read_stdout() -> None:
-        stream = process.stdout
-        try:
-            if stream is not None:
-                for line in stream:
-                    stdout_queue.put(line)
-        except BaseException as error:
-            with reader_lock:
-                reader_errors.append(f"reference stdout reader: {type(error).__name__}: {error}")
-        finally:
-            stdout_queue.put(None)
-
-    def read_stderr() -> None:
-        stream = process.stderr
-        try:
-            if stream is not None:
-                while True:
-                    read = getattr(stream, "read1", None) or stream.read
-                    chunk = read(64 * 1024)
-                    if not chunk:
-                        break
-                    with reader_lock:
-                        consumed_stderr.append(render_chunk(chunk))
-        except BaseException as error:
-            with reader_lock:
-                reader_errors.append(f"reference stderr reader: {type(error).__name__}: {error}")
-
-    stdout_reader = threading.Thread(target=read_stdout, name="dobbyvpn-reference-stdout", daemon=True)
-    stderr_reader = threading.Thread(target=read_stderr, name="dobbyvpn-reference-stderr", daemon=True)
-    stdout_reader.start()
-    stderr_reader.start()
-
-    def remember_cleanup_error(label: str, error: BaseException) -> None:
-        # A process can exit between poll/terminate/kill.  That absence is the
-        # one expected cleanup race; every other cleanup failure must remain in
-        # the final diagnostic rather than being hidden by the primary error.
-        if isinstance(error, ProcessLookupError):
-            return
-        cleanup_errors.append(f"{label}: {type(error).__name__}: {error}")
-
-    def next_stdout_line() -> str | None:
-        remaining = max(0.0, deadline - time.monotonic())
-        if remaining <= 0:
-            return None
-        try:
-            line = stdout_queue.get(timeout=remaining)
-        except queue.Empty:
-            return None
-        if line is None:
-            return None
-        rendered = render_chunk(line)
-        consumed_stdout.append(rendered)
-        return rendered
-
-    def drain_queued_stdout() -> None:
-        while True:
-            try:
-                line = stdout_queue.get_nowait()
-            except queue.Empty:
-                return
-            if line is None:
-                return
-            consumed_stdout.append(render_chunk(line))
-
-    try:
-        while time.monotonic() < deadline:
-            line = next_stdout_line()
-            if line is None:
-                break
-            try:
-                payload = json.loads(line)
-            except (TypeError, ValueError) as error:
-                raise NativeUISmokeError(
-                    f"macOS AppKit reference control returned invalid JSON: {line!r}"
-                ) from error
-            if isinstance(payload, dict) and payload.get("ready") is True:
-                ready_line = line
-                break
-        if ready_line is None:
-            raise NativeUISmokeError("macOS AppKit reference control did not become ready")
-        payload = json.loads(ready_line)
-        try:
-            x = int(payload["x"])
-            y = int(payload["y"])
-            width = int(payload["width"])
-            height = int(payload["height"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise NativeUISmokeError("macOS AppKit reference control returned invalid bounds") from error
-        if width <= 0 or height <= 0:
-            raise NativeUISmokeError("macOS AppKit reference control returned invalid bounds")
-        reference_rect = (x, y, x + width, y + height)
-        with tempfile.TemporaryDirectory(prefix="dobbyvpn-macos-preflight-") as temporary:
-            _macos_capture_rect(reference_rect, Path(temporary) / "screen.png")
-        # Do not use the generic product-window obstruction probe here.  The
-        # VM's CoreGraphics list contains transparent full-screen Dock and
-        # Notification Center surfaces even when the captured reference area
-        # is visibly clear.  The physical click below is the decisive check:
-        # an actual overlay would prevent the disposable button from changing
-        # state and would fail this preflight without a false positive.
-        _macos_post_reference_click(x, y)
-        clicked = False
-        while time.monotonic() < deadline:
-            line = next_stdout_line()
-            if line is None:
-                break
-            try:
-                result = json.loads(line)
-            except (TypeError, ValueError):
-                continue
-            if isinstance(result, dict) and result.get("clicked") is True:
-                clicked = True
-                break
-        if not clicked:
-            raise NativeUISmokeError("macOS AppKit reference control did not receive the CoreGraphics click")
-    except BaseException as error:
-        primary_error = error
-    finally:
-        try:
-            process_running = process.poll() is None
-        except BaseException as error:
-            remember_cleanup_error("reference process status", error)
-            process_running = False
-        if process_running:
-            try:
-                process.terminate()
-            except BaseException as error:
-                remember_cleanup_error("reference process terminate", error)
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            try:
-                process.kill()
-            except BaseException as kill_error:
-                remember_cleanup_error("reference process kill", kill_error)
-            try:
-                process.wait(timeout=2)
-            except BaseException as reap_error:
-                remember_cleanup_error("reference process reap", reap_error)
-        except BaseException as error:
-            remember_cleanup_error("reference process reap", error)
-        stdout_reader.join(timeout=2)
-        stderr_reader.join(timeout=2)
-        if stdout_reader.is_alive():
-            remember_cleanup_error(
-                "reference stdout reader", RuntimeError("reader did not finish")
-            )
-        if stderr_reader.is_alive():
-            remember_cleanup_error(
-                "reference stderr reader", RuntimeError("reader did not finish")
-            )
-        with reader_lock:
-            cleanup_errors.extend(reader_errors)
-        drain_queued_stdout()
-        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
-            if stream is not None:
-                try:
-                    stream.close()
-                except BaseException as error:
-                    remember_cleanup_error(f"reference {name} close", error)
-        try:
-            reference_temporary.cleanup()
-        except BaseException as error:
-            remember_cleanup_error("reference helper temporary directory cleanup", error)
-    _emit_native_streams(
-        "macOS AppKit reference control",
-        "".join(consumed_stdout),
-        "".join(consumed_stderr),
-    )
-    if primary_error is not None or cleanup_errors:
-        diagnostics = (
-            f"; reference-stdout:\n{''.join(consumed_stdout)}"
-            f"; reference-stderr:\n{''.join(consumed_stderr)}"
-        )
-        if cleanup_errors:
-            diagnostics += "; reference-cleanup:\n" + "\n".join(cleanup_errors)
-        if primary_error is not None:
-            raise NativeUISmokeError(f"{primary_error}{diagnostics}") from primary_error
-        raise NativeUISmokeError(f"macOS AppKit reference control cleanup failed{diagnostics}")
-
-
 class _MacCGPoint(ctypes.Structure):
     """CoreGraphics point passed by value to CGEventCreateMouseEvent."""
 
@@ -761,7 +454,6 @@ def _macos_interactive_identity(timeout: float = 12.0) -> str:
             + _subprocess_streams(session)
         )
     _macos_accessibility_preflight(timeout=min(timeout, 5.0))
-    _macos_reference_event_preflight(timeout=min(timeout, 20.0))
     return f"{current_user}|uid={uid}|console={console_user}"
 
 
@@ -772,23 +464,6 @@ def verify_interactive_session(platform: str) -> str:
     if platform == "macos":
         return _macos_interactive_identity()
     raise NativeUISmokeError(f"native UI is unsupported on {platform}")
-
-
-def preflight_macos_capabilities(timeout: float = 90.0) -> str:
-    """Run the product-independent macOS full-lane capability preflight.
-
-    This is the single entrypoint used both before candidate preparation and
-    again at the native-command boundary.  It proves the current Aqua
-    identity, Accessibility, HID event posting, exact reference-window
-    capture/Screen Recording, and unobstructed AppKit event delivery without
-    starting the product UI.
-    """
-
-    if sys.platform != "darwin":
-        raise NativeUISmokeError("macOS capability preflight requires a Darwin host")
-    if timeout <= 0:
-        raise NativeUISmokeError("macOS capability preflight timeout is invalid")
-    return _macos_interactive_identity(timeout)
 
 
 def _wait_until(predicate, timeout: float, message: str) -> None:
@@ -3362,32 +3037,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--profile", type=Path, help="fresh synthetic/owner test profile to enter through the UI")
     parser.add_argument("--timeout", type=float)
     parser.add_argument(
-        "--preflight-only",
-        action="store_true",
-        help="prove macOS full-lane capabilities without launching the product UI",
-    )
-    parser.add_argument(
         "--screenshot-dir",
         type=Path,
         help="disposable directory for native-window screenshots",
     )
     args = parser.parse_args(argv)
     if args.timeout is None:
-        args.timeout = 90.0 if args.preflight_only else 30.0
-    if args.preflight_only:
-        if args.platform != "macos" or args.timeout <= 0:
-            print("native-ui macOS capability preflight arguments are invalid", file=sys.stderr)
-            return 2
-        try:
-            preflight_macos_capabilities(args.timeout)
-        except BaseException as error:
-            print(
-                f"native-ui macOS capability preflight failed: {type(error).__name__}: {error}",
-                file=sys.stderr,
-            )
-            return 1
-        print("native-ui macOS capability preflight passed", flush=True)
-        return 0
+        args.timeout = 30.0
     if (
         args.timeout <= 0
         or args.ui is None
