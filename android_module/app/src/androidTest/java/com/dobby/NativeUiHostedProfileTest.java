@@ -140,6 +140,7 @@ public final class NativeUiHostedProfileTest {
             "ANDROID_VPN_CONSENT_TIMEOUT",
             "ANDROID_NETWORK_IDENTITY_UNAVAILABLE",
             "ANDROID_NETWORK_INTERFACE_UNAVAILABLE",
+            "ANDROID_VPN_DNS_UNSUPPORTED_ADDRESS_FAMILY",
             "ANDROID_ROUTING_PROOF_FAILED",
             "ANDROID_NETWORK_TRANSITION_REQUEST_INVALID",
             "ANDROID_PHYSICAL_NETWORK_NOT_VALIDATED",
@@ -1557,6 +1558,7 @@ public final class NativeUiHostedProfileTest {
         String physicalInterface = physicalProperties == null ? null : physicalProperties.getInterfaceName();
         String vpnInterface = vpnProperties == null ? null : vpnProperties.getInterfaceName();
         if (physicalInterface == null || vpnInterface == null) throw new IllegalStateException("ANDROID_NETWORK_INTERFACE_UNAVAILABLE");
+        assertVpnDnsUsesSupportedAddressFamily(vpnProperties);
         URL identity = new URL(identityUrl);
         JSONArray identityAddresses = resolveIdentityIpv4s(physical, identity.getHost());
         JSONObject providerReady = awaitProviderDefaultVpn(deadlineElapsedRealtime);
@@ -1616,6 +1618,18 @@ public final class NativeUiHostedProfileTest {
                     // before the result crosses this process boundary.
                     .put("vpn", vpnProbe);
             writeJson(new File(control.getPath() + ".ready"), response);
+        }
+    }
+
+    private static void assertVpnDnsUsesSupportedAddressFamily(LinkProperties properties) {
+        List<InetAddress> servers = properties.getDnsServers();
+        if (servers.isEmpty()) {
+            throw new IllegalStateException("ANDROID_VPN_DNS_UNSUPPORTED_ADDRESS_FAMILY");
+        }
+        for (InetAddress server : servers) {
+            if (!(server instanceof Inet4Address)) {
+                throw new IllegalStateException("ANDROID_VPN_DNS_UNSUPPORTED_ADDRESS_FAMILY");
+            }
         }
     }
 

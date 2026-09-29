@@ -13,11 +13,11 @@ third-party services as part of normal operation:
 - When connected, the endpoint in the user's profile handles traffic routed
   through that tunnel and may observe information exposed by the selected
   protocol. DobbyVPN does not operate or control that endpoint.
-- VPN DNS settings vary by platform. Android advertises Cloudflare resolvers
-  (`1.1.1.1` and `2606:4700:4700::1111`) to its VPN service; iOS advertises
-  `1.1.1.1` and `8.8.8.8`. The effective resolver path can also depend on the
-  selected protocol and its runtime settings. Android's advertised resolver
-  list is fixed and is independent of TrustTunnel's `dns_upstreams` setting.
+- VPN DNS settings vary by platform. Android advertises Cloudflare's IPv4
+  resolver (`1.1.1.1`) to its VPN service; iOS advertises `1.1.1.1` and
+  `8.8.8.8`. The effective resolver path can also depend on the selected
+  protocol and its runtime settings. Android's advertised resolver list is
+  fixed and is independent of TrustTunnel's `dns_upstreams` setting.
 - If the user runs the CLI `external-ip` command, it requests their public
   address from `api.ipify.org`, then tries `ifconfig.me/ip` if the first
   service is unavailable. Those services can observe the request and the

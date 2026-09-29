@@ -74,9 +74,12 @@ class DobbyVpnService : VpnService() {
                 .setMtu(1500)
                 .addAddress("10.7.0.2", 32)
                 .addRoute("0.0.0.0", 0)
+                // Keep IPv6 fail-closed: the shared tunnel router blocks IPv6
+                // destinations until the protocol engines can carry them.
                 .addRoute("::", 0)
+                // The tunnel router currently blocks IPv6 destinations, so
+                // advertise only a resolver it can reach through the tunnel.
                 .addDnsServer("1.1.1.1")
-                .addDnsServer("2606:4700:4700::1111")
                 .establish()
         } catch (failure: Throwable) {
             Log.e(TAG, "VPN interface establish failed", failure)
