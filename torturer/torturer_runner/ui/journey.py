@@ -103,7 +103,7 @@ def _timeout(value: str) -> float:
         result = float(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError("timeout must be a finite number") from error
-    if result <= 0 or result == float("inf"):
+    if result <= 0 or not math.isfinite(result):
         raise argparse.ArgumentTypeError("timeout must be positive and finite")
     return result
 
@@ -315,22 +315,21 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
     checks: dict[str, object] = {}
     primary: BaseException | None = None
     try:
-        smoke.verify_interactive_session(args.platform)
         ui = smoke.NativeUIController(
             args.platform,
             args.ui,
             args.profile,
             _smoke_timeout(request_timeout),
+            helper=args.ui_helper,
             screenshot_dir=args.raw_log_dir / "screenshots",
         )
         _start_native_ui(ui, request_timeout)
-        _native_ui_action(
+        configured = _native_ui_action(
             ui, "configure", "native-input", request_timeout,
             ui.configure, milestone="configured",
         )
-        accepted = base._snapshot(min(30.0, args.timeout), "NATIVE_CONFIGURE_STATUS_FAILED")
-        if accepted.get("configured") is not True or not accepted.get("profiles"):
-            raise NativeUIJourneyError("native UI did not establish an accepted configuration")
+        if configured.get("input_verified") is not True:
+            raise NativeUIJourneyError("native UI did not verify the pasted configuration")
         checks["configure_native"] = True
 
         # The base adapter prepares its independent observation/proof state;
@@ -346,6 +345,8 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             ui.connect, milestone="connected",
         )
         active = base._snapshot(min(30.0, args.timeout), "NATIVE_CONNECT_STATUS_FAILED")
+        if active.get("configured") is not True or not active.get("profiles"):
+            raise NativeUIJourneyError("native Connect did not establish an accepted configuration")
         if active.get("active_profile") is None:
             raise NativeUIJourneyError("native UI Auto selection reported no active profile")
         checks["connect_native"] = True
@@ -464,6 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--platform", choices=("windows", "macos"), required=True)
     parser.add_argument("--cli", type=_path, required=True)
     parser.add_argument("--ui", type=_path, required=True)
+    parser.add_argument("--ui-helper", type=_path, required=True)
     parser.add_argument("--profile", type=_path, required=True)
     parser.add_argument("--raw-log-dir", type=_path, required=True)
     parser.add_argument("--output", type=_path)
@@ -490,8 +492,9 @@ def main(argv: list[str] | None = None) -> int:
         not args.cli.is_file()
         or not _ui_path_is_launchable(args.platform, args.ui)
         or not args.profile.is_file()
+        or not args.ui_helper.is_file()
     ):
-        raise SystemExit("native UI journey requires regular CLI, launchable UI, and profile files")
+        raise SystemExit("native UI journey requires a CLI, launchable UI, prepared helper, and profile")
     try:
         result = run_journey(args)
     except Exception as error:

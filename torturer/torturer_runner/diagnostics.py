@@ -5,23 +5,7 @@ from __future__ import annotations
 import sys
 from typing import TextIO
 
-
-def output_text(value: bytes | str | None) -> str:
-    """Render complete bytes reversibly when an exception needs text notes."""
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="backslashreplace")
-    return value
-
-
-def merge_output(first: bytes, second: bytes) -> bytes:
-    """Merge repeated captures when one contains the other."""
-    if not first:
-        return second
-    if not second or second.startswith(first) or first.startswith(second):
-        return second if len(second) >= len(first) else first
-    return first + second
+from .process_capture import merge_output_fragments as merge_output, output_text
 
 
 def _write_payload(destination: TextIO, payload: bytes | str) -> None:

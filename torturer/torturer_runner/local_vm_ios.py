@@ -9,18 +9,53 @@ import sys
 from . import ios_simulator_app as ios
 
 
-def run(
+def prepare(
     run_dir: Path,
     logs: Path,
     timeout: float,
     architecture: str | None,
-    source_sha: str | None,
 ) -> dict:
-    from .local_vm import _read_state, _run_logged, _write_json
-
     contract = ios.public_ios_simulator_app_contract(
         architecture or ("amd64" if platform.machine().lower() in {"x86_64", "amd64"} else "arm64")
     )
+    runner = ios.SubprocessCommandRunner()
+    budget = ios.RunBudget(max_seconds=timeout, cleanup_reserve_seconds=min(120, timeout / 4))
+    work = run_dir / "work" / "ios"
+    try:
+        ios.prepare_ios_simulator_candidate(
+            candidate_root=run_dir / "source", work_dir=work, runner=runner,
+            contract=contract, budget=budget,
+        )
+    except BaseException as error:
+        try:
+            ios.retain_ios_diagnostics(work, logs / "ios-simulator")
+        except BaseException as collection_error:
+            error.add_note(
+                f"iOS Simulator build diagnostic collection failed: {collection_error}"
+            )
+        raise
+    return {
+        "mode": "ios-simulator",
+        "app": str(contract.app_path(work)),
+        "architecture": contract.architecture,
+    }
+
+
+def run(
+    run_dir: Path,
+    candidate: dict,
+    logs: Path,
+    timeout: float,
+) -> dict:
+    from .local_vm import _read_state, _write_json
+
+    if candidate.get("mode") != "ios-simulator" or not isinstance(candidate.get("app"), str):
+        raise ios.IOSSimulatorAppContractError("prepared iOS Simulator candidate is missing")
+    contract = ios.public_ios_simulator_app_contract(str(candidate.get("architecture", "")))
+    work = run_dir / "work" / "ios"
+    app_path = contract.app_path(work)
+    if Path(candidate["app"]).resolve() != app_path.resolve() or not app_path.is_dir():
+        raise ios.IOSSimulatorAppContractError("prepared iOS Simulator app descriptor is invalid")
 
     class Runner(ios.SubprocessCommandRunner):
         def run(self, command, **kwargs):
@@ -46,11 +81,6 @@ def run(
 
     runner = Runner()
     budget = ios.RunBudget(max_seconds=timeout, cleanup_reserve_seconds=min(120, timeout / 4))
-    work = run_dir / "work" / "ios"
-    ios.prepare_ios_simulator_candidate(
-        candidate_root=run_dir / "source", work_dir=work, runner=runner,
-        contract=contract, budget=budget,
-    )
     try:
         evidence = ios.run_ios_simulator_app_contract(
             candidate_root=run_dir / "source", work_dir=work, runner=runner,
@@ -69,21 +99,26 @@ def run(
             )
         raise
     ios.retain_ios_diagnostics(work, logs / "ios-simulator")
-    if source_sha is not None:
-        _run_logged(
-            [
-                sys.executable, str(run_dir / "source" / ".github" / "scripts" / "ios" / "ios_production_check.py"),
-                "--source-sha", source_sha,
-                "--output-dir", str(run_dir / "work" / "ios-production"),
-            ],
-            cwd=run_dir / "source", logs=logs,
-            label="ios-production-analysis-and-archive", timeout=timeout,
-        )
     _write_json(logs / "simulator.json", {
         "scope": "ios-simulator-mini", "suite": "mini", "passed": True,
         "udid": evidence.simulator.udid, "architecture": contract.architecture,
     })
     return _read_state(run_dir)["runtime"]
+
+
+def check_production(run_dir: Path, logs: Path, timeout: float, source_sha: str) -> None:
+    from .local_vm import _run_logged
+
+    _run_logged(
+        [
+            sys.executable,
+            str(run_dir / "source" / ".github" / "scripts" / "ios" / "ios_production_check.py"),
+            "--source-sha", source_sha,
+            "--output-dir", str(run_dir / "work" / "ios-production"),
+        ],
+        cwd=run_dir / "source", logs=logs,
+        label="ios-production-analysis-and-archive", timeout=timeout,
+    )
 
 
 def cleanup(run_dir: Path, runtime: dict, logs: Path, timeout: float) -> None:

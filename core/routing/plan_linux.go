@@ -10,6 +10,9 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 const linuxResolvedCommandTimeout = 5 * time.Second
@@ -28,15 +31,6 @@ func executeLinuxResolvedCommand(args ...string) error {
 	return nil
 }
 
-func linuxRouteAlreadyGone(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "no such process") ||
-		strings.Contains(message, "no such file or directory") || strings.Contains(message, "cannot find")
-}
-
 // AcquireLinuxProxyRoute installs a host bypass only when this session added
 // it. Existing routes are left untouched and therefore are never removed by
 // the lease.
@@ -44,16 +38,14 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 	if isLoopbackIP(proxyIP) {
 		return nil, nil
 	}
-
-	command := fmt.Sprintf(
-		"ip route add %s/32 via %s dev %s proto %d metric %d",
-		proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
-	)
+	route, err := linuxGatewayRoute(proxyIP, gatewayIP, iface, unix.RT_TABLE_MAIN, linuxOwnedRouteProtocol, linuxOwnedProxyMetric)
+	if err != nil {
+		return nil, err
+	}
 	var created bool
 	return p.Acquire("proxy-route "+proxyIP, func() error {
-		_, err := linuxRunCommand(command)
-		if err != nil {
-			if strings.Contains(err.Error(), "File exists") {
+		if err := linuxRouteOperation("add", &route, linuxRouteAdd); err != nil {
+			if linuxAlreadyExists(err) {
 				return nil
 			}
 			return err
@@ -64,10 +56,7 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 		if !created {
 			return nil
 		}
-		_, err := linuxRunCommand(fmt.Sprintf(
-			"ip route del %s/32 via %s dev %s proto %d metric %d",
-			proxyIP, gatewayIP, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
-		))
+		err := linuxRouteOperation("delete", &route, linuxRouteDel)
 		if linuxRouteAlreadyGone(err) {
 			return nil
 		}
@@ -80,19 +69,27 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 // rule. If either resource already exists, acquisition fails rather than
 // claiming ownership of it.
 func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP string) error {
-	routeCommand := fmt.Sprintf(
-		"ip route add table %d %s via %s dev %s proto %d",
-		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
-	)
-	routeDelete := fmt.Sprintf(
-		"ip route del table %d %s via %s dev %s proto %d",
-		tableID, linuxDefaultRoute, gatewayIP, iface, linuxOwnedRouteProtocol,
-	)
-	routeLease, err := p.Acquire(fmt.Sprintf("mark-route table=%d", tableID), func() error {
-		_, err := linuxRunCommand(routeCommand)
+	if tableID <= 0 || uint64(tableID) > uint64(^uint32(0)) {
+		return fmt.Errorf("invalid Linux routing table %d", tableID)
+	}
+	if priority <= 0 || uint64(priority) > uint64(^uint32(0)) {
+		return fmt.Errorf("invalid Linux routing rule priority %d", priority)
+	}
+	existingRule, err := linuxSessionRuleExists(tableID, priority)
+	if err != nil {
+		return fmt.Errorf("inspect existing fwmark rule: %w", err)
+	}
+	if existingRule {
+		return fmt.Errorf("fwmark rule table=%d priority=%d already exists", tableID, priority)
+	}
+	mainRoute, err := linuxGatewayRoute("", gatewayIP, iface, tableID, linuxOwnedRouteProtocol, 0)
+	if err != nil {
 		return err
+	}
+	routeLease, err := p.Acquire(fmt.Sprintf("mark-route table=%d", tableID), func() error {
+		return linuxRouteOperation("add", &mainRoute, linuxRouteAdd)
 	}, func() error {
-		_, err := linuxRunCommand(routeDelete)
+		err := linuxRouteOperation("delete", &mainRoute, linuxRouteDel)
 		if linuxRouteAlreadyGone(err) {
 			return nil
 		}
@@ -105,12 +102,18 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 	// Link loss removes the physical default. Without a terminal route, marked
 	// VPN-server traffic falls through to the main TUN route and loops back into
 	// the VPN. Metric 1 loses to the physical route's metric 0 and survives link loss.
-	terminalRoute := fmt.Sprintf("table %d unreachable default proto %d metric 1", tableID, linuxOwnedRouteProtocol)
+	terminalRoute := netlink.Route{
+		Dst:      linuxDefaultIPNet(netlink.FAMILY_V4),
+		Protocol: netlink.RouteProtocol(linuxOwnedRouteProtocol),
+		Priority: 1,
+		Family:   netlink.FAMILY_V4,
+		Table:    tableID,
+		Type:     unix.RTN_UNREACHABLE,
+	}
 	terminalLease, err := p.Acquire(fmt.Sprintf("mark-unreachable table=%d", tableID), func() error {
-		_, routeErr := linuxRunCommand("ip route add " + terminalRoute)
-		return routeErr
+		return linuxRouteOperation("add", &terminalRoute, linuxRouteAdd)
 	}, func() error {
-		_, routeErr := linuxRunCommand("ip route del " + terminalRoute)
+		routeErr := linuxRouteOperation("delete", &terminalRoute, linuxRouteDel)
 		if linuxRouteAlreadyGone(routeErr) {
 			return nil
 		}
@@ -120,14 +123,12 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 		return errors.Join(err, routeLease.Close())
 	}
 
-	ruleCommand := fmt.Sprintf("ip rule add fwmark %d lookup %d priority %d", tableID, tableID, priority)
-	ruleDelete := fmt.Sprintf("ip rule del fwmark %d lookup %d priority %d", tableID, tableID, priority)
 	if _, err := p.Acquire(fmt.Sprintf("mark-rule table=%d priority=%d", tableID, priority), func() error {
-		_, err := linuxRunCommand(ruleCommand)
-		return err
+		rule := linuxSessionRule(tableID, priority)
+		return linuxRuleOperation("add", rule, linuxRuleAdd)
 	}, func() error {
-		_, err := linuxRunCommand(ruleDelete)
-		return err
+		rule := linuxSessionRule(tableID, priority)
+		return linuxRuleOperation("delete", rule, linuxRuleDel)
 	}); err != nil {
 		return errors.Join(err, terminalLease.Close(), routeLease.Close())
 	}
@@ -138,30 +139,47 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 // route and records the exact previous route. Release deletes only the TUN
 // default and restores that recorded baseline; it never guesses a gateway.
 func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
-	var baseline string
+	var baseline netlink.Route
+	var tunRoute netlink.Route
 	return p.Acquire("tun-default "+tunName, func() error {
-		output, err := linuxRunCommand("ip -o -4 route show " + linuxDefaultRoute)
+		defaults, err := linuxMainIPv4DefaultRoutes()
 		if err != nil {
-			return fmt.Errorf("capture default route: %w", err)
+			return fmt.Errorf("capture main-table default route: %w", err)
 		}
-		baseline, err = linuxDefaultRouteRestoreCommand(output)
+		if len(defaults) == 0 {
+			return fmt.Errorf("no IPv4 default route to preserve")
+		}
+		baseline = defaults[0]
+		if baseline.Dst == nil {
+			baseline.Dst = linuxDefaultIPNet(netlink.FAMILY_V4)
+		}
+		tunLinkIndex, err := linuxLinkIndex(tunName)
 		if err != nil {
 			return err
 		}
-		_, err = linuxRunCommand(fmt.Sprintf(
-			"ip route replace %s dev %s proto %d", linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
-		))
-		return err
+		tunRoute = netlink.Route{
+			Dst:       linuxDefaultIPNet(netlink.FAMILY_V4),
+			LinkIndex: tunLinkIndex,
+			Protocol:  netlink.RouteProtocol(linuxOwnedRouteProtocol),
+			Family:    netlink.FAMILY_V4,
+			Table:     unix.RT_TABLE_MAIN,
+			Type:      unix.RTN_UNICAST,
+			Scope:     netlink.SCOPE_LINK,
+		}
+		if err := linuxRouteOperation("replace", &tunRoute, linuxRouteReplace); err != nil {
+			return fmt.Errorf("install TUN default route: %w", err)
+		}
+		return nil
 	}, func() error {
-		// Specify the TUN device so a changed default owned by another actor is
-		// never removed. Do not restore the snapshot if that deletion fails.
-		if _, err := linuxRunCommand(fmt.Sprintf(
-			"ip route del %s dev %s proto %d", linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
-		)); err != nil {
+		// Delete the route owned by this session first. A failed delete must not
+		// restore a baseline over a route changed by another actor.
+		if err := linuxRouteOperation("delete", &tunRoute, linuxRouteDel); err != nil {
 			return err
 		}
-		_, err := linuxRunCommand(baseline)
-		return err
+		if err := linuxRouteOperation("replace", &baseline, linuxRouteReplace); err != nil {
+			return fmt.Errorf("restore captured main-table default route: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -198,31 +216,27 @@ func (p *Plan) AcquireLinuxResolvedDNS(tunName, dnsIP string) (*Lease, error) {
 	})
 }
 
-func linuxDefaultRouteRestoreCommand(output string) (string, error) {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		if fields[0] == linuxDefaultRoute {
-			return "ip route replace " + strings.Join(fields, " "), nil
-		}
-	}
-	return "", fmt.Errorf("no IPv4 default route to preserve")
-}
-
 // AcquireLinuxIPv6Block uses add, not replace, so pre-existing block routes
 // are preserved. Only routes created by this plan receive a cleanup lease.
 func (p *Plan) AcquireLinuxIPv6Block() error {
 	for _, subnet := range []string{ipv6LowerHalf, ipv6UpperHalf} {
 		subnet := subnet
+		_, network, err := net.ParseCIDR(subnet)
+		if err != nil {
+			return fmt.Errorf("parse IPv6 block route %q: %w", subnet, err)
+		}
+		route := netlink.Route{
+			Dst:      network,
+			Protocol: netlink.RouteProtocol(linuxOwnedRouteProtocol),
+			Priority: 1,
+			Family:   netlink.FAMILY_V6,
+			Table:    unix.RT_TABLE_MAIN,
+			Type:     unix.RTN_BLACKHOLE,
+		}
 		created := false
 		_, err := p.Acquire("ipv6-block "+subnet, func() error {
-			_, err := linuxRunCommand(fmt.Sprintf(
-				"ip -6 route add blackhole %s proto %d metric 1", subnet, linuxOwnedRouteProtocol,
-			))
-			if err != nil {
-				if strings.Contains(err.Error(), "File exists") {
+			if err := linuxRouteOperation("add", &route, linuxRouteAdd); err != nil {
+				if linuxAlreadyExists(err) {
 					return nil
 				}
 				return err
@@ -233,9 +247,10 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 			if !created {
 				return nil
 			}
-			_, err := linuxRunCommand(fmt.Sprintf(
-				"ip -6 route del blackhole %s proto %d metric 1", subnet, linuxOwnedRouteProtocol,
-			))
+			err := linuxRouteOperation("delete", &route, linuxRouteDel)
+			if linuxRouteAlreadyGone(err) {
+				return nil
+			}
 			return err
 		})
 		if err != nil {

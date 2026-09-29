@@ -5,12 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
-import os
 import plistlib
 from pathlib import Path
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -21,9 +19,9 @@ from torturer_runner.diagnostics import (
     add_exception_notes,
     add_stream_notes,
     emit_streams,
-    merge_output,
     output_text,
 )
+from torturer_runner.process_capture import exception_output, run_finite_capture
 from torturer_runner.ios_simulator import (
     IOSSimulatorContractError,
     SimulatorApp,
@@ -33,7 +31,7 @@ from torturer_runner.ios_simulator import (
     simctl_get_app_container_command,
     simctl_install_command,
     simctl_terminate_command,
-    xcodebuild_ui_test_command,
+    xcodebuild_ui_test_without_building_command,
 )
 from torturer_runner.screenshot_artifacts import (
     assert_files_identical,
@@ -62,10 +60,10 @@ IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS = 10 * 60
 # contract; RunBudget still enforces the 30-minute lane and cleanup reserve.
 IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
-# A timed-out command may need one bounded drain after SIGTERM, one after the
-# process-group SIGKILL, and one after killing the direct child. Keep that
-# worst-case time outside each operation timeout so RunBudget still preserves
-# its cleanup reserve.
+# A timed-out command can use one grace window to stop its process group, then
+# the remaining reserve to drain inherited pipes and reap the direct child.
+# Keep this outside each operation timeout so RunBudget retains its cleanup
+# reserve.
 COMMAND_TERMINATION_RESERVE_SECONDS = 3 * COMMAND_TERMINATION_GRACE_SECONDS
 
 # These are deliberately stage-specific.  The old contract gave every
@@ -250,73 +248,6 @@ class CommandRunner(Protocol):
         """Run shell-free and forward each captured stream exactly once."""
 
 
-def _signal_process_group(process: subprocess.Popen[bytes], sig: int) -> None:
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, sig)
-        elif sig == signal.SIGTERM:
-            process.terminate()
-        else:
-            process.kill()
-    except ProcessLookupError:
-        pass
-
-
-def _stop_process_group(process: subprocess.Popen[bytes], grace_seconds: float) -> tuple[bytes, bytes]:
-    """Stop the command's process group and drain its pipes; no PID census."""
-    _signal_process_group(process, signal.SIGTERM)
-    try:
-        stdout, stderr = process.communicate(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        _signal_process_group(process, signal.SIGKILL)
-        try:
-            stdout, stderr = process.communicate(timeout=max(1.0, grace_seconds))
-        except subprocess.TimeoutExpired as error:
-            captured_stdout = error.output or error.stdout or b""
-            captured_stderr = error.stderr or b""
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            try:
-                stdout, stderr = process.communicate(timeout=max(1.0, grace_seconds))
-            except subprocess.TimeoutExpired as final_error:
-                captured_stdout = merge_output(
-                    captured_stdout,
-                    final_error.output or final_error.stdout or b"",
-                )
-                captured_stderr = merge_output(
-                    captured_stderr,
-                    final_error.stderr or b"",
-                )
-                cleanup_errors: list[str] = []
-                for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
-                    if stream is None:
-                        continue
-                    try:
-                        stream.close()
-                    except BaseException as close_error:
-                        cleanup_errors.append(
-                            f"{name} pipe close: {type(close_error).__name__}: {close_error}"
-                        )
-                failure = IOSSimulatorAppContractError(
-                    "iOS command pipes remained open after process-group cleanup; "
-                    "output collection did not finish within the bounded drain"
-                )
-                failure.stdout = merge_output(captured_stdout, final_error.output or b"")
-                failure.stderr = merge_output(captured_stderr, final_error.stderr or b"")
-                if cleanup_errors:
-                    failure.add_note("cleanup_errors: " + "; ".join(cleanup_errors))
-                raise failure from final_error
-            # Drain output already written before closing inherited handles.
-            stdout = merge_output(captured_stdout, stdout or b"")
-            stderr = merge_output(captured_stderr, stderr or b"")
-    # The parent may have exited while a background command still shares its
-    # process group but not its pipes. Reap that group as part of timeout cleanup.
-    _signal_process_group(process, signal.SIGKILL)
-    return stdout or b"", stderr or b""
-
-
 class SubprocessCommandRunner:
     """Run shell-free commands with timeouts and process-group cleanup."""
 
@@ -331,64 +262,39 @@ class SubprocessCommandRunner:
         if timeout <= 0:
             raise IOSSimulatorAppContractError("iOS command timeout must be positive")
         try:
-            process = subprocess.Popen(
-                list(command),
+            completed = run_finite_capture(
+                command,
                 cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=(os.name == "posix"),
+                timeout_seconds=timeout,
+                termination_grace_seconds=COMMAND_TERMINATION_GRACE_SECONDS,
+                cleanup_timeout_seconds=COMMAND_TERMINATION_RESERVE_SECONDS,
             )
         except OSError as error:
+            stdout, stderr = exception_output(error)
             failure = IOSSimulatorAppContractError(
                 f"iOS command could not start: {type(error).__name__}"
             )
-            add_stream_notes(
-                failure,
-                "command",
-                getattr(error, "stdout", None),
-                getattr(error, "stderr", None),
-            )
-            raise failure from None
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            add_stream_notes(failure, "command", stdout, stderr)
+            _emit_command_streams("ios-command", stdout, stderr, failure)
+            for note in getattr(error, "__notes__", ()):
+                failure.add_note(f"cleanup_{note}")
+            raise failure from error
         except subprocess.TimeoutExpired as error:
-            partial_stdout = error.output or b""
-            partial_stderr = error.stderr or b""
-            cleanup_error: BaseException | None = None
-            try:
-                stdout, stderr = _stop_process_group(
-                    process,
-                    min(COMMAND_TERMINATION_GRACE_SECONDS, max(1.0, timeout)),
-                )
-            except IOSSimulatorAppContractError as cleanup_failure:
-                stdout = merge_output(
-                    partial_stdout,
-                    getattr(cleanup_failure, "stdout", b""),
-                )
-                stderr = merge_output(
-                    partial_stderr,
-                    getattr(cleanup_failure, "stderr", b""),
-                )
-                cleanup_error = cleanup_failure
+            stdout, stderr = exception_output(error)
             failure = IOSSimulatorAppContractError(
                 f"iOS command timed out after {timeout:g}s"
             )
             add_stream_notes(failure, "command", stdout, stderr)
             _emit_command_streams("ios-command", stdout, stderr, failure)
-            if cleanup_error is not None:
-                add_exception_notes(
-                    failure,
-                    "cleanup",
-                    cleanup_error,
-                    include_streams=False,
-                )
-            raise failure from None
+            for note in getattr(error, "__notes__", ()):
+                failure.add_note(f"cleanup_{note}")
+            raise failure from error
         result = CommandResult(
-            returncode=process.returncode if process.returncode is not None else -1,
-            stdout=output_text(stdout or b""),
-            stderr=output_text(stderr or b""),
+            returncode=completed.returncode if completed.returncode is not None else -1,
+            stdout=output_text(completed.stdout),
+            stderr=output_text(completed.stderr),
         )
-        _emit_command_streams("ios-command", stdout or b"", stderr or b"")
+        _emit_command_streams("ios-command", completed.stdout, completed.stderr)
         return result
 
 
@@ -1313,7 +1219,7 @@ def run_ios_simulator_app_contract(
             "xctest",
             lambda: _require_success(
                 runner,
-                xcodebuild_ui_test_command(
+                xcodebuild_ui_test_without_building_command(
                     simulator.udid,
                     project,
                     work_dir / "derived-data",
@@ -1442,6 +1348,13 @@ def prepare_ios_simulator_candidate(
     work_dir.mkdir(parents=True, exist_ok=True)
     app_path = contract.app_path(work_dir)
     go_root = candidate_root / "core"
+    project = candidate_root / _PROJECT_PATH
+    if not project.is_dir():
+        raise IOSSimulatorStageError(
+            "verify-ui-test-project",
+            f"iOS XCTest project is unavailable: {project}",
+        )
+
     def build_app() -> None:
         _require_success(
             runner,

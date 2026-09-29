@@ -76,7 +76,7 @@ class TimingProgressTests(unittest.TestCase):
             def run(self, _command, *, cwd=None, timeout_seconds=None):
                 del cwd, timeout_seconds
                 if self.returncode == 0:
-                    contract.app_path(work_dir).mkdir(parents=True)
+                    contract.app_path(work_dir).mkdir(parents=True, exist_ok=True)
                 return ios_simulator_app.CommandResult(
                     self.returncode,
                     "build stdout\x00" if self.returncode else "",
@@ -86,6 +86,9 @@ class TimingProgressTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             work_dir = root / "work"
+            (root / "candidate" / "ui" / "apple" / "ios" / "iosApp.xcodeproj").mkdir(
+                parents=True
+            )
             events_output = StringIO()
             with redirect_stdout(events_output):
                 ios_simulator_app.prepare_ios_simulator_candidate(

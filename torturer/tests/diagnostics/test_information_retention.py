@@ -203,10 +203,10 @@ class InformationRetentionTests(unittest.TestCase):
             controller = mock.Mock()
             controller.bounded_by.side_effect = lambda _timeout: nullcontext()
             controller.configure.return_value = {"input_verified": True}
+            args.ui_helper = root / "native-helper"
             controller.connect.side_effect = native_ui.NativeUIJourneyError("connect failed")
             controller.capture.return_value = {}
             smoke = SimpleNamespace(
-                verify_interactive_session=mock.Mock(),
                 NativeUIController=mock.Mock(return_value=controller),
             )
 
@@ -223,6 +223,7 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(failure.native_ui_checks, {"configure_native": True})
             base.discover_connections.assert_not_called()
             controller.connect.assert_called_once()
+            base._snapshot.assert_not_called()
             controller.close_for_cleanup.assert_called_once()
 
             with (
@@ -250,15 +251,15 @@ class InformationRetentionTests(unittest.TestCase):
         process.communicate.side_effect = [
             subprocess.TimeoutExpired(("command",), 0.1, output=initial_stdout),
             subprocess.TimeoutExpired(("command",), 1.0, output=terminated_stdout),
-            subprocess.TimeoutExpired(("command",), 1.0, output=final_stdout,
-                                      stderr=final_stderr),
-            (final_stdout, final_stderr),
+            subprocess.TimeoutExpired(
+                ("command",), 1.0, output=final_stdout, stderr=final_stderr
+            ),
         ]
         forwarded = BinaryStderr()
 
         with (
             mock.patch.object(ios_simulator_app.subprocess, "Popen", return_value=process),
-            mock.patch.object(ios_simulator_app, "_signal_process_group"),
+            mock.patch("bounded_process.terminate_process_group"),
             redirect_stderr(forwarded),
         ):
             with self.assertRaises(ios_simulator_app.IOSSimulatorAppContractError) as caught:

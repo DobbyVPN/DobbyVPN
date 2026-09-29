@@ -12,7 +12,7 @@ fi
 case "$target" in
   ios|iosarchive|iosanalyze) sdk=iphoneos; scheme=iosApp ;;
   iossimulator)
-    sdk=iphonesimulator; scheme=iosSimulatorApp
+    sdk=iphonesimulator; scheme=iosAppUITests
     case "$architecture" in arm64) xcode_arch=arm64 ;; amd64) xcode_arch=x86_64 ;; "") xcode_arch="" ;; *) echo "unsupported Simulator architecture: $architecture" >&2; exit 2 ;; esac
     ;;
   iosexport) sdk=; scheme= ;;
@@ -143,7 +143,9 @@ if [[ "$target" == iossimulator ]]; then
   [[ "$derived_data" != "$output" ]] || { echo "Simulator output path must be the Xcode app product path" >&2; exit 2; }
   xcode_args+=(-derivedDataPath "$derived_data" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=-)
   if [[ -n "${xcode_arch:-}" ]]; then xcode_args+=(ARCHS="$xcode_arch" ONLY_ACTIVE_ARCH=YES); fi
-  xcodebuild "${xcode_args[@]}" build
+  xcodebuild "${xcode_args[@]}" \
+    -destination "generic/platform=iOS Simulator" \
+    build-for-testing
 elif [[ "$target" == iosanalyze ]]; then
   mkdir -p "$output"
   xcode_args+=(-derivedDataPath "$output" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")

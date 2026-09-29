@@ -32,7 +32,11 @@ from torturer_runner.diagnostics import (
     add_exception_notes,
     add_stream_notes,
     emit_streams,
-    merge_output,
+)
+from torturer_runner.process_capture import (
+    exception_output,
+    output_bytes,
+    run_finite_capture,
 )
 from torturer_runner.windows_job import (
     WindowsJobError,
@@ -58,11 +62,6 @@ _TRANSIENT_ROUTING_FAILURES = frozenset(
 
 def _call_with_deadline(method, timeout: float, deadline: float | None):
     return method(timeout, deadline=deadline)
-
-
-def _remaining_until(deadline: float, *, cap: float | None = None) -> float:
-    remaining = max(0.0, deadline - time.monotonic())
-    return remaining if cap is None else min(remaining, max(0.0, cap))
 
 
 class AdapterError(RuntimeError):
@@ -166,35 +165,22 @@ def _ensure_directory(path: Path) -> None:
         raise AdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
 
 
-def _process_group_kwargs() -> dict[str, int | bool]:
-    if os.name == "nt":
-        creation_flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        return {"creationflags": creation_flag} if creation_flag else {}
-    return {"start_new_session": True}
-
-
-def _output_bytes(value: bytes | str | None) -> bytes:
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, str):
-        return value.encode("utf-8", errors="replace")
-    return b""
-
-
-def _append_error_notes(error: BaseException, errors: Sequence[tuple[str, BaseException]]) -> None:
-    for label, secondary in errors:
-        add_exception_notes(error, label, secondary)
-
-
 def _terminate_process(
     process: subprocess.Popen[bytes],
     *,
     deadline: float,
     stage: str,
+    detached: bool,
 ) -> tuple[str, ...]:
     """Terminate only the command boundary and return native diagnostics."""
 
     if os.name == "nt":
+        if detached:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            return ()
         cleanup = terminate_windows_job(process, deadline=deadline, stage=stage)
         if not cleanup.process_tree_proven:
             error = AdapterError("PROCESS_TERMINATION_FAILED")
@@ -227,46 +213,6 @@ def _close_process_boundary(
             error.add_note("; ".join(diagnostics.diagnostics))
         raise error
     return diagnostics.diagnostics
-
-
-def _drain_after_termination(
-    process: subprocess.Popen[bytes],
-    *,
-    deadline: float,
-    stdout: bytes,
-    stderr: bytes,
-    input_bytes: bytes | None = None,
-) -> tuple[bytes, bytes, list[tuple[str, BaseException]]]:
-    errors: list[tuple[str, BaseException]] = []
-    try:
-        if input_bytes is None:
-            recovered_stdout, recovered_stderr = process.communicate(
-                timeout=_remaining_until(deadline)
-            )
-        else:
-            recovered_stdout, recovered_stderr = process.communicate(
-                input=input_bytes,
-                timeout=_remaining_until(deadline),
-            )
-        return (
-            merge_output(stdout, recovered_stdout),
-            merge_output(stderr, recovered_stderr),
-            errors,
-        )
-    except subprocess.TimeoutExpired as error:
-        errors.append(("output_drain", error))
-        return (
-            merge_output(stdout, _output_bytes(error.output)),
-            merge_output(stderr, _output_bytes(error.stderr)),
-            errors,
-        )
-    except OSError as error:
-        errors.append(("output_drain", error))
-        return (
-            merge_output(stdout, _output_bytes(getattr(error, "stdout", None))),
-            merge_output(stderr, _output_bytes(getattr(error, "stderr", None))),
-            errors,
-        )
 
 
 class SubprocessRunner:
@@ -389,73 +335,66 @@ class SubprocessRunner:
             raise AdapterError("INVALID_COMMAND")
         argv = tuple(command)
         deadline = time.monotonic() + timeout_seconds
-        process: subprocess.Popen[bytes] | None = None
         stage = "hosted-detached-command" if detached else "hosted-cli-command"
         timeout_stage = f"{stage}-timeout"
-        try:
-            popen_kwargs = {
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "env": self.environment,
-                **_process_group_kwargs(),
-            }
+        timed_out = False
+
+        def spawn(arguments: list[str], **popen_kwargs) -> subprocess.Popen[bytes]:
             if detached:
-                process = subprocess.Popen(list(argv), **popen_kwargs)
-            else:
-                popen_kwargs["stdin"] = (
-                    subprocess.PIPE if input_bytes is not None else None
-                )
-                process = popen_with_windows_job(
-                    subprocess.Popen,
-                    list(argv),
-                    stage=stage,
-                    deadline=deadline,
-                    **popen_kwargs,
-                )
-            if input_bytes is None:
-                stdout, stderr = process.communicate(timeout=_remaining_until(deadline))
-            else:
-                stdout, stderr = process.communicate(
-                    input=input_bytes,
-                    timeout=_remaining_until(deadline),
-                )
-        except subprocess.TimeoutExpired as timeout_error:
-            assert process is not None
-            stdout = _output_bytes(timeout_error.output)
-            stderr = _output_bytes(timeout_error.stderr)
-            errors: list[tuple[str, BaseException]] = []
-            cleanup_deadline = time.monotonic() + _PROCESS_CLEANUP_SECONDS
-            try:
-                _terminate_process(
-                    process,
-                    deadline=cleanup_deadline,
-                    stage=timeout_stage,
-                )
-            except BaseException as error:
-                errors.append(("termination", error))
-            stdout, stderr, drain_errors = _drain_after_termination(
+                return subprocess.Popen(arguments, **popen_kwargs)
+            return popen_with_windows_job(
+                subprocess.Popen,
+                arguments,
+                stage=stage,
+                deadline=deadline,
+                **popen_kwargs,
+            )
+
+        def terminate_boundary(
+            process: subprocess.Popen[bytes], cleanup_deadline: float
+        ) -> None:
+            nonlocal timed_out
+            timed_out = True
+            _terminate_process(
                 process,
                 deadline=cleanup_deadline,
-                stdout=stdout,
-                stderr=stderr,
+                stage=timeout_stage,
+                detached=detached,
             )
-            errors.extend(drain_errors)
-            if not detached:
-                try:
-                    _close_process_boundary(
-                        process,
-                        deadline=cleanup_deadline,
-                        stage=timeout_stage,
-                    )
-                except BaseException as error:
-                    errors.append(("close", error))
+
+        def close_boundary(
+            process: subprocess.Popen[bytes], boundary_deadline: float
+        ) -> None:
+            _close_process_boundary(
+                process,
+                deadline=boundary_deadline,
+                stage=timeout_stage if timed_out else stage,
+            )
+
+        try:
+            result = run_finite_capture(
+                argv,
+                timeout_seconds=timeout_seconds,
+                env=self.environment,
+                input_bytes=input_bytes,
+                popen_factory=spawn,
+                terminate=terminate_boundary,
+                close_boundary=close_boundary,
+                detached=detached,
+                termination_grace_seconds=_PROCESS_CLEANUP_SECONDS,
+                cleanup_timeout_seconds=2 * _PROCESS_CLEANUP_SECONDS,
+            )
+        except subprocess.TimeoutExpired as timeout_error:
+            stdout, stderr = exception_output(timeout_error)
             result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
             primary = AdapterError("COMMAND_TIMEOUT", stdout=stdout, stderr=stderr)
-            _append_error_notes(primary, errors)
+            add_exception_notes(
+                primary, "command_timeout", timeout_error, include_streams=False
+            )
             _append_command_metadata(primary, result)
             add_stream_notes(primary, "command", result.stdout, result.stderr)
             self._emit_result(stage, result)
-            raise primary from None
+            raise primary from timeout_error
         except WindowsJobError as error:
             if detached:
                 raise
@@ -465,40 +404,43 @@ class SubprocessRunner:
                 stdout=result.stdout,
                 stderr=result.stderr,
             )
+            add_exception_notes(primary, "process_containment", error, include_streams=False)
             _append_command_metadata(primary, result)
             add_stream_notes(primary, "command", result.stdout, result.stderr)
             self._emit_result(stage, result)
-            raise primary from None
+            raise primary from error
         except OSError as error:
-            stdout = _output_bytes(getattr(error, "stdout", None))
-            stderr = _output_bytes(getattr(error, "stderr", None))
+            stdout, stderr = exception_output(error)
             result = CommandResult(argv, -1, stdout, stderr)
             primary = AdapterError(
                 "COMMAND_UNAVAILABLE", stdout=stdout, stderr=stderr
             )
+            add_exception_notes(primary, "command_error", error, include_streams=False)
             _append_command_metadata(primary, result)
             add_stream_notes(primary, "command", stdout, stderr)
             self._emit_result(stage, result)
-            raise primary from None
+            raise primary from error
+        except AdapterError as error:
+            stdout = output_bytes(error.stdout)
+            stderr = output_bytes(error.stderr)
+            command_result = CommandResult(
+                argv,
+                getattr(error, "returncode", -1),
+                stdout,
+                stderr,
+            )
+            error.stdout = stdout
+            error.stderr = stderr
+            _append_command_metadata(error, command_result)
+            add_stream_notes(error, "command", stdout, stderr)
+            self._emit_result(stage, command_result)
+            raise
 
-        if not detached:
-            try:
-                _close_process_boundary(
-                    process,
-                    deadline=deadline,
-                    stage=stage,
-                )
-            except BaseException as error:
-                result = CommandResult(argv, process.returncode, stdout, stderr)
-                primary = AdapterError("PROCESS_CLEANUP_FAILED")
-                _append_error_notes(primary, (("close", error),))
-                _append_command_metadata(primary, result)
-                add_stream_notes(primary, "command", result.stdout, result.stderr)
-                self._emit_result(stage, result)
-                raise primary from None
-        result = CommandResult(argv, process.returncode, stdout, stderr)
-        self._emit_result(stage, result)
-        return result
+        command_result = CommandResult(
+            argv, result.returncode, result.stdout or b"", result.stderr or b""
+        )
+        self._emit_result(stage, command_result)
+        return command_result
 
     def run_detached(
         self, command: Sequence[str], *, timeout_seconds: float

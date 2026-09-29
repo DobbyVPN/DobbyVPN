@@ -11,6 +11,32 @@ from torturer_runner import ios_simulator_app
 
 
 class IOSSimulatorBoundaryTests(unittest.TestCase):
+    def test_ui_test_build_and_run_share_products_without_rebuilding(self) -> None:
+        udid = "01234567-89ab-cdef-0123-456789abcdef"
+        contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
+        project = Path("candidate/iosApp.xcodeproj")
+        work_dir = Path("work/ios")
+        derived_data = Path("work/ios/derived-data")
+        result_bundle = Path("work/ios/xctest-results.xcresult")
+
+        build = ios_simulator_app.xcodebuild_app_command(
+            contract, work_dir=work_dir
+        )
+        run = ios_simulator_app.xcodebuild_ui_test_without_building_command(
+            udid, project, derived_data, result_bundle
+        )
+
+        self.assertEqual(build[1:3], ["scripts/package_ios_app.sh", "iossimulator"])
+        self.assertEqual(build[3], str(contract.app_path(work_dir)))
+        self.assertEqual(run[-1], "test-without-building")
+        self.assertIn(f"platform=iOS Simulator,id={udid.upper()}", run)
+        self.assertEqual(run[run.index("-scheme") + 1], "iosAppUITests")
+        self.assertIn(str(derived_data), build[3])
+        self.assertEqual(run[run.index("-derivedDataPath") + 1], str(derived_data))
+        self.assertEqual(
+            run[run.index("-resultBundlePath") + 1], str(result_bundle)
+        )
+
     def test_install_timeout_reports_elapsed_time_and_preserves_cleanup_window(self) -> None:
         udid = "01234567-89ab-cdef-0123-456789abcdef"
         clock = [0.0]
@@ -100,8 +126,9 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         process.stderr = mock.Mock()
         process.communicate.side_effect = [
             subprocess.TimeoutExpired(("command",), 0.1, output=b"started\n"),
-            subprocess.TimeoutExpired(("command",), 1.0, output=b"started\nterm\n"),
-            subprocess.TimeoutExpired(("command",), 1.0, output=b"started\nterm\nkill\n"),
+            subprocess.TimeoutExpired(
+                ("command",), 1.0, output=b"started\nterm\n",
+            ),
             subprocess.TimeoutExpired(
                 ("command",), 1.0, output=b"started\nterm\nkill\nfinal\n",
                 stderr=b"child stderr\n",
@@ -109,14 +136,14 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         ]
         with (
             mock.patch.object(ios_simulator_app.subprocess, "Popen", return_value=process),
-            mock.patch.object(ios_simulator_app, "_signal_process_group"),
+            mock.patch("bounded_process.terminate_process_group"),
         ):
             with self.assertRaises(ios_simulator_app.IOSSimulatorAppContractError) as caught:
                 ios_simulator_app.SubprocessCommandRunner().run(
                     ("command",), timeout_seconds=0.1,
                 )
 
-        self.assertEqual(process.communicate.call_count, 4)
+        self.assertEqual(process.communicate.call_count, 3)
         notes = "\n".join(caught.exception.__notes__)
         self.assertIn("started\nterm\nkill\nfinal\n", notes)
         self.assertIn("child stderr", notes)

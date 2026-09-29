@@ -6,227 +6,177 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 
 	"core/log"
+
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
-
-const (
-	linuxOwnedRouteProtocol = 233
-	linuxOwnedProxyMetric   = 233
-)
-
-func linuxRouteField(fields []string, name string) (string, bool) {
-	for index := 0; index+1 < len(fields); index++ {
-		if fields[index] == name {
-			return fields[index+1], true
-		}
-	}
-	return "", false
-}
-
-func linuxOwnedProxyRouteDelete(line string) (string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 9 {
-		return "", false
-	}
-	destination := fields[0]
-	_, network, err := net.ParseCIDR(destination)
-	if err != nil {
-		parsed := net.ParseIP(destination)
-		if parsed == nil || parsed.To4() == nil {
-			return "", false
-		}
-	} else if ones, bits := network.Mask.Size(); bits != 32 || ones != 32 {
-		return "", false
-	}
-	gateway, hasGateway := linuxRouteField(fields, "via")
-	iface, hasIface := linuxRouteField(fields, "dev")
-	protocol, hasProtocol := linuxRouteField(fields, "proto")
-	metric, hasMetric := linuxRouteField(fields, "metric")
-	if !hasGateway || net.ParseIP(gateway).To4() == nil || !hasIface || iface == "" ||
-		!hasProtocol || protocol != strconv.Itoa(linuxOwnedRouteProtocol) ||
-		!hasMetric || metric != strconv.Itoa(linuxOwnedProxyMetric) {
-		return "", false
-	}
-	return fmt.Sprintf(
-		"ip -4 route del table main %s via %s dev %s proto %d metric %d",
-		destination, gateway, iface, linuxOwnedRouteProtocol, linuxOwnedProxyMetric,
-	), true
-}
-
-func linuxOwnedMarkedRouteFields(line string) (gateway, iface string, ok bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 7 || fields[0] != linuxDefaultRoute {
-		return "", "", false
-	}
-	gateway, hasGateway := linuxRouteField(fields, "via")
-	iface, hasIface := linuxRouteField(fields, "dev")
-	protocol, hasProtocol := linuxRouteField(fields, "proto")
-	if !hasGateway || net.ParseIP(gateway).To4() == nil || !hasIface || iface == "" ||
-		!hasProtocol || protocol != strconv.Itoa(linuxOwnedRouteProtocol) {
-		return "", "", false
-	}
-	return gateway, iface, true
-}
-
-func linuxOwnedMarkedRouteDelete(line string, tableID int) (string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) >= 6 && fields[0] == "unreachable" && fields[1] == linuxDefaultRoute {
-		protocol, _ := linuxRouteField(fields, "proto")
-		metric, _ := linuxRouteField(fields, "metric")
-		if protocol == strconv.Itoa(linuxOwnedRouteProtocol) && metric == "1" {
-			return fmt.Sprintf("ip route del table %d unreachable default proto %d metric 1", tableID, linuxOwnedRouteProtocol), true
-		}
-	}
-	gateway, iface, ok := linuxOwnedMarkedRouteFields(line)
-	if !ok {
-		return "", false
-	}
-	return fmt.Sprintf(
-		"ip -4 route del table %d %s via %s dev %s proto %d",
-		tableID, linuxDefaultRoute, gateway, iface, linuxOwnedRouteProtocol,
-	), true
-}
-
-func linuxOwnedTunnelRouteDelete(line, tunName string) (string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 5 || fields[0] != linuxDefaultRoute {
-		return "", false
-	}
-	iface, hasIface := linuxRouteField(fields, "dev")
-	protocol, hasProtocol := linuxRouteField(fields, "proto")
-	if !hasIface || iface != tunName || !hasProtocol || protocol != strconv.Itoa(linuxOwnedRouteProtocol) {
-		return "", false
-	}
-	return fmt.Sprintf(
-		"ip -4 route del table main %s dev %s proto %d",
-		linuxDefaultRoute, tunName, linuxOwnedRouteProtocol,
-	), true
-}
-
-func linuxOwnedIPv6RouteDelete(line string) (string, bool) {
-	fields := strings.Fields(line)
-	if len(fields) < 6 || fields[0] != "blackhole" ||
-		(fields[1] != ipv6LowerHalf && fields[1] != ipv6UpperHalf) {
-		return "", false
-	}
-	protocol, hasProtocol := linuxRouteField(fields, "proto")
-	metric, hasMetric := linuxRouteField(fields, "metric")
-	if !hasProtocol || protocol != strconv.Itoa(linuxOwnedRouteProtocol) || !hasMetric || metric != "1" {
-		return "", false
-	}
-	return fmt.Sprintf(
-		"ip -6 route del table main blackhole %s proto %d metric 1",
-		fields[1], linuxOwnedRouteProtocol,
-	), true
-}
-
-func linuxRoutingTableAbsent(output string, err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(output+"\n"+err.Error()), "fib table does not exist")
-}
 
 type linuxRecoveryRoutes struct {
-	deletes                 []string
+	deletes                 []netlink.Route
 	hasIndependentDefault   bool
-	restoreDefault          string
+	restoreDefault          *netlink.Route
 	restoreDefaultAmbiguous bool
 }
 
-func collectLinuxRecoveryRoutes(mainOutput, markedOutput, ipv6Output string, tableID int, tunName string) linuxRecoveryRoutes {
-	var routes linuxRecoveryRoutes
-	for _, line := range strings.Split(mainOutput, "\n") {
-		if command, ok := linuxOwnedProxyRouteDelete(line); ok {
-			routes.deletes = append(routes.deletes, command)
-			continue
-		}
-		if command, ok := linuxOwnedTunnelRouteDelete(line, tunName); ok {
-			routes.deletes = append(routes.deletes, command)
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) > 0 && fields[0] == linuxDefaultRoute {
-			routes.hasIndependentDefault = true
-		}
+func linuxOwnedProxyRoute(route netlink.Route) bool {
+	if route.Table != unix.RT_TABLE_MAIN || route.Family != netlink.FAMILY_V4 ||
+		route.Protocol != linuxOwnedRouteProtocol || route.Priority != linuxOwnedProxyMetric ||
+		route.Type != unix.RTN_UNICAST || route.Gw == nil || route.Gw.To4() == nil ||
+		route.LinkIndex <= 0 || len(route.MultiPath) != 0 || route.Dst == nil {
+		return false
 	}
-	for _, line := range strings.Split(markedOutput, "\n") {
-		command, ok := linuxOwnedMarkedRouteDelete(line, tableID)
-		if !ok {
-			continue
-		}
-		routes.deletes = append(routes.deletes, command)
-		gateway, iface, hasGateway := linuxOwnedMarkedRouteFields(line)
-		if !hasGateway {
-			continue
-		}
-		candidate := fmt.Sprintf(
-			"ip -4 route replace table main %s via %s dev %s",
-			linuxDefaultRoute, gateway, iface,
-		)
-		if routes.restoreDefault == "" {
-			routes.restoreDefault = candidate
-		} else if routes.restoreDefault != candidate {
-			routes.restoreDefaultAmbiguous = true
-		}
-	}
-	for _, line := range strings.Split(ipv6Output, "\n") {
-		if command, ok := linuxOwnedIPv6RouteDelete(line); ok {
-			routes.deletes = append(routes.deletes, command)
-		}
-	}
-	return routes
+	ones, bits := route.Dst.Mask.Size()
+	return bits == net.IPv4len*8 && ones == 32 && route.Dst.IP.To4() != nil
 }
 
-// RecoverLinuxOwnedRoutes removes only routes carrying DobbyVPN's explicit
-// protocol/metric ownership tags. If process death removed the TUN and its
-// main-table default route, the owned marked table supplies the gateway and
-// interface needed to restore connectivity. Untagged pre-existing routes
-// remain outside product ownership and are never replaced.
-func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
-	// Keep these queries unfiltered: iproute2 omits the protocol field from
-	// output when a protocol selector is present, and recovery must independently
-	// verify the ownership tag before deleting anything.
-	mainOutput, err := linuxRunCommand("ip -o -4 route show table main")
+func linuxOwnedTunnelRoute(route netlink.Route, tunName string) bool {
+	if route.Table != unix.RT_TABLE_MAIN || route.Family != netlink.FAMILY_V4 ||
+		!linuxRouteIsDefault(route, netlink.FAMILY_V4) ||
+		route.Protocol != linuxOwnedRouteProtocol || route.Type != unix.RTN_UNICAST ||
+		route.LinkIndex <= 0 || tunName == "" {
+		return false
+	}
+	link, err := linuxLinkByIndex(route.LinkIndex)
 	if err != nil {
-		return fmt.Errorf("inspect owned main-table routes: %w", err)
+		log.Debugf(Category, "[Linux][Recovery][WARN] cannot identify route link index=%d: %v", route.LinkIndex, err)
+		return false
 	}
-	markedOutput, err := linuxRunCommand(fmt.Sprintf(
-		"ip -o -4 route show table %d", tableID,
-	))
-	if linuxRoutingTableAbsent(markedOutput, err) {
-		markedOutput = ""
-	} else if err != nil {
-		return fmt.Errorf("inspect owned marked-table routes: %w", err)
+	return link.Attrs().Name == tunName
+}
+
+func linuxOwnedMarkedGatewayRoute(route netlink.Route, tableID int) bool {
+	return route.Table == tableID && route.Family == netlink.FAMILY_V4 &&
+		linuxRouteIsDefault(route, netlink.FAMILY_V4) &&
+		route.Protocol == linuxOwnedRouteProtocol && route.Type == unix.RTN_UNICAST &&
+		route.Gw != nil && route.Gw.To4() != nil && route.LinkIndex > 0 && len(route.MultiPath) == 0
+}
+
+func linuxOwnedTerminalRoute(route netlink.Route, tableID int) bool {
+	return route.Table == tableID && route.Family == netlink.FAMILY_V4 &&
+		linuxRouteIsDefault(route, netlink.FAMILY_V4) && route.Type == unix.RTN_UNREACHABLE &&
+		route.Protocol == linuxOwnedRouteProtocol && route.Priority == 1 &&
+		route.Gw == nil && route.LinkIndex == 0
+}
+
+func linuxOwnedIPv6Route(route netlink.Route) bool {
+	if route.Table != unix.RT_TABLE_MAIN || route.Family != netlink.FAMILY_V6 ||
+		route.Type != unix.RTN_BLACKHOLE || route.Protocol != linuxOwnedRouteProtocol || route.Priority != 1 ||
+		route.Dst == nil {
+		return false
 	}
-	ipv6Output, err := linuxRunCommand("ip -o -6 route show table main")
+	return route.Dst.String() == ipv6LowerHalf || route.Dst.String() == ipv6UpperHalf
+}
+
+func linuxRecoveryRouteForDelete(route netlink.Route, family int) netlink.Route {
+	if route.Dst == nil && linuxRouteIsDefault(route, family) {
+		route.Dst = linuxDefaultIPNet(family)
+	}
+	return route
+}
+
+func collectLinuxRecoveryRoutes(ipv4Routes, ipv6Routes []netlink.Route, tableID int, tunName string) linuxRecoveryRoutes {
+	var recovered linuxRecoveryRoutes
+	for _, route := range ipv4Routes {
+		if route.Table == unix.RT_TABLE_MAIN {
+			if linuxOwnedProxyRoute(route) {
+				recovered.deletes = append(recovered.deletes, route)
+				continue
+			}
+			if linuxOwnedTunnelRoute(route, tunName) {
+				recovered.deletes = append(recovered.deletes, linuxRecoveryRouteForDelete(route, netlink.FAMILY_V4))
+				continue
+			}
+			if linuxRouteIsDefault(route, netlink.FAMILY_V4) {
+				recovered.hasIndependentDefault = true
+			}
+			continue
+		}
+		if route.Table != tableID {
+			continue
+		}
+		if linuxOwnedTerminalRoute(route, tableID) {
+			recovered.deletes = append(recovered.deletes, linuxRecoveryRouteForDelete(route, netlink.FAMILY_V4))
+			continue
+		}
+		if !linuxOwnedMarkedGatewayRoute(route, tableID) {
+			continue
+		}
+		recovered.deletes = append(recovered.deletes, linuxRecoveryRouteForDelete(route, netlink.FAMILY_V4))
+		candidate := netlink.Route{
+			Dst:       linuxDefaultIPNet(netlink.FAMILY_V4),
+			Gw:        append(net.IP(nil), route.Gw.To4()...),
+			LinkIndex: route.LinkIndex,
+			Protocol:  unix.RTPROT_BOOT,
+			Family:    netlink.FAMILY_V4,
+			Table:     unix.RT_TABLE_MAIN,
+			Type:      unix.RTN_UNICAST,
+			Scope:     netlink.SCOPE_UNIVERSE,
+		}
+		if recovered.restoreDefault == nil {
+			recovered.restoreDefault = &candidate
+		} else if recovered.restoreDefault.LinkIndex != candidate.LinkIndex ||
+			!recovered.restoreDefault.Gw.Equal(candidate.Gw) {
+			recovered.restoreDefaultAmbiguous = true
+		}
+	}
+	for _, route := range ipv6Routes {
+		if linuxOwnedIPv6Route(route) {
+			recovered.deletes = append(recovered.deletes, route)
+		}
+	}
+	return recovered
+}
+
+// RecoverLinuxOwnedRoutes removes only typed routes carrying DobbyVPN's
+// explicit protocol/metric ownership tags and the exact fwmark rule used by
+// this session. If process death removed the TUN and its main-table default,
+// the marked table supplies the uplink gateway and interface for restoration.
+func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
+	mainRoutes, err := linuxRouteList(netlink.FAMILY_V4)
+	if err != nil {
+		return fmt.Errorf("inspect owned IPv4 routes: %w", err)
+	}
+	ipv6Routes, err := linuxRouteList(netlink.FAMILY_V6)
 	if err != nil {
 		return fmt.Errorf("inspect owned IPv6 routes: %w", err)
 	}
+	routes := collectLinuxRecoveryRoutes(mainRoutes, ipv6Routes, tableID, tunName)
 
-	routes := collectLinuxRecoveryRoutes(mainOutput, markedOutput, ipv6Output, tableID, tunName)
-	if len(routes.deletes) == 0 {
+	var ownedRules []netlink.Rule
+	rules, ruleListErr := linuxRuleList(netlink.FAMILY_V4)
+	if ruleListErr == nil {
+		for _, rule := range rules {
+			if linuxSessionRuleMatches(rule, tableID, priority) {
+				ownedRules = append(ownedRules, rule)
+			}
+		}
+	}
+	if len(routes.deletes) == 0 && len(ownedRules) == 0 && ruleListErr == nil {
 		return nil
 	}
 
-	log.Debugf(Category, "[Linux][Recovery] removing %d tagged route(s) after process loss", len(routes.deletes))
+	log.Debugf(Category, "[Linux][Recovery] removing %d tagged route(s) and %d owned rule(s) after process loss", len(routes.deletes), len(ownedRules))
 	var errs []error
-	ruleCommand := fmt.Sprintf("ip rule del fwmark %d lookup %d priority %d", tableID, tableID, priority)
-	if _, ruleErr := linuxRunCommand(ruleCommand); ruleErr != nil && !linuxRouteAlreadyGone(ruleErr) {
-		errs = append(errs, fmt.Errorf("remove owned fwmark rule: %w", ruleErr))
+	if ruleListErr != nil {
+		errs = append(errs, fmt.Errorf("inspect owned fwmark rule: %w", ruleListErr))
 	}
-	for _, command := range routes.deletes {
-		if _, deleteErr := linuxRunCommand(command); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
-			errs = append(errs, fmt.Errorf("remove owned route: %w", deleteErr))
+	for index := range ownedRules {
+		rule := ownedRules[index]
+		if deleteErr := linuxRuleOperation("delete", &rule, linuxRuleDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
+			errs = append(errs, fmt.Errorf("remove owned fwmark rule: %w", deleteErr))
+		}
+	}
+	for _, route := range routes.deletes {
+		if deleteErr := linuxRouteOperation("delete", &route, linuxRouteDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
+			errs = append(errs, fmt.Errorf("remove owned route %s: %w", route.String(), deleteErr))
 		}
 	}
 	if routes.restoreDefaultAmbiguous {
 		errs = append(errs, fmt.Errorf("restore interrupted default route: owned marked routes disagree"))
-	} else if routes.restoreDefault != "" && !routes.hasIndependentDefault {
-		if _, restoreErr := linuxRunCommand(routes.restoreDefault); restoreErr != nil {
+	} else if routes.restoreDefault != nil && !routes.hasIndependentDefault {
+		if restoreErr := linuxRouteOperation("replace", routes.restoreDefault, linuxRouteReplace); restoreErr != nil {
 			errs = append(errs, fmt.Errorf("restore interrupted default route: %w", restoreErr))
 		}
 	}

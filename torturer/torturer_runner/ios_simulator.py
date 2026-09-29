@@ -72,13 +72,13 @@ def iphonesimulator_sdk_version_command() -> list[str]:
     return ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]
 
 
-def xcodebuild_ui_test_command(
+def xcodebuild_ui_test_without_building_command(
     device_udid: str,
     project: str | Path,
     derived_data: str | Path,
     result_bundle: str | Path | None = None,
 ) -> list[str]:
-    """Run XCTest and export its diagnostics/attachments to one owned bundle."""
+    """Run prepared XCTest products and retain their result bundle."""
     app_project = Path(project)
     if app_project.suffix != ".xcodeproj":
         raise IOSSimulatorContractError("iOS UI test project must end in .xcodeproj")
@@ -91,7 +91,9 @@ def xcodebuild_ui_test_command(
         else data_path.parent / "xctest-results.xcresult"
     )
     if result_path.suffix != ".xcresult":
-        raise IOSSimulatorContractError("iOS UI test result bundle must end in .xcresult")
+        raise IOSSimulatorContractError(
+            "iOS UI test result bundle must end in .xcresult"
+        )
     udid = _validate_udid(device_udid)
     return [
         "xcodebuild",
@@ -110,7 +112,7 @@ def xcodebuild_ui_test_command(
         "CODE_SIGNING_ALLOWED=YES",
         "CODE_SIGNING_REQUIRED=NO",
         "CODE_SIGN_IDENTITY=-",
-        "test",
+        "test-without-building",
     ]
 
 

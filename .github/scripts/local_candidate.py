@@ -50,6 +50,7 @@ class CandidateError(ValueError):
 
 @dataclass(frozen=True)
 class CandidatePaths:
+    mode: str = "local-build"
     app: Path | None = None
     test_companion: Path | None = None
     service: Path | None = None
@@ -58,18 +59,21 @@ class CandidatePaths:
     network: Path | None = None
 
     def to_dict(self) -> dict[str, str]:
-        """Render validated paths only when recording platform state."""
+        """Render the validated build mode and artifact paths for platform state."""
         return {
-            name: str(path)
-            for name, path in (
-                ("app", self.app),
-                ("test_companion", self.test_companion),
-                ("service", self.service),
-                ("cli", self.cli),
-                ("ui", self.ui),
-                ("network", self.network),
-            )
-            if path is not None
+            "mode": self.mode,
+            **{
+                name: str(path)
+                for name, path in (
+                    ("app", self.app),
+                    ("test_companion", self.test_companion),
+                    ("service", self.service),
+                    ("cli", self.cli),
+                    ("ui", self.ui),
+                    ("network", self.network),
+                )
+                if path is not None
+            },
         }
 
 

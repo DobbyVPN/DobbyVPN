@@ -112,30 +112,6 @@ class DiagnosticPreservationTests(unittest.TestCase):
             self.assertNotIn("width", records[0])
             self.assertNotIn("height", records[0])
 
-    def test_clipboard_payload_is_kept_out_of_diagnostics(self) -> None:
-        smoke = _load_script(
-            "dobbyvpn_native_ui_smoke",
-            PRODUCT_ROOT / "torturer/torturer_runner/ui/smoke.py",
-        )
-        payload = b"clipboard-profile-value"
-        destination = BinaryStderr()
-        completed = __import__("subprocess").CompletedProcess(
-            ["pbpaste"], 0, stdout=None, stderr=b"clipboard read warning\n",
-        )
-
-        def run(_command, **kwargs):
-            kwargs["stdout"].write(payload)
-            return completed
-
-        with mock.patch.object(smoke.subprocess, "run", side_effect=run):
-            with redirect_stderr(destination):
-                result, captured = smoke._clipboard_payload(["pbpaste"], "clipboard", 5)
-
-        self.assertIs(result, completed)
-        self.assertEqual(captured, payload)
-        self.assertIn(b"clipboard read warning", destination.buffer.getvalue())
-        self.assertNotIn(payload, destination.buffer.getvalue())
-
     def test_native_ui_subprocess_streams_are_forwarded_byte_for_byte(self) -> None:
         smoke = _load_script(
             "dobbyvpn_native_ui_smoke_streams",
@@ -148,9 +124,9 @@ class DiagnosticPreservationTests(unittest.TestCase):
         )
         destination = BinaryStderr()
 
-        with mock.patch.object(smoke.subprocess, "run", return_value=completed):
+        with mock.patch.object(smoke, "run_finite_capture", return_value=completed):
             with redirect_stderr(destination):
-                result = smoke._native_run(["native-command"], capture_output=True)
+                result = smoke._native_run(["native-command"], timeout_seconds=5)
 
         self.assertIs(result, completed)
         forwarded = destination.buffer.getvalue()

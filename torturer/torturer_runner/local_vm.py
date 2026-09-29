@@ -1,10 +1,10 @@
-"""Run one bounded DobbyVPN qualification candidate in a prepared VM.
+"""Prepare and run one bounded DobbyVPN qualification candidate in a VM.
 
 The private Harness owns the VM, SSH session, timeout supervisor, and process
-tree kill. This module builds and installs the native desktop package for a
-complete run, starts the installed product, runs the canonical functional
-suite, and cleans up the exact state recorded in ``platform.json``. Focused
-runs use ``local_candidate.py`` where package qualification is unnecessary.
+tree kill. ``prepare`` builds the candidate and records its artifact/runtime
+descriptors. ``run`` consumes those descriptors, starts the candidate, and
+runs the canonical functional suite. Focused runs use ``local_candidate.py``
+where package qualification is unnecessary.
 
 ``run`` intentionally leaves the candidate running.  A supervisor invokes
 ``cleanup`` in a separate step, which also makes a failed setup inspectable.
@@ -33,6 +33,7 @@ import stat
 import subprocess
 import sys
 import time
+import traceback
 from typing import Any
 
 from .diagnostics import output_text
@@ -197,7 +198,7 @@ def _native_ui_driver_timeout(task_timeout: float) -> float:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
-    for action in ("run", "cleanup"):
+    for action in ("prepare", "run", "cleanup"):
         command = commands.add_parser(action)
         command.add_argument("--platform", choices=PLATFORMS, required=True)
         command.add_argument(
@@ -205,9 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
             help="absolute disposable candidate directory",
         )
         command.add_argument("--timeout", type=_positive_timeout, required=True)
-        command.add_argument("--suite", choices=SUITES, default="mini")
-        command.add_argument("--scenario", action="append", dest="scenarios")
+        if action in {"prepare", "run"}:
+            command.add_argument("--suite", choices=SUITES, default="mini")
         if action == "run":
+            command.add_argument("--scenario", action="append", dest="scenarios")
+        if action == "prepare":
             command.add_argument("--architecture")
             command.add_argument("--skip-deps", action="store_true")
             command.add_argument("--source-checks", action="store_true")
@@ -325,6 +328,22 @@ def _read_state(run_dir: Path) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise LocalVMError("platform state is not an object")
     return value
+
+
+def _record_failure(run_dir: Path, state: dict[str, Any], error: Exception) -> None:
+    """Print the complete failure and retain the latest cleanup descriptors."""
+    traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+    try:
+        persisted = _read_state(run_dir)
+    except LocalVMError:
+        persisted = None
+    if persisted is not None:
+        for key in ("candidate", "runtime", "release"):
+            if key in persisted:
+                state[key] = persisted[key]
+    state["status"] = "failed"
+    state["error"] = f"{type(error).__name__}: {error}"
+    _write_json(run_dir / "platform.json", state)
 
 
 def _save_state(run_dir: Path, platform: str, runtime: dict[str, Any]) -> None:
@@ -887,6 +906,15 @@ def _prepare_candidate(
     return candidate.to_dict()
 
 
+def _candidate_mode(descriptor: dict[str, Any]) -> str:
+    mode = descriptor.get("mode")
+    if not isinstance(mode, str) or mode not in {
+        "local-build", "installed-package", "release-package", "ios-simulator",
+    }:
+        raise LocalVMError("prepared candidate mode is invalid")
+    return mode
+
+
 def _run_platform_source_checks(run_dir: Path, platform: str, logs: Path, timeout: float) -> None:
     """Run the same platform source commands used by CI on the selected source."""
     commands = {
@@ -987,7 +1015,7 @@ def _prepare_desktop_package(
         install.extend(("--control-pipe-sid", control_pipe_sid))
     _run_logged(install, cwd=source, logs=logs, label="desktop-package-install", timeout=timeout)
     descriptor = _release_document(run_dir / "installed.json", label="installed package")
-    return _write_candidate_descriptor(run_dir, descriptor)
+    return descriptor
 
 
 def _discover_network_interface(
@@ -1466,7 +1494,7 @@ def _install_macos_release(
 def _prepare_release_candidate(
     run_dir: Path, platform: str, manifest_path: Path, logs: Path, timeout: float,
 ) -> dict[str, Any]:
-    source = _required_input(run_dir, "source", directory=True)
+    _required_input(run_dir, "source", directory=True)
     manifest, artifacts = _validate_release_inputs(
         run_dir,
         source,
@@ -1479,6 +1507,7 @@ def _prepare_release_candidate(
         descriptor, _ = _install_macos_release(run_dir, manifest, artifacts, logs, timeout)
     else:
         raise LocalVMError("exact Release packages are supported only on Windows/macOS")
+    descriptor["mode"] = "release-package"
     return descriptor
 
 
@@ -1494,13 +1523,22 @@ def _start_android(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeou
 
 def _start_ios(
     run_dir: Path,
+    descriptor: dict[str, Any],
+    logs: Path,
+    timeout: float,
+) -> dict[str, Any]:
+    from .local_vm_ios import run
+    return run(run_dir, descriptor, logs, timeout)
+
+
+def _prepare_ios(
+    run_dir: Path,
     logs: Path,
     timeout: float,
     architecture: str | None,
-    source_sha: str | None,
 ) -> dict[str, Any]:
-    from .local_vm_ios import run
-    return run(run_dir, logs, timeout, architecture, source_sha)
+    from .local_vm_ios import prepare
+    return prepare(run_dir, logs, timeout, architecture)
 
 
 def _functional_command(
@@ -1512,7 +1550,7 @@ def _functional_command(
     suite: str,
 ) -> list[str]:
     logs = run_dir / "logs"
-    if platform in {"linux", "windows", "macos"} and (run_dir / "installed.json").is_file():
+    if descriptor.get("mode") == "installed-package":
         runtime = descriptor.get("runtime", {})
         if not isinstance(runtime, dict) or not isinstance(runtime.get("pid"), int):
             raise LocalVMError("installed desktop service runtime PID is unavailable")
@@ -1569,6 +1607,7 @@ def _native_ui_command(
     runtime: dict[str, Any],
     platform: str,
     timeout: float,
+    ui_helper: Path,
 ) -> list[str]:
     """Build the real-window journey command for desktop full guests."""
     if platform not in {"windows", "macos"}:
@@ -1579,6 +1618,8 @@ def _native_ui_command(
         raise LocalVMError("native desktop UI qualification script is missing")
     if not module.is_file():
         raise LocalVMError("native desktop UI journey module is missing")
+    if not ui_helper.is_file():
+        raise LocalVMError("prepared native UI helper is missing")
     for name in ("cli", "ui"):
         if not isinstance(descriptor.get(name), str):
             raise LocalVMError(f"native desktop UI candidate path is missing: {name}")
@@ -1598,6 +1639,7 @@ def _native_ui_command(
         "--raw-log-dir", str(run_dir / "logs"),
         "--output", str(run_dir / "logs" / "native-ui.json"),
         "--timeout", str(_native_ui_driver_timeout(task_timeout)),
+        "--ui-helper", str(ui_helper),
         "--service-pid", str(runtime["pid"]),
         "--service-binary", str(runtime["binary"]),
     ]
@@ -1701,25 +1743,33 @@ def _refresh_desktop_runtime_after_headless(
     return runtime
 
 
-def run(args: argparse.Namespace) -> int:
-    run_dir = _run_dir(args.run_dir)
-    source = _required_input(run_dir, "source", directory=True)
-    if args.platform == "android" and (args.source_sha is None) != (args.source_tree is None):
-        raise LocalVMError("complete Android build requires both source commit and source tree")
-    if args.suite == "full" and args.platform not in {"windows", "macos"}:
+def _validate_suite(platform: str, suite: str, scenarios: list[str] | None) -> None:
+    if suite == "full" and platform not in {"windows", "macos"}:
         raise LocalVMError(
-            f"{args.platform} full is unsupported: local full adds a native desktop window only"
+            f"{platform} full is unsupported: local full adds a native desktop window only"
         )
-    if args.suite == "full" and args.scenarios:
+    if suite == "full" and scenarios:
         raise LocalVMError(
             "full qualification cannot select focused scenarios; run diagnostics with --suite mini"
         )
+
+
+def prepare(args: argparse.Namespace) -> int:
+    """Build a candidate and persist its artifact and cleanup descriptors."""
+    run_dir = _run_dir(args.run_dir)
+    if _read_state(run_dir) is not None:
+        raise LocalVMError("run-dir already has platform state; clean it before preparing a new candidate")
+    _required_input(run_dir, "source", directory=True)
+    if args.platform == "android" and (args.source_sha is None) != (args.source_tree is None):
+        raise LocalVMError("complete Android build requires both source commit and source tree")
+    _validate_suite(args.platform, args.suite, args.scenarios)
     if args.release_manifest is not None and (
         args.suite != "full" or args.platform not in {"windows", "macos"}
     ):
         raise LocalVMError("exact Release packages require full Windows/macOS coverage")
     if args.platform != "ios-simulator":
         _required_input(run_dir, "profile")
+
     logs = run_dir / "logs"
     (run_dir / "output").mkdir(parents=True, exist_ok=True)
     state: dict[str, Any] = {
@@ -1728,7 +1778,6 @@ def run(args: argparse.Namespace) -> int:
         "status": "preparing",
     }
     _write_json(run_dir / "platform.json", state)
-    screenshot_python: Path | None = None
     try:
         if args.source_checks:
             state["source_checks_attempted"] = True
@@ -1738,15 +1787,8 @@ def run(args: argparse.Namespace) -> int:
             state["source_checks"] = "passed"
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
-        if args.platform == "ios-simulator" or (
-            args.suite == "full" and args.platform in {"windows", "macos"}
-        ):
-            screenshot_python = _install_screenshot_decoder(
-                run_dir, logs, args.timeout,
-            )
+
         if args.platform == "macos" and args.suite == "full":
-            # Fail early when this worker is not attached to the Aqua console.
-            # The native UI journey then proves input and capture against the app.
             from .local_vm_macos import preflight_interactive_desktop
 
             state["status"] = "desktop-preflight"
@@ -1759,17 +1801,15 @@ def run(args: argparse.Namespace) -> int:
             state["macos_desktop_preflight"] = "passed"
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
+
         if args.platform == "ios-simulator":
-            runtime = _timed_call(
-                "ios-simulator-and-production-check",
-                lambda: _start_ios(run_dir, logs, args.timeout, args.architecture, args.source_sha),
+            candidate = _timed_call(
+                "ios-simulator-build",
+                lambda: _prepare_ios(run_dir, logs, args.timeout, args.architecture),
                 platform=args.platform,
             )
-            state.update(runtime=runtime, status="functional-complete", functional_exit_code=0)
-            _write_json(run_dir / "platform.json", state)
-            return 0
-        if args.release_manifest is not None:
-            descriptor = _timed_call(
+        elif args.release_manifest is not None:
+            candidate = _timed_call(
                 "release-package-prepare-install",
                 lambda: _prepare_release_candidate(
                     run_dir, args.platform, args.release_manifest, logs, args.timeout,
@@ -1779,11 +1819,9 @@ def run(args: argparse.Namespace) -> int:
             persisted = _read_state(run_dir)
             if persisted is not None:
                 state.update(persisted)
-            state["candidate"] = descriptor
-            state["status"] = "candidate-prepared"
-            _write_json(run_dir / "platform.json", state)
+            candidate["mode"] = "release-package"
         elif args.source_sha and args.platform in {"linux", "windows", "macos"}:
-            descriptor = _timed_call(
+            candidate = _timed_call(
                 "desktop-package-build-install",
                 lambda: _prepare_desktop_package(
                     run_dir, args.platform, args.source_sha, logs, args.timeout,
@@ -1791,11 +1829,8 @@ def run(args: argparse.Namespace) -> int:
                 ),
                 platform=args.platform,
             )
-            state["candidate"] = descriptor
-            state["status"] = "candidate-prepared"
-            _write_json(run_dir / "platform.json", state)
         else:
-            descriptor = _timed_call(
+            candidate = _timed_call(
                 "candidate-build",
                 lambda: _prepare_candidate(
                     run_dir,
@@ -1807,23 +1842,19 @@ def run(args: argparse.Namespace) -> int:
                 ),
                 platform=args.platform,
             )
-            state["candidate"] = descriptor
-            state["status"] = "candidate-prepared"
-            _write_json(run_dir / "platform.json", state)
-        # Record the paths and cleanup seam before invoking any native start
-        # command.  A supervisor can therefore clean a setup that fails
-        # between the first side effect and the returned runtime metadata.
+
+        state["candidate"] = candidate
         if args.platform == "linux":
-            service = _candidate_path(descriptor, "service")
-            network = _candidate_path(descriptor, "network")
+            service = _candidate_path(candidate, "service")
+            network = _candidate_path(candidate, "network")
             if service is not None and network is not None:
                 state["runtime"] = {
                     "binary": str(service.resolve()), "socket": str(network),
                     "pid_file": str(run_dir / "service.pid"),
                 }
         elif args.platform == "macos":
-            service = _candidate_path(descriptor, "service")
-            network = _candidate_path(descriptor, "network")
+            service = _candidate_path(candidate, "service")
+            network = _candidate_path(candidate, "network")
             if service is not None and network is not None:
                 state["runtime"] = {
                     "binary": str(service.resolve()),
@@ -1831,46 +1862,121 @@ def run(args: argparse.Namespace) -> int:
                     "launchd_label": "system/com.dobby.vpnservice",
                     "plist": "/Library/LaunchDaemons/com.dobby.vpnservice.plist",
                 }
+        _write_json(run_dir / "platform.json", state)
+        if args.platform == "ios-simulator" and args.source_sha is not None:
+            from .local_vm_ios import check_production
+
+            _timed_call(
+                "ios-production-analysis-and-archive",
+                lambda: check_production(run_dir, logs, args.timeout, args.source_sha),
+                platform=args.platform,
+            )
+
+        screenshot_python: Path | None = None
+        if args.platform == "ios-simulator" or (
+            args.suite == "full" and args.platform in {"windows", "macos"}
+        ):
+            screenshot_python = _install_screenshot_decoder(run_dir, logs, args.timeout)
+        if screenshot_python is not None:
+            candidate["screenshot_python"] = str(screenshot_python)
+            state["candidate"] = candidate
+            _write_json(run_dir / "platform.json", state)
+        if args.suite == "full" and args.platform in {"windows", "macos"}:
+            from .ui.helper import prepare_helper
+
+            candidate["ui_helper"] = str(
+                _timed_call(
+                    "native-ui-helper-build",
+                    lambda: prepare_helper(args.platform, run_dir, logs, args.timeout),
+                    platform=args.platform,
+                ).resolve()
+            )
+            state["candidate"] = candidate
+            _write_json(run_dir / "platform.json", state)
+
+        # Persist network ownership before interface discovery and execution.
         if args.platform in {"linux", "macos"}:
             interface = _discover_network_interface(
                 run_dir, logs, args.timeout, args.platform, args.network_interface
             )
             state.setdefault("runtime", {})["network_interface"] = interface
+            _write_json(run_dir / "platform.json", state)
+
+        state["status"] = "candidate-prepared"
         _write_json(run_dir / "platform.json", state)
+        return 0
+    except Exception as error:
+        _record_failure(run_dir, state, error)
+        return 1
+
+
+def run(args: argparse.Namespace) -> int:
+    """Execute the prepared candidate described by ``platform.json``."""
+    run_dir = _run_dir(args.run_dir)
+    source = _required_input(run_dir, "source", directory=True)
+    if args.platform != "ios-simulator":
+        _required_input(run_dir, "profile")
+    _validate_suite(args.platform, args.suite, args.scenarios)
+    state = _read_state(run_dir)
+    if state is None or state.get("status") != "candidate-prepared":
+        raise LocalVMError("run requires a successfully prepared candidate")
+    if state.get("platform") != args.platform or state.get("suite") != args.suite:
+        raise LocalVMError("run request does not match the prepared platform and suite")
+    descriptor = state.get("candidate")
+    if not isinstance(descriptor, dict):
+        raise LocalVMError("prepared candidate descriptor is missing")
+    _candidate_mode(descriptor)
+    logs = run_dir / "logs"
+    (run_dir / "output").mkdir(parents=True, exist_ok=True)
+    try:
+        if args.platform == "ios-simulator":
+            state["status"] = "running"
+            _write_json(run_dir / "platform.json", state)
+            runtime = _timed_call(
+                "ios-simulator-app-contract",
+                lambda: _start_ios(run_dir, descriptor, logs, args.timeout),
+                platform=args.platform,
+            )
+            state["runtime"] = runtime
+            state["status"] = "functional-complete"
+            state["functional_exit_code"] = 0
+            _write_json(run_dir / "platform.json", state)
+            return 0
+
+        runtime_plan = state.get("runtime")
+        runtime_plan = dict(runtime_plan) if isinstance(runtime_plan, dict) else {}
+        state["status"] = "starting"
+        _write_json(run_dir / "platform.json", state)
+        mode = _candidate_mode(descriptor)
         if args.platform == "linux":
             runtime = _timed_call(
                 "service-start",
                 lambda: _start_linux(
                     run_dir, descriptor, logs, args.timeout,
-                    state.get("runtime", {}).get("network_interface"),
+                    runtime_plan.get("network_interface"),
                 ),
                 platform=args.platform,
             )
         elif args.platform == "macos":
-            if args.release_manifest is not None or (args.source_sha and (run_dir / "installed.json").is_file()):
-                runtime = _timed_call(
-                    "service-start",
-                    lambda: _start_macos_release(
-                        run_dir, descriptor, logs, args.timeout,
-                        state.get("runtime", {}).get("network_interface"),
-                    ),
-                    platform=args.platform,
-                )
-            else:
-                runtime = _timed_call(
-                    "service-start",
-                    lambda: _start_macos(
-                        run_dir, descriptor, logs, args.timeout,
-                        state.get("runtime", {}).get("network_interface"),
-                    ),
-                    platform=args.platform,
-                )
+            start_macos = (
+                _start_macos_release
+                if mode in {"release-package", "installed-package"}
+                else _start_macos
+            )
+            runtime = _timed_call(
+                "service-start",
+                lambda: start_macos(
+                    run_dir, descriptor, logs, args.timeout,
+                    runtime_plan.get("network_interface"),
+                ),
+                platform=args.platform,
+            )
         elif args.platform == "windows":
-            if args.release_manifest is not None or (args.source_sha and (run_dir / "installed.json").is_file()):
+            if mode in {"release-package", "installed-package"}:
                 from .local_vm_windows import stop_installed_service
 
                 release_state = state.get("release")
-                if args.release_manifest is not None and not isinstance(release_state, dict):
+                if mode == "release-package" and not isinstance(release_state, dict):
                     raise LocalVMError("exact Windows Release install state is missing")
                 if isinstance(release_state, dict):
                     release_state["msi_service_stop_attempted"] = True
@@ -1899,6 +2005,7 @@ def run(args: argparse.Namespace) -> int:
                 lambda: _start_android(run_dir, descriptor, logs, args.timeout),
                 platform=args.platform,
             )
+
         if args.platform in {"windows", "macos"}:
             runtime_environment = runtime.get("environment")
             runtime_environment = dict(runtime_environment) if isinstance(runtime_environment, dict) else {}
@@ -1907,6 +2014,7 @@ def run(args: argparse.Namespace) -> int:
         state["runtime"] = runtime
         state["status"] = "running"
         _write_json(run_dir / "platform.json", state)
+
         if args.platform == "android":
             from .local_vm_android import run_ui as run_android_ui
 
@@ -1922,12 +2030,9 @@ def run(args: argparse.Namespace) -> int:
                 return native_result.returncode
             state["native_ui_status"] = "passed"
             _write_json(run_dir / "platform.json", state)
-        # Desktop full is cumulative: the canonical headless mini lane runs
-        # once first, then the native-window journey runs as a second phase.
-        # Windows' hosted adapter closes its Job-owned process when mini
-        # finalizes, so start a fresh SYSTEM candidate before the native UI;
-        # macOS launchd keeps its replacement alive and can refresh its
-        # sidecar PID instead.
+
+        # Full desktop qualification keeps the canonical mini suite, then runs
+        # the real-window journey with the helper built during preparation.
         functional_suite = "mini" if args.suite == "full" else args.suite
         command = _functional_command(
             run_dir, {**descriptor, "runtime": runtime}, args.platform,
@@ -1935,7 +2040,7 @@ def run(args: argparse.Namespace) -> int:
         )
         functional_environment = {
             **os.environ,
-            "PYTHONPATH": str(run_dir / "source" / "torturer"),
+            "PYTHONPATH": str(source / "torturer"),
             "DOBBYVPN_SSH_RUN": run_dir.name,
         }
         if args.platform == "linux":
@@ -1953,7 +2058,7 @@ def run(args: argparse.Namespace) -> int:
         result = _timed_call(
             "functional-suite",
             lambda: _run_logged(
-                command, cwd=run_dir / "source" / "torturer", logs=logs,
+                command, cwd=source / "torturer", logs=logs,
                 label="functional", timeout=args.timeout,
                 environment=functional_environment, check=False,
             ),
@@ -1965,6 +2070,7 @@ def run(args: argparse.Namespace) -> int:
         _write_json(run_dir / "platform.json", state)
         if result.returncode != 0:
             return result.returncode
+
         if args.suite == "full" and args.platform in {"windows", "macos"}:
             if args.platform == "windows":
                 runtime = _start_windows(run_dir, descriptor, logs, args.timeout)
@@ -1976,34 +2082,31 @@ def run(args: argparse.Namespace) -> int:
             runtime["environment"] = runtime_environment
             native_descriptor = descriptor
             if args.platform == "macos":
-                # Validate the product-shaped bundle before LaunchServices
-                # opens the local or installed application.
                 from .local_vm_macos import stage_native_ui_bundle
 
                 native_descriptor = {
                     **descriptor,
                     "ui": str(stage_native_ui_bundle(descriptor["ui"])),
                 }
+            ui_helper = _candidate_path(descriptor, "ui_helper")
             state["runtime"] = runtime
             _write_json(run_dir / "platform.json", state)
             native_environment = _native_ui_environment(args.platform, runtime)
-            if screenshot_python is not None:
-                native_environment["PYTHONPATH"] = str(screenshot_python)
-            native_task_timeout = min(
-                args.timeout, _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS,
-            )
+            screenshot_python = descriptor.get("screenshot_python")
+            if isinstance(screenshot_python, str):
+                native_environment["PYTHONPATH"] = screenshot_python
+            native_task_timeout = min(args.timeout, _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS)
             try:
                 native_result = _timed_call(
                     "desktop-native-ui",
                     lambda: _run_native_ui(
                         _native_ui_command(
-                            run_dir, native_descriptor, runtime, args.platform, native_task_timeout,
+                            run_dir, native_descriptor, runtime, args.platform,
+                            native_task_timeout, ui_helper,
                         ),
                         platform=args.platform,
                         run_dir=run_dir,
-                        # The journey is a Python module under torturer; Windows runs
-                        # this cwd through the existing interactive user task.
-                        cwd=run_dir / "source" / "torturer",
+                        cwd=source / "torturer",
                         logs=logs,
                         timeout=native_task_timeout,
                         environment=native_environment,
@@ -2011,18 +2114,17 @@ def run(args: argparse.Namespace) -> int:
                     platform=args.platform,
                 )
             except Exception as error:
-                if args.platform in {"windows", "macos"}:
-                    from .local_vm_windows import WindowsInteractiveDesktopUnavailable
-                    from .local_vm_macos import MacOSInteractiveDesktopUnavailable
+                from .local_vm_windows import WindowsInteractiveDesktopUnavailable
+                from .local_vm_macos import MacOSInteractiveDesktopUnavailable
 
-                    if isinstance(error, (WindowsInteractiveDesktopUnavailable, MacOSInteractiveDesktopUnavailable)):
-                        _record_native_ui_unavailable(run_dir, args.platform, error)
-                        state["native_ui_exit_code"] = 1
-                        state["native_ui_status"] = "unavailable"
-                        state["native_ui_reason"] = str(error)
-                        state["status"] = "native-ui-unavailable"
-                        _write_json(run_dir / "platform.json", state)
-                        return 1
+                if isinstance(error, (WindowsInteractiveDesktopUnavailable, MacOSInteractiveDesktopUnavailable)):
+                    _record_native_ui_unavailable(run_dir, args.platform, error)
+                    state["native_ui_exit_code"] = 1
+                    state["native_ui_status"] = "unavailable"
+                    state["native_ui_reason"] = str(error)
+                    state["status"] = "native-ui-unavailable"
+                    _write_json(run_dir / "platform.json", state)
+                    return 1
                 raise
             state["native_ui_exit_code"] = native_result.returncode
             if native_result.returncode != 0:
@@ -2031,27 +2133,13 @@ def run(args: argparse.Namespace) -> int:
                 return native_result.returncode
             state["native_ui_status"] = "passed"
             _write_json(run_dir / "platform.json", state)
+
         state["status"] = "functional-complete"
         _write_json(run_dir / "platform.json", state)
         return 0
     except Exception as error:
-        # A platform helper may have persisted ownership immediately before a
-        # native side effect.  Reload that record so the failure marker never
-        # erases the supervisor's cleanup inputs.
-        try:
-            persisted = _read_state(run_dir)
-        except LocalVMError:
-            persisted = None
-        if persisted is not None:
-            for key in ("candidate", "runtime", "release"):
-                if key in persisted:
-                    state[key] = persisted[key]
-        state["status"] = "failed"
-        state["error"] = f"{type(error).__name__}: {error}"
-        _write_json(run_dir / "platform.json", state)
-        print(state["error"], file=sys.stderr)
+        _record_failure(run_dir, state, error)
         return 1
-
 
 def _pid_matches(
     pid: int,
@@ -2454,9 +2542,11 @@ def cleanup(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.action == "prepare":
+            return prepare(args)
         return run(args) if args.action == "run" else cleanup(args)
     except LocalVMError as error:
-        print(str(error), file=sys.stderr)
+        traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
         return 2
 
 
