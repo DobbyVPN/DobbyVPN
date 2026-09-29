@@ -24,6 +24,12 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
 
+    private static void TracePhase(string name)
+    {
+        Console.Error.WriteLine($"native-ui-phase={name}");
+        Console.Error.Flush();
+    }
+
     [STAThread]
     private static int Main()
     {
@@ -37,6 +43,11 @@ internal static class Program
             try { found = Process.GetProcessById(request.GetProperty("pid").GetInt32()); }
             catch (ArgumentException) { Console.WriteLine("{\"ready\":false,\"alive\":false}"); return 0; }
             using var process = found;
+            if (process.HasExited)
+            {
+                Console.WriteLine("{\"ready\":false,\"alive\":false}");
+                return 0;
+            }
             var expected = Path.GetFullPath(Text("executable"));
             if (!string.Equals(process.MainModule!.FileName, expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("UI process executable changed");
@@ -101,21 +112,38 @@ internal static class Program
                     else throw new InvalidOperationException("Control has no native invoke or selection action");
                     break;
                 case "type":
+                    TracePhase("type-find-editor");
                     var editor = Find("Connection configuration", editor: true);
+                    TracePhase("type-read-profile");
                     var value = File.ReadAllText(Text("source"));
+                    TracePhase("type-activate-window");
                     if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
+                    TracePhase("type-focus-editor");
                     editor.SetFocus();
+                    TracePhase("type-read-clipboard");
                     var previous = Forms.Clipboard.GetDataObject();
                     var clipboard = new Forms.DataObject();
                     if (previous is not null)
-                        foreach (var format in previous.GetFormats(false))
+                    {
+                        TracePhase("type-enumerate-clipboard-formats");
+                        var formats = previous.GetFormats(false);
+                        for (var index = 0; index < formats.Length; index++)
+                        {
+                            TracePhase($"type-copy-clipboard-format-{index + 1}");
+                            var format = formats[index];
                             clipboard.SetData(format, false, previous.GetData(format, false));
+                        }
+                    }
                     Exception? primary = null;
                     try
                     {
+                        TracePhase("type-set-clipboard-text");
                         Forms.Clipboard.SetText(value);
+                        TracePhase("type-send-select-all");
                         Forms.SendKeys.SendWait("^a");
+                        TracePhase("type-send-paste");
                         Forms.SendKeys.SendWait("^v");
+                        TracePhase("type-verify-pasted-value");
                         var limit = Stopwatch.StartNew();
                         string observed = "";
                         do
@@ -132,8 +160,16 @@ internal static class Program
                     {
                         try
                         {
-                            if (previous is null) Forms.Clipboard.Clear();
-                            else Forms.Clipboard.SetDataObject(clipboard, true);
+                            if (previous is null)
+                            {
+                                TracePhase("type-clear-clipboard");
+                                Forms.Clipboard.Clear();
+                            }
+                            else
+                            {
+                                TracePhase("type-restore-clipboard");
+                                Forms.Clipboard.SetDataObject(clipboard, true);
+                            }
                         }
                         catch (Exception cleanup)
                         {
