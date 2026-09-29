@@ -306,6 +306,7 @@ class ApplePreflightTests(unittest.TestCase):
         notes = "\n".join(failure.__notes__)
         self.assertIn("install stdout\x00\\xff", notes)
         self.assertIn("install stderr", notes)
+        # The remaining lane budget still caps the five-minute stage limit.
         self.assertEqual(runner.asserted_install_timeout, 180)
         # The simulated install and its bounded process-group stop consume 225s
         # of a 345s run. Cleanup still receives the reserved 120s; the shutdown

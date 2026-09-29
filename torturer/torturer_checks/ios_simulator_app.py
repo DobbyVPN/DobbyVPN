@@ -82,7 +82,9 @@ STAGE_TIMEOUT_SECONDS = {
     # one-time Data Migration before bootstatus reports ready. Keep this a
     # single bounded wait; the lane budget still reserves cleanup time.
     "bootstatus": 360,
-    "install": 180,
+    # A slow iOS 26 boot can leave installd busy after bootstatus reports
+    # ready. Keep one bounded install attempt inside the lane budget.
+    "install": 300,
     "xctest-ui": IOS_UI_TEST_TIMEOUT_SECONDS,
     "export-xctest-screenshots": 120,
     "terminate": 60,
