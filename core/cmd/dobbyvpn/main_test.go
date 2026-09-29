@@ -25,7 +25,7 @@ func TestReadSourceAcceptsHTTPSURLAndExistingFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("file config"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readSource(path)
+	got, err = readSource(path)
 	if err != nil || string(got) != "file config" {
 		t.Fatalf("readSource(file) = %q, %v", got, err)
 	}

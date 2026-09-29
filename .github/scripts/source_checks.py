@@ -170,7 +170,7 @@ def python_tests() -> None:
         run(
             [
                 sys.executable, "-m", "unittest", "discover",
-                "-s", "torturer/tests", "-p", "test_*.py",
+                "-s", "torturer/tests", "-t", "torturer", "-p", "test_*.py",
             ],
             env=environment,
         )
