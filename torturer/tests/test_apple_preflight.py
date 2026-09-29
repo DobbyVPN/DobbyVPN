@@ -13,6 +13,8 @@ import unittest
 from unittest import mock
 
 from torturer_checks import ios_simulator_app, local_vm, local_vm_macos
+from torturer_checks.hosted.cli import CommandResult
+from torturer_checks.hosted.macos import MacOSHostedAdapter
 
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +32,28 @@ def _load_smoke_script():
 
 
 class ApplePreflightTests(unittest.TestCase):
+    def test_hosted_macos_discovers_uplink_for_routing_proof(self) -> None:
+        commands: list[tuple[str, ...]] = []
+
+        class Runner:
+            def run(self, command, *, timeout_seconds):
+                self.asserted_timeout = timeout_seconds
+                arguments = tuple(command)
+                commands.append(arguments)
+                if arguments[0] == "/usr/bin/dscacheutil":
+                    return CommandResult(arguments, 0, b"name: api.ipify.org\nip_address: 104.26.12.205\n")
+                if arguments[0] == "/sbin/route":
+                    return CommandResult(arguments, 0, b"route to: 104.26.12.205\ninterface: en0\n")
+                raise AssertionError(arguments)
+
+        adapter = object.__new__(MacOSHostedAdapter)
+        adapter.runner = Runner()
+        adapter.identity_url = "https://api.ipify.org"
+        adapter.network_interface = None
+        adapter._resolve_routing_probe(5.0)
+        self.assertEqual(adapter.network_interface, "en0")
+        self.assertEqual(commands[-1], ("/sbin/route", "-n", "get", "104.26.12.205"))
+
     def test_accessibility_probe_gets_longer_timeout_than_other_aqua_probes(self) -> None:
         responses = {
             "scutil": b"kCGSSessionUserNameKey : tester\nkCGSSessionUserIDKey : 501\n",

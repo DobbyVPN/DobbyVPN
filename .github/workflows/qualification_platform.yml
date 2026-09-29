@@ -611,7 +611,6 @@ jobs:
             fi
             if [ "$PLATFORM" = linux ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
-              release_args+=(--service-library-path "$SERVICE_LIBRARY_PATH")
             fi
             if [ "$PLATFORM" = macos ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"

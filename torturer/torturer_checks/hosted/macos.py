@@ -515,6 +515,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             raise
 
     def _resolve_routing_probe(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
         if self.identity_url is None:
             raise ScenarioExecutionError("ROUTING_PROBE_UNAVAILABLE")
         try:
@@ -551,6 +552,13 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         self._routing_probe_host = endpoint.hostname
         self._routing_probe_port = port
         self._routing_probe_address = sorted(addresses)[0]
+        if self.network_interface is None:
+            # Hosted package checks do not have the owner's VM interface
+            # inventory. Discover the physical route before installing the
+            # temporary firewall rule; local runs already supply this value.
+            self.network_interface = self._route_interface(
+                self._remaining(deadline, "ROUTING_INTERFACE_UNAVAILABLE")
+            )
 
     def _firewall(self, action: str, timeout: float) -> None:
         if self.routing_firewall_helper is None:
