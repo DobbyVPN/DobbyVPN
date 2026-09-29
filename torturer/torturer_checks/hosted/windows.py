@@ -1066,10 +1066,13 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
 
     def execute(self, step: ScenarioStep) -> dict[str, object]:
         if self._routing_proof_enabled and step.operation == "connect":
-            self._connect_with_routing_probe(float(step.timeout_seconds))
+            # NetSecurity rule setup is test infrastructure and can stall on
+            # this VM. Give it a separate bound; retain the contract's full
+            # product Connect deadline after the routing proof is ready.
+            self._connect_with_routing_probe(float(step.timeout_seconds), setup_timeout=60.0)
             return {}
         if self._routing_proof_enabled and step.operation == "reconnect":
-            return self._reconnect_with_routing_probe(float(step.timeout_seconds))
+            return self._reconnect_with_routing_probe(float(step.timeout_seconds), setup_timeout=60.0)
         if step.operation == "network_transition":
             self._emit_progress("native-state", kind="uplink", state="transition-started")
             result = self._network_transition(float(step.timeout_seconds))

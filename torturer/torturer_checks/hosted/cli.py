@@ -926,11 +926,16 @@ class RoutingProofMixin:
             )
             raise ScenarioExecutionError("ROUTING_FIREWALL_INEFFECTIVE")
 
-    def _connect_with_routing_probe(self, timeout: float) -> None:
+    def _connect_with_routing_probe(
+        self, timeout: float, *, setup_timeout: float | None = None
+    ) -> None:
         deadline = time.monotonic() + timeout
         self._prepare_routing_probe(
-            self._remaining(deadline, "CONNECT_TIMEOUT")
+            setup_timeout if setup_timeout is not None
+            else self._remaining(deadline, "CONNECT_TIMEOUT")
         )
+        if setup_timeout is not None:
+            deadline = time.monotonic() + timeout
         try:
             self._command(
                 ("connect-profile", str(self.profile), self._selected_connection_index()),
@@ -951,11 +956,16 @@ class RoutingProofMixin:
                 )
             raise
 
-    def _reconnect_with_routing_probe(self, timeout: float) -> dict[str, object]:
+    def _reconnect_with_routing_probe(
+        self, timeout: float, *, setup_timeout: float | None = None
+    ) -> dict[str, object]:
         deadline = time.monotonic() + timeout
         self._prepare_routing_probe(
-            self._remaining(deadline, "RECONNECT_TIMEOUT")
+            setup_timeout if setup_timeout is not None
+            else self._remaining(deadline, "RECONNECT_TIMEOUT")
         )
+        if setup_timeout is not None:
+            deadline = time.monotonic() + timeout
         try:
             self._command(
                 ("connect-profile", str(self.profile), self._selected_connection_index()),

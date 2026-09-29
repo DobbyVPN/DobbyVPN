@@ -14,7 +14,8 @@ from unittest import mock
 from torturer_checks import local_vm
 from torturer_checks import ios_simulator_app
 from torturer_checks.hosted import run as hosted_run
-from torturer_checks.hosted.cli import HostedCLIAdapter, SubprocessRunner
+from torturer_checks.hosted.cli import HostedCLIAdapter, RoutingProofMixin, SubprocessRunner
+from torturer_checks.hosted.windows import WindowsHostedAdapter
 from torturer_contract.functional.engine import ScenarioExecutionError
 from torturer_contract.functional.scenarios import ScenarioDefinition, ScenarioStep
 from torturer_provider import render_service
@@ -32,6 +33,39 @@ def _assert_utc_timestamp(test: unittest.TestCase, value: object) -> None:
 
 
 class TimingProgressTests(unittest.TestCase):
+    def test_windows_firewall_setup_does_not_consume_product_connect_deadline(self) -> None:
+        clock = [100.0]
+        setup_budgets: list[float] = []
+        command_budgets: list[float] = []
+
+        def prepare(budget: float) -> None:
+            setup_budgets.append(budget)
+            clock[0] += 37.0
+
+        probe = SimpleNamespace(
+            profile=Path("fixture"),
+            _prepare_routing_probe=prepare,
+            _selected_connection_index=lambda: "0",
+            _remaining=lambda deadline, _failure: deadline - clock[0],
+            _command=lambda _command, budget, _failure: command_budgets.append(budget),
+            _connected=lambda _budget: True,
+            _emit_progress=lambda *_args, **_kwargs: None,
+        )
+        with mock.patch("torturer_checks.hosted.cli.time.monotonic", side_effect=lambda: clock[0]):
+            RoutingProofMixin._connect_with_routing_probe(probe, 40.0, setup_timeout=60.0)
+            RoutingProofMixin._reconnect_with_routing_probe(probe, 30.0, setup_timeout=60.0)
+        self.assertEqual(setup_budgets, [60.0, 60.0])
+        self.assertEqual(command_budgets, [40.0, 30.0])
+
+        adapter = object.__new__(WindowsHostedAdapter)
+        adapter._routing_proof_enabled = True
+        with mock.patch.object(adapter, "_connect_with_routing_probe") as connect:
+            adapter.execute(SimpleNamespace(operation="connect", timeout_seconds=40))
+        connect.assert_called_once_with(40.0, setup_timeout=60.0)
+        with mock.patch.object(adapter, "_reconnect_with_routing_probe") as reconnect:
+            adapter.execute(SimpleNamespace(operation="reconnect", timeout_seconds=30))
+        reconnect.assert_called_once_with(30.0, setup_timeout=60.0)
+
     def test_ios_build_stage_events_report_utc_duration_and_keep_failure_streams(self) -> None:
         contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
 
