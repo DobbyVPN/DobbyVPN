@@ -9,6 +9,13 @@ struct HelperError: Error, CustomStringConvertible {
     init(_ message: String) { description = message }
 }
 
+struct AccessibilityReadError: Error, CustomStringConvertible {
+    let attribute: String
+    let code: AXError
+
+    var description: String { "AX read \(attribute) failed: \(code.rawValue)" }
+}
+
 func require(_ condition: Bool, _ message: String) throws {
     if !condition { throw HelperError(message) }
 }
@@ -17,7 +24,7 @@ func attribute(_ element: AXUIElement, _ name: String) throws -> CFTypeRef? {
     var value: CFTypeRef?
     let code = AXUIElementCopyAttributeValue(element, name as CFString, &value)
     if code == .noValue || code == .attributeUnsupported { return nil }
-    try require(code == .success, "AX read \(name) failed: \(code.rawValue)")
+    if code != .success { throw AccessibilityReadError(attribute: name, code: code) }
     return value
 }
 
@@ -135,6 +142,9 @@ func capture(_ pid: pid_t, path: String) throws {
         try require(CGGetActiveDisplayList(UInt32(displays.count), &displays, &count) == .success, "Display geometry unavailable")
         try require(displays.prefix(Int(count)).contains { CGDisplayBounds($0).contains(bounds) }, "Native window is partly offscreen")
         for obstruction in windows[..<index] {
+            if (obstruction[kCGWindowLayer as String] as? Int) == Int(CGWindowLevelForKey(.cursorWindow)) {
+                continue
+            }
             guard (obstruction[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let raw = obstruction[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), rect.intersects(bounds) else { continue }
@@ -192,29 +202,25 @@ func run() throws -> [String: Any] {
     try require(AXIsProcessTrusted(), "Accessibility permission unavailable")
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 1)
-    var windowsValue: CFTypeRef?
-    let windowsError = AXUIElementCopyAttributeValue(
-        root,
-        kAXWindowsAttribute as CFString,
-        &windowsValue
-    )
-    if operation == "tree" && windowsError == .cannotComplete {
-        FileHandle.standardError.write(Data(
-            "AX read \(kAXWindowsAttribute) failed during startup; retrying tree discovery: \(windowsError.rawValue)\n".utf8
-        ))
-        return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity]
+    let nodes: [AXUIElement]
+    do {
+        guard let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
+              let window = windows.first else {
+            return ["ready": false, "pid": Int(pid), "identity": identity]
+        }
+        nodes = try elements(window)
+        if operation == "tree" {
+            let labels = try nodes.flatMap(names)
+            return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": labels]
+        }
+    } catch {
+        if operation == "tree", let readError = error as? AccessibilityReadError,
+           readError.code == .failure || readError.code == .cannotComplete {
+            FileHandle.standardError.write(Data("\(readError) during tree discovery; retrying\n".utf8))
+            return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity]
+        }
+        throw error
     }
-    if windowsError == .noValue || windowsError == .attributeUnsupported {
-        return ["ready": false, "pid": Int(pid), "identity": identity]
-    }
-    try require(
-        windowsError == .success,
-        "AX read \(kAXWindowsAttribute) failed: \(windowsError.rawValue)"
-    )
-    guard let windows = windowsValue as? [AXUIElement], let window = windows.first else {
-        return ["ready": false, "pid": Int(pid), "identity": identity]
-    }
-    let nodes = try elements(window)
     func activate() throws {
         try require(app.activate(options: [.activateIgnoringOtherApps]), "Could not activate native app")
         let deadline = Date().addingTimeInterval(2)
@@ -225,7 +231,6 @@ func run() throws -> [String: Any] {
     }
     switch operation {
     case "focus": try activate()
-    case "tree": break
     case "click":
         guard let target = request["target"] as? String else { throw HelperError("Missing control name") }
         try activate()
@@ -239,8 +244,7 @@ func run() throws -> [String: Any] {
         try capture(pid, path: path)
     default: throw HelperError("Unknown helper operation: \(operation)")
     }
-    let labels = operation == "tree" ? try nodes.flatMap(names) : []
-    return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": labels]
+    return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": []]
 }
 
 do {
