@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_contract.engine import ScenarioExecutionError
-from torturer_runner.adapters.android import AndroidAdapter
+from torturer_runner.adapters.android import AndroidAdapter, _select_gui_profile
 from torturer_runner.adapters.cli import CommandResult
 
 
@@ -20,6 +20,41 @@ class BinaryStderr:
 
     def flush(self) -> None:
         pass
+
+
+class AndroidGuiProfileSelectionTests(unittest.TestCase):
+    def test_selects_one_supported_schema_v2_profile_and_adds_schema_header(self) -> None:
+        raw = (
+            b"schema_version = 2\n"
+            b"[[profiles]]\nprotocol = 'TRUST_TUNNEL'\n"
+            b"[profiles.config]\nendpoint = 'https://trust.invalid'\n"
+            b"[[profiles]]\nprotocol = 'OUTLINE'\n"
+            b"[profiles.config]\nServer = 'outline.invalid'\nPassword = 'synthetic'\nPort = 443\n"
+            b"[[profiles]]\nprotocol = 'XRAY'\n"
+            b"[profiles.config]\noutbounds = []\n"
+        )
+        start = raw.index(b"[[profiles]]\nprotocol = 'OUTLINE'")
+        end = raw.index(b"[[profiles]]\nprotocol = 'XRAY'")
+
+        selected = _select_gui_profile(raw)
+
+        self.assertEqual(selected, b"schema_version = 2\n" + raw[start:end])
+        self.assertLessEqual(len(selected), 64 * 1024)
+
+    def test_header_inside_multiline_string_is_preserved_as_profile_content(self) -> None:
+        profile = (
+            b'[[profiles]]\nprotocol = "OUTLINE"\n'
+            b'description = """Synthetic details include a header-like line.\n'
+            b'[[profiles]]\nprotocol = "XRAY"\n"""\n'
+            b'[profiles.config]\nServer = "outline.invalid"\n'
+            b'Password = "synthetic"\nPort = 443\n'
+        )
+        raw = b"schema_version = 2\n" + profile
+
+        self.assertEqual(
+            _select_gui_profile(raw),
+            b"schema_version = 2\n" + profile,
+        )
 
 
 class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):

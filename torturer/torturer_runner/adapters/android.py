@@ -17,6 +17,7 @@ import re
 import shlex
 import threading
 import time
+import tomllib
 from typing import Callable, Mapping
 import uuid
 
@@ -104,18 +105,17 @@ _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
-# Keep this boundary in step with sessionapi's product parser. The rendered
-# lane uses one representative input, while the binding lane exercises all
-# profiles. It still receives an untouched, complete TOML protocol block. In
-# particular, do not re-encode or otherwise normalize private profile bytes in
-# the controller.
+# The rendered lane selects one schema-v2 profile while the binding lane
+# exercises the complete profile set. tomllib validates the source and each
+# candidate; the product's Go parser remains authoritative.
 _GUI_PROFILE_HEADER = re.compile(
-    rb"(?m)^[ \t]*\[\[\s*(Outline|Xray|TrustTunnel)\s*\]\]"
+    rb"(?m)^[ \t]*\[\[[ \t]*profiles[ \t]*\]\]"
     rb"[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
 )
-_GUI_PROFILE_PROTOCOLS = frozenset({b"Outline", b"Xray"})
+_GUI_PROFILE_PROTOCOLS = frozenset({"OUTLINE", "XRAY"})
 # Keep emulator input bounded; the binding lane owns the complete profile set.
 _GUI_PROFILE_MAX_BYTES = 64 * 1024
+_GUI_PROFILE_PREFIX = b"schema_version = 2\n"
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
     "foreground": frozenset({"VPN_DIALOG", "PRODUCT", "OTHER", "NONE"}),
@@ -183,30 +183,53 @@ def _remaining(deadline: float, code: str) -> float:
 
 
 def _select_gui_profile(raw: bytes) -> bytes:
-    """Return the first complete emulator-supported protocol block.
+    """Return one source-preserving, complete schema-v2 GUI profile.
 
     Android's rendered lane intentionally proves one real UI journey while
-    the binding lane retains full profile-matrix coverage.  A large
-    multi-profile bundle is unnecessary for one UI journey, so the rendered lane stages one
-    source-preserving ``Outline`` or ``Xray`` block within the conservative
-    native-editor bound. TrustTunnel is excluded because it is not an
-    emulator-supported representative for this lane. Oversized candidates
-    are skipped so a later bounded protocol block can still represent the
-    rendered journey; if none exists, selection fails closed.
-
-    The product's Go parser remains authoritative for syntax and protocol
-    validation once the bytes reach the app.  This helper only finds strict
-    protocol-header boundaries; it never parses, logs, or reconstructs
-    profile content.
+    the binding lane retains full profile-matrix coverage. It validates the
+    original TOML and each bounded single-profile candidate with tomllib,
+    matching the parsed profile to the original so a header-like line inside
+    a multiline string cannot be selected as a profile. Profile bytes remain
+    untouched; Go remains authoritative for product validation.
     """
+    try:
+        source = tomllib.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE") from None
+    source_profiles = source.get("profiles")
+    if source.get("schema_version") != 2 or not isinstance(source_profiles, list):
+        raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
+
     headers = tuple(_GUI_PROFILE_HEADER.finditer(raw))
     for index, header in enumerate(headers):
-        if header.group(1) not in _GUI_PROFILE_PROTOCOLS:
-            continue
-        end = headers[index + 1].start() if index + 1 < len(headers) else len(raw)
-        candidate = raw[header.start():end]
-        if candidate.strip() and len(candidate) <= _GUI_PROFILE_MAX_BYTES:
-            return candidate
+        for end_index in range(index + 1, len(headers) + 1):
+            end = (
+                headers[end_index].start()
+                if end_index < len(headers)
+                else len(raw)
+            )
+            candidate = _GUI_PROFILE_PREFIX + raw[header.start():end]
+            if len(candidate) > _GUI_PROFILE_MAX_BYTES:
+                break
+            try:
+                parsed = tomllib.loads(candidate.decode("utf-8"))
+            except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                continue
+            profiles = parsed.get("profiles")
+            if (
+                parsed.get("schema_version") != 2
+                or not isinstance(profiles, list)
+            ):
+                continue
+            if len(profiles) > 1:
+                break
+            if not profiles:
+                continue
+            profile = profiles[0]
+            if isinstance(profile, dict) and profile in source_profiles:
+                if profile.get("protocol") in _GUI_PROFILE_PROTOCOLS:
+                    return candidate
+                break
     raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
 
 
