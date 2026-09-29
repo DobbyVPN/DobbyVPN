@@ -107,7 +107,8 @@ func TestCallJSONWithEmptyMailboxLeavesConfigurationValidationToGo(t *testing.T)
 	response := binding.CallJSONWithConfiguration(
 		context.Background(), "Configure", params, []byte{}, true,
 	)
-	if !strings.Contains(response, `"code":"MALFORMED_CONFIG"`) {
+	if !strings.Contains(response, `"code":"INVALID_ARGUMENT"`) ||
+		!strings.Contains(response, `"message":"configuration source is empty"`) {
 		t.Fatalf("empty config was not rejected by the shared Go configuration path: %s", response)
 	}
 }
@@ -149,7 +150,8 @@ func TestStartWithEmptyMailboxRejectsChangedSource(t *testing.T) {
 	params := json.RawMessage(`{"session_id":"` + jsonSessionID(t, initial) + `","expected_sequence":` +
 		strconv.FormatInt(int64Field(t, initial, "sequence"), 10) + `,"mode":"AUTO_SELECT","index":0}`)
 	response := binding.CallJSONWithConfiguration(context.Background(), "Start", params, nil, true)
-	if !strings.Contains(response, `"code":"MALFORMED_CONFIG"`) {
+	if !strings.Contains(response, `"code":"INVALID_ARGUMENT"`) ||
+		!strings.Contains(response, `"message":"configuration source is empty"`) {
 		t.Fatalf("empty Start source was not rejected by Go: %s", response)
 	}
 }
