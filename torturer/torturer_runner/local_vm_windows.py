@@ -210,7 +210,7 @@ function Get-ConfiguredExplorerProbe {
 
 function Get-ActiveConsoleSessionId {
   # Use the runner's Python to call Win32 directly, without compiling a C# type.
-  $value = & $env:DOBBYVPN_PREFLIGHT_PYTHON -I -S -c 'import ctypes; api = ctypes.WinDLL("kernel32").WTSGetActiveConsoleSessionId; api.restype = ctypes.c_uint32; print(api())'
+  $value = & $env:DOBBYVPN_PREFLIGHT_PYTHON -I -S -c 'import ctypes; api = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId; api.restype = ctypes.c_uint32; print(api())'
   if ($LASTEXITCODE -ne 0 -or [string]$value -notmatch '^[0-9]+$') {
     throw "could not read the active console session"
   }
