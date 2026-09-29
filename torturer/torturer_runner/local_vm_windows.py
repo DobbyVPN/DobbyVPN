@@ -79,7 +79,7 @@ class WindowsInteractiveDesktopUnavailable(LocalVMError):
 
 
 def _save_state(run_dir: Path, runtime: dict[str, Any], status: str = "starting") -> None:
-    from ..local_vm import _read_state, _write_json
+    from .local_vm import _read_state, _write_json
 
     state = _read_state(run_dir)
     if state is None:
@@ -818,7 +818,7 @@ def run_interactive_task(
     interactive token. No password or persistent task is introduced.
     """
 
-    from ..local_vm import LocalVMError
+    from .local_vm import LocalVMError
 
     if timeout <= 0:
         raise LocalVMError("Windows interactive task timeout must be positive")

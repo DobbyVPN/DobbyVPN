@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_contract.engine import ScenarioExecutionError
-from torturer_runner import hosted as run
+from torturer_runner import lane as run
 from torturer_runner.adapters import linux
 from torturer_runner.adapters.cli import CommandResult, CLIAdapter
 

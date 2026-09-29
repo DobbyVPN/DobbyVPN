@@ -32,7 +32,7 @@ from .adapters.cli import (
     _ensure_directory,
 )
 from .adapters.factory import adapter_for_platform
-from .hosted import (
+from .lane import (
     _execute_lane,
     _emit_progress_event,
     _write_json,

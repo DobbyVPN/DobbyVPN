@@ -13,7 +13,7 @@ from unittest import mock
 
 from torturer_runner import local_vm
 from torturer_runner import ios_simulator_app
-from torturer_runner import hosted as hosted_run
+from torturer_runner import lane
 from torturer_runner.adapters.cli import CLIAdapter, RoutingProofMixin, SubprocessRunner
 from torturer_runner.adapters.windows import WindowsAdapter
 from torturer_contract.engine import ScenarioExecutionError
@@ -203,10 +203,10 @@ class TimingProgressTests(unittest.TestCase):
             self.assertGreaterEqual(event["duration_seconds"], 0)
             self.assertEqual(event["status"], "succeeded")
 
-    def test_hosted_progress_events_have_utc_timestamps(self) -> None:
+    def test_lane_progress_events_have_utc_timestamps(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
-            hosted_run._emit_progress_event("test-event", {"phase": "test"})
+            lane._emit_progress_event("test-event", {"phase": "test"})
 
         event = _json_events(output.getvalue())[0]
         self.assertEqual(event["kind"], "dobbyvpn.functional.progress")
