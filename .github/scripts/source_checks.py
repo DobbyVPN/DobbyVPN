@@ -481,13 +481,17 @@ def trivy_scan(tools: Tools) -> None:
     require_platform("linux")
     trivy = tools.get("trivy")
     cache_dir = tools.root / "trivy-cache"
-    ignore = ROOT / ".trivyignore"
-    for target in (ROOT / "core", ROOT / "ui" / "android"):
+    for target in (
+        ROOT / "core",
+        ROOT / "ui" / "android",
+        SCRIPT_DIR / "requirements-native-ui.txt",
+    ):
         run(
             [
                 str(trivy), "fs", "--cache-dir", str(cache_dir),
                 "--severity", "HIGH,CRITICAL", "--ignore-unfixed",
-                "--exit-code", "1", "--ignorefile", str(ignore), str(target),
+                "--exit-code", "1", "--file-patterns", r"pip:requirements-native-ui\.txt",
+                str(target),
             ],
             cwd=ROOT,
         )
