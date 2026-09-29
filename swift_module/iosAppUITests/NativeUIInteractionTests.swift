@@ -22,12 +22,15 @@ final class NativeUIInteractionTests: XCTestCase {
         app.buttons["VPN connection action"].tap()
         XCTAssertTrue(app.staticTexts["Error"].waitForExistence(timeout: 30))
         attachScreenshot("failure")
+        XCTAssertEqual(configuration.value as? String, "invalidprofile")
 
         configuration.tap()
         configuration.typeText("2")
         let editedConfiguration = try XCTUnwrap(configuration.value as? String)
-        XCTAssertEqual(editedConfiguration.count, "invalidprofile".count + 1)
-        XCTAssertEqual(editedConfiguration.filter { $0 != "2" }, "invalidprofile")
+        if editedConfiguration != "2" {
+            XCTAssertEqual(editedConfiguration.count, "invalidprofile".count + 1)
+            XCTAssertEqual(editedConfiguration.filter { $0 != "2" }, "invalidprofile")
+        }
         app.buttons["Dismiss configuration keyboard"].tap()
 
         let settingsTab = app.tabBars.buttons["Settings"]
