@@ -18,10 +18,55 @@ if str(_TORTURER_ROOT) not in sys.path:
 from torturer_runner.diagnostics import add_exception_notes, add_stream_notes, emit_streams
 from torturer_runner.process_capture import run_finite_capture
 from torturer_runner.screenshot_artifacts import nonblank_png_dimensions
+from torturer_runner.windows_job import (
+    WindowsJobError,
+    close_for as close_windows_job,
+    popen_with_windows_job,
+    terminate_and_prove_empty as terminate_windows_job,
+)
 
 
 class NativeUISmokeError(RuntimeError):
     pass
+
+
+def _windows_job_capture_callbacks(deadline: float):
+    stage = "native-ui-helper"
+    timeout_stage = f"{stage}-timeout"
+
+    def spawn(command: list[str], **popen_kwargs):
+        return popen_with_windows_job(
+            subprocess.Popen,
+            command,
+            stage=stage,
+            deadline=deadline,
+            **popen_kwargs,
+        )
+
+    def terminate(process: subprocess.Popen[bytes], cleanup_deadline: float) -> None:
+        cleanup = terminate_windows_job(
+            process,
+            deadline=cleanup_deadline,
+            stage=timeout_stage,
+        )
+        if not cleanup.process_tree_proven:
+            diagnostics = cleanup.diagnostics or (
+                "api=JobObject detail=tree-not-proven "
+                f"active_processes={cleanup.active_processes}",
+            )
+            raise WindowsJobError(timeout_stage, diagnostics)
+
+    def close(process: subprocess.Popen[bytes], cleanup_deadline: float) -> None:
+        result = close_windows_job(
+            process,
+            stage=f"{stage}-cleanup",
+            deadline=cleanup_deadline,
+        )
+        if result.failed:
+            diagnostics = result.diagnostics or ("api=JobObject detail=close-failed",)
+            raise WindowsJobError(f"{stage}-cleanup", diagnostics)
+
+    return spawn, terminate, close
 
 
 def _native_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[bytes]:
@@ -96,12 +141,22 @@ class NativeUIController:
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
         operation_timeout = min(10.0, available - cleanup_timeout)
+        capture_callbacks = {}
+        if self.platform == "windows":
+            operation_deadline = time.monotonic() + operation_timeout
+            spawn, terminate, close = _windows_job_capture_callbacks(operation_deadline)
+            capture_callbacks = {
+                "popen_factory": spawn,
+                "terminate": terminate,
+                "close_boundary": close,
+            }
         result = _native_run(
             [str(self.helper)],
             timeout_seconds=operation_timeout,
             input_bytes=json.dumps(request).encode("utf-8"),
             termination_grace_seconds=cleanup_timeout / 2,
             cleanup_timeout_seconds=cleanup_timeout,
+            **capture_callbacks,
         )
         if result.returncode:
             raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)

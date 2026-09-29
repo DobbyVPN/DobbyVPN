@@ -13,6 +13,7 @@ from unittest import mock
 from torturer_runner import ios_simulator_app
 from torturer_runner.adapters import macos
 from torturer_runner.ui import journey as native_ui
+from torturer_runner.ui import smoke as native_ui_smoke
 from torturer_runner.adapters.cli import CommandResult
 from torturer_runner.windows_job import (
     WindowsJobCloseResult,
@@ -289,6 +290,89 @@ class InformationRetentionTests(unittest.TestCase):
         self.assertTrue(result.failed)
         self.assertIn("api=CloseHandle winerror=5", result.diagnostics)
         self.assertTrue(any("job-still-attached" in item for item in result.diagnostics))
+
+    def test_native_windows_helper_uses_existing_job_boundary(self) -> None:
+        process = mock.Mock()
+        completed = subprocess.CompletedProcess(
+            ["native-helper"], 0, stdout=b'{"ready":true}', stderr=b""
+        )
+        controller = object.__new__(native_ui_smoke.NativeUIController)
+        controller.platform = "windows"
+        controller.executable = Path("D:/DobbyVPN.exe")
+        controller.helper = Path("D:/NativeUI.exe")
+        controller._timeout = 15.0
+        controller._deadline = None
+        controller.pid = None
+        controller.identity = None
+
+        with (
+            mock.patch.object(native_ui_smoke, "_native_run", return_value=completed) as run,
+            mock.patch.object(native_ui_smoke.time, "monotonic", return_value=100.0),
+            mock.patch.object(
+                native_ui_smoke,
+                "popen_with_windows_job",
+                return_value=process,
+            ) as popen_with_job,
+            mock.patch.object(
+                native_ui_smoke,
+                "terminate_windows_job",
+                return_value=SimpleNamespace(
+                    process_tree_proven=True,
+                    active_processes=0,
+                    diagnostics=(),
+                ),
+            ) as terminate_job,
+            mock.patch.object(
+                native_ui_smoke,
+                "close_windows_job",
+                return_value=WindowsJobCloseResult(),
+            ) as close_job,
+        ):
+            response = controller._call("type", source="profile.ovpn")
+
+            self.assertEqual(response, {"ready": True})
+            self.assertIn("popen_factory", run.call_args.kwargs)
+            self.assertIn("terminate", run.call_args.kwargs)
+            self.assertIn("close_boundary", run.call_args.kwargs)
+            self.assertEqual(run.call_args.kwargs["cleanup_timeout_seconds"], 2.0)
+
+            popen_factory = run.call_args.kwargs["popen_factory"]
+            self.assertIs(popen_factory(["native-helper"]), process)
+            popen_with_job.assert_called_once_with(
+                subprocess.Popen,
+                ["native-helper"],
+                stage="native-ui-helper",
+                deadline=110.0,
+            )
+
+            run.call_args.kwargs["terminate"](process, 112.0)
+            terminate_job.assert_called_once_with(
+                process,
+                deadline=112.0,
+                stage="native-ui-helper-timeout",
+            )
+            run.call_args.kwargs["close_boundary"](process, 114.0)
+            close_job.assert_called_once_with(
+                process,
+                stage="native-ui-helper-cleanup",
+                deadline=114.0,
+            )
+
+            terminate_job.return_value = SimpleNamespace(
+                process_tree_proven=False,
+                active_processes=1,
+                diagnostics=(),
+            )
+            with self.assertRaises(native_ui_smoke.WindowsJobError) as termination_error:
+                run.call_args.kwargs["terminate"](process, 115.0)
+            self.assertIn("active_processes=1", str(termination_error.exception))
+
+            close_job.return_value = WindowsJobCloseResult(
+                diagnostics=("api=CloseHandle winerror=5",), failed=True
+            )
+            with self.assertRaises(native_ui_smoke.WindowsJobError) as close_error:
+                run.call_args.kwargs["close_boundary"](process, 116.0)
+            self.assertIn("CloseHandle winerror=5", str(close_error.exception))
 
 
 if __name__ == "__main__":

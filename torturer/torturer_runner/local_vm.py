@@ -159,9 +159,6 @@ def _install_screenshot_decoder(
         label="install-screenshot-decoder",
         timeout=min(timeout, _SCREENSHOT_DECODER_INSTALL_TIMEOUT_SECONDS),
     )
-    package_path = str(target)
-    if package_path not in sys.path:
-        sys.path.insert(0, package_path)
     return target
 
 

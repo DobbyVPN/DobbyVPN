@@ -52,6 +52,19 @@ def run(
 
     if candidate.get("mode") != "ios-simulator" or not isinstance(candidate.get("app"), str):
         raise ios.IOSSimulatorAppContractError("prepared iOS Simulator candidate is missing")
+    screenshot_python = candidate.get("screenshot_python")
+    screenshot_python_dir = run_dir / "screenshot-python"
+    if (
+        not isinstance(screenshot_python, str)
+        or screenshot_python_dir.is_symlink()
+        or not screenshot_python_dir.is_dir()
+        or Path(screenshot_python).resolve() != screenshot_python_dir.resolve()
+    ):
+        raise ios.IOSSimulatorAppContractError("prepared iOS screenshot decoder is missing")
+    package_path = str(screenshot_python_dir)
+    if package_path not in sys.path:
+        sys.path.insert(0, package_path)
+
     contract = ios.public_ios_simulator_app_contract(str(candidate.get("architecture", "")))
     work = run_dir / "work" / "ios"
     app_path = contract.app_path(work)

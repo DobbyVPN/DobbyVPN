@@ -2,15 +2,73 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
-from torturer_runner import ios_simulator_app
+from torturer_runner import ios_simulator_app, local_vm, local_vm_ios
 
 
 class IOSSimulatorBoundaryTests(unittest.TestCase):
+    def test_run_reactivates_prepared_screenshot_decoder_without_installing(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            run_dir = Path(name)
+            screenshot_python = run_dir / "screenshot-python"
+            fake_pil = screenshot_python / "PIL"
+            fake_pil.mkdir(parents=True)
+            (fake_pil / "__init__.py").write_text("prepared_decoder = True\n", encoding="utf-8")
+            logs = run_dir / "logs"
+            logs.mkdir()
+            work = run_dir / "work" / "ios"
+            contract = ios_simulator_app.public_ios_simulator_app_contract("arm64")
+            app_path = contract.app_path(work)
+            app_path.mkdir(parents=True)
+            descriptor = {
+                "mode": "ios-simulator",
+                "app": str(app_path),
+                "architecture": "arm64",
+                "screenshot_python": str(screenshot_python),
+            }
+            loaded_from: list[Path] = []
+
+            def run_contract(**_kwargs):
+                import PIL
+
+                self.assertTrue(PIL.prepared_decoder)
+                loaded_from.append(Path(PIL.__file__).resolve())
+                return SimpleNamespace(
+                    simulator=SimpleNamespace(udid="01234567-89ab-cdef-0123-456789abcdef")
+                )
+
+            original_path = sys.path[:]
+            saved_pil_modules = {
+                name: sys.modules.pop(name)
+                for name in tuple(sys.modules)
+                if name == "PIL" or name.startswith("PIL.")
+            }
+            sys.path[:] = [entry for entry in sys.path if entry != str(screenshot_python)]
+            try:
+                with (
+                    mock.patch.object(local_vm, "_read_state", return_value={"runtime": {"udid": "0123"}}),
+                    mock.patch.object(local_vm, "_write_json"),
+                    mock.patch.object(local_vm, "_install_screenshot_decoder", side_effect=AssertionError("run must not install")) as install,
+                    mock.patch.object(local_vm_ios.ios, "run_ios_simulator_app_contract", side_effect=run_contract),
+                    mock.patch.object(local_vm_ios.ios, "retain_ios_diagnostics"),
+                ):
+                    local_vm_ios.run(run_dir, descriptor, logs, timeout=30)
+                install.assert_not_called()
+            finally:
+                sys.path[:] = original_path
+                for name in tuple(sys.modules):
+                    if name == "PIL" or name.startswith("PIL."):
+                        sys.modules.pop(name)
+                sys.modules.update(saved_pil_modules)
+
+            self.assertEqual(loaded_from, [fake_pil / "__init__.py"])
+
     def test_ui_test_build_and_run_share_products_without_rebuilding(self) -> None:
         udid = "01234567-89ab-cdef-0123-456789abcdef"
         contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
