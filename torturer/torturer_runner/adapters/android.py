@@ -33,14 +33,14 @@ from torturer_runner.screenshot_artifacts import (
     assert_marker_matches,
     file_metadata,
 )
-from torturer_contract.functional.android_observation import (
+from torturer_contract.android_observation import (
     AndroidObservationError,
     AndroidProfileObservation,
 )
-from torturer_contract.functional.capabilities import Capability
-from torturer_contract.functional.engine import ScenarioExecutionError
-from torturer_contract.functional.results import ConnectionIdentity
-from torturer_contract.functional.scenarios import (
+from torturer_contract.capabilities import Capability
+from torturer_contract.engine import ScenarioExecutionError
+from torturer_contract.results import ConnectionIdentity
+from torturer_contract.scenarios import (
     ScenarioDefinition,
     ScenarioStep,
     select_scenarios,
@@ -49,7 +49,7 @@ from torturer_contract.functional.scenarios import (
 from .cli import (
     CommandResult,
     CommandRunner,
-    HostedAdapterError,
+    AdapterError,
     _append_command_result_notes,
     _ensure_directory,
     _executable_file,
@@ -271,7 +271,7 @@ def _failure_code(error: BaseException) -> str:
     return type(error).__name__
 
 
-class AndroidHostedAdapter:
+class AndroidAdapter:
     """Run canonical scenarios through DobbyVPN Android instrumentation."""
 
     adapter_id = "hosted-android-app"
@@ -292,20 +292,20 @@ class AndroidHostedAdapter:
         **kwargs: object,
     ) -> None:
         if kwargs:
-            raise HostedAdapterError("ANDROID_ARGUMENT_UNEXPECTED")
+            raise AdapterError("ANDROID_ARGUMENT_UNEXPECTED")
         _profile_file(profile)
         if adb is None:
-            raise HostedAdapterError("ANDROID_ADB_UNAVAILABLE")
+            raise AdapterError("ANDROID_ADB_UNAVAILABLE")
         _executable_file(adb, "ANDROID_ADB_UNAVAILABLE")
         if source_sha is not None and _SOURCE_SHA.fullmatch(source_sha) is None:
-            raise HostedAdapterError("SOURCE_SHA_INVALID")
+            raise AdapterError("SOURCE_SHA_INVALID")
         if ui_mode not in _ANDROID_UI_MODES:
-            raise HostedAdapterError(
+            raise AdapterError(
                 "ANDROID_UI_MODE_INVALID: expected protocol-matrix or gui-auto"
             )
         endpoint_values = (identity_url, latency_url, download_url, upload_url)
         if not all(value is not None for value in endpoint_values):
-            raise HostedAdapterError("ENDPOINTS_REQUIRED")
+            raise AdapterError("ENDPOINTS_REQUIRED")
         self.runner = runner
         self.profile = profile
         self.adb = adb
@@ -365,7 +365,7 @@ class AndroidHostedAdapter:
         self, timeout_seconds: float = 30.0
     ) -> tuple[ConnectionIdentity, ...]:
         if timeout_seconds <= 0:
-            raise HostedAdapterError("CONNECTION_DISCOVERY_TIMEOUT")
+            raise AdapterError("CONNECTION_DISCOVERY_TIMEOUT")
         self._selected_connection = None
         if self.ui_mode == "gui-auto":
             # The rendered lane deliberately does not probe the binding to
@@ -379,17 +379,17 @@ class AndroidHostedAdapter:
         )
         observation = self._last_observation
         if observation is None:
-            raise HostedAdapterError("CONNECTION_INVENTORY_INVALID")
+            raise AdapterError("CONNECTION_INVENTORY_INVALID")
         self._connections = observation.connections
         return self._connections
 
     def select_connection(self, connection: ConnectionIdentity) -> None:
         if connection not in self._connections:
-            raise HostedAdapterError("CONNECTION_NOT_DISCOVERED")
+            raise AdapterError("CONNECTION_NOT_DISCOVERED")
         if self.ui_mode == "gui-auto" and connection != ConnectionIdentity(
             index=0, protocol="AUTO"
         ):
-            raise HostedAdapterError("ANDROID_GUI_CONNECTION_INVALID")
+            raise AdapterError("ANDROID_GUI_CONNECTION_INVALID")
         self._selected_connection = connection
 
     def _validate_observation_identity(
@@ -781,7 +781,7 @@ class AndroidHostedAdapter:
 
     def reset(self, timeout_seconds: float = 5.0) -> None:
         if timeout_seconds <= 0:
-            raise HostedAdapterError("INVALID_RESET_TIMEOUT")
+            raise AdapterError("INVALID_RESET_TIMEOUT")
         self._adb(
             ("shell", "am", "force-stop", _PACKAGE_NAME),
             timeout_seconds,
@@ -794,9 +794,9 @@ class AndroidHostedAdapter:
         """Satisfy the shared lifecycle contract; no run-scoped process remains."""
 
         if timeout_seconds <= 0:
-            raise HostedAdapterError("INVALID_FINALIZE_TIMEOUT")
+            raise AdapterError("INVALID_FINALIZE_TIMEOUT")
         if deadline is not None and deadline <= time.monotonic():
-            raise HostedAdapterError("SERVICE_FINALIZE_TIMEOUT")
+            raise AdapterError("SERVICE_FINALIZE_TIMEOUT")
 
     def _run_instrumentation(
         self,
@@ -911,7 +911,7 @@ class AndroidHostedAdapter:
         highest_progress_sequence = -1
 
         def poll_ui_progress() -> None:
-            """Read and validate the hosted UI progress record."""
+            """Read and validate the Android UI progress record."""
 
             nonlocal last_ui_progress, required_screenshot_seen
             nonlocal failed_milestone_seen, highest_progress_sequence
@@ -1811,24 +1811,24 @@ class AndroidHostedAdapter:
             or isinstance(raw_port, bool)
             or not 1 <= raw_port <= 65535
         ):
-            raise AndroidHostedAdapter._routing_observation_failure(
+            raise AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_READY_INVALID", ready
             )
         addresses: list[str] = []
         for raw_ipv4 in raw_ipv4s:
             if not isinstance(raw_ipv4, str):
-                raise AndroidHostedAdapter._routing_observation_failure(
+                raise AndroidAdapter._routing_observation_failure(
                     "ANDROID_ROUTING_READY_INVALID", ready
                 )
             try:
                 address = ipaddress.ip_address(raw_ipv4)
             except ValueError as error:
-                failure = AndroidHostedAdapter._routing_observation_failure(
+                failure = AndroidAdapter._routing_observation_failure(
                     "ANDROID_ROUTING_READY_INVALID", ready
                 )
                 raise failure from error
             if address.version != 4 or str(address) in addresses:
-                raise AndroidHostedAdapter._routing_observation_failure(
+                raise AndroidAdapter._routing_observation_failure(
                     "ANDROID_ROUTING_READY_INVALID", ready
                 )
             addresses.append(str(address))
@@ -1994,16 +1994,16 @@ class AndroidHostedAdapter:
             or "status" in direct
             or direct.get("error_code") != "ANDROID_NETWORK_REQUEST_FAILED"
         ):
-            raise AndroidHostedAdapter._routing_observation_failure(
+            raise AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_DIRECT_NOT_BLOCKED", value
             )
         if not isinstance(vpn, Mapping):
-            raise AndroidHostedAdapter._routing_observation_failure(
+            raise AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_VPN_INVALID", value
             )
         provider_error = vpn.get("error_code")
         if provider_error == "ANDROID_NETWORK_REQUEST_FAILED":
-            failure = AndroidHostedAdapter._routing_observation_failure(
+            failure = AndroidAdapter._routing_observation_failure(
                 provider_error, value
             )
             detail = vpn.get("error_detail")
@@ -2017,7 +2017,7 @@ class AndroidHostedAdapter:
             "ANDROID_NETWORK_PROBE_PROVIDER_IDENTITY_INVALID",
             "ANDROID_NETWORK_PROBE_DEFAULT_NOT_VPN",
         }:
-            raise AndroidHostedAdapter._routing_observation_failure(
+            raise AndroidAdapter._routing_observation_failure(
                 provider_error, value
             )
         status = vpn.get("status")
@@ -2028,13 +2028,13 @@ class AndroidHostedAdapter:
             or not 200 <= status < 300
             or not isinstance(body, str)
         ):
-            raise AndroidHostedAdapter._routing_observation_failure(
+            raise AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_VPN_INVALID", value
             )
         try:
             return _parse_external_ip(body)
         except ScenarioExecutionError as error:
-            failure = AndroidHostedAdapter._routing_observation_failure(
+            failure = AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_VPN_INVALID", value
             )
             raise failure from error
@@ -2043,7 +2043,7 @@ class AndroidHostedAdapter:
     def _assert_routing_recovery(value: Mapping[str, object]) -> str:
         direct = value.get("direct")
         if not isinstance(direct, Mapping):
-            raise AndroidHostedAdapter._routing_observation_failure(
+            raise AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_RECOVERY_INVALID", value
             )
         status = direct.get("status")
@@ -2054,13 +2054,13 @@ class AndroidHostedAdapter:
             or not 200 <= status < 300
             or not isinstance(body, str)
         ):
-            raise AndroidHostedAdapter._routing_observation_failure(
+            raise AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_RECOVERY_INVALID", value
             )
         try:
             return _parse_external_ip(body)
         except ScenarioExecutionError as error:
-            failure = AndroidHostedAdapter._routing_observation_failure(
+            failure = AndroidAdapter._routing_observation_failure(
                 "ANDROID_ROUTING_RECOVERY_INVALID", value
             )
             raise failure from error
@@ -2157,7 +2157,7 @@ class AndroidHostedAdapter:
             raise ScenarioExecutionError("ANDROID_SCRATCH_UNAVAILABLE")
         try:
             _ensure_directory(raw_directory)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             failure = ScenarioExecutionError(error.code)
             add_exception_notes(
                 failure,
@@ -2257,7 +2257,7 @@ class AndroidHostedAdapter:
                 timeout_seconds=timeout_seconds,
                 input_bytes=input_bytes,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             failure = ScenarioExecutionError(error.code)
             failure.stdout = error.stdout
             failure.stderr = error.stderr

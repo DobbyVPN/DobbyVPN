@@ -4,7 +4,7 @@ package main
 
 import (
 	"flag"
-	executor "core/desktop/executor"
+	executor "core/clientserver/executor"
 )
 
 func main() {

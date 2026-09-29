@@ -237,7 +237,7 @@ jobs:
           codesign --display --entitlements :- "${tunnels[0]}" > "$work/tunnel-entitlements.plist"
           security cms -D -i "${apps[0]}/embedded.mobileprovision" > "$work/app-profile.plist"
           security cms -D -i "${tunnels[0]}/embedded.mobileprovision" > "$work/tunnel-profile.plist"
-          python3 .github/scripts/apple/verify_ios_app_group.py \
+          python3 .github/scripts/ios/verify_ios_app_group.py \
             --app-entitlements "$work/app-entitlements.plist" \
             --app-profile "$work/app-profile.plist" \
             --tunnel-entitlements "$work/tunnel-entitlements.plist" \

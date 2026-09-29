@@ -115,7 +115,7 @@ class DiagnosticPreservationTests(unittest.TestCase):
     def test_clipboard_payload_is_kept_out_of_diagnostics(self) -> None:
         smoke = _load_script(
             "dobbyvpn_native_ui_smoke",
-            PRODUCT_ROOT / ".github/scripts/desktop/native_ui_smoke.py",
+            PRODUCT_ROOT / "torturer/torturer_runner/ui/smoke.py",
         )
         payload = b"clipboard-profile-value"
         destination = BinaryStderr()
@@ -139,7 +139,7 @@ class DiagnosticPreservationTests(unittest.TestCase):
     def test_native_ui_subprocess_streams_are_forwarded_byte_for_byte(self) -> None:
         smoke = _load_script(
             "dobbyvpn_native_ui_smoke_streams",
-            PRODUCT_ROOT / ".github/scripts/desktop/native_ui_smoke.py",
+            PRODUCT_ROOT / "torturer/torturer_runner/ui/smoke.py",
         )
         stdout = b'Password="native-profile-value"\x00\xff\n'
         stderr = b"token=native-token\n"

@@ -72,7 +72,7 @@ def run(
     if source_sha is not None:
         _run_logged(
             [
-                sys.executable, str(run_dir / "source" / ".github" / "scripts" / "apple" / "ios_production_check.py"),
+                sys.executable, str(run_dir / "source" / ".github" / "scripts" / "ios" / "ios_production_check.py"),
                 "--source-sha", source_sha,
                 "--output-dir", str(run_dir / "work" / "ios-production"),
             ],

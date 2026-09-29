@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"core/desktop/controljson"
+	"core/clientserver/controljson"
 	applicationlog "core/log"
 	"core/sessionapi"
 )

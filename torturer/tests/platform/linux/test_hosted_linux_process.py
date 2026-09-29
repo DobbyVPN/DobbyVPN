@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from torturer_runner.hosted.cli import CommandResult
-from torturer_runner.hosted.linux import _process_stat_is_absent
+from torturer_runner.adapters.cli import CommandResult
+from torturer_runner.adapters.linux import _process_stat_is_absent
 
 
 class LinuxProcessStatTests(unittest.TestCase):

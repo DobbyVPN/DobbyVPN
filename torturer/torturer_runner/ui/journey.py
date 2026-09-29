@@ -11,7 +11,6 @@ interactive scheduled-task boundary.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import math
 import os
@@ -19,10 +18,11 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_contract.scenarios import ScenarioStep
 
-from .cli import SubprocessRunner, _ensure_directory
-from .factory import adapter_for_platform
+from ..adapters.cli import SubprocessRunner, _ensure_directory
+from ..adapters.factory import adapter_for_platform
+from . import smoke
 
 
 # Keep each native action below the hosted journey's step deadline, leaving
@@ -130,20 +130,6 @@ def _smoke_timeout(response_timeout: float) -> float:
         raise ValueError("native UI response timeout must be positive")
     reserve = min(_SMOKE_DIAGNOSTIC_RESERVE_SECONDS, response_timeout / 3.0)
     return min(_REQUEST_TIMEOUT, response_timeout - reserve)
-
-
-def _load_native_ui_smoke(script: Path) -> Any:
-    spec = importlib.util.spec_from_file_location("dobbyvpn_native_ui_smoke_runtime", script)
-    if spec is None or spec.loader is None:
-        raise NativeUIJourneyError(f"could not load native UI driver {script}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
-    return module
 
 
 def _native_ui_action(
@@ -329,7 +315,6 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
     checks: dict[str, object] = {}
     primary: BaseException | None = None
     try:
-        smoke = _load_native_ui_smoke(args.smoke_script)
         smoke.verify_interactive_session(args.platform)
         ui = smoke.NativeUIController(
             args.platform,
@@ -480,7 +465,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cli", type=_path, required=True)
     parser.add_argument("--ui", type=_path, required=True)
     parser.add_argument("--profile", type=_path, required=True)
-    parser.add_argument("--smoke-script", type=_path, required=True)
     parser.add_argument("--raw-log-dir", type=_path, required=True)
     parser.add_argument("--output", type=_path)
     parser.add_argument("--timeout", type=_timeout, default=900.0)
@@ -506,9 +490,8 @@ def main(argv: list[str] | None = None) -> int:
         not args.cli.is_file()
         or not _ui_path_is_launchable(args.platform, args.ui)
         or not args.profile.is_file()
-        or not args.smoke_script.is_file()
     ):
-        raise SystemExit("native UI journey requires regular CLI, launchable UI, profile, and smoke-script files")
+        raise SystemExit("native UI journey requires regular CLI, launchable UI, and profile files")
     try:
         result = run_journey(args)
     except Exception as error:

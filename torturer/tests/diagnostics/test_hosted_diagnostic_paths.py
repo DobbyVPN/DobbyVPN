@@ -8,9 +8,10 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from torturer_contract.functional.engine import ScenarioExecutionError
-from torturer_runner.hosted import linux, run
-from torturer_runner.hosted.cli import CommandResult, HostedCLIAdapter
+from torturer_contract.engine import ScenarioExecutionError
+from torturer_runner import hosted as run
+from torturer_runner.adapters import linux
+from torturer_runner.adapters.cli import CommandResult, CLIAdapter
 
 
 class BinaryStderr:
@@ -95,8 +96,8 @@ class RestartedServiceLogTests(unittest.TestCase):
 
 class HostedMeasurementDiagnosticsTests(unittest.TestCase):
     @staticmethod
-    def adapter_for(result: CommandResult) -> tuple[HostedCLIAdapter, mock.Mock]:
-        adapter = HostedCLIAdapter.__new__(HostedCLIAdapter)
+    def adapter_for(result: CommandResult) -> tuple[CLIAdapter, mock.Mock]:
+        adapter = CLIAdapter.__new__(CLIAdapter)
         runner = mock.Mock()
         runner.run.return_value = result
         adapter.runner = runner
@@ -159,7 +160,7 @@ class HostedMeasurementDiagnosticsTests(unittest.TestCase):
 
 class HostedStabilityTests(unittest.TestCase):
     def test_stability_uses_five_lightweight_identity_requests(self) -> None:
-        adapter = HostedCLIAdapter.__new__(HostedCLIAdapter)
+        adapter = CLIAdapter.__new__(CLIAdapter)
         adapter.identity_url = "https://identity.invalid"
         adapter.download_url = "https://measurement.invalid/down?bytes=1048576"
         adapter.runner = mock.Mock()
@@ -170,7 +171,7 @@ class HostedStabilityTests(unittest.TestCase):
         )
         adapter._connected = mock.Mock(return_value=True)
 
-        with mock.patch("torturer_runner.hosted.cli.time.sleep"):
+        with mock.patch("torturer_runner.adapters.cli.time.sleep"):
             observation = adapter._stability(15)
 
         self.assertEqual(observation["stability_verified"], True)

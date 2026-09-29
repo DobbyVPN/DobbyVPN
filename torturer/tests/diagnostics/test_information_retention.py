@@ -11,13 +11,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_runner import ios_simulator_app
-from torturer_runner.hosted import macos, native_ui
-from torturer_runner.hosted.cli import CommandResult
-from torturer_runner.windows.job import (
+from torturer_runner.adapters import macos
+from torturer_runner.ui import journey as native_ui
+from torturer_runner.adapters.cli import CommandResult
+from torturer_runner.windows_job import (
     WindowsJobCloseResult,
     _close_job,
 )
-from torturer_contract.functional.engine import ScenarioExecutionError
+from torturer_contract.engine import ScenarioExecutionError
 
 
 class BinaryStderr:
@@ -67,7 +68,7 @@ class InformationRetentionTests(unittest.TestCase):
         self.assertIn("stderr closed", "\n".join(caught.exception.__notes__))
 
     def test_macos_routing_firewall_failures_retain_command_diagnostics(self) -> None:
-        adapter = object.__new__(macos.MacOSHostedAdapter)
+        adapter = object.__new__(macos.MacOSAdapter)
         adapter.routing_firewall_helper = Path("/tmp/routing-firewall")
         adapter.network_interface = "en0"
         adapter._routing_probe_address = "198.51.100.9"
@@ -84,7 +85,7 @@ class InformationRetentionTests(unittest.TestCase):
                     command=tuple(argv), returncode=1, stdout=stdout, stderr=stderr
                 )
                 adapter.runner.run.return_value = result
-                with mock.patch("torturer_runner.hosted.cli.emit_streams") as emit:
+                with mock.patch("torturer_runner.adapters.cli.emit_streams") as emit:
                     with self.assertRaises(ScenarioExecutionError) as caught:
                         adapter._firewall(action, 5)
 
@@ -131,7 +132,7 @@ class InformationRetentionTests(unittest.TestCase):
             service.runner = runner
             service.raw_directory = root
             service.control_socket = root / "control.sock"
-            adapter = object.__new__(macos.MacOSHostedAdapter)
+            adapter = object.__new__(macos.MacOSAdapter)
             adapter.cli = Path("dobby-cli")
             adapter.runner = runner
             adapter.service = service
@@ -174,11 +175,10 @@ class InformationRetentionTests(unittest.TestCase):
             cli = root / "cli"
             ui = root / "ui"
             profile = root / "profile"
-            smoke = root / "smoke"
             output = root / "native-ui.json"
             raw_logs = root / "logs"
             raw_logs.mkdir()
-            for path in (cli, ui, profile, smoke):
+            for path in (cli, ui, profile):
                 path.write_text("test", encoding="utf-8")
             args = SimpleNamespace(
                 platform="windows",
@@ -187,7 +187,6 @@ class InformationRetentionTests(unittest.TestCase):
                 cli=cli,
                 ui=ui,
                 profile=profile,
-                smoke_script=smoke,
                 raw_log_dir=raw_logs,
                 output=output,
                 service_pid=123,
@@ -215,7 +214,7 @@ class InformationRetentionTests(unittest.TestCase):
                 mock.patch.object(native_ui, "_ensure_directory"),
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
-                mock.patch.object(native_ui, "_load_native_ui_smoke", return_value=smoke),
+                mock.patch.object(native_ui, "smoke", smoke),
             ):
                 with self.assertRaises(native_ui.NativeUIJourneyError) as caught:
                     native_ui.run_journey(args)

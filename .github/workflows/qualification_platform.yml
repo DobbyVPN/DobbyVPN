@@ -586,7 +586,7 @@ jobs:
             exit 1
           fi
           if [ "$PLATFORM" = android ]; then
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted.run \
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted \
               --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
               --raw-log-dir "$RUN_DIR"

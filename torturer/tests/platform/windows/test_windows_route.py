@@ -11,10 +11,10 @@ from collections.abc import Sequence
 from contextlib import redirect_stdout
 from unittest import mock
 
-from torturer_contract.functional.engine import ScenarioExecutionError
-from torturer_runner.hosted.cli import CommandResult, HostedAdapterError
-from torturer_runner.hosted.windows import WindowsHostedAdapter
-from torturer_runner.windows.route import (
+from torturer_contract.engine import ScenarioExecutionError
+from torturer_runner.adapters.cli import CommandResult, AdapterError
+from torturer_runner.adapters.windows import WindowsAdapter
+from torturer_runner.routing.windows import (
     _MibIfRow2,
     best_ipv4_interface,
     interface_counters,
@@ -106,7 +106,7 @@ class WindowsRouteTests(unittest.TestCase):
                 )
 
         runner = Runner()
-        adapter = object.__new__(WindowsHostedAdapter)
+        adapter = object.__new__(WindowsAdapter)
         adapter.runner = runner
 
         self.assertEqual(adapter._interface_counters("37", 1.25), (1234, 5678))
@@ -115,7 +115,7 @@ class WindowsRouteTests(unittest.TestCase):
             (
                 sys.executable,
                 "-m",
-                "torturer_runner.windows.route",
+                "torturer_runner.routing.windows",
                 "--counters",
                 "37",
             ),
@@ -125,12 +125,12 @@ class WindowsRouteTests(unittest.TestCase):
     def test_hosted_adapter_preserves_runner_timeout_streams(self) -> None:
         class Runner:
             def run(self, _command: Sequence[str], *, timeout_seconds: float) -> CommandResult:
-                error = HostedAdapterError(
+                error = AdapterError(
                     "COMMAND_TIMEOUT", stdout=b"complete stdout", stderr=b"complete stderr"
                 )
                 raise error
 
-        adapter = object.__new__(WindowsHostedAdapter)
+        adapter = object.__new__(WindowsAdapter)
         adapter.runner = Runner()
 
         with self.assertRaises(ScenarioExecutionError) as caught:

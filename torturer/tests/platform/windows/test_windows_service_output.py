@@ -5,7 +5,7 @@ from io import BytesIO
 from types import SimpleNamespace
 import unittest
 
-from torturer_runner.hosted.windows import WindowsServiceProcessController
+from torturer_runner.adapters.windows import WindowsServiceProcessController
 
 
 class BinaryStderr:

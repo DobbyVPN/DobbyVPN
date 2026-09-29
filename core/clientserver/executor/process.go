@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"core/desktop/controlplane"
+	"core/clientserver/controlplane"
 	"core/sessionapi"
 	"core/sessionapi/mobilebinding"
 	"core/sessionapi/runtimebridge"

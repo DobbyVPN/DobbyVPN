@@ -18,7 +18,7 @@ import time
 from typing import Any
 import uuid
 
-from ..local_vm import LocalVMError, _run_logged
+from .local_vm import LocalVMError, _run_logged
 
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[1-9][0-9]*\|[1-9][0-9]+$")
@@ -34,7 +34,7 @@ _NATIVE_UI_ENVIRONMENT = frozenset({
     "DOBBY_LOG_ROOT",
     "DOBBY_LOG_PRECREATED",
     "GODEBUG",
-    # native_ui_smoke.py resolves PowerShell through shutil.which() for
+    # The native UI smoke driver resolves PowerShell through shutil.which() for
     # clipboard and UI Automation operations.  The scheduled task runs with
     # the interactive account's environment, but ProcessStartInfo receives a
     # deliberately bounded environment below, so carry the system PATH
@@ -64,7 +64,7 @@ _NATIVE_UI_USER_ENVIRONMENT = (
 
 def _error(message: str) -> Exception:
     # Keep this module importable while local_vm imports the platform modules.
-    from ..local_vm import LocalVMError
+    from .local_vm import LocalVMError
 
     return LocalVMError(message)
 
@@ -573,7 +573,7 @@ def _native_ui_access_script(
         raise _error("Windows native UI access user is missing")
     source = cwd.parent if cwd.name.lower() == "torturer" else cwd
     read_path_flags = frozenset({
-        "--cli", "--ui", "--profile", "--smoke-script", "--service-binary",
+        "--cli", "--ui", "--profile", "--service-binary",
         "--service-library-path", "--raw-log-dir", "--output", "--package",
     })
     write_path_flags = frozenset({"--service-pid-file", "--service-identity-file"})

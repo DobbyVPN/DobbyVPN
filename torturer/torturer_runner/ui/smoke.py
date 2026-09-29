@@ -28,7 +28,7 @@ import time
 from typing import TypeVar
 
 
-_TORTURER_ROOT = Path(__file__).resolve().parents[3] / "torturer"
+_TORTURER_ROOT = Path(__file__).resolve().parents[2]
 if str(_TORTURER_ROOT) not in sys.path:
     sys.path.insert(0, str(_TORTURER_ROOT))
 
@@ -140,7 +140,7 @@ _T = TypeVar("_T")
 
 _FILETIME_TO_DATETIME_TICKS = 504911232000000000
 _MACOS_UI_PROCESS_NAME = "DobbyVPNMacApp"
-_MACOS_AX_HELPER = Path(__file__).resolve().parents[1] / "apple" / "macos_accessibility.py"
+_MACOS_AX_HELPER = Path(__file__).resolve().with_name("macos_accessibility.py")
 _MACOS_INPUT_SENTINEL = b"DobbyVPN-native-input-sentinel-v1"
 # Keep the parent subprocess alive long enough to receive a helper's final
 # JSON after the helper's own AX deadline expires.  Without this separation a
@@ -299,7 +299,7 @@ def _macos_post_reference_click(x: int, y: int) -> None:
         time.sleep(0.05)
 
 
-_MACOS_REFERENCE_EVENT_HELPER_SOURCE = Path(__file__).resolve().parents[1] / "apple" / "macos_reference_event_probe.m"
+_MACOS_REFERENCE_EVENT_HELPER_SOURCE = Path(__file__).resolve().with_name("macos_reference_event_probe.m")
 
 
 def _macos_build_reference_event_helper(temporary: Path) -> Path:

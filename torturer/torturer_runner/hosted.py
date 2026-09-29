@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the canonical scenarios through one trusted hosted CLI adapter."""
+"""Run canonical scenarios against installed packages during hosted qualification."""
 
 from __future__ import annotations
 
@@ -12,30 +12,29 @@ from pathlib import Path
 import re
 import time
 
-from torturer_contract.functional.engine import FunctionalEngine
-from torturer_contract.functional.coverage import (
+from torturer_contract.engine import FunctionalEngine
+from torturer_contract.coverage import (
     coverage_contract,
     qualification_exit_code,
 )
-from torturer_contract.functional.results import (
+from torturer_contract.results import (
     ConnectionIdentity,
     RunProvenance,
 )
-from torturer_contract.functional.scenarios import (
+from torturer_contract.scenarios import (
     select_scenarios,
     validate_suite,
 )
 from torturer_runner.diagnostics import add_exception_notes
 
-from .cli import (
-    HostedAdapterError,
+from .adapters.cli import (
+    AdapterError,
     SubprocessRunner,
     _ensure_directory,
 )
-from .factory import adapter_for_platform
+from .adapters.factory import adapter_for_platform
 
 
-ROOT = Path(__file__).resolve().parents[2]
 _SHA40 = set("0123456789abcdef")
 _RESET_TIMEOUT_SECONDS = 5
 _ANDROID_RESET_TIMEOUT_SECONDS = 15

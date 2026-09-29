@@ -16,23 +16,23 @@ import re
 import shutil
 import time
 
-from torturer_contract.functional.engine import FunctionalEngine
-from torturer_contract.functional.coverage import (
+from torturer_contract.engine import FunctionalEngine
+from torturer_contract.coverage import (
     coverage_contract,
     qualification_exit_code,
 )
-from torturer_contract.functional.results import (
+from torturer_contract.results import (
     RunProvenance,
 )
-from torturer_contract.functional.scenarios import select_scenarios, validate_suite
+from torturer_contract.scenarios import select_scenarios, validate_suite
 
-from .hosted.cli import (
-    HostedAdapterError,
+from .adapters.cli import (
+    AdapterError,
     SubprocessRunner,
     _ensure_directory,
 )
-from .hosted.factory import adapter_for_platform
-from .hosted.run import (
+from .adapters.factory import adapter_for_platform
+from .hosted import (
     _execute_lane,
     _emit_progress_event,
     _write_json,
@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
     runner = SubprocessRunner(raw_dir)
     adb = args.adb or (Path(shutil.which("adb")) if shutil.which("adb") else None)
     if args.platform == "linux" and args.routing_firewall_helper is None:
-        raise HostedAdapterError("ROUTING_FIREWALL_HELPER_UNAVAILABLE")
+        raise AdapterError("ROUTING_FIREWALL_HELPER_UNAVAILABLE")
     adapter = adapter_for_platform(
         args.platform,
         cli=cli,

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from torturer_runner.hosted.cli import CommandResult
-from torturer_runner.hosted.linux import LinuxHostedAdapter
+from torturer_runner.adapters.cli import CommandResult
+from torturer_runner.adapters.linux import LinuxAdapter
 
 
 class LinuxPreflightTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class LinuxPreflightTests(unittest.TestCase):
                     return CommandResult(arguments, 0, b"104.26.12.205 via 10.1.0.1 dev eth0 src 10.1.0.221\n")
                 raise AssertionError(arguments)
 
-        adapter = object.__new__(LinuxHostedAdapter)
+        adapter = object.__new__(LinuxAdapter)
         adapter.runner = Runner()
         adapter.identity_url = "https://api.ipify.org"
         adapter.network_interface = None

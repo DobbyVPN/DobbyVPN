@@ -8,12 +8,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_runner import functional
-from torturer_contract.functional.coverage import (
+from torturer_contract.coverage import (
     coverage_contract,
     qualification_exit_code,
 )
-from torturer_contract.functional.results import ConnectionIdentity
-from torturer_contract.functional.scenarios import select_scenarios
+from torturer_contract.results import ConnectionIdentity
+from torturer_contract.scenarios import select_scenarios
 
 
 def _matrix_results(connections, scenarios):

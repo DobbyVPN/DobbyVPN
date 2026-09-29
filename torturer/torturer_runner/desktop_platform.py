@@ -126,12 +126,12 @@ def _functional_arguments(args: argparse.Namespace, installed: dict[str, Any]) -
             argv.extend(("--service-identity-file", str(args.service_identity_file)))
     if args.network_interface is not None:
         argv.extend(("--network-interface", args.network_interface))
-    helper_root = Path(__file__).resolve().parents[1] / "helpers" / "local"
+    helper_root = Path(__file__).resolve().parent / "routing"
     routing_helper = args.routing_firewall_helper
     if args.platform == "linux" and routing_helper is None:
-        routing_helper = helper_root / "linux" / "routing-probe-firewall"
+        routing_helper = helper_root / "linux.sh"
     if args.platform == "macos" and routing_helper is None:
-        routing_helper = helper_root / "macos" / "routing-firewall"
+        routing_helper = helper_root / "macos.sh"
     if routing_helper is not None:
         argv.extend(("--routing-firewall-helper", str(routing_helper)))
     source_sha = installed.get("source_sha")
@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return functional.main(functional_argv)
 
-    from .hosted import run as hosted_run
+    from . import hosted as hosted_run
 
     return hosted_run.main(functional_argv)
 

@@ -407,7 +407,7 @@ def swift_unit(args: argparse.Namespace) -> None:
         run(
             [
                 sys.executable,
-                str(SCRIPT_DIR / "apple" / "check_swift_coverage.py"),
+                str(SCRIPT_DIR / "ios" / "check_swift_coverage.py"),
                 "--lcov", str(lcov),
                 "--source-root", str(ROOT / "ui" / "apple" / "ios" / "integration"),
                 "--summary", str(summary),

@@ -1027,7 +1027,7 @@ def build_service(
                 f"-ldflags={ldflags}",
                 "-o",
                 os.fspath(output),
-                "./desktop/",
+                "./clientserver/",
             ]
         )
         run(

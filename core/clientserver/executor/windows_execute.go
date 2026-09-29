@@ -12,8 +12,8 @@ import (
 	"strings"
 	"syscall"
 
-	"core/desktop/controljson"
-	"core/desktop/controlplane"
+	"core/clientserver/controljson"
+	"core/clientserver/controlplane"
 	"core/tunnel/platform_engine"
 
 	"core/log"

@@ -13,11 +13,11 @@ from unittest import mock
 
 from torturer_runner import local_vm
 from torturer_runner import ios_simulator_app
-from torturer_runner.hosted import run as hosted_run
-from torturer_runner.hosted.cli import HostedCLIAdapter, RoutingProofMixin, SubprocessRunner
-from torturer_runner.hosted.windows import WindowsHostedAdapter
-from torturer_contract.functional.engine import ScenarioExecutionError
-from torturer_contract.functional.scenarios import ScenarioDefinition, ScenarioStep
+from torturer_runner import hosted as hosted_run
+from torturer_runner.adapters.cli import CLIAdapter, RoutingProofMixin, SubprocessRunner
+from torturer_runner.adapters.windows import WindowsAdapter
+from torturer_contract.engine import ScenarioExecutionError
+from torturer_contract.scenarios import ScenarioDefinition, ScenarioStep
 from disposable_vpn_server import render_service
 
 
@@ -51,13 +51,13 @@ class TimingProgressTests(unittest.TestCase):
             _connected=lambda _budget: True,
             _emit_progress=lambda *_args, **_kwargs: None,
         )
-        with mock.patch("torturer_runner.hosted.cli.time.monotonic", side_effect=lambda: clock[0]):
+        with mock.patch("torturer_runner.adapters.cli.time.monotonic", side_effect=lambda: clock[0]):
             RoutingProofMixin._connect_with_routing_probe(probe, 40.0, setup_timeout=60.0)
             RoutingProofMixin._reconnect_with_routing_probe(probe, 30.0, setup_timeout=60.0)
         self.assertEqual(setup_budgets, [60.0, 60.0])
         self.assertEqual(command_budgets, [40.0, 30.0])
 
-        adapter = object.__new__(WindowsHostedAdapter)
+        adapter = object.__new__(WindowsAdapter)
         adapter._routing_proof_enabled = True
         with mock.patch.object(adapter, "_connect_with_routing_probe") as connect:
             adapter.execute(SimpleNamespace(operation="connect", timeout_seconds=40))
@@ -239,7 +239,7 @@ class TimingProgressTests(unittest.TestCase):
         self.assertGreaterEqual(finish["duration_seconds"], 0)
 
     def test_hosted_semantic_operations_report_monotonic_duration(self) -> None:
-        adapter = HostedCLIAdapter.__new__(HostedCLIAdapter)
+        adapter = CLIAdapter.__new__(CLIAdapter)
         adapter._selected_connection = None
         events: list[tuple[str, dict[str, object]]] = []
         adapter._progress_sink = lambda event, fields: events.append((event, fields))
@@ -257,7 +257,7 @@ class TimingProgressTests(unittest.TestCase):
         self.assertGreaterEqual(events[1][1]["duration_seconds"], 0)
 
     def test_failed_hosted_operation_also_reports_duration(self) -> None:
-        adapter = HostedCLIAdapter.__new__(HostedCLIAdapter)
+        adapter = CLIAdapter.__new__(CLIAdapter)
         adapter._selected_connection = None
         events: list[tuple[str, dict[str, object]]] = []
         adapter._progress_sink = lambda event, fields: events.append((event, fields))

@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from torturer_runner import local_vm_android
-from torturer_contract.functional.scenarios import select_scenarios
+from torturer_contract.scenarios import select_scenarios
 
 
 class AndroidDiagnosticCollectionTests(unittest.TestCase):

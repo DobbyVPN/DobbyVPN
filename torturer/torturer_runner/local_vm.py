@@ -38,6 +38,7 @@ from typing import Any
 PLATFORMS = ("linux", "windows", "macos", "android", "ios-simulator")
 SUITES = ("mini", "full")
 DESKTOP_PLATFORMS = frozenset(("linux", "windows", "macos"))
+ROUTING_HELPERS = Path(__file__).resolve().parent / "routing"
 _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[A-Za-z0-9._-]+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -49,7 +50,7 @@ _RELEASE_WORKFLOW = ".github/workflows/release.yml"
 # the hosted journey an inner deadline so it can emit its failure JSON and
 # leave enough time for the exact-process/task cleanup boundary to run.  The
 # hosted journey has its own reserve before it waits on the real-window smoke
-# process (see hosted/native_ui.py).
+# process (see ui/journey.py).
 _NATIVE_UI_TASK_TIMEOUT_RESERVE_SECONDS = 90.0
 _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS = 900.0
 _SCREENSHOT_DECODER_INSTALL_TIMEOUT_SECONDS = 180.0
@@ -59,7 +60,7 @@ _SCREENSHOT_DECODER_INSTALL_TIMEOUT_SECONDS = 180.0
 # runtime purpose here.  In particular, do not let CI credentials, endpoints,
 # or arbitrary tool configuration cross the desktop boundary.
 _NATIVE_UI_HOST_ENVIRONMENT = frozenset({
-    # native_ui_smoke.py resolves macOS helpers (and Windows PowerShell) by
+    # The native UI smoke driver resolves macOS helpers (and Windows PowerShell) by
     # name, while the Go backend and CLI use HOME for their user-owned stores.
     "PATH",
     "HOME",
@@ -942,7 +943,7 @@ def _prepare_desktop_package(
             # Keep the downloaded rollback MSI inside this disposable run even
             # if the supervisor has to stop the interactive task on timeout.
             migration.extend(("--temp-parent", str(run_dir)))
-            from .windows.local_vm import run_interactive_task
+            from .local_vm_windows import run_interactive_task
 
             if control_pipe_sid is None:
                 raise LocalVMError("Windows installer migration requires the configured account SID")
@@ -1477,7 +1478,7 @@ def _prepare_release_candidate(
 
 
 def _start_windows(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float) -> dict[str, Any]:
-    from .windows.local_vm import start
+    from .local_vm_windows import start
     return start(run_dir, descriptor, logs, timeout)
 
 
@@ -1548,9 +1549,9 @@ def _functional_command(
         if "network_interface" in runtime:
             command.extend(("--network-interface", str(runtime["network_interface"])))
         if platform == "linux":
-            command.extend(("--routing-firewall-helper", str(Path(__file__).resolve().parents[1] / "helpers/local/linux/routing-probe-firewall"),))
+            command.extend(("--routing-firewall-helper", str(ROUTING_HELPERS / "linux.sh"),))
         elif platform == "macos":
-            helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/routing-firewall"
+            helper = ROUTING_HELPERS / "macos.sh"
             command.extend(("--routing-firewall-helper", str(helper)))
     for scenario in scenarios or []:
         command.extend(("--scenario", scenario))
@@ -1567,8 +1568,8 @@ def _native_ui_command(
     """Build the real-window journey command for desktop full guests."""
     if platform not in {"windows", "macos"}:
         raise LocalVMError(f"native GUI qualification is unsupported on {platform}")
-    smoke = run_dir / "source" / ".github" / "scripts" / "desktop" / "native_ui_smoke.py"
-    module = run_dir / "source" / "torturer" / "torturer_runner" / "hosted" / "native_ui.py"
+    smoke = run_dir / "source" / "torturer" / "torturer_runner" / "ui" / "smoke.py"
+    module = run_dir / "source" / "torturer" / "torturer_runner" / "ui" / "journey.py"
     if not smoke.is_file():
         raise LocalVMError("native desktop UI qualification script is missing")
     if not module.is_file():
@@ -1584,12 +1585,11 @@ def _native_ui_command(
     command = [
         sys.executable,
         "-m",
-        "torturer_runner.hosted.native_ui",
+        "torturer_runner.ui.journey",
         "--platform", platform,
         "--cli", str(descriptor["cli"]),
         "--ui", str(descriptor["ui"]),
         "--profile", str(run_dir / "profile"),
-        "--smoke-script", str(smoke),
         "--raw-log-dir", str(run_dir / "logs"),
         "--output", str(run_dir / "logs" / "native-ui.json"),
         "--timeout", str(_native_ui_driver_timeout(task_timeout)),
@@ -1607,7 +1607,7 @@ def _native_ui_command(
     if runtime.get("network_interface") is not None:
         command.extend(("--network-interface", str(runtime["network_interface"])))
     if platform == "macos":
-        helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/routing-firewall"
+        helper = ROUTING_HELPERS / "macos.sh"
         command.extend(("--routing-firewall-helper", str(helper)))
     return command
 
@@ -1625,7 +1625,7 @@ def _run_native_ui(
     """Run desktop UI smoke in the platform's actual interactive context."""
 
     if platform == "windows":
-        from .windows.local_vm import run_interactive_ui
+        from .local_vm_windows import run_interactive_ui
 
         return run_interactive_ui(
             command,
@@ -1758,7 +1758,7 @@ def run(args: argparse.Namespace) -> int:
                 timeout=min(args.timeout, 30.0),
             )
             preflight_native_ui_capabilities(
-                source / ".github" / "scripts" / "desktop" / "native_ui_smoke.py",
+                source / "torturer" / "torturer_runner" / "ui" / "smoke.py",
                 run_dir=run_dir,
                 logs=logs,
                 timeout=min(args.timeout, 30.0),
@@ -1874,7 +1874,7 @@ def run(args: argparse.Namespace) -> int:
                 )
         elif args.platform == "windows":
             if args.release_manifest is not None or (args.source_sha and (run_dir / "installed.json").is_file()):
-                from .windows.local_vm import stop_installed_service
+                from .local_vm_windows import stop_installed_service
 
                 release_state = state.get("release")
                 if args.release_manifest is not None and not isinstance(release_state, dict):
@@ -2019,7 +2019,7 @@ def run(args: argparse.Namespace) -> int:
                 )
             except Exception as error:
                 if args.platform in {"windows", "macos"}:
-                    from .windows.local_vm import WindowsInteractiveDesktopUnavailable
+                    from .local_vm_windows import WindowsInteractiveDesktopUnavailable
                     from .local_vm_macos import MacOSInteractiveDesktopUnavailable
 
                     if isinstance(error, (WindowsInteractiveDesktopUnavailable, MacOSInteractiveDesktopUnavailable)):
@@ -2335,7 +2335,7 @@ def cleanup(args: argparse.Namespace) -> int:
     installed_descriptor = run_dir / "installed.json"
     errors: list[str] = []
     if args.platform == "linux":
-        helper = Path(__file__).resolve().parents[1] / "helpers/local/linux/routing-probe-firewall"
+        helper = ROUTING_HELPERS / "linux.sh"
         _cleanup_logged(["sudo", "-n", str(helper), "remove"], cwd=run_dir, logs=logs, label="cleanup-routing", timeout=args.timeout, errors=errors)
         interface = runtime.get("network_interface")
         if isinstance(interface, str):
@@ -2376,7 +2376,7 @@ def cleanup(args: argparse.Namespace) -> int:
                 errors=errors,
             )
     elif args.platform == "macos":
-        helper = Path(__file__).resolve().parents[1] / "helpers/local/macos/routing-firewall"
+        helper = ROUTING_HELPERS / "macos.sh"
         _cleanup_logged(["sudo", "-n", str(helper), "routing-remove"], cwd=run_dir, logs=logs, label="cleanup-routing", timeout=args.timeout, errors=errors)
         if release is not None:
             # The package's fixed uninstaller owns launchd, its plist/socket,
@@ -2398,7 +2398,7 @@ def cleanup(args: argparse.Namespace) -> int:
             if remove_paths:
                 _cleanup_logged(["sudo", "-n", "rm", "-f", *remove_paths], cwd=run_dir, logs=logs, label="cleanup-macos-state", timeout=args.timeout, errors=errors)
     elif args.platform == "windows":
-        from .windows.local_vm import cleanup as cleanup_windows
+        from .local_vm_windows import cleanup as cleanup_windows
         try:
             cleanup_windows(run_dir, runtime, logs, args.timeout)
         except Exception as error:

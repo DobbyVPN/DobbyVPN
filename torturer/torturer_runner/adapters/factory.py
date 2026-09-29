@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .android import AndroidHostedAdapter
+from .android import AndroidAdapter
 from .cli import CommandRunner
-from .linux import LinuxHostedAdapter
-from .macos import MacOSHostedAdapter
-from .windows import WindowsHostedAdapter
+from .linux import LinuxAdapter
+from .macos import MacOSAdapter
+from .windows import WindowsAdapter
 
 PUBLIC_IDENTITY_URL = "https://api.ipify.org"
 PUBLIC_LATENCY_URL = "https://speed.cloudflare.com/__down?bytes=1"
@@ -36,10 +36,10 @@ def adapter_for_platform(
     routing_firewall_helper: Path | None = None,
     android_ui_mode: str = "protocol-matrix",
 ) -> (
-    LinuxHostedAdapter
-    | WindowsHostedAdapter
-    | MacOSHostedAdapter
-    | AndroidHostedAdapter
+    LinuxAdapter
+    | WindowsAdapter
+    | MacOSAdapter
+    | AndroidAdapter
 ):
     if platform == "android":
         for name, value in (
@@ -62,14 +62,14 @@ def adapter_for_platform(
         )
         if android_ui_mode not in {"gui-auto", "protocol-matrix"}:
             raise ValueError("unsupported Android adapter lane")
-        return AndroidHostedAdapter(**common, ui_mode=android_ui_mode)
+        return AndroidAdapter(**common, ui_mode=android_ui_mode)
 
     if platform not in {"linux", "windows", "macos"}:
-        raise ValueError("unsupported hosted platform")
+        raise ValueError("unsupported platform")
     if android_ui_mode != "protocol-matrix":
         raise ValueError("android_ui_mode is only valid for Android")
     if cli is None:
-        raise ValueError("hosted desktop adapter requires --cli")
+        raise ValueError("desktop adapter requires --cli")
 
     common = dict(
         cli=cli,
@@ -86,7 +86,7 @@ def adapter_for_platform(
         network_interface=network_interface,
     )
     if platform == "linux":
-        return LinuxHostedAdapter(
+        return LinuxAdapter(
             **common,
             service_socket=service_socket,
             service_library_path=service_library_path,
@@ -95,10 +95,10 @@ def adapter_for_platform(
     if platform == "windows":
         if service_socket is not None or routing_firewall_helper is not None:
             raise ValueError("windows adapter received an unexpected platform helper")
-        return WindowsHostedAdapter(**common, service_pipe=service_pipe)
+        return WindowsAdapter(**common, service_pipe=service_pipe)
     if service_pipe is not None:
         raise ValueError("non-Windows adapter received unexpected service_pipe")
-    return MacOSHostedAdapter(
+    return MacOSAdapter(
         **common,
         service_socket=service_socket,
         routing_firewall_helper=routing_firewall_helper,

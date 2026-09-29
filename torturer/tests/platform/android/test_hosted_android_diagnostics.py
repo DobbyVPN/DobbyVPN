@@ -9,9 +9,9 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from torturer_contract.functional.engine import ScenarioExecutionError
-from torturer_runner.hosted.android import AndroidHostedAdapter
-from torturer_runner.hosted.cli import CommandResult
+from torturer_contract.engine import ScenarioExecutionError
+from torturer_runner.adapters.android import AndroidAdapter
+from torturer_runner.adapters.cli import CommandResult
 
 
 class BinaryStderr:
@@ -24,8 +24,8 @@ class BinaryStderr:
 
 class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
     @staticmethod
-    def adapter_for(profile: Path, instrument: CommandResult) -> AndroidHostedAdapter:
-        adapter = AndroidHostedAdapter.__new__(AndroidHostedAdapter)
+    def adapter_for(profile: Path, instrument: CommandResult) -> AndroidAdapter:
+        adapter = AndroidAdapter.__new__(AndroidAdapter)
         adapter.profile = profile
         adapter.ui_mode = "protocol-matrix"
         adapter._active_controls = ()
@@ -34,7 +34,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
 
     def run_failing_phase(
         self,
-        adapter: AndroidHostedAdapter,
+        adapter: AndroidAdapter,
         profile: Path,
         adb_result: CommandResult | BaseException,
         forwarded: BinaryStderr,
@@ -131,7 +131,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
         self.assertIn("cat stderr diagnostic", notes)
 
     def test_primary_and_both_cleanup_failures_keep_original_details(self) -> None:
-        adapter = AndroidHostedAdapter.__new__(AndroidHostedAdapter)
+        adapter = AndroidAdapter.__new__(AndroidAdapter)
         primary = ScenarioExecutionError("ANDROID_PRIMARY_SENTINEL")
         device_cleanup = ScenarioExecutionError("ANDROID_DEVICE_CLEANUP_SENTINEL")
         scratch_cleanup = ScenarioExecutionError("ANDROID_SCRATCH_CLEANUP_SENTINEL")
@@ -172,7 +172,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
             raw = Path(name) / "logs"
             raw.mkdir()
             commands: list[tuple[str, ...]] = []
-            adapter = AndroidHostedAdapter.__new__(AndroidHostedAdapter)
+            adapter = AndroidAdapter.__new__(AndroidAdapter)
             adapter.runner = SimpleNamespace(raw_directory=raw)
             adapter.ui_mode = "protocol-matrix"
             adapter._selected_connection = SimpleNamespace(index=2, protocol="Xray")
@@ -227,7 +227,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as name:
             raw = Path(name)
-            adapter = AndroidHostedAdapter.__new__(AndroidHostedAdapter)
+            adapter = AndroidAdapter.__new__(AndroidAdapter)
             adapter.runner = SimpleNamespace(raw_directory=raw)
             adapter.ui_mode = "gui-auto"
             adapter._selected_connection = None
@@ -266,7 +266,7 @@ class HostedAndroidRoutingProofDiagnosticsTests(unittest.TestCase):
         }
 
         with self.assertRaises(ScenarioExecutionError) as caught:
-            AndroidHostedAdapter._assert_routing_blocked(observation)
+            AndroidAdapter._assert_routing_blocked(observation)
 
         failure = caught.exception
         self.assertEqual(str(failure), "ANDROID_NETWORK_REQUEST_FAILED")
@@ -281,7 +281,7 @@ class HostedAndroidRoutingProofDiagnosticsTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            AndroidHostedAdapter._assert_routing_blocked(observation),
+            AndroidAdapter._assert_routing_blocked(observation),
             "203.0.113.7",
         )
 

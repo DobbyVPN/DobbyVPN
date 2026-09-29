@@ -66,10 +66,10 @@ if [[ "$target" == iosexport ]]; then
   }
   derived=$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-export.XXXXXX")
   trap 'rm -rf "$derived"' EXIT
-  python3 "$script_root/.github/scripts/apple/ios_archive.py" extract \
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" extract \
     --input "$archive_tar" --output-dir "$derived/unpacked"
   archive="$derived/unpacked/DobbyVPN.xcarchive"
-  python3 "$script_root/.github/scripts/apple/ios_archive.py" verify \
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" verify \
     --archive-dir "$archive" --source-sha "$source_commit" \
     --version "$version" --build-number "$build"
   export_options="$derived/ExportOptions.plist"
@@ -93,7 +93,7 @@ PLIST
   shopt -s nullglob
   ipas=("$export_dir"/*.ipa)
   [[ "${#ipas[@]}" -eq 1 ]] || { echo "Xcode export did not produce exactly one IPA" >&2; exit 1; }
-  python3 "$script_root/.github/scripts/apple/ios_archive.py" verify-ipa \
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" verify-ipa \
     --ipa "${ipas[0]}" --source-sha "$source_commit" \
     --version "$version" --build-number "$build"
   mkdir -p "$(dirname -- "$output")"
@@ -162,7 +162,7 @@ elif [[ "$target" == iosarchive ]]; then
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     archive
-  python3 "$script_root/.github/scripts/apple/ios_archive.py" pack \
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" pack \
     --archive-dir "$archive" --output "$output" \
     --source-sha "$source_commit" --version "$version" \
     --build-number "$build"

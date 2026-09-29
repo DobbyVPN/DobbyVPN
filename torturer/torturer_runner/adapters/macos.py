@@ -1,4 +1,4 @@
-"""macOS hosted adapter using DobbyVPN's public CLI."""
+"""macOS functional adapter using DobbyVPN's public CLI."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ import time
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-from torturer_contract.functional.capabilities import Capability
-from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
-from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_contract.capabilities import Capability
+from torturer_contract.engine import CapabilityUnavailable, ScenarioExecutionError
+from torturer_contract.scenarios import ScenarioStep
 from torturer_runner.diagnostics import add_exception_notes, add_stream_notes, emit_streams
 
 from .cli import (
     CommandRunner,
-    HostedAdapterError,
-    HostedCLIAdapter,
+    AdapterError,
+    CLIAdapter,
     HostedServiceProcessController,
     RoutingProofMixin,
     _append_command_result_notes,
@@ -144,7 +144,7 @@ class MacOSServiceProcessController(HostedServiceProcessController):
                 raise ScenarioExecutionError("SERVICE_LAUNCHD_PID_MISMATCH")
             self._initial_job = job
         except ScenarioExecutionError as error:
-            raise HostedAdapterError(error.reason_code) from error
+            raise AdapterError(error.reason_code) from error
 
     def add_control_failure_diagnostics(self, error: BaseException) -> None:
         """Attach bounded launchd, socket, and backend logs to a CLI failure."""
@@ -229,7 +229,7 @@ class MacOSServiceProcessController(HostedServiceProcessController):
     def _launchd_job(self, timeout: float) -> _MacOSLaunchdJob:
         try:
             result = self.runner.run(_MACOS_LAUNCHD_PRINT, timeout_seconds=timeout)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError("SERVICE_LAUNCHD_PROBE_FAILED")
@@ -275,7 +275,7 @@ class MacOSServiceProcessController(HostedServiceProcessController):
                 _MACOS_LAUNCHD_KILL,
                 timeout_seconds=self._remaining(deadline, "SERVICE_KILL_FAILED"),
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError("SERVICE_KILL_FAILED")
@@ -359,7 +359,7 @@ class MacOSServiceProcessController(HostedServiceProcessController):
             raise ScenarioExecutionError("SERVICE_CONTROL_PROBE_FAILED")
 
 
-class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
+class MacOSAdapter(RoutingProofMixin, CLIAdapter):
     adapter_id = "hosted-macos-cli"
     adapter_version = "v3"
 
@@ -392,10 +392,10 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         )
         if any(value is not None for value in (service_pid, service_binary)):
             if service_pid is None or service_binary is None:
-                raise HostedAdapterError("SERVICE_CONTROL_INCOMPLETE")
+                raise AdapterError("SERVICE_CONTROL_INCOMPLETE")
             raw_directory = getattr(runner, "raw_directory", None)
             if not isinstance(raw_directory, Path):
-                raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
+                raise AdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
             control_socket = service_socket or _default_control_socket()
             self.service: MacOSServiceProcessController | None = MacOSServiceProcessController(
                 pid=service_pid,
@@ -408,7 +408,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         else:
             self.service = None
         if network_interface is not None and _MACOS_INTERFACE.fullmatch(network_interface) is None:
-            raise HostedAdapterError("NETWORK_INTERFACE_INVALID")
+            raise AdapterError("NETWORK_INTERFACE_INVALID")
         self.routing_firewall_helper = routing_firewall_helper
         self._initialize_routing_proof(
             enabled=routing_firewall_helper is not None,
@@ -502,7 +502,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 ("/usr/bin/dscacheutil", "-q", "host", "-a", "name", endpoint.hostname),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError("ROUTING_PROBE_RESOLUTION_FAILED")
@@ -546,7 +546,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             raise ScenarioExecutionError("ROUTING_FIREWALL_ACTION_INVALID")
         try:
             result = self.runner.run(arguments, timeout_seconds=timeout)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError(
@@ -563,7 +563,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 ("/sbin/route", "-n", "get", self._routing_probe_address),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError("ROUTING_INTERFACE_UNAVAILABLE")
@@ -587,7 +587,7 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 ("/usr/sbin/netstat", "-bI", interface),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE")
@@ -632,4 +632,4 @@ class MacOSHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         return {"process_loss_verified": True}
 
 
-__all__ = ["MacOSHostedAdapter", "MacOSServiceProcessController"]
+__all__ = ["MacOSAdapter", "MacOSServiceProcessController"]

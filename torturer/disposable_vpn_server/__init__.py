@@ -1,7 +1,7 @@
 """Trusted hosted-test infrastructure controllers.
 
 Provider code owns infrastructure lifecycle only.  Functional scenario
-meaning and assertions remain in :mod:`torturer_contract.functional`.
+meaning and assertions remain in :mod:`torturer_contract`.
 """
 
 from .render import (

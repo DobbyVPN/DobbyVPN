@@ -143,7 +143,7 @@ def preflight_native_ui_capabilities(
     # The local worker's generic preflight cap was established before the
     # AppKit helper needed a bounded compile. Give this product-independent
     # probe its own 90-second outer limit while keeping the compile capped at
-    # 60 seconds inside native_ui_smoke.py.
+    # 60 seconds inside ui/smoke.py.
     del timeout
     try:
         result = _run_logged(
@@ -354,20 +354,12 @@ def run_interactive_ui(
     console_user, console_uid = preflight_interactive_desktop(
         run_dir=run_dir, logs=logs, timeout=timeout
     )
-    if "--smoke-script" in command:
-        try:
-            smoke_index = command.index("--smoke-script")
-            smoke_script = Path(command[smoke_index + 1])
-        except (ValueError, IndexError):
-            raise MacOSInteractiveDesktopUnavailable(
-                "native UI capability preflight script argument is missing"
-            )
-        preflight_native_ui_capabilities(
-            smoke_script,
-            run_dir=run_dir,
-            logs=logs,
-            timeout=timeout,
-        )
+    preflight_native_ui_capabilities(
+        Path(__file__).resolve().parent / "ui" / "smoke.py",
+        run_dir=run_dir,
+        logs=logs,
+        timeout=timeout,
+    )
     filtered_environment = _filtered_native_ui_environment(environment)
     asuser_command = [
         "sudo", "-n", "launchctl", "asuser", str(console_uid),

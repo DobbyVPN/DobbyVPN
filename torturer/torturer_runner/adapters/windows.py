@@ -1,4 +1,4 @@
-"""Windows hosted adapter using DobbyVPN's public CLI."""
+"""Windows functional adapter using DobbyVPN's public CLI."""
 
 from __future__ import annotations
 
@@ -15,20 +15,20 @@ import time
 from urllib.parse import urlsplit
 
 from torturer_runner.diagnostics import add_exception_notes
-from torturer_contract.functional.capabilities import Capability
-from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
-from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_contract.capabilities import Capability
+from torturer_contract.engine import CapabilityUnavailable, ScenarioExecutionError
+from torturer_contract.scenarios import ScenarioStep
 
 from .cli import (
     CommandRunner,
-    HostedAdapterError,
-    HostedCLIAdapter,
+    AdapterError,
+    CLIAdapter,
     HostedServiceProcessController,
     RoutingProofMixin,
     _append_command_result_notes,
     _call_with_deadline,
 )
-from torturer_runner.windows.job import (
+from torturer_runner.windows_job import (
     WindowsJobError,
     close_for as close_windows_job,
     job_for as windows_job_for,
@@ -387,14 +387,14 @@ class WindowsServiceProcessController(HostedServiceProcessController):
         self._replacement_stream_threads: list[threading.Thread] = []
         self._replacement_cleanup_proven = False
         if control_pipe != "DobbyVPN.Control":
-            raise HostedAdapterError("SERVICE_CONTROL_PIPE_INVALID")
+            raise AdapterError("SERVICE_CONTROL_PIPE_INVALID")
         self.control_pipe = control_pipe
         if expected_initial_identity is not None:
             if (
                 _WINDOWS_SERVICE_IDENTITY.fullmatch(expected_initial_identity) is None
                 or int(expected_initial_identity.split("|", 1)[0]) != pid
             ):
-                raise HostedAdapterError("SERVICE_PID_PROBE_FAILED")
+                raise AdapterError("SERVICE_PID_PROBE_FAILED")
         self._expected_initial_identity = expected_initial_identity
         if replacement_command is not None:
             if (
@@ -405,7 +405,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
                 )
                 or Path(replacement_command[0]).resolve() != binary.resolve()
             ):
-                raise HostedAdapterError("SERVICE_REPLACEMENT_COMMAND_INVALID")
+                raise AdapterError("SERVICE_REPLACEMENT_COMMAND_INVALID")
             self._replacement_command = replacement_command
         else:
             self._replacement_command = (str(binary), "-mode", "normal")
@@ -425,7 +425,7 @@ class WindowsServiceProcessController(HostedServiceProcessController):
             self._initial_identity = observed_identity
             self._persist_identity(self._initial_identity)
         except ScenarioExecutionError as error:
-            raise HostedAdapterError(error.reason_code) from error
+            raise AdapterError(error.reason_code) from error
 
     def _persist_identity(self, identity: str) -> None:
         if self.identity_file is None:
@@ -956,7 +956,7 @@ def _service_pid(value: str) -> int | None:
     return None
 
 
-class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
+class WindowsAdapter(RoutingProofMixin, CLIAdapter):
     """Drive the Windows CLI and an optional exact service process seam."""
 
     adapter_id = "hosted-windows-cli"
@@ -989,17 +989,17 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             local_mode=local_mode,
         )
         if network_interface is not None and _WINDOWS_INTERFACE_INDEX.fullmatch(network_interface) is None:
-            raise HostedAdapterError("NETWORK_INTERFACE_INVALID")
+            raise AdapterError("NETWORK_INTERFACE_INVALID")
         self._initialize_routing_proof(
             enabled=local_mode and network_interface is not None,
             network_interface=network_interface,
         )
         if any(value is not None for value in (service_pid, service_binary)):
             if service_pid is None or service_binary is None:
-                raise HostedAdapterError("SERVICE_CONTROL_INCOMPLETE")
+                raise AdapterError("SERVICE_CONTROL_INCOMPLETE")
             raw_directory = getattr(runner, "raw_directory", None)
             if not isinstance(raw_directory, Path):
-                raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
+                raise AdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
             control_pipe = service_pipe or "DobbyVPN.Control"
             expected_initial_identity = None
             if service_identity_file is not None:
@@ -1009,7 +1009,7 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                         expected_pid=service_pid,
                     )
                 except ScenarioExecutionError as error:
-                    raise HostedAdapterError(error.reason_code) from error
+                    raise AdapterError(error.reason_code) from error
             self.service: WindowsServiceProcessController | None = WindowsServiceProcessController(
                 pid=service_pid,
                 binary=service_binary,
@@ -1077,7 +1077,7 @@ class WindowsHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         command = WindowsServiceProcessController._powershell(script, *arguments)
         try:
             result = self.runner.run(command, timeout_seconds=timeout)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             error = ScenarioExecutionError(failure)
@@ -1180,12 +1180,12 @@ if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
                 [
                     sys.executable,
                     "-m",
-                    "torturer_runner.windows.route",
+                    "torturer_runner.routing.windows",
                     self._routing_probe_address,
                 ],
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             error = ScenarioExecutionError("ROUTING_INTERFACE_UNAVAILABLE")
@@ -1208,13 +1208,13 @@ if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
                 [
                     sys.executable,
                     "-m",
-                    "torturer_runner.windows.route",
+                    "torturer_runner.routing.windows",
                     "--counters",
                     interface,
                 ],
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             failure = ScenarioExecutionError(error.code)
             add_exception_notes(failure, "routing_counter_command", error)
             raise failure from error
@@ -1259,4 +1259,4 @@ if ($null -ne (Get-NetFirewallRule -Name $ruleName -ErrorAction Continue)) {
         return {"process_loss_verified": True}
 
 
-__all__ = ["WindowsHostedAdapter", "WindowsServiceProcessController"]
+__all__ = ["WindowsAdapter", "WindowsServiceProcessController"]

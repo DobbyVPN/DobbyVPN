@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from torturer_runner.hosted.cli import CommandResult, HostedCLIAdapter
+from torturer_runner.adapters.cli import CommandResult, CLIAdapter
 
 
 class AcceptedSessionRunner:
@@ -46,7 +46,7 @@ class CLIOrchestrationTests(unittest.TestCase):
             profile = root / "mixed.toml"
             profile.write_text("[[Outline]]\n", encoding="utf-8")
             runner = AcceptedSessionRunner()
-            adapter = HostedCLIAdapter(cli=cli, profile=profile, runner=runner)
+            adapter = CLIAdapter(cli=cli, profile=profile, runner=runner)
             connections = adapter.discover_connections()
             self.assertEqual([(c.index, c.protocol) for c in connections], [(0, "OUTLINE"), (1, "XRAY")])
             adapter.select_connection(connections[1])

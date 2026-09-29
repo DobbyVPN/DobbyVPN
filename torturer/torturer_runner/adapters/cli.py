@@ -20,21 +20,21 @@ from collections.abc import Mapping
 from typing import Callable, Protocol, Sequence
 from urllib.parse import urlparse
 
-from torturer_contract.functional.capabilities import Capability
-from torturer_contract.functional.assertions import (
+from torturer_contract.capabilities import Capability
+from torturer_contract.assertions import (
     STABILITY_SAMPLE_COUNT,
     STABILITY_SAMPLE_INTERVAL_SECONDS,
 )
-from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
-from torturer_contract.functional.results import ConnectionIdentity
-from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_contract.engine import CapabilityUnavailable, ScenarioExecutionError
+from torturer_contract.results import ConnectionIdentity
+from torturer_contract.scenarios import ScenarioStep
 from torturer_runner.diagnostics import (
     add_exception_notes,
     add_stream_notes,
     emit_streams,
     merge_output,
 )
-from torturer_runner.windows.job import (
+from torturer_runner.windows_job import (
     WindowsJobError,
     close_for as close_windows_job,
     job_for as windows_job_for,
@@ -65,7 +65,7 @@ def _remaining_until(deadline: float, *, cap: float | None = None) -> float:
     return remaining if cap is None else min(remaining, max(0.0, cap))
 
 
-class HostedAdapterError(RuntimeError):
+class AdapterError(RuntimeError):
     """An adapter boundary failure with a stable caller-facing code."""
 
     def __init__(
@@ -161,9 +161,9 @@ def _ensure_directory(path: Path) -> None:
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as error:
-        raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE") from error
+        raise AdapterError("SCRATCH_DIRECTORY_UNAVAILABLE") from error
     if not path.is_dir():
-        raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
+        raise AdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
 
 
 def _process_group_kwargs() -> dict[str, int | bool]:
@@ -197,7 +197,7 @@ def _terminate_process(
     if os.name == "nt":
         cleanup = terminate_windows_job(process, deadline=deadline, stage=stage)
         if not cleanup.process_tree_proven:
-            error = HostedAdapterError("PROCESS_TERMINATION_FAILED")
+            error = AdapterError("PROCESS_TERMINATION_FAILED")
             if cleanup.diagnostics:
                 error.add_note("; ".join(cleanup.diagnostics))
             raise error
@@ -222,7 +222,7 @@ def _close_process_boundary(
         return ()
     diagnostics = close_windows_job(process, stage=stage, deadline=deadline)
     if diagnostics.failed:
-        error = HostedAdapterError("PROCESS_CLEANUP_FAILED")
+        error = AdapterError("PROCESS_CLEANUP_FAILED")
         if diagnostics.diagnostics:
             error.add_note("; ".join(diagnostics.diagnostics))
         raise error
@@ -382,11 +382,11 @@ class SubprocessRunner:
     ) -> CommandResult:
         """Capture both command kinds while preserving their process boundaries."""
         if input_bytes is not None and not isinstance(input_bytes, bytes):
-            raise HostedAdapterError("INVALID_INPUT_BYTES")
+            raise AdapterError("INVALID_INPUT_BYTES")
         if timeout_seconds <= 0 or any(
             not isinstance(item, str) or not item for item in command
         ):
-            raise HostedAdapterError("INVALID_COMMAND")
+            raise AdapterError("INVALID_COMMAND")
         argv = tuple(command)
         deadline = time.monotonic() + timeout_seconds
         process: subprocess.Popen[bytes] | None = None
@@ -450,7 +450,7 @@ class SubprocessRunner:
                 except BaseException as error:
                     errors.append(("close", error))
             result = CommandResult(argv, 124, stdout, stderr, timed_out=True)
-            primary = HostedAdapterError("COMMAND_TIMEOUT", stdout=stdout, stderr=stderr)
+            primary = AdapterError("COMMAND_TIMEOUT", stdout=stdout, stderr=stderr)
             _append_error_notes(primary, errors)
             _append_command_metadata(primary, result)
             add_stream_notes(primary, "command", result.stdout, result.stderr)
@@ -460,7 +460,7 @@ class SubprocessRunner:
             if detached:
                 raise
             result = CommandResult(argv, -1, error.stdout, error.stderr)
-            primary = HostedAdapterError(
+            primary = AdapterError(
                 "PROCESS_CONTAINMENT_UNAVAILABLE",
                 stdout=result.stdout,
                 stderr=result.stderr,
@@ -473,7 +473,7 @@ class SubprocessRunner:
             stdout = _output_bytes(getattr(error, "stdout", None))
             stderr = _output_bytes(getattr(error, "stderr", None))
             result = CommandResult(argv, -1, stdout, stderr)
-            primary = HostedAdapterError(
+            primary = AdapterError(
                 "COMMAND_UNAVAILABLE", stdout=stdout, stderr=stderr
             )
             _append_command_metadata(primary, result)
@@ -490,7 +490,7 @@ class SubprocessRunner:
                 )
             except BaseException as error:
                 result = CommandResult(argv, process.returncode, stdout, stderr)
-                primary = HostedAdapterError("PROCESS_CLEANUP_FAILED")
+                primary = AdapterError("PROCESS_CLEANUP_FAILED")
                 _append_error_notes(primary, (("close", error),))
                 _append_command_metadata(primary, result)
                 add_stream_notes(primary, "command", result.stdout, result.stderr)
@@ -522,7 +522,7 @@ class SubprocessRunner:
 
 def _require_scratch_file(path: Path) -> None:
     if not path.is_file():
-        raise HostedAdapterError("SCRATCH_FILE_UNAVAILABLE")
+        raise AdapterError("SCRATCH_FILE_UNAVAILABLE")
 
 
 def _discard_scratch_file(path: Path) -> None:
@@ -531,7 +531,7 @@ def _discard_scratch_file(path: Path) -> None:
     try:
         path.unlink()
     except OSError:
-        raise HostedAdapterError("SCRATCH_CLEANUP_FAILED") from None
+        raise AdapterError("SCRATCH_CLEANUP_FAILED") from None
 
 
 def _allocate_scratch_path(
@@ -551,13 +551,13 @@ def _allocate_scratch_path(
 
 def _https_endpoint(value: str | None, name: str, *, allow_query: bool = False) -> str:
     if not isinstance(value, str) or not value:
-        raise HostedAdapterError(f"{name.upper()}_INVALID")
+        raise AdapterError(f"{name.upper()}_INVALID")
     try:
         parsed = urlparse(value)
         hostname = parsed.hostname
         parsed.port
     except ValueError as error:
-        raise HostedAdapterError(f"{name.upper()}_INVALID") from error
+        raise AdapterError(f"{name.upper()}_INVALID") from error
     if (
         parsed.scheme != "https"
         or not hostname
@@ -569,7 +569,7 @@ def _https_endpoint(value: str | None, name: str, *, allow_query: bool = False) 
         or "#" in value
         or any(character.isspace() for character in value)
     ):
-        raise HostedAdapterError(f"{name.upper()}_INVALID")
+        raise AdapterError(f"{name.upper()}_INVALID")
     return value
 
 
@@ -577,7 +577,7 @@ _SERVICE_PID = re.compile(r"^[1-9][0-9]*$")
 
 
 class HostedServiceProcessController:
-    """Common bounded process-loss lifecycle for hosted desktop adapters.
+    """Common bounded process-loss lifecycle for desktop adapters.
 
     Platform adapters provide only the OS command vectors for terminating,
     probing, launching, and checking readiness. The deadline accounting,
@@ -596,9 +596,9 @@ class HostedServiceProcessController:
         raw_directory: Path,
     ) -> None:
         if pid <= 0 or not _SERVICE_PID.fullmatch(str(pid)):
-            raise HostedAdapterError("SERVICE_PID_INVALID")
+            raise AdapterError("SERVICE_PID_INVALID")
         if not binary.is_file():
-            raise HostedAdapterError("SERVICE_BINARY_UNAVAILABLE")
+            raise AdapterError("SERVICE_BINARY_UNAVAILABLE")
         _ensure_directory(raw_directory)
         self.pid = pid
         self.binary = binary
@@ -630,7 +630,7 @@ class HostedServiceProcessController:
     ) -> CommandResult:
         try:
             result = self.runner.run(command, timeout_seconds=timeout)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out:
             raise ScenarioExecutionError(failure)
@@ -749,19 +749,19 @@ class HostedServiceProcessController:
 
 def _profile_file(path: Path) -> None:
     if not path.is_file():
-        raise HostedAdapterError("PROFILE_INVALID")
+        raise AdapterError("PROFILE_INVALID")
     try:
         with path.open("rb"):
             pass
     except OSError as error:
-        raise HostedAdapterError("PROFILE_INVALID") from error
+        raise AdapterError("PROFILE_INVALID") from error
 
 
 def _executable_file(path: Path, code: str) -> None:
     if not isinstance(path, Path):
-        raise HostedAdapterError(code)
+        raise AdapterError(code)
     if not path.is_file() or not os.access(path, os.X_OK):
-        raise HostedAdapterError(code)
+        raise AdapterError(code)
 
 
 class RoutingProofMixin:
@@ -785,7 +785,7 @@ class RoutingProofMixin:
         issue a second, CLI-driven connection.  Routing-enabled hosted
         adapters therefore prepare the same firewall/baseline proof used by
         their CLI connect path, while ordinary adapters retain the simple
-        external-IP baseline behavior from ``HostedCLIAdapter``.
+        external-IP baseline behavior from ``CLIAdapter``.
         """
         if self._routing_proof_enabled:
             self._prepare_routing_probe(timeout)
@@ -820,7 +820,7 @@ class RoutingProofMixin:
                 ),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
 
     def _probe_external_ip(self, timeout: float) -> str:
@@ -888,7 +888,7 @@ class RoutingProofMixin:
                 self._remove_routing_firewall(
                     self._remaining(deadline, "ROUTING_FIREWALL_REMOVE_FAILED")
                 )
-            except (HostedAdapterError, ScenarioExecutionError) as cleanup_error:
+            except (AdapterError, ScenarioExecutionError) as cleanup_error:
                 error.add_note(
                     f"routing_firewall_cleanup_error={type(cleanup_error).__name__}"
                 )
@@ -913,7 +913,7 @@ class RoutingProofMixin:
                 self._remove_routing_firewall(
                     self._remaining(deadline, "ROUTING_FIREWALL_REMOVE_FAILED")
                 )
-            except (HostedAdapterError, ScenarioExecutionError) as cleanup_error:
+            except (AdapterError, ScenarioExecutionError) as cleanup_error:
                 error.add_note(
                     f"routing_firewall_cleanup_error={type(cleanup_error).__name__}"
                 )
@@ -996,7 +996,7 @@ class RoutingProofMixin:
             self._remove_routing_firewall(available)
 
 
-class HostedCLIAdapter:
+class CLIAdapter:
     """Drive one installed DobbyVPN CLI through semantic adapter operations."""
 
     adapter_id = "hosted-cli"
@@ -1014,10 +1014,10 @@ class HostedCLIAdapter:
         local_mode: bool = False,
     ) -> None:
         if not cli.is_file():
-            raise HostedAdapterError("CLI_UNAVAILABLE")
+            raise AdapterError("CLI_UNAVAILABLE")
         _profile_file(profile)
         if (download_url is None) != (upload_url is None):
-            raise HostedAdapterError("THROUGHPUT_URL_PAIR_REQUIRED")
+            raise AdapterError("THROUGHPUT_URL_PAIR_REQUIRED")
         if download_url is not None:
             _https_endpoint(download_url, "download_url", allow_query=True)
         if upload_url is not None:
@@ -1076,7 +1076,7 @@ class HostedCLIAdapter:
 
     def select_connection(self, connection: ConnectionIdentity) -> None:
         if connection not in self._connections:
-            raise HostedAdapterError("CONNECTION_NOT_DISCOVERED")
+            raise AdapterError("CONNECTION_NOT_DISCOVERED")
         self._selected_connection = connection
 
     def _selected_connection_index(self) -> str:
@@ -1294,13 +1294,13 @@ class HostedCLIAdapter:
     def reset(self, timeout_seconds: float = 30.0) -> None:
         """Stop a scenario's session within one total timeout window."""
         if timeout_seconds <= 0:
-            raise HostedAdapterError("INVALID_RESET_TIMEOUT")
+            raise AdapterError("INVALID_RESET_TIMEOUT")
         deadline = time.monotonic() + timeout_seconds
 
         def remaining() -> float:
             value = deadline - time.monotonic()
             if value <= 0:
-                raise HostedAdapterError("RESET_TIMEOUT")
+                raise AdapterError("RESET_TIMEOUT")
             return value
 
         try:
@@ -1308,7 +1308,7 @@ class HostedCLIAdapter:
             if snapshot.get("cleanup_complete") is not True:
                 self._stop(remaining(), "RESET_FAILED")
             if self._baseline_ip is not None and not self._cleanup_verified(remaining()):
-                raise HostedAdapterError("RESET_CLEANUP_UNVERIFIED")
+                raise AdapterError("RESET_CLEANUP_UNVERIFIED")
         finally:
             self._baseline_ip = None
             self._tunneled_ips.clear()
@@ -1319,15 +1319,15 @@ class HostedCLIAdapter:
         """Release adapter-owned run resources inside the canonical lane."""
 
         if timeout_seconds <= 0:
-            raise HostedAdapterError("INVALID_FINALIZE_TIMEOUT")
+            raise AdapterError("INVALID_FINALIZE_TIMEOUT")
         if deadline is not None and deadline <= time.monotonic():
-            raise HostedAdapterError("SERVICE_FINALIZE_TIMEOUT")
+            raise AdapterError("SERVICE_FINALIZE_TIMEOUT")
 
     def _command(self, arguments: Sequence[str], timeout: float, failure: str) -> CommandResult:
         command = (str(self.cli), *arguments)
         try:
             result = self.runner.run(command, timeout_seconds=timeout)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             failure_error = ScenarioExecutionError(error.code)
             add_exception_notes(
                 failure_error,
@@ -1450,7 +1450,7 @@ class HostedCLIAdapter:
                     ),
                     timeout_seconds=timeout,
                 )
-            except HostedAdapterError as error:
+            except AdapterError as error:
                 raise ScenarioExecutionError(error.code) from error
             if result.timed_out or result.returncode != 0:
                 failure = ScenarioExecutionError("EXTERNAL_IDENTITY_FAILED")
@@ -1565,7 +1565,7 @@ class HostedCLIAdapter:
                 ),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             failure = ScenarioExecutionError(error.code)
             add_exception_notes(failure, "measurement_command", error)
             raise failure from error
@@ -1598,7 +1598,7 @@ class HostedCLIAdapter:
             raise ScenarioExecutionError("THROUGHPUT_UPLOAD_UNAVAILABLE")
         try:
             _ensure_directory(raw_directory)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         payload = raw_directory / "traffic-upload.bin"
         if not payload.exists():
@@ -1642,8 +1642,8 @@ class HostedCLIAdapter:
 
 __all__ = [
     "CommandResult",
-    "HostedAdapterError",
-    "HostedCLIAdapter",
+    "AdapterError",
+    "CLIAdapter",
     "HostedServiceProcessController",
     "SubprocessRunner",
 ]

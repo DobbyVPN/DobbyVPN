@@ -1,4 +1,4 @@
-"""Linux hosted adapter with explicit, bounded runner controls."""
+"""Linux functional adapter with explicit, bounded runner controls."""
 
 from __future__ import annotations
 
@@ -12,16 +12,16 @@ import socket
 import time
 from urllib.parse import urlsplit
 
-from torturer_contract.functional.capabilities import Capability
-from torturer_contract.functional.engine import CapabilityUnavailable, ScenarioExecutionError
-from torturer_contract.functional.scenarios import ScenarioStep
+from torturer_contract.capabilities import Capability
+from torturer_contract.engine import CapabilityUnavailable, ScenarioExecutionError
+from torturer_contract.scenarios import ScenarioStep
 from torturer_runner.diagnostics import add_exception_notes, emit_streams
 
 from .cli import (
     CommandResult,
     CommandRunner,
-    HostedAdapterError,
-    HostedCLIAdapter,
+    AdapterError,
+    CLIAdapter,
     RoutingProofMixin,
     _append_error_notes,
     _append_command_result_notes,
@@ -178,11 +178,11 @@ class LinuxServiceProcessController:
         supervised_request: bool = False,
     ) -> None:
         if pid <= 0 or not _PID.fullmatch(str(pid)):
-            raise HostedAdapterError("SERVICE_PID_INVALID")
+            raise AdapterError("SERVICE_PID_INVALID")
         if not binary.is_file():
-            raise HostedAdapterError("SERVICE_BINARY_UNAVAILABLE")
+            raise AdapterError("SERVICE_BINARY_UNAVAILABLE")
         if library_path is not None and not library_path.is_dir():
-            raise HostedAdapterError("SERVICE_LIBRARY_UNAVAILABLE")
+            raise AdapterError("SERVICE_LIBRARY_UNAVAILABLE")
         self.pid = pid
         self.binary = binary
         self.socket = socket
@@ -206,7 +206,7 @@ class LinuxServiceProcessController:
         self._replacement_tree: tuple[_LinuxProcessRecord, ...] = ()
         self._initial_identity = self._read_persisted_identity(pid)
         if self.identity_file is not None and self._initial_identity is None:
-            raise HostedAdapterError("SERVICE_IDENTITY_UNAVAILABLE")
+            raise AdapterError("SERVICE_IDENTITY_UNAVAILABLE")
         self._write_pid(pid)
         identity_deadline = time.monotonic() + 5.0
         self._initial_identity = self._verify_candidate_pid(
@@ -235,7 +235,7 @@ class LinuxServiceProcessController:
         try:
             value = self.identity_file.read_text(encoding="ascii").strip()
         except OSError as error:
-            raise HostedAdapterError("SERVICE_IDENTITY_UNAVAILABLE") from error
+            raise AdapterError("SERVICE_IDENTITY_UNAVAILABLE") from error
         fields = value.split("|")
         if (
             len(fields) != 3
@@ -244,7 +244,7 @@ class LinuxServiceProcessController:
             or int(fields[1]) <= 0
             or int(fields[2]) <= 0
         ):
-            raise HostedAdapterError("SERVICE_IDENTITY_UNAVAILABLE")
+            raise AdapterError("SERVICE_IDENTITY_UNAVAILABLE")
         return fields[1], int(fields[2])
 
     def _persist_identity(self, identity: tuple[str, int]) -> None:
@@ -277,18 +277,17 @@ class LinuxServiceProcessController:
                 (*getattr(self, "_sudo_prefix", ("sudo", "-n")), *args),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         return result
 
     def _alive(self, timeout: float) -> bool:
         """Return whether the candidate is live, treating a zombie as gone.
 
-        The hosted lane is itself run under a Linux subreaper.  A deliberately
-        detached replacement therefore remains visible to ``kill -0`` as a
-        zombie until that outer subreaper reaps it.  Waiting on ``kill -0``
-        alone consequently deadlocks finalization.  Keep the signal probe for
-        the normal liveness check, but pair it with a retained ``ps`` state
+        A detached replacement can remain visible to ``kill -0`` as a zombie
+        until its parent reaps it. Waiting on ``kill -0`` alone can therefore
+        deadlock finalization. Keep the signal probe for the normal liveness
+        check, but pair it with a retained ``ps`` state
         probe and regard only an explicitly reported zombie as exited.
         """
 
@@ -335,9 +334,9 @@ class LinuxServiceProcessController:
         try:
             record = self._read_process_stat(self.pid, timeout)
         except ScenarioExecutionError as error:
-            raise HostedAdapterError("SERVICE_PID_PROBE_FAILED") from error
+            raise AdapterError("SERVICE_PID_PROBE_FAILED") from error
         if record is None:
-            raise HostedAdapterError("SERVICE_PID_PROBE_FAILED")
+            raise AdapterError("SERVICE_PID_PROBE_FAILED")
         return record.start, record.process_group
 
     def _read_process_stat(
@@ -352,7 +351,7 @@ class LinuxServiceProcessController:
                 ),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError("SERVICE_TREE_PROBE_FAILED") from error
         if result.timed_out:
             raise ScenarioExecutionError("SERVICE_TREE_PROBE_FAILED")
@@ -395,7 +394,7 @@ class LinuxServiceProcessController:
                 ),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError("SERVICE_TREE_PROBE_FAILED") from error
         if result.returncode != 0 or result.timed_out:
             raise ScenarioExecutionError("SERVICE_TREE_PROBE_FAILED")
@@ -483,10 +482,9 @@ class LinuxServiceProcessController:
                 reused.append(current)
                 continue
             # A zombie has terminated and cannot execute or retain the
-            # service's resources.  The outer hosted subreaper is responsible
-            # for reaping it after this controller returns; requiring /proc to
-            # disappear here would deadlock on an adopted child whose parent
-            # is still inside the canonical lane.
+            # service's resources. Its parent is responsible for reaping it;
+            # requiring /proc to disappear here could deadlock on an adopted
+            # child whose parent is still inside the canonical lane.
             if current.state != "Z":
                 survivors.append(current)
         return tuple(survivors), tuple(reused)
@@ -497,14 +495,14 @@ class LinuxServiceProcessController:
                 survivors, reused = self._replacement_records(deadline)
             except ScenarioExecutionError as error:
                 if error.reason_code == "SERVICE_FINALIZE_TIMEOUT":
-                    raise HostedAdapterError(error.reason_code) from error
+                    raise AdapterError(error.reason_code) from error
                 raise
             if reused:
-                raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+                raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
             if not survivors:
                 return ()
             if time.monotonic() >= deadline:
-                raise HostedAdapterError("SERVICE_FINALIZE_TIMEOUT")
+                raise AdapterError("SERVICE_FINALIZE_TIMEOUT")
             time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
 
     def _verify_candidate_pid(
@@ -522,23 +520,23 @@ class LinuxServiceProcessController:
                 ),
                 timeout_seconds=self._remaining(deadline, "SERVICE_PID_PROBE_FAILED"),
             )
-        except HostedAdapterError as error:
-            raise HostedAdapterError("SERVICE_PID_PROBE_FAILED") from error
+        except AdapterError as error:
+            raise AdapterError("SERVICE_PID_PROBE_FAILED") from error
         if result.returncode != 0 or result.timed_out:
-            raise HostedAdapterError("SERVICE_PID_PROBE_FAILED")
+            raise AdapterError("SERVICE_PID_PROBE_FAILED")
         value = result.stdout_text.strip()
         if not value:
-            raise HostedAdapterError("SERVICE_PID_PROBE_FAILED")
+            raise AdapterError("SERVICE_PID_PROBE_FAILED")
         executable = Path(value).resolve()
         expected = self.binary.resolve()
         if executable != expected:
-            raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+            raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
         expected_identity = self._replacement_identity or self._initial_identity
         observed = self._candidate_process_identity(
             self._remaining(deadline, "SERVICE_PID_PROBE_FAILED")
         )
         if expected_identity is not None and observed != expected_identity:
-            raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+            raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
         return observed
 
     def _wait_dead(self, timeout: float) -> None:
@@ -609,7 +607,7 @@ class LinuxServiceProcessController:
                     10.0, self._remaining(deadline, "SERVICE_RESTART_TIMEOUT")
                 ),
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError("SERVICE_RESTART_UNAVAILABLE") from error
         if result.returncode != 0 or result.timed_out:
             raise ScenarioExecutionError("SERVICE_RESTART_UNAVAILABLE")
@@ -714,30 +712,29 @@ class LinuxServiceProcessController:
         """Stop the exact service deliberately retained by a restart launcher."""
 
         if timeout <= 0:
-            raise HostedAdapterError("INVALID_FINALIZE_TIMEOUT")
+            raise AdapterError("INVALID_FINALIZE_TIMEOUT")
         if self._restart_number == 0:
             return
         if deadline is None:
             deadline = time.monotonic() + timeout
         elif deadline <= time.monotonic():
-            raise HostedAdapterError("SERVICE_FINALIZE_TIMEOUT")
+            raise AdapterError("SERVICE_FINALIZE_TIMEOUT")
 
         def remaining(failure: str) -> float:
             value = deadline - time.monotonic()
             if value <= 0:
-                raise HostedAdapterError(failure)
+                raise AdapterError(failure)
             return value
 
         def alive() -> bool:
             return self._alive(min(5.0, remaining("SERVICE_FINALIZE_TIMEOUT")))
 
         if self._replacement_identity is None:
-            raise HostedAdapterError("SERVICE_PID_PROBE_FAILED")
+            raise AdapterError("SERVICE_PID_PROBE_FAILED")
         if not alive():
-            # A replacement launched by the hosted lane is adopted by the
-            # outer Linux subreaper.  Once that process exits, it can remain
-            # visible as a zombie until the subreaper reaps it.  The state
-            # probe in ``_alive`` is the authoritative proof that the root
+            # A replacement may remain visible as a zombie until its parent
+            # reaps it. The state probe in ``_alive`` is the authoritative
+            # proof that the root
             # cannot execute or retain service resources; do not turn that
             # expected hand-off state into a lane-wide deadlock.  A clean
             # disappearance is still handled fail-closed below because it
@@ -747,13 +744,13 @@ class LinuxServiceProcessController:
                 min(5.0, remaining("SERVICE_TREE_PROBE_FAILED")),
             )
             if root_record is None or root_record.state != "Z":
-                raise HostedAdapterError("SERVICE_TREE_PROBE_FAILED")
+                raise AdapterError("SERVICE_TREE_PROBE_FAILED")
             root_start, root_group = self._replacement_identity
             if (
                 root_record.start != root_start
                 or root_record.process_group != root_group
             ):
-                raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+                raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
             # Capture the exact tree while the zombie root is still visible.
             # ``_tracked_tree`` validates every descendant and the isolated
             # process group before any cleanup decision is made.  A lone
@@ -766,7 +763,7 @@ class LinuxServiceProcessController:
                 # The exact process census proved that the adopted root and
                 # every process still attributable to its tree are zombies.
                 # They are already unable to execute or retain resources;
-                # leave reaping to the outer subreaper and avoid signalling a
+                # leave reaping to its parent and avoid signalling a
                 # process group whose only member is a zombie.
                 return
         _call_with_deadline(
@@ -780,9 +777,9 @@ class LinuxServiceProcessController:
         )
         _root_start, process_group = self._replacement_identity
         if tree[0].process_group != process_group:
-            raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+            raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
         if tree[0].start == "":
-            raise HostedAdapterError("SERVICE_TREE_PROBE_FAILED")
+            raise AdapterError("SERVICE_TREE_PROBE_FAILED")
         self._replacement_tree = tree
 
         # Re-census the exact tree and process group immediately before the
@@ -805,17 +802,17 @@ class LinuxServiceProcessController:
             "SERVICE_FINALIZE_TERM_FAILED",
         )
         if terminated.returncode != 0:
-            raise HostedAdapterError("SERVICE_FINALIZE_TERM_FAILED")
+            raise AdapterError("SERVICE_FINALIZE_TERM_FAILED")
 
         term_remaining = remaining("SERVICE_FINALIZE_TIMEOUT")
         term_grace = min(5.0, term_remaining / 2.0)
         if term_grace <= 0:
-            raise HostedAdapterError("SERVICE_FINALIZE_TIMEOUT")
+            raise AdapterError("SERVICE_FINALIZE_TIMEOUT")
         term_deadline = min(deadline, time.monotonic() + term_grace)
         try:
             self._wait_replacement_tree(term_deadline)
             return
-        except HostedAdapterError as error:
+        except AdapterError as error:
             if error.code not in {"SERVICE_FINALIZE_TIMEOUT"}:
                 raise
 
@@ -825,7 +822,7 @@ class LinuxServiceProcessController:
         # disappearance alone.
         survivors, reused = self._replacement_records(deadline)
         if reused:
-            raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+            raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
         if not survivors:
             return
         # If the root is still present, a second group-membership proof lets
@@ -839,7 +836,7 @@ class LinuxServiceProcessController:
         if root_record is not None:
             root_start, root_group = self._replacement_identity
             if root_record.start != root_start or root_record.process_group != root_group:
-                raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+                raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
             # Before escalating to a PGID KILL, prove the current membership
             # again.  This prevents a process that joined the group after the
             # TERM census from being treated as owned by this replacement.
@@ -849,7 +846,7 @@ class LinuxServiceProcessController:
             self._replacement_tree = final_tree
             survivors, reused = self._replacement_records(deadline)
             if reused:
-                raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+                raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
             if not survivors:
                 return
             root_record = final_tree[0]
@@ -858,7 +855,7 @@ class LinuxServiceProcessController:
                 or root_record.start != root_start
                 or root_record.process_group != root_group
             ):
-                raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+                raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
         group_owned = root_record is not None
         for expected in survivors:
             if group_owned and expected.process_group == process_group:
@@ -868,14 +865,14 @@ class LinuxServiceProcessController:
                 min(5.0, remaining("SERVICE_FINALIZE_KILL_FAILED")),
             )
             if current is None or current.start != expected.start:
-                raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+                raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
             killed = self._sudo(
                 ("kill", "-KILL", str(expected.pid)),
                 min(5.0, remaining("SERVICE_FINALIZE_KILL_FAILED")),
                 "SERVICE_FINALIZE_KILL_FAILED",
             )
             if killed.returncode != 0:
-                raise HostedAdapterError("SERVICE_FINALIZE_KILL_FAILED")
+                raise AdapterError("SERVICE_FINALIZE_KILL_FAILED")
 
         if group_owned:
             # Revalidate the root's precise /proc start tick and group
@@ -885,7 +882,7 @@ class LinuxServiceProcessController:
                 min(5.0, remaining("SERVICE_PID_PROBE_FAILED"))
             )
             if (current_start, current_group) != self._replacement_identity:
-                raise HostedAdapterError("SERVICE_PID_NOT_CANDIDATE")
+                raise AdapterError("SERVICE_PID_NOT_CANDIDATE")
             killed = self._sudo(
                 ("kill", "-KILL", "--", f"-{process_group}"),
                 min(5.0, remaining("SERVICE_FINALIZE_TIMEOUT")),
@@ -895,11 +892,11 @@ class LinuxServiceProcessController:
                 # The group may already be gone while an escaped child
                 # remains; the final tree proof below decides whether cleanup
                 # succeeded.
-                raise HostedAdapterError("SERVICE_FINALIZE_KILL_FAILED")
+                raise AdapterError("SERVICE_FINALIZE_KILL_FAILED")
         self._wait_replacement_tree(deadline)
 
 
-class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
+class LinuxAdapter(RoutingProofMixin, CLIAdapter):
     """Drive the Linux CLI and optional explicit service/network test seams."""
 
     adapter_id = "hosted-linux-cli"
@@ -931,7 +928,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             local_mode=local_mode,
         )
         if network_interface is not None and not _INTERFACE.fullmatch(network_interface):
-            raise HostedAdapterError("NETWORK_INTERFACE_INVALID")
+            raise AdapterError("NETWORK_INTERFACE_INVALID")
         self.routing_firewall_helper = routing_firewall_helper
         self._initialize_routing_proof(
             enabled=routing_firewall_helper is not None,
@@ -940,10 +937,10 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         self.service: LinuxServiceProcessController | None = None
         if any(value is not None for value in (service_pid, service_binary, service_socket)):
             if None in (service_pid, service_binary, service_socket):
-                raise HostedAdapterError("SERVICE_CONTROL_INCOMPLETE")
+                raise AdapterError("SERVICE_CONTROL_INCOMPLETE")
             raw_directory = getattr(runner, "raw_directory", None)
             if not isinstance(raw_directory, Path):
-                raise HostedAdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
+                raise AdapterError("SCRATCH_DIRECTORY_UNAVAILABLE")
             self.service = LinuxServiceProcessController(
                 pid=service_pid, binary=service_binary, socket=service_socket,
                 library_path=service_library_path,
@@ -999,7 +996,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 ("/usr/bin/getent", "ahostsv4", endpoint.hostname),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             failure = ScenarioExecutionError("ROUTING_PROBE_RESOLUTION_FAILED")
@@ -1038,7 +1035,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
             arguments.append(self._routing_probe_address)
         try:
             result = self.runner.run(arguments, timeout_seconds=timeout)
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             raise ScenarioExecutionError(f"ROUTING_FIREWALL_{action.upper()}_FAILED")
@@ -1051,7 +1048,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                 ("/usr/sbin/ip", "-o", "route", "get", self._routing_probe_address),
                 timeout_seconds=timeout,
             )
-        except HostedAdapterError as error:
+        except AdapterError as error:
             raise ScenarioExecutionError(error.code) from error
         if result.timed_out or result.returncode != 0:
             raise ScenarioExecutionError("ROUTING_INTERFACE_UNAVAILABLE")
@@ -1076,7 +1073,7 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
                     ),
                 )
                 value = int(result.stdout_text.strip())
-            except (HostedAdapterError, TypeError, ValueError) as error:
+            except (AdapterError, TypeError, ValueError) as error:
                 raise ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE") from error
             if result.timed_out or result.returncode != 0 or value < 0:
                 raise ScenarioExecutionError("ROUTING_COUNTERS_UNAVAILABLE")
@@ -1145,6 +1142,6 @@ class LinuxHostedAdapter(RoutingProofMixin, HostedCLIAdapter):
         return {"process_loss_verified": True}
 
 __all__ = [
-    "LinuxHostedAdapter",
+    "LinuxAdapter",
     "LinuxServiceProcessController",
 ]
