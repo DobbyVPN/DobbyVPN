@@ -306,7 +306,7 @@ def _build_android(
         go_path.mkdir(parents=True, exist_ok=True)
         environment["GO_BIN"] = str(Path(go_binary).resolve())
         environment["GOPATH"] = str(go_path)
-        environment["GRADLE_BIN"] = str(source_root / "android" / "gradlew")
+        environment["GRADLE_BIN"] = str(source_root / "ui" / "android" / "gradlew")
         label = "Android Release-mode candidate build"
         command = driver_command
 
@@ -320,7 +320,7 @@ def _build_android(
         provenance = candidate_root / "android-provenance.json"
         version_code_match = re.search(
             r"^versionCode=([1-9][0-9]*)$",
-            (source_root / "android" / "gradle.properties").read_text(encoding="utf-8"),
+            (source_root / "ui" / "android" / "gradle.properties").read_text(encoding="utf-8"),
             re.MULTILINE,
         )
         if version_code_match is None:

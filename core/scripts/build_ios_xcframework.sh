@@ -65,7 +65,7 @@ if [[ -z "$simulator_architecture" ]]; then
     -iosversion=15.6 \
     -target=ios/arm64 \
     -o "$device_output" \
-    ./ios_exports
+    ./ffi/ios
 fi
 
 simulator_target="iossimulator"
@@ -79,7 +79,7 @@ GO111MODULE=on gomobile bind \
   -iosversion=15.6 \
   -target="$simulator_target" \
   -o "$simulator_output" \
-  ./ios_exports
+  ./ffi/ios
 
 simulator_framework_output="$(
   find "$simulator_output" -type d -name DobbyVPNRuntime.framework -print | tee /dev/stderr

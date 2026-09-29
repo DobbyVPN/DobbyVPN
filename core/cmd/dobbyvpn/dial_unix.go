@@ -3,8 +3,8 @@
 package main
 
 import (
-	"core/desktop_exports/controljson"
-	"core/desktop_exports/controlplane"
+	"core/desktop/controljson"
+	"core/desktop/controlplane"
 )
 
 func dialService() controljson.Client {

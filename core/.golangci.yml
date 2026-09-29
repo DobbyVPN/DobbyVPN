@@ -87,9 +87,8 @@ linters:
         - rangeValCopy
   exclusions:
     paths:
-      - ios_exports
-      - kotlin_exports
-      - desktop_exports
+      - ffi/ios
+      - desktop
     rules:
       - path: _test\.go
         linters:

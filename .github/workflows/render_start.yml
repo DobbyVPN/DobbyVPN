@@ -43,7 +43,7 @@ jobs:
           test -n "$RENDER_IMAGE_PATH"
           test -n "$RENDER_IMAGE_DIGEST"
           test -n "$RENDER_REGION"
-          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_provider.render_service start \
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m disposable_vpn_server.render_service start \
             --run-id "$GITHUB_RUN_ID" \
             --attempt "$GITHUB_RUN_ATTEMPT" \
             --owner-id "$RENDER_OWNER_ID" \

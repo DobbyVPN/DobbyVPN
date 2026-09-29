@@ -645,7 +645,7 @@ def qualify(
             )
         else:
             adapter = MacOSInstaller(
-                runner, fallback_uninstaller=SCRIPT_DIR.parents[2] / "apple/installer/uninstall.sh"
+                runner, fallback_uninstaller=SCRIPT_DIR.parents[2] / "ui/apple/macos/installer/uninstall.sh"
             )
         assert adapter is not None
         migration_sequence(

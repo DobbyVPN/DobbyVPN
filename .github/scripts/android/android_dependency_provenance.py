@@ -31,12 +31,12 @@ REPOSITORIES = [
 ]
 DECLARED_INPUTS = (
     ".go-version",
-    "android/settings.gradle.kts",
-    "android/build.gradle.kts",
-    "android/app/build.gradle.kts",
-    "android/gradle/wrapper/gradle-wrapper.properties",
-    "android/gradle/wrapper/gradle-wrapper.jar",
-    "android/gradle.properties",
+    "ui/android/settings.gradle.kts",
+    "ui/android/build.gradle.kts",
+    "ui/android/app/build.gradle.kts",
+    "ui/android/gradle/wrapper/gradle-wrapper.properties",
+    "ui/android/gradle/wrapper/gradle-wrapper.jar",
+    "ui/android/gradle.properties",
     "core/go.mod",
     "core/go.sum",
 )
@@ -183,7 +183,7 @@ def create_manifest(
     gradle_distribution = (
         _verify_external_gradle_distribution(gradle_archive, gradle_root)
         if gradle_archive is not None and gradle_root is not None
-        else _wrapper_values(source_root / "android/gradle/wrapper/gradle-wrapper.properties")
+        else _wrapper_values(source_root / "ui/android/gradle/wrapper/gradle-wrapper.properties")
     )
     spec_sha256 = _sha256(spec_file)
     spec_input: dict[str, object] = {

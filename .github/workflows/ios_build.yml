@@ -50,27 +50,27 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: DobbyVPNRuntime.xcframework
-          path: apple/DobbyVPNRuntime.xcframework
+          path: ui/apple/DobbyVPNRuntime.xcframework
 
       - name: Analyze production iOS app and tunnel without signing
         run: |
           set -euo pipefail
           bash core/scripts/package_ios_app.sh \
             iosanalyze "$RUNNER_TEMP/dobbyvpn-ios-analysis" \
-            apple/DobbyVPNRuntime.xcframework
+            ui/apple/DobbyVPNRuntime.xcframework
 
       - name: Archive production iOS app and tunnel without signing
         run: |
           set -euo pipefail
-          mkdir -p apple/build/release
+          mkdir -p ui/apple/build/release
           bash core/scripts/package_ios_app.sh \
-            iosarchive apple/build/release/DobbyVPN.xcarchive.tar.gz \
-            apple/DobbyVPNRuntime.xcframework
+            iosarchive ui/apple/build/release/DobbyVPN.xcarchive.tar.gz \
+            ui/apple/DobbyVPNRuntime.xcframework
 
       - name: Upload unsigned iOS archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: DobbyVPN.xcarchive.tar.gz
-          path: apple/build/release/DobbyVPN.xcarchive.tar.gz
+          path: ui/apple/build/release/DobbyVPN.xcarchive.tar.gz
           if-no-files-found: error
           retention-days: 90

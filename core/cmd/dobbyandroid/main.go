@@ -4,6 +4,6 @@
 // The Kotlin Activity owns the UI and the Android VPN lifecycle boundary.
 package main
 
-import _ "core/android_exports"
+import _ "core/ffi/android"
 
 func main() {}

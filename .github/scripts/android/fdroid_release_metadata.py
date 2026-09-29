@@ -41,7 +41,7 @@ ANDROID_BUILD = [
     'test -x "$GOROOT/bin/go"',
     'test "$("$GOROOT/bin/go" env GOVERSION)" = "go1.26.8"',
     'go env GOROOT GOVERSION GOFLAGS GOTOOLCHAIN',
-    'cd ..',
+    'cd ../..',
     'pushd core',
     'go mod download',
     'popd',
@@ -51,7 +51,7 @@ ANDROID_BUILD = [
     'export ANDROID_NDK_HOME="$$SDK$$/ndk/28.1.13356709"',
     'export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64',
     'export PATH="$JAVA_HOME/bin:$GOROOT/bin:$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$GOPATH/bin:$PATH"',
-    'cd android',
+    'cd ui/android',
     'sed -i -e "s/^versionCode=.*/versionCode=$$VERCODE$$/" -e "s/^versionName=.*/versionName=$$VERSION$$/" gradle.properties',
     'printf "\\ndobbyGoBinary=$GOROOT/bin/go\\n" >> gradle.properties',
     'export COMMIT=$(git rev-parse HEAD)',
@@ -286,7 +286,7 @@ def finalize(
     target["commit"] = source_sha
     # The release shell is a plain Android project now. Point the candidate at
     # the Android Gradle root and install the pinned Go backend build inputs.
-    target["subdir"] = "android"
+    target["subdir"] = "ui/android"
     target["gradle"] = ["yes"]
     target["srclibs"] = list(ANDROID_BUILD_SOURCES)
     target["build"] = list(ANDROID_BUILD)

@@ -1027,7 +1027,7 @@ def build_service(
                 f"-ldflags={ldflags}",
                 "-o",
                 os.fspath(output),
-                "./desktop_exports/",
+                "./desktop/",
             ]
         )
         run(
@@ -1152,7 +1152,7 @@ def build_native_ui(target_platform: str, arch: str | None, output: Path) -> Pat
     version = os.environ.get("VERSION_NAME") or read_version()
     commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "N/A"
     if target_platform == "windows":
-        project = ROOT_DIR / "windows" / "DobbyVPN.Windows" / "DobbyVPN.Windows.csproj"
+        project = ROOT_DIR / "ui" / "windows" / "DobbyVPN.Windows" / "DobbyVPN.Windows.csproj"
         run([
             "dotnet", "publish", str(project), "--configuration", "Release",
             "--runtime", "win-x64", "--self-contained", "true",
@@ -1166,8 +1166,8 @@ def build_native_ui(target_platform: str, arch: str | None, output: Path) -> Pat
 
     environment = os.environ.copy()
     environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
-    run(["swift", "build", "--package-path", str(ROOT_DIR / "apple"), "--configuration", "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
-    binary = ROOT_DIR / "apple" / ".build" / "release" / "DobbyVPNMacApp"
+    run(["swift", "build", "--package-path", str(ROOT_DIR / "ui" / "apple"), "--configuration", "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
+    binary = ROOT_DIR / "ui" / "apple" / ".build" / "release" / "DobbyVPNMacApp"
     if not binary.is_file():
         fail(f"Swift build did not produce {binary}")
     if output.suffix == ".app":

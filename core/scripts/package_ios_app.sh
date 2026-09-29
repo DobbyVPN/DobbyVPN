@@ -20,7 +20,7 @@ case "$target" in
 esac
 
 script_root=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
-swift_root="$script_root/apple"
+swift_root="$script_root/ui/apple"
 runtime=${3:-"$swift_root/DobbyVPNRuntime.xcframework"}
 version=${VERSION_NAME:-$(tr -d '[:space:]' < "$script_root/VERSION")}
 build=${APP_BUILD:-1005001}
@@ -130,7 +130,7 @@ if [[ "$target" == ios || "$target" == iosarchive || "$target" == iosanalyze ]];
 fi
 
 xcode_args=(
-  -project "$swift_root/iosApp.xcodeproj"
+  -project "$swift_root/ios/iosApp.xcodeproj"
   -scheme "$scheme"
   -configuration Release
   -sdk "$sdk"

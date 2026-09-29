@@ -392,7 +392,7 @@ jobs:
           fi
           parser_status=0
           PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
-            python3 -m torturer_checks.android_instrumentation \
+            python3 -m torturer_runner.android_instrumentation \
             "${parser_args[@]}" || parser_status=$?
           printf '%s\n' '[android-native-ui stdout]' >&2
           cat "$ui_stdout" >&2
@@ -586,7 +586,7 @@ jobs:
             exit 1
           fi
           if [ "$PLATFORM" = android ]; then
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_checks.hosted.run \
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted.run \
               --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
               --raw-log-dir "$RUN_DIR"

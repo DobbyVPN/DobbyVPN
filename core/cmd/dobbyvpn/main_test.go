@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/desktop_exports/controljson"
+	"core/desktop/controljson"
 	"core/sessionapi"
 )
 

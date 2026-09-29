@@ -407,7 +407,7 @@ def _build_windows_msi(
     env = environment.copy()
     installer = work / "windows-installer"
     installer.mkdir()
-    source_installer = ROOT / "installer" / "windows"
+    source_installer = ROOT / "ui" / "windows" / "installer"
     for name in ("build.bat", "Package.wxs", "Folders.wxs", "AppComponents.wxs"):
         shutil.copyfile(source_installer / name, installer / name)
     shutil.copyfile(archive, installer / "dobbyVPN-windows.zip")
@@ -492,7 +492,7 @@ def _build_macos_pkg(
     staging.mkdir(parents=True)
     shutil.copyfile(service_directory / "dobbyvpn-backend", staging / "dobbyvpn-backend")
     for name in ("build.sh", "postinstall.sh", "uninstall.sh", "vpnservice.plist"):
-        shutil.copyfile(ROOT / "installer" / "macos" / name, installer / name)
+        shutil.copyfile(ROOT / "ui" / "apple" / "macos" / "installer" / name, installer / name)
     shutil.copyfile(archive, installer / f"dobbyVPN-macos-{label}.zip")
     env = environment.copy()
     env["APP_MAJOR_VERSION"], env["APP_MINOR_VERSION"], env["APP_MAINTENANCE_VERSION"] = version.split(".")
@@ -712,7 +712,7 @@ def _uninstall(args: argparse.Namespace) -> int:
     else:
         uninstaller = Path("/usr/local/libexec/dobbyvpn-uninstall")
         if not uninstaller.is_file():
-            uninstaller = ROOT / "installer" / "macos" / "uninstall.sh"
+            uninstaller = ROOT / "ui" / "apple" / "macos" / "installer" / "uninstall.sh"
         _run("remove macOS PKG", ["sudo", "-n", str(uninstaller)])
     descriptor["installed"] = False
     descriptor["cleanup_complete"] = True
@@ -757,7 +757,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "test":
         sys.path.insert(0, str(ROOT / "torturer"))
-        from torturer_checks.desktop_platform import main as test_main
+        from torturer_runner.desktop_platform import main as test_main
 
         return test_main(arguments)
     args = _parser().parse_args(arguments)

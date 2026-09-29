@@ -387,8 +387,8 @@ def swift_unit(args: argparse.Namespace) -> None:
     xcrun = require_command("xcrun", "Swift lifecycle coverage export")
     output, temporary = coverage_dir(args, "swift")
     try:
-        run([swift, "test", "-v", "--enable-code-coverage", "--package-path", str(ROOT / "apple")])
-        bin_path = capture([swift, "build", "--show-bin-path", "--package-path", str(ROOT / "apple")]).strip()
+        run([swift, "test", "-v", "--enable-code-coverage", "--package-path", str(ROOT / "ui" / "apple")])
+        bin_path = capture([swift, "build", "--show-bin-path", "--package-path", str(ROOT / "ui" / "apple")]).strip()
         build_path = Path(bin_path)
         profiles = list(build_path.glob("**/codecov/default.profdata"))
         tests = [path for path in build_path.glob("**/*.xctest/Contents/MacOS/*PackageTests") if os.access(path, os.X_OK)]
@@ -409,7 +409,7 @@ def swift_unit(args: argparse.Namespace) -> None:
                 sys.executable,
                 str(SCRIPT_DIR / "apple" / "check_swift_coverage.py"),
                 "--lcov", str(lcov),
-                "--source-root", str(ROOT / "apple" / "CommonDI"),
+                "--source-root", str(ROOT / "ui" / "apple" / "ios" / "integration"),
                 "--summary", str(summary),
             ]
         )
@@ -433,14 +433,14 @@ def lint_go(tools: Tools) -> None:
 
 def require_android_sdk() -> Path:
     candidates = [os.environ.get("ANDROID_SDK_ROOT"), os.environ.get("ANDROID_HOME")]
-    local_properties = ROOT / "android" / "local.properties"
+    local_properties = ROOT / "ui" / "android" / "local.properties"
     if local_properties.is_file():
         match = re.search(r"^sdk\.dir=(.+)$", local_properties.read_text(encoding="utf-8"), re.MULTILINE)
         if match:
             candidates.append(match.group(1).replace("\\:", ":").replace("\\\\", "\\"))
     sdk = next((Path(value).expanduser() for value in candidates if value and value.strip()), None)
     if sdk is None or not sdk.is_dir():
-        raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or android/local.properties")
+        raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or ui/android/local.properties")
     ndk = sdk / "ndk" / "28.1.13356709"
     if not ndk.is_dir():
         raise CheckError(f"Android Lint requires NDK 28.1.13356709 at {ndk}")
@@ -465,16 +465,16 @@ def lint_android() -> None:
     build_tools = sdk / "build-tools" / "36.0.0"
     if not build_tools.is_dir():
         raise CheckError(f"Android Lint requires build-tools 36.0.0 at {build_tools}")
-    gradle = ROOT / "android" / "gradlew"
+    gradle = ROOT / "ui" / "android" / "gradlew"
     if not gradle.is_file():
         raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
-    run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "android")
+    run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "ui" / "android")
 
 
 def lint_swift(tools: Tools) -> None:
     require_platform("darwin")
     swiftlint = tools.get("swiftlint")
-    run([str(swiftlint), "lint", "--config", ".swiftlint.yml"], cwd=ROOT / "apple")
+    run([str(swiftlint), "lint", "--config", ".swiftlint.yml"], cwd=ROOT / "ui" / "apple")
 
 
 def trivy_scan(tools: Tools) -> None:
@@ -482,7 +482,7 @@ def trivy_scan(tools: Tools) -> None:
     trivy = tools.get("trivy")
     cache_dir = tools.root / "trivy-cache"
     ignore = ROOT / ".trivyignore"
-    for target in (ROOT / "core", ROOT / "android"):
+    for target in (ROOT / "core", ROOT / "ui" / "android"):
         run(
             [
                 str(trivy), "fs", "--cache-dir", str(cache_dir),

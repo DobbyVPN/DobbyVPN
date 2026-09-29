@@ -18,7 +18,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[3]
 SERVICES = ROOT / "runtime" / "services"
 LOGO = ROOT / "publishing" / "assets" / "logo.png"
-LINUX_INSTALLER = ROOT / "linux" / "installer"
+LINUX_INSTALLER = ROOT / "ui" / "linux" / "installer"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 

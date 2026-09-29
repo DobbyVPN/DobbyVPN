@@ -90,7 +90,7 @@ tee_stderr() {
 }
 
 git_bin=${GIT_BIN:-git}
-gradle_bin=${GRADLE_BIN:-"$source_root/android/gradlew"}
+gradle_bin=${GRADLE_BIN:-"$source_root/ui/android/gradlew"}
 
 validate_source_checkout() {
   local root=$1
@@ -175,9 +175,9 @@ if [[ -n "$gradle_archive" ]]; then
 fi
 [[ -x "$gradle_bin" ]] || { echo "Gradle entry point is not executable: $gradle_bin" >&2; exit 2; }
 
-cat "$source_root/android/gradle.properties" >&2
-version_name=$(sed -n 's/^versionName=//p' "$source_root/android/gradle.properties")
-version_code=$(sed -n 's/^versionCode=//p' "$source_root/android/gradle.properties")
+cat "$source_root/ui/android/gradle.properties" >&2
+version_name=$(sed -n 's/^versionName=//p' "$source_root/ui/android/gradle.properties")
+version_code=$(sed -n 's/^versionCode=//p' "$source_root/ui/android/gradle.properties")
 [[ "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$version_code" =~ ^[1-9][0-9]*$ ]] || {
   echo 'Android version properties are missing or invalid' >&2
   exit 2
@@ -326,20 +326,20 @@ run_unsigned_build() {
   export GOCACHE="$cache" GOTMPDIR="$tmp"
   mkdir -p "$cache" "$tmp"
   ( cd -- "$source_root"
-    "$gradle_bin" -p android :app:assembleRelease "${gradle_flags[@]}" \
+    "$gradle_bin" -p ui/android :app:assembleRelease "${gradle_flags[@]}" \
       -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
       -PdobbyGoBinary="$go_bin" \
       -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
   )
-  built="$source_root/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+  built="$source_root/ui/android/app/build/outputs/apk/release/app-release-unsigned.apk"
   [[ -f "$built" ]] || { echo "Gradle did not produce $built" >&2; exit 1; }
   cp -- "$built" "$destination"
 }
 
 run_test_companion_build() {
-  local destination=$1 built="$source_root/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
+  local destination=$1 built="$source_root/ui/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
   ( cd -- "$source_root"
-    "$gradle_bin" -p android :app:assembleReleaseAndroidTest "${gradle_flags[@]}" \
+    "$gradle_bin" -p ui/android :app:assembleReleaseAndroidTest "${gradle_flags[@]}" \
       -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
       -PdobbyGoBinary="$go_bin" \
       -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
@@ -362,7 +362,7 @@ if [[ "$local_build" == 1 ]]; then
 fi
 
 run_unsigned_build "$build_cache/first" "$build_tmp/first" "$first_output"
-( cd -- "$source_root"; "$gradle_bin" -p android clean --no-daemon --no-build-cache )
+( cd -- "$source_root"; "$gradle_bin" -p ui/android clean --no-daemon --no-build-cache )
 run_unsigned_build "$build_cache/second" "$build_tmp/second" "$output"
 if [[ -n "$test_companion_output" ]]; then
   run_test_companion_build "$test_companion_output"

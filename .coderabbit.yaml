@@ -1,3 +1,5 @@
+# CodeRabbit reads this file from the repository root, so it stays here rather
+# than under .github/.
 language: en
 
 reviews:
@@ -18,12 +20,12 @@ reviews:
         Review Go behavior, concurrency, resource cleanup, errors, and platform
         boundaries. Check relevant tests without inventing undocumented gates.
 
-    - path: "android/app/**/*.kt"
+    - path: "ui/android/app/**/*.kt"
       instructions: >
         Review Android permission, VpnService, JNI lifecycle boundaries, and
         relevant tests. Go owns session policy; keep the Kotlin shell thin.
 
-    - path: "apple/**/*.swift"
+    - path: "ui/apple/**/*.swift"
       instructions: >
         Review the Go/Swift bridge, lifecycle, and VPN extension behavior.
         Keep findings tied to observable bugs or documented requirements.

@@ -42,9 +42,9 @@ go.work.sum
 **/*.xcframework
 
 # Android / Gradle build state
-/android/.gradle/
-/android/**/build/
-# Generated state left by checkouts with the old directory layout.
+/ui/android/.gradle/
+/ui/android/**/build/
+# Legacy generated directories can remain in local checkouts.
 /android_module/
 /go_module/
 

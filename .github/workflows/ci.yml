@@ -310,7 +310,7 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/dobbyvpn-screenshot-python:${{ github.workspace }}/torturer
         run: |
           set -euo pipefail
-          python3 torturer/tests/ios_simulator/run_app_contract.py \
+          python3 torturer/tests/platform/ios_simulator/run_app_contract.py \
             --candidate-root "$GITHUB_WORKSPACE" \
             --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract"
 

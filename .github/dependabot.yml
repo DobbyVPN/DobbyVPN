@@ -7,7 +7,7 @@ updates:
     open-pull-requests-limit: 5
 
   - package-ecosystem: gradle
-    directory: /android
+    directory: /ui/android
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
