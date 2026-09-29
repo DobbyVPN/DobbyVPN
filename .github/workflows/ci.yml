@@ -358,6 +358,7 @@ jobs:
       contents: read
       actions: read
     uses: ./.github/workflows/render_start.yml
+    secrets: inherit
 
   focused_desktop_mini:
     name: Selected desktop hosted mini
@@ -388,6 +389,7 @@ jobs:
     if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini' || inputs.platform == 'android-mini') }}
     needs: [mini_render_start, focused_desktop_mini, android_mini]
     uses: ./.github/workflows/render_cleanup.yml
+    secrets: inherit
 
   focused_mini_result:
     name: Require selected mini and cleanup success

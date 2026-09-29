@@ -176,6 +176,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+    secrets: inherit
 
   qualify_linux:
     needs: [build_linux, render_start]
@@ -223,6 +224,7 @@ jobs:
     uses: ./.github/workflows/render_cleanup.yml
     permissions:
       contents: read
+    secrets: inherit
 
   qualification_result:
     name: Require hosted mini and Render cleanup
