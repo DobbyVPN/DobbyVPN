@@ -78,7 +78,8 @@ func TestConfigurePreservesMixedSourceOrder(t *testing.T) {
 	if got.Digest == "" {
 		t.Fatal("empty digest")
 	}
-	if _, err := configureForTest(t, m, id, []byte("[Outline]\nServer='x'")); CodeOf(err) != FailureMalformedConfig {
+	malformedSchema2 := []byte("schema_version = 2\n[[profiles]]\nprotocol = 'XRAY'\n[profiles.config]\n")
+	if _, err := configureForTest(t, m, id, malformedSchema2); CodeOf(err) != FailureMalformedConfig {
 		t.Fatalf("bad config error = %v", err)
 	}
 }

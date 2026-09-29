@@ -31,12 +31,14 @@ func TestReadSourceAcceptsHTTPSURLAndExistingFile(t *testing.T) {
 	}
 }
 
-func TestReadSourceRejectsMissingFileInsteadOfTreatingItAsInlineTOML(t *testing.T) {
+func TestReadSourceRejectsMissingFileAndInlineTOML(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing.toml")
-	for _, source := range []string{missingPath, "schema_version = 2\n[[profiles]]\nprotocol = \"XRAY\"\n"} {
-		if _, err := readSource(source); err == nil || !strings.Contains(err.Error(), "cannot read configuration file") {
-			t.Fatalf("readSource(%q) error = %v", source, err)
-		}
+	if _, err := readSource(missingPath); err == nil || !strings.Contains(err.Error(), "cannot read configuration file") {
+		t.Fatalf("readSource(%q) error = %v", missingPath, err)
+	}
+	inlineTOML := "schema_version = 2\n[[profiles]]\nprotocol = \"XRAY\"\n"
+	if _, err := readSource(inlineTOML); err == nil {
+		t.Fatalf("readSource(inline TOML) unexpectedly succeeded")
 	}
 }
 
