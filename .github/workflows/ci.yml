@@ -1,7 +1,5 @@
 name: CI
 
-run-name: CI / ${{ inputs.platform || 'ci' }}
-
 on:
   push:
     branches: [main]
