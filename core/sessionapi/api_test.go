@@ -826,7 +826,8 @@ func TestSnapshotPrimaryActionTracksStartStopAndCleanup(t *testing.T) {
 	if got := snapshotForTest(t, m, id).PrimaryAction; got != "START" {
 		t.Fatalf("idle action=%q", got)
 	}
-	if _, err := configureForTest(t, m, id, fixture(t)); err != nil {
+	_, err = configureForTest(t, m, id, fixture(t))
+	if err != nil {
 		t.Fatal(err)
 	}
 	start, err := startForTest(t, m, id, StartTarget{Mode: ProfileIndex, Index: 0})
@@ -901,11 +902,12 @@ func TestAutoSelectionRetainsFirstSuccessfulRuntimeAndPlatformLeases(t *testing.
 		t.Fatalf("active profile = %#v, want first ready index 2", connected.ActiveProfile)
 	}
 	waitForEvent(t, platform.events, start.Generation, StateConnected)
-	wantPrefix := []string{
+	wantPrefix := make([]string, 0, 10)
+	wantPrefix = append(wantPrefix,
 		"prepare-1", "start-0", "release-1",
 		"prepare-2", "start-1", "release-2",
 		"prepare-3", "start-2",
-	}
+	)
 	if got := order.itemsCopy(); !sameStrings(got, wantPrefix) {
 		t.Fatalf("candidate ordering=%v, want=%v", got, wantPrefix)
 	}

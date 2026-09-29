@@ -4,12 +4,13 @@ package controlplane
 
 import (
 	"fmt"
-	"golang.org/x/sys/unix"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func peerUID(conn net.Conn) (int, error) {
@@ -24,9 +25,9 @@ func peerUID(conn net.Conn) (int, error) {
 		return 0, err
 	}
 	err = raw.Control(func(fd uintptr) {
-		cred, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-		if err != nil {
-			controlErr = err
+		cred, credErr := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+		if credErr != nil {
+			controlErr = credErr
 			return
 		}
 		uid = int(cred.Uid)
@@ -54,7 +55,7 @@ func privilegedDefaultPeerUID() (int, error) {
 		if err != nil || uid < 1000 || uid >= 60000 {
 			continue
 		}
-		info, err := os.Stat(filepath.Join("/run/user", entry.Name()))
+		info, err := os.Stat(filepath.Join(string(filepath.Separator), "run", "user", entry.Name()))
 		if err != nil || !info.IsDir() {
 			continue
 		}

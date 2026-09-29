@@ -192,7 +192,26 @@ func run() throws -> [String: Any] {
     try require(AXIsProcessTrusted(), "Accessibility permission unavailable")
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 1)
-    guard let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement], let window = windows.first else {
+    var windowsValue: CFTypeRef?
+    let windowsError = AXUIElementCopyAttributeValue(
+        root,
+        kAXWindowsAttribute as CFString,
+        &windowsValue
+    )
+    if operation == "tree" && windowsError == .cannotComplete {
+        FileHandle.standardError.write(Data(
+            "AX read \(kAXWindowsAttribute) failed during startup; retrying tree discovery: \(windowsError.rawValue)\n".utf8
+        ))
+        return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity]
+    }
+    if windowsError == .noValue || windowsError == .attributeUnsupported {
+        return ["ready": false, "pid": Int(pid), "identity": identity]
+    }
+    try require(
+        windowsError == .success,
+        "AX read \(kAXWindowsAttribute) failed: \(windowsError.rawValue)"
+    )
+    guard let windows = windowsValue as? [AXUIElement], let window = windows.first else {
         return ["ready": false, "pid": Int(pid), "identity": identity]
     }
     let nodes = try elements(window)

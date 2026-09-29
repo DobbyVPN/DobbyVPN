@@ -3,8 +3,8 @@
 package main
 
 import (
-	"flag"
 	executor "core/clientserver/executor"
+	"flag"
 )
 
 func main() {

@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	exitOK       = 0
-	exitArgs     = 2
-	exitConnect  = 3
-	exitRuntime  = 4
-	exitConflict = 8
+	exitOK                   = 0
+	exitArgs                 = 2
+	exitConnect              = 3
+	exitRuntime              = 4
+	exitConflict             = 8
+	sessionIDRequiredMessage = "--session-id requires one value"
 )
 
 type controlFailure struct {
@@ -196,55 +197,81 @@ func configureJSON(ctx context.Context, client controljson.Client, source string
 	}{current.SessionID, configured.Digest, configured.Sequence, configured.Profiles, configured.SourceKind})
 }
 
-func startJSON(ctx context.Context, client controljson.Client, args []string) int {
-	mode := string(sessionapi.AutoSelect)
+type startOptions struct {
+	mode      string
+	index     int32
+	sessionID string
+	digest    string
+}
+
+func parseStartOptions(args []string) (options startOptions, errorMessage string) {
+	options = startOptions{mode: string(sessionapi.AutoSelect)}
 	selectionSet := false
-	var index int32
-	var sessionID, digest string
 	for len(args) > 0 {
-		switch args[0] {
+		option := args[0]
+		args = args[1:]
+		switch option {
 		case "--auto":
 			if selectionSet {
-				return usage("choose either --auto or --profile")
+				return options, "choose either --auto or --profile"
 			}
 			selectionSet = true
 		case "--profile":
-			if len(args) < 2 || selectionSet {
-				return usage("--profile requires one index")
+			if selectionSet {
+				return options, "--profile requires one index"
 			}
-			var err error
-			index, err = parseProfileIndex(args[1])
+			value, remaining, ok := takeOptionValue(args)
+			if !ok {
+				return options, "--profile requires one index"
+			}
+			args = remaining
+			index, err := parseProfileIndex(value)
 			if err != nil {
-				return usage(err.Error())
+				return options, err.Error()
 			}
-			mode = string(sessionapi.ProfileIndex)
+			options.index = index
+			options.mode = string(sessionapi.ProfileIndex)
 			selectionSet = true
-			args = args[1:]
 		case "--session-id":
-			if len(args) < 2 || sessionID != "" {
-				return usage("--session-id requires one value")
+			if options.sessionID != "" {
+				return options, sessionIDRequiredMessage
 			}
-			sessionID = args[1]
-			args = args[1:]
+			value, remaining, ok := takeOptionValue(args)
+			if !ok {
+				return options, sessionIDRequiredMessage
+			}
+			options.sessionID = value
+			args = remaining
 		case "--config-digest":
-			if len(args) < 2 || digest != "" {
-				return usage("--config-digest requires one value")
+			if options.digest != "" {
+				return options, "--config-digest requires one value"
 			}
-			digest = args[1]
-			args = args[1:]
+			value, remaining, ok := takeOptionValue(args)
+			if !ok {
+				return options, "--config-digest requires one value"
+			}
+			options.digest = value
+			args = remaining
 		default:
-			return usage("unknown start option")
+			return options, "unknown start option"
 		}
-		args = args[1:]
 	}
-	if !selectionSet || (sessionID == "") != (digest == "") {
-		return usage("start requires --auto or --profile and paired --session-id/--config-digest guards")
+	if !selectionSet || (options.sessionID == "") != (options.digest == "") {
+		return options, "start requires --auto or --profile and paired --session-id/--config-digest guards"
+	}
+	return options, ""
+}
+
+func startJSON(ctx context.Context, client controljson.Client, args []string) int {
+	options, parseError := parseStartOptions(args)
+	if parseError != "" {
+		return usage(parseError)
 	}
 	current, err := callSnapshot(ctx, client, "")
 	if err != nil {
 		return writeJSONFailure(err)
 	}
-	if sessionID != "" && (current.SessionID != sessionID || current.Digest != digest) {
+	if options.sessionID != "" && (current.SessionID != options.sessionID || current.Digest != options.digest) {
 		return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureConflict), Message: "accepted configuration changed; configure and select again"})
 	}
 	if !current.Configured {
@@ -256,20 +283,24 @@ func startJSON(ctx context.Context, client controljson.Client, args []string) in
 		ExpectedSequence uint64 `json:"expected_sequence"`
 		Mode             string `json:"mode"`
 		Index            int32  `json:"index"`
-	}{current.SessionID, current.Sequence, mode, index}, &started)
+	}{current.SessionID, current.Sequence, options.mode, options.index}, &started)
 	if err != nil {
 		return writeJSONFailure(err)
 	}
+	return waitForConnection(ctx, client, current.SessionID, started)
+}
+
+func waitForConnection(ctx context.Context, client controljson.Client, sessionID string, started controlResult) int {
 	connected := false
 	defer func() {
 		if !connected {
-			if cleanupErr := cleanupSession(client, current.SessionID, started.Generation); cleanupErr != nil {
+			if cleanupErr := cleanupSession(client, sessionID, started.Generation); cleanupErr != nil {
 				reportCLIError("failed connection session cleanup failed", cleanupErr)
 			}
 		}
 	}()
 	for {
-		snapshot, snapshotErr := callSnapshot(ctx, client, current.SessionID)
+		snapshot, snapshotErr := callSnapshot(ctx, client, sessionID)
 		if snapshotErr != nil {
 			return writeJSONFailure(snapshotErr)
 		}
@@ -288,40 +319,68 @@ func startJSON(ctx context.Context, client controljson.Client, args []string) in
 	}
 }
 
-func stopJSON(ctx context.Context, client controljson.Client, args []string) int {
-	var sessionID string
-	var generation uint64
-	for len(args) > 0 {
-		switch args[0] {
-		case "--session-id":
-			if len(args) < 2 || sessionID != "" {
-				return usage("--session-id requires one value")
-			}
-			sessionID = args[1]
-			args = args[1:]
-		case "--generation":
-			if len(args) < 2 || generation != 0 {
-				return usage("--generation requires one value")
-			}
-			var err error
-			generation, err = strconv.ParseUint(args[1], 10, 64)
-			if err != nil || generation == 0 {
-				return usage("--generation must be a positive integer")
-			}
-			args = args[1:]
-		default:
-			return usage("unknown stop option")
-		}
-		args = args[1:]
+func takeOptionValue(args []string) (value string, remaining []string, found bool) {
+	if len(args) == 0 {
+		return "", args, false
 	}
-	if (sessionID == "") != (generation == 0) {
-		return usage("stop requires paired --session-id/--generation guards")
+	return args[0], args[1:], true
+}
+
+type stopOptions struct {
+	sessionID  string
+	generation uint64
+}
+
+func parseStopOptions(args []string) (options stopOptions, errorMessage string) {
+	options = stopOptions{}
+	for len(args) > 0 {
+		option := args[0]
+		args = args[1:]
+		switch option {
+		case "--session-id":
+			if options.sessionID != "" {
+				return options, sessionIDRequiredMessage
+			}
+			value, remaining, ok := takeOptionValue(args)
+			if !ok {
+				return options, sessionIDRequiredMessage
+			}
+			options.sessionID = value
+			args = remaining
+		case "--generation":
+			if options.generation != 0 {
+				return options, "--generation requires one value"
+			}
+			value, remaining, ok := takeOptionValue(args)
+			if !ok {
+				return options, "--generation requires one value"
+			}
+			generation, err := strconv.ParseUint(value, 10, 64)
+			if err != nil || generation == 0 {
+				return options, "--generation must be a positive integer"
+			}
+			options.generation = generation
+			args = remaining
+		default:
+			return options, "unknown stop option"
+		}
+	}
+	if (options.sessionID == "") != (options.generation == 0) {
+		return options, "stop requires paired --session-id/--generation guards"
+	}
+	return options, ""
+}
+
+func stopJSON(ctx context.Context, client controljson.Client, args []string) int {
+	options, parseError := parseStopOptions(args)
+	if parseError != "" {
+		return usage(parseError)
 	}
 	snapshot, err := callSnapshot(ctx, client, "")
 	if err != nil {
 		return writeJSONFailure(err)
 	}
-	if sessionID != "" && (snapshot.SessionID != sessionID || snapshot.Generation != generation) {
+	if options.sessionID != "" && (snapshot.SessionID != options.sessionID || snapshot.Generation != options.generation) {
 		return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureConflict), Message: "session generation changed; refresh its snapshot before stopping"})
 	}
 	if snapshot.Generation == 0 || snapshot.CleanupComplete {
@@ -337,8 +396,12 @@ func stopJSON(ctx context.Context, client controljson.Client, args []string) int
 	}{snapshot.SessionID, snapshot.Generation}, &stopped); err != nil {
 		return writeJSONFailure(err)
 	}
+	return waitForDisconnect(ctx, client, snapshot.SessionID)
+}
+
+func waitForDisconnect(ctx context.Context, client controljson.Client, sessionID string) int {
 	for {
-		current, err := callSnapshot(ctx, client, snapshot.SessionID)
+		current, err := callSnapshot(ctx, client, sessionID)
 		if err != nil {
 			return writeJSONFailure(err)
 		}

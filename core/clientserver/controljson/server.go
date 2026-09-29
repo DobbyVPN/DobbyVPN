@@ -43,8 +43,8 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 		return writeFailureWithCause(conn, "INVALID_ARGUMENT", "command request could not be read: "+err.Error(), err)
 	}
 	var request Request
-	if err := json.Unmarshal(requestBytes, &request); err != nil {
-		return writeFailureWithCause(conn, "INVALID_ARGUMENT", "command request is invalid: "+err.Error(), err)
+	if decodeErr := json.Unmarshal(requestBytes, &request); decodeErr != nil {
+		return writeFailureWithCause(conn, "INVALID_ARGUMENT", "command request is invalid: "+decodeErr.Error(), decodeErr)
 	}
 	if request.Method == "" || len(request.Params) == 0 || string(request.Params) == "null" {
 		return writeFailure(conn, "INVALID_ARGUMENT", "command method and parameters are required")
@@ -53,8 +53,8 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 	defer cancel()
 	response := json.RawMessage(h.Binding.CallJSON(ctx, request.Method, request.Params))
 	var checked json.RawMessage
-	if err := json.Unmarshal(response, &checked); err != nil {
-		return writeFailureWithCause(conn, "INTERNAL", "desktop control returned an invalid response: "+err.Error(), err)
+	if decodeErr := json.Unmarshal(response, &checked); decodeErr != nil {
+		return writeFailureWithCause(conn, "INTERNAL", "desktop control returned an invalid response: "+decodeErr.Error(), decodeErr)
 	}
 	_, err = conn.Write(append(response, '\n'))
 	return err

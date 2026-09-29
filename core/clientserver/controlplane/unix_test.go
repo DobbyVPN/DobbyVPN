@@ -3,6 +3,7 @@
 package controlplane
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -38,14 +39,14 @@ func TestControlSocketIsOwnerOnlyAndPeerVerifiable(t *testing.T) {
 	}
 	accepted := make(chan error, 1)
 	go func() {
-		conn, err := lis.Accept()
-		if err == nil {
-			_, err = peerUID(conn)
+		conn, acceptErr := lis.Accept()
+		if acceptErr == nil {
+			_, acceptErr = peerUID(conn)
 			_ = conn.Close()
 		}
-		accepted <- err
+		accepted <- acceptErr
 	}()
-	client, err := net.Dial("unix", path)
+	client, err := (&net.Dialer{}).DialContext(context.Background(), "unix", path)
 	if err != nil {
 		t.Fatal(err)
 	}

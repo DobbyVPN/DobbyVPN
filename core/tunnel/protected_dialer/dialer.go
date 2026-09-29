@@ -96,12 +96,11 @@ func cachedDialAddress(cache *dnscache.Cache, address string) (string, error) {
 	if cache == nil {
 		return "", fmt.Errorf("DNS cache is required for protected dialing")
 	}
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return address, nil
-	}
-	if ip, ok := cache.LookupIPv4(host, "protected-dialer"); ok {
-		return net.JoinHostPort(ip.String(), port), nil
+	host, port, splitErr := net.SplitHostPort(address)
+	if splitErr == nil {
+		if ip, ok := cache.LookupIPv4(host, "protected-dialer"); ok {
+			return net.JoinHostPort(ip.String(), port), nil
+		}
 	}
 	return address, nil
 }
@@ -122,10 +121,10 @@ func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network,
 	if isLoopback(dialAddress) {
 		log.Debugf(Category, "[Protect] TCP BYPASS loopback")
 		var d net.Dialer
-		conn, err := d.DialContext(ctx, realNet, dialAddress)
-		if err != nil {
-			log.Debugf(Category, "[Protect] TCP BYPASS loopback failed network=%s dest=%s dialDest=%s elapsed=%s err=%v", realNet, address, dialAddress, time.Since(start), err)
-			return nil, err
+		conn, dialErr := d.DialContext(ctx, realNet, dialAddress)
+		if dialErr != nil {
+			log.Debugf(Category, "[Protect] TCP BYPASS loopback failed network=%s dest=%s dialDest=%s elapsed=%s err=%v", realNet, address, dialAddress, time.Since(start), dialErr)
+			return nil, dialErr
 		}
 		log.Debugf(Category, "[Protect] TCP BYPASS loopback OK network=%s dest=%s dialDest=%s elapsed=%s local=%s remote=%s", realNet, address, dialAddress, time.Since(start), conn.LocalAddr(), conn.RemoteAddr())
 		return conn, nil
@@ -133,11 +132,11 @@ func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network,
 
 	d := &net.Dialer{
 		Control: func(network, address string, c syscall.RawConn) error {
-			err := protectRawConn(realNet, address, c)
-			if err != nil {
-				log.Debugf(Category, "[Protect] TCP protection failed network=%s dest=%s err=%v", realNet, address, err)
+			protectErr := protectRawConn(realNet, address, c)
+			if protectErr != nil {
+				log.Debugf(Category, "[Protect] TCP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
 			}
-			return err
+			return protectErr
 		},
 	}
 
@@ -203,19 +202,19 @@ func DialUDPWithProtect(ctx context.Context, cache *dnscache.Cache, network, add
 
 		lc := net.ListenConfig{}
 
-		pc, err := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
-		if err != nil {
-			log.Debugf(Category, "[Protect] UDP BYPASS loopback listen error network=%s destination=%s dialDest=%s elapsed=%s err=%v", realNet, address, dialAddress, time.Since(start), err)
-			return nil, err
+		pc, listenErr := lc.ListenPacket(ctx, realNet, listenAddr(realNet))
+		if listenErr != nil {
+			log.Debugf(Category, "[Protect] UDP BYPASS loopback listen error network=%s destination=%s dialDest=%s elapsed=%s err=%v", realNet, address, dialAddress, time.Since(start), listenErr)
+			return nil, listenErr
 		}
 
-		udpAddr, err := net.ResolveUDPAddr(realNet, dialAddress)
-		if err != nil {
+		udpAddr, resolveErr := net.ResolveUDPAddr(realNet, dialAddress)
+		if resolveErr != nil {
 			if closeErr := pc.Close(); closeErr != nil {
 				log.Debugf(Category, "[Protect] UDP BYPASS loopback close after resolve error failed network=%s destination=%s closeErr=%v", realNet, address, closeErr)
 			}
-			log.Debugf(Category, "[Protect] UDP BYPASS loopback resolve error network=%s destination=%s dialDest=%s elapsed=%s err=%v", realNet, address, dialAddress, time.Since(start), err)
-			return nil, err
+			log.Debugf(Category, "[Protect] UDP BYPASS loopback resolve error network=%s destination=%s dialDest=%s elapsed=%s err=%v", realNet, address, dialAddress, time.Since(start), resolveErr)
+			return nil, resolveErr
 		}
 
 		log.Debugf(Category, "[Protect] UDP BYPASS loopback OK network=%s destination=%s dialDest=%s elapsed=%s local=%s remote=%s", realNet, address, dialAddress, time.Since(start), pc.LocalAddr(), udpAddr)
@@ -227,11 +226,11 @@ func DialUDPWithProtect(ctx context.Context, cache *dnscache.Cache, network, add
 
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
-			err := protectRawConn(realNet, address, c)
-			if err != nil {
-				log.Debugf(Category, "[Protect] UDP protection failed network=%s dest=%s err=%v", realNet, address, err)
+			protectErr := protectRawConn(realNet, address, c)
+			if protectErr != nil {
+				log.Debugf(Category, "[Protect] UDP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
 			}
-			return err
+			return protectErr
 		},
 	}
 

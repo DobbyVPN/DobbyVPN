@@ -4,6 +4,7 @@ package routing
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"testing"
@@ -58,116 +59,142 @@ func installLinuxNetlinkFake(t *testing.T) *linuxNetlinkFake {
 		linuxLinkByIndex = originalLinkByIndex
 	})
 
-	linuxRouteList = func(family int) ([]netlink.Route, error) {
-		fake.listedFamilies = append(fake.listedFamilies, family)
-		if family == netlink.FAMILY_V6 && fake.ipv6RouteListError != nil {
-			return nil, fake.ipv6RouteListError
-		}
-		if fake.routeListError != nil {
-			return nil, fake.routeListError
-		}
-		var routes []netlink.Route
-		for _, route := range fake.routes {
-			if route.Family == family {
-				routes = append(routes, cloneLinuxTestRoute(route))
-			}
-		}
-		return routes, nil
-	}
-	linuxRouteAdd = func(route *netlink.Route) error {
-		copy := cloneLinuxTestRoute(*route)
-		fake.routeAdds = append(fake.routeAdds, copy)
-		if fake.routeAddError != nil {
-			if err := fake.routeAddError(copy); err != nil {
-				return err
-			}
-		}
-		fake.routes = append(fake.routes, copy)
-		return nil
-	}
-	linuxRouteReplace = func(route *netlink.Route) error {
-		copy := cloneLinuxTestRoute(*route)
-		fake.routeReplaces = append(fake.routeReplaces, copy)
-		if fake.routeReplaceError != nil {
-			if err := fake.routeReplaceError(copy); err != nil {
-				return err
-			}
-		}
-		fake.routes = append(fake.routes, copy)
-		return nil
-	}
-	linuxRouteDel = func(route *netlink.Route) error {
-		copy := cloneLinuxTestRoute(*route)
-		fake.routeDeletes = append(fake.routeDeletes, copy)
-		if fake.routeDeleteError != nil {
-			if err := fake.routeDeleteError(copy); err != nil {
-				return err
-			}
-		}
-		for index, existing := range fake.routes {
-			if reflect.DeepEqual(existing, copy) {
-				fake.routes = append(fake.routes[:index], fake.routes[index+1:]...)
-				break
-			}
-		}
-		return nil
-	}
-	linuxRuleList = func(family int) ([]netlink.Rule, error) {
-		if fake.ruleListError != nil {
-			return nil, fake.ruleListError
-		}
-		var rules []netlink.Rule
-		for _, rule := range fake.rules {
-			if rule.Family == family {
-				rules = append(rules, rule)
-			}
-		}
-		return rules, nil
-	}
-	linuxRuleAdd = func(rule *netlink.Rule) error {
-		copy := *rule
-		fake.ruleAdds = append(fake.ruleAdds, copy)
-		if fake.ruleAddError != nil {
-			if err := fake.ruleAddError(copy); err != nil {
-				return err
-			}
-		}
-		fake.rules = append(fake.rules, copy)
-		return nil
-	}
-	linuxRuleDel = func(rule *netlink.Rule) error {
-		copy := *rule
-		fake.ruleDeletes = append(fake.ruleDeletes, copy)
-		if fake.ruleDeleteError != nil {
-			if err := fake.ruleDeleteError(copy); err != nil {
-				return err
-			}
-		}
-		for index, existing := range fake.rules {
-			if reflect.DeepEqual(existing, copy) {
-				fake.rules = append(fake.rules[:index], fake.rules[index+1:]...)
-				break
-			}
-		}
-		return nil
-	}
-	linuxLinkByName = func(name string) (netlink.Link, error) {
-		for _, link := range fake.links {
-			if link.Attrs().Name == name {
-				return link, nil
-			}
-		}
-		return nil, errors.New("link not found")
-	}
-	linuxLinkByIndex = func(index int) (netlink.Link, error) {
-		for _, link := range fake.links {
-			if link.Attrs().Index == index {
-				return link, nil
-			}
-		}
-		return nil, errors.New("link not found")
-	}
+	linuxRouteList = fake.listRoutes
+	linuxRouteAdd = fake.addRoute
+	linuxRouteReplace = fake.replaceRoute
+	linuxRouteDel = fake.deleteRoute
+	linuxRuleList = fake.listRules
+	linuxRuleAdd = fake.addRule
+	linuxRuleDel = fake.deleteRule
+	linuxLinkByName = fake.linkByName
+	linuxLinkByIndex = fake.linkByIndex
 	return fake
+}
+
+func (fake *linuxNetlinkFake) listRoutes(family int) ([]netlink.Route, error) {
+	fake.listedFamilies = append(fake.listedFamilies, family)
+	if family == netlink.FAMILY_V6 && fake.ipv6RouteListError != nil {
+		return nil, fake.ipv6RouteListError
+	}
+	if fake.routeListError != nil {
+		return nil, fake.routeListError
+	}
+	var routes []netlink.Route
+	for _, route := range fake.routes {
+		if route.Family == family {
+			routes = append(routes, cloneLinuxTestRoute(route))
+		}
+	}
+	return routes, nil
+}
+
+func (fake *linuxNetlinkFake) addRoute(route *netlink.Route) error {
+	return fake.addOrReplaceRoute(route, &fake.routeAdds, fake.routeAddError)
+}
+
+func (fake *linuxNetlinkFake) replaceRoute(route *netlink.Route) error {
+	return fake.addOrReplaceRoute(route, &fake.routeReplaces, fake.routeReplaceError)
+}
+
+func (fake *linuxNetlinkFake) addOrReplaceRoute(route *netlink.Route, recorded *[]netlink.Route, fail func(netlink.Route) error) error {
+	copy := cloneLinuxTestRoute(*route)
+	*recorded = append(*recorded, copy)
+	if fail != nil {
+		if routeErr := fail(copy); routeErr != nil {
+			return routeErr
+		}
+	}
+	fake.routes = append(fake.routes, copy)
+	return nil
+}
+
+func (fake *linuxNetlinkFake) deleteRoute(route *netlink.Route) error {
+	copy := cloneLinuxTestRoute(*route)
+	fake.routeDeletes = append(fake.routeDeletes, copy)
+	if fake.routeDeleteError != nil {
+		if routeErr := fake.routeDeleteError(copy); routeErr != nil {
+			return routeErr
+		}
+	}
+	fake.routes = removeLinuxRoute(fake.routes, copy)
+	return nil
+}
+
+func removeLinuxRoute(routes []netlink.Route, target netlink.Route) []netlink.Route {
+	for index, route := range routes {
+		if reflect.DeepEqual(route, target) {
+			return append(routes[:index], routes[index+1:]...)
+		}
+	}
+	return routes
+}
+
+func (fake *linuxNetlinkFake) listRules(family int) ([]netlink.Rule, error) {
+	if fake.ruleListError != nil {
+		return nil, fake.ruleListError
+	}
+	var rules []netlink.Rule
+	for _, rule := range fake.rules {
+		if rule.Family == family {
+			rules = append(rules, rule)
+		}
+	}
+	return rules, nil
+}
+
+func (fake *linuxNetlinkFake) addRule(rule *netlink.Rule) error {
+	return fake.addOrReplaceRule(rule, &fake.ruleAdds, fake.ruleAddError)
+}
+
+func (fake *linuxNetlinkFake) addOrReplaceRule(rule *netlink.Rule, recorded *[]netlink.Rule, fail func(netlink.Rule) error) error {
+	copy := *rule
+	*recorded = append(*recorded, copy)
+	if fail != nil {
+		if ruleErr := fail(copy); ruleErr != nil {
+			return ruleErr
+		}
+	}
+	fake.rules = append(fake.rules, copy)
+	return nil
+}
+
+func (fake *linuxNetlinkFake) deleteRule(rule *netlink.Rule) error {
+	copy := *rule
+	fake.ruleDeletes = append(fake.ruleDeletes, copy)
+	if fake.ruleDeleteError != nil {
+		if ruleErr := fake.ruleDeleteError(copy); ruleErr != nil {
+			return ruleErr
+		}
+	}
+	fake.rules = removeLinuxRule(fake.rules, copy)
+	return nil
+}
+
+func removeLinuxRule(rules []netlink.Rule, target netlink.Rule) []netlink.Rule {
+	for index, rule := range rules {
+		if reflect.DeepEqual(rule, target) {
+			return append(rules[:index], rules[index+1:]...)
+		}
+	}
+	return rules
+}
+
+func (fake *linuxNetlinkFake) linkByName(name string) (netlink.Link, error) {
+	for _, link := range fake.links {
+		if link.Attrs().Name == name {
+			return link, nil
+		}
+	}
+	return nil, errors.New("link not found")
+}
+
+func (fake *linuxNetlinkFake) linkByIndex(index int) (netlink.Link, error) {
+	for _, link := range fake.links {
+		if link.Attrs().Index == index {
+			return link, nil
+		}
+	}
+	return nil, errors.New("link not found")
 }
 
 func linuxTestLink(name string, index int) netlink.Link {
@@ -259,6 +286,21 @@ func TestReconcileLinuxSessionRoutesAcceptsOnlyTheExistingExactRule(t *testing.T
 	fake.rules = []netlink.Rule{*linuxSessionRule(233, 23334)}
 	if err := ReconcileLinuxSessionRoutesWithRule("127.0.0.1", "192.0.2.1", "eth0", 233, 23333); err == nil {
 		t.Fatal("different rule at the requested priority was accepted")
+	}
+}
+
+func TestLinuxAddSessionRuleRejectsUnrepresentableTableWithoutMutation(t *testing.T) {
+	fake := installLinuxNetlinkFake(t)
+	tooLargeTable := uint64(^uint32(0)) + 1
+	if tooLargeTable > uint64(^uint(0)>>1) {
+		t.Skip("requires a 64-bit int")
+	}
+	tableID := int(tooLargeTable)
+	if err := linuxAddSessionRule(tableID, 23333); err == nil || err.Error() != fmt.Sprintf("invalid Linux routing table %d", tableID) {
+		t.Fatalf("linuxAddSessionRule error = %v, want invalid routing table", err)
+	}
+	if len(fake.listedFamilies) != 0 || len(fake.ruleAdds) != 0 || len(fake.ruleDeletes) != 0 || len(fake.routes) != 0 {
+		t.Fatalf("invalid table touched netlink state: %#v", fake)
 	}
 }
 

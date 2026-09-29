@@ -38,7 +38,7 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 	if isLoopbackIP(proxyIP) {
 		return nil, nil
 	}
-	route, err := linuxGatewayRoute(proxyIP, gatewayIP, iface, unix.RT_TABLE_MAIN, linuxOwnedRouteProtocol, linuxOwnedProxyMetric)
+	route, err := linuxGatewayRoute(proxyIP, gatewayIP, iface, unix.RT_TABLE_MAIN, linuxOwnedProxyMetric)
 	if err != nil {
 		return nil, err
 	}
@@ -82,18 +82,18 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 	if existingRule {
 		return fmt.Errorf("fwmark rule table=%d priority=%d already exists", tableID, priority)
 	}
-	mainRoute, err := linuxGatewayRoute("", gatewayIP, iface, tableID, linuxOwnedRouteProtocol, 0)
+	mainRoute, err := linuxGatewayRoute("", gatewayIP, iface, tableID, 0)
 	if err != nil {
 		return err
 	}
 	routeLease, err := p.Acquire(fmt.Sprintf("mark-route table=%d", tableID), func() error {
 		return linuxRouteOperation("add", &mainRoute, linuxRouteAdd)
 	}, func() error {
-		err := linuxRouteOperation("delete", &mainRoute, linuxRouteDel)
-		if linuxRouteAlreadyGone(err) {
+		cleanupErr := linuxRouteOperation("delete", &mainRoute, linuxRouteDel)
+		if linuxRouteAlreadyGone(cleanupErr) {
 			return nil
 		}
-		return err
+		return cleanupErr
 	})
 	if err != nil {
 		return err
@@ -104,7 +104,7 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 	// the VPN. Metric 1 loses to the physical route's metric 0 and survives link loss.
 	terminalRoute := netlink.Route{
 		Dst:      linuxDefaultIPNet(netlink.FAMILY_V4),
-		Protocol: netlink.RouteProtocol(linuxOwnedRouteProtocol),
+		Protocol: linuxOwnedRouteProtocol,
 		Priority: 1,
 		Family:   netlink.FAMILY_V4,
 		Table:    tableID,
@@ -160,7 +160,7 @@ func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 		tunRoute = netlink.Route{
 			Dst:       linuxDefaultIPNet(netlink.FAMILY_V4),
 			LinkIndex: tunLinkIndex,
-			Protocol:  netlink.RouteProtocol(linuxOwnedRouteProtocol),
+			Protocol:  linuxOwnedRouteProtocol,
 			Family:    netlink.FAMILY_V4,
 			Table:     unix.RT_TABLE_MAIN,
 			Type:      unix.RTN_UNICAST,
@@ -227,7 +227,7 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 		}
 		route := netlink.Route{
 			Dst:      network,
-			Protocol: netlink.RouteProtocol(linuxOwnedRouteProtocol),
+			Protocol: linuxOwnedRouteProtocol,
 			Priority: 1,
 			Family:   netlink.FAMILY_V6,
 			Table:    unix.RT_TABLE_MAIN,
@@ -235,11 +235,11 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 		}
 		created := false
 		_, err = p.Acquire("ipv6-block "+subnet, func() error {
-			if err := linuxRouteOperation("add", &route, linuxRouteAdd); err != nil {
-				if linuxAlreadyExists(err) {
+			if routeErr := linuxRouteOperation("add", &route, linuxRouteAdd); routeErr != nil {
+				if linuxAlreadyExists(routeErr) {
 					return nil
 				}
-				return err
+				return routeErr
 			}
 			created = true
 			return nil
@@ -247,11 +247,11 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 			if !created {
 				return nil
 			}
-			err := linuxRouteOperation("delete", &route, linuxRouteDel)
-			if linuxRouteAlreadyGone(err) {
+			routeErr := linuxRouteOperation("delete", &route, linuxRouteDel)
+			if linuxRouteAlreadyGone(routeErr) {
 				return nil
 			}
-			return err
+			return routeErr
 		})
 		if err != nil {
 			return err

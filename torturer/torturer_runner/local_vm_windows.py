@@ -41,6 +41,9 @@ _NATIVE_UI_ENVIRONMENT = frozenset({
     # deliberately bounded environment below, so carry the system PATH
     # explicitly rather than relying on .NET's inherited value.
     "PATH",
+    # Pillow is installed once into the disposable candidate by the SYSTEM
+    # preparer. Preserve that target for the interactive user's Python too.
+    "PYTHONPATH",
 })
 _NATIVE_UI_USER_ENVIRONMENT = (
     # Go's desktop source store uses USERPROFILE.  The other values are the
@@ -542,6 +545,7 @@ def _native_ui_access_script(
     wrapper: Path,
     profile: Path,
     command: list[str],
+    python_path: str | None = None,
 ) -> str:
     """Grant the interactive account bounded access to the disposable UI tree.
 
@@ -549,11 +553,11 @@ def _native_ui_access_script(
     ACL.  Task Scheduler can therefore register an Interactive task but its
     user token cannot traverse the wrapper's directory, which surfaces as the
     opaque ``ERROR_DIRECTORY`` last-task result.  Grant access only to this
-    run's source/profile/log paths and the concrete command paths; the source
-    is read/execute, logs are modify, service PID/identity sidecars are
-    modify, and the run root receives direct write access for the PID/exit
-    markers.  The run tree is disposable and is removed by the normal SYSTEM
-    cleanup boundary.
+    run's source/profile/log paths, prepared Python dependency target, and
+    concrete command paths. Source and Python dependencies are read/execute,
+    logs are modify, service PID/identity sidecars are modify, and the run
+    root receives direct write access for the PID/exit markers. The run tree
+    is disposable and is removed by the normal SYSTEM cleanup boundary.
     """
 
     if not user:
@@ -571,6 +575,20 @@ def _native_ui_access_script(
             read_paths.append(command[index + 1])
         elif value in write_path_flags:
             write_paths.append(command[index + 1])
+    python_dependency_path: Path | None = None
+    if python_path is not None:
+        candidate = Path(python_path)
+        try:
+            python_dependency_path = candidate.resolve(strict=True)
+            python_dependency_path.relative_to(run_dir.resolve())
+        except (OSError, ValueError) as error:
+            raise _error("Windows native UI Python dependency path is outside the run") from error
+        if (
+            candidate.is_symlink()
+            or not candidate.is_dir()
+            or python_dependency_path == run_dir.resolve()
+        ):
+            raise _error("Windows native UI Python dependency directory is unavailable")
     # These are mandatory paths whose existence is already established by the
     # local-VM run.  Command-derived paths are optional here so a later native
     # process check reports a missing candidate with its normal diagnostics.
@@ -607,6 +625,11 @@ def _native_ui_access_script(
         lines.append(
             f"if (Test-Path -LiteralPath {_powershell_literal(path)}) {{ "
             f"Grant-Access {_powershell_literal(path)} {_powershell_literal('RX')} $false }}"
+        )
+    if python_dependency_path is not None:
+        lines.append(
+            f"Grant-Access {_powershell_literal(str(python_dependency_path))} "
+            f"{_powershell_literal('(OI)(CI)RX')} $true"
         )
     # The user-session process-loss controller rewrites these sidecars and
     # atomically replaces the identity marker after each service restart.
@@ -914,6 +937,7 @@ def run_interactive_task(
                 wrapper=wrapper,
                 profile=run_dir / "profile",
                 command=command,
+                python_path=filtered_environment.get("PYTHONPATH"),
             ),
             cwd=run_dir,
             logs=logs,

@@ -1,9 +1,9 @@
 package runtime
 
 import (
+	"core/log"
 	"errors"
 	"fmt"
-	"core/log"
 	"sync"
 )
 

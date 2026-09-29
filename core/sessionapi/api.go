@@ -750,61 +750,62 @@ func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint
 	}
 	var candidateErrors []error
 	for _, profile := range candidates {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return profileSelection{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(candidateErrors...)))
-		}
-		ref := SessionRef{s.id, generation}
-		// Startup readiness owns the leases which become the winning session.
-		// Failed candidates are fully rolled back before the next profile.
-		platformLease, prepareErr := m.platform.PrepareTunnel(ctx, ref)
-		if prepareErr == nil && platformLease == nil {
-			prepareErr = failure(FailurePlatform, "platform returned an empty tunnel lease")
-		}
-		if prepareErr != nil {
-			prepareErr = errors.Join(errors.Join(candidateErrors...), prepareErr)
-			if platformLease != nil {
-				if releaseErr := platformLease.Release(context.Background()); releaseErr != nil {
-					return profileSelection{}, wrapFailure(FailureCleanup, errors.Join(prepareErr, releaseErr))
-				}
-			}
-			return profileSelection{}, wrapFailure(FailurePlatform, prepareErr)
-		}
-		runtimeLease, startErr := m.runtime.Start(ctx, ref, profile)
-		invalidRuntimeLease := startErr == nil && runtimeLease == nil
-		if invalidRuntimeLease {
-			startErr = failure(FailureRuntime, "runtime returned an empty lease")
-		}
-		if startErr != nil {
-			cleanupErr := releaseProfileSelection(profileSelection{
-				platformLease: platformLease,
-				runtimeLease:  runtimeLease,
-			})
-			if cleanupErr != nil {
-				return profileSelection{}, wrapFailure(FailureCleanup, errors.Join(errors.Join(candidateErrors...), startErr, cleanupErr))
-			}
-			var cleanupFailure *CleanupFailure
-			if errors.As(startErr, &cleanupFailure) || CodeOf(startErr) == FailureCleanup {
-				return profileSelection{}, wrapFailure(FailureCleanup, errors.Join(errors.Join(candidateErrors...), startErr))
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return profileSelection{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, startErr, errors.Join(candidateErrors...)))
-			}
-			if invalidRuntimeLease || target.Mode == ProfileIndex {
-				return profileSelection{}, wrapFailure(FailureRuntime, errors.Join(errors.Join(candidateErrors...), startErr))
-			}
-			candidateErrors = append(candidateErrors, fmt.Errorf("profile %d (%s): %w", profile.Summary.Index, profile.Summary.Protocol, startErr))
+		selection, retry, candidateErr := m.selectProfileCandidate(ctx, s, generation, target, profile, candidateErrors)
+		if retry {
+			candidateErrors = append(candidateErrors, candidateErr)
 			continue
 		}
-		return profileSelection{
-			profile:       profile,
-			platformLease: platformLease,
-			runtimeLease:  runtimeLease,
-		}, nil
+		return selection, candidateErr
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return profileSelection{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(candidateErrors...)))
 	}
 	return profileSelection{}, failureWithCause(FailureProbe, "no configured profile became ready", errors.Join(candidateErrors...))
+}
+
+// selectProfileCandidate owns setup and rollback for one candidate. A retry is
+// returned only for an auto-selection runtime failure after full cleanup.
+func (m *Manager) selectProfileCandidate(ctx context.Context, s *session, generation uint64, target StartTarget, profile RuntimeProfile, previousErrors []error) (profileSelection, bool, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return profileSelection{}, false, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(previousErrors...)))
+	}
+	ref := SessionRef{s.id, generation}
+	platformLease, prepareErr := m.platform.PrepareTunnel(ctx, ref)
+	if prepareErr == nil && platformLease == nil {
+		prepareErr = failure(FailurePlatform, "platform returned an empty tunnel lease")
+	}
+	if prepareErr != nil {
+		prepareErr = errors.Join(errors.Join(previousErrors...), prepareErr)
+		if platformLease != nil {
+			if releaseErr := platformLease.Release(context.Background()); releaseErr != nil {
+				return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(prepareErr, releaseErr))
+			}
+		}
+		return profileSelection{}, false, wrapFailure(FailurePlatform, prepareErr)
+	}
+	runtimeLease, startErr := m.runtime.Start(ctx, ref, profile)
+	invalidRuntimeLease := startErr == nil && runtimeLease == nil
+	if invalidRuntimeLease {
+		startErr = failure(FailureRuntime, "runtime returned an empty lease")
+	}
+	if startErr != nil {
+		cleanupErr := releaseProfileSelection(profileSelection{platformLease: platformLease, runtimeLease: runtimeLease})
+		if cleanupErr != nil {
+			return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(errors.Join(previousErrors...), startErr, cleanupErr))
+		}
+		var cleanupFailure *CleanupFailure
+		if errors.As(startErr, &cleanupFailure) || CodeOf(startErr) == FailureCleanup {
+			return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(errors.Join(previousErrors...), startErr))
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return profileSelection{}, false, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, startErr, errors.Join(previousErrors...)))
+		}
+		if invalidRuntimeLease || target.Mode == ProfileIndex {
+			return profileSelection{}, false, wrapFailure(FailureRuntime, errors.Join(errors.Join(previousErrors...), startErr))
+		}
+		return profileSelection{}, true, fmt.Errorf("profile %d (%s): %w", profile.Summary.Index, profile.Summary.Protocol, startErr)
+	}
+	return profileSelection{profile: profile, platformLease: platformLease, runtimeLease: runtimeLease}, false, nil
 }
 
 func releaseProfileSelection(selection profileSelection) error {

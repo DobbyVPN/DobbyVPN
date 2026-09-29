@@ -2,9 +2,9 @@ package probe
 
 import (
 	"context"
+	"core/log"
 	"errors"
 	"fmt"
-	"core/log"
 	"net"
 	"net/http"
 	"net/http/httptrace"

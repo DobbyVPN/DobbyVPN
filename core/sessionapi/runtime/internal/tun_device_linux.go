@@ -4,9 +4,9 @@
 package internal
 
 import (
+	"core/tunnel/protected_dialer"
 	"errors"
 	"fmt"
-	"core/tunnel/protected_dialer"
 	"os"
 
 	"github.com/songgao/water"

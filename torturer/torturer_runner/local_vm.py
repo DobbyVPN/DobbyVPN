@@ -1536,9 +1536,10 @@ def _prepare_ios(
     logs: Path,
     timeout: float,
     architecture: str | None,
+    source_sha: str | None = None,
 ) -> dict[str, Any]:
     from .local_vm_ios import prepare
-    return prepare(run_dir, logs, timeout, architecture)
+    return prepare(run_dir, logs, timeout, architecture, source_sha)
 
 
 def _functional_command(
@@ -1807,7 +1808,9 @@ def prepare(args: argparse.Namespace) -> int:
         if args.platform == "ios-simulator":
             candidate = _timed_call(
                 "ios-simulator-build",
-                lambda: _prepare_ios(run_dir, logs, args.timeout, args.architecture),
+                lambda: _prepare_ios(
+                    run_dir, logs, args.timeout, args.architecture, args.source_sha
+                ),
                 platform=args.platform,
             )
         elif args.release_manifest is not None:

@@ -1,5 +1,5 @@
 # Generated build/test output
-artifacts/
+/artifacts/
 results/
 tmp/
 *.log

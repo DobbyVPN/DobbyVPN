@@ -31,7 +31,7 @@ internal func reversibleDiagnosticText(_ data: Data) -> String {
 /// Render the complete NSError details and its underlying cause chain for the
 /// exported native diagnostic log. `localizedDescription` alone often drops
 /// the domain, code, and NetworkExtension's underlying failure information.
-internal func diagnosticErrorDescription(_ error: Error) -> String {
+public func diagnosticErrorDescription(_ error: Error) -> String {
     var visited = Set<ObjectIdentifier>()
 
     func describe(_ error: Error, indentation: String) -> String {

@@ -24,7 +24,7 @@ func (e *CallError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
-func (c Client) Call(ctx context.Context, method string, params any, result any) error {
+func (c Client) Call(ctx context.Context, method string, params, result any) (callErr error) {
 	if c.Dial == nil {
 		return errors.New("desktop control dialer is unavailable")
 	}
@@ -32,7 +32,11 @@ func (c Client) Call(ctx context.Context, method string, params any, result any)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			callErr = errors.Join(callErr, fmt.Errorf("close desktop control connection: %w", closeErr))
+		}
+	}()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	} else {
@@ -46,8 +50,8 @@ func (c Client) Call(ctx context.Context, method string, params any, result any)
 	if err != nil {
 		return fmt.Errorf("encode desktop control request: %w", err)
 	}
-	if _, err := conn.Write(append(request, '\n')); err != nil {
-		return fmt.Errorf("send desktop control request: %w", err)
+	if _, writeErr := conn.Write(append(request, '\n')); writeErr != nil {
+		return fmt.Errorf("send desktop control request: %w", writeErr)
 	}
 	line, err := readLineBounded(bufio.NewReaderSize(conn, 4096), maxRequestBytes)
 	if err != nil {

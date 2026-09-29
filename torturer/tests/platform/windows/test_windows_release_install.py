@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from torturer_runner import local_vm
+from torturer_runner import local_vm, local_vm_windows
 
 
 class WindowsReleaseInstallTests(unittest.TestCase):
@@ -78,6 +78,62 @@ class WindowsReleaseInstallTests(unittest.TestCase):
             self.assertIn(
                 "DOBBYVPN_CONTROL_PIPE_SID=S-1-5-21-123-456-789-1001",
                 calls[0],
+            )
+
+    def test_interactive_native_ui_can_import_prepared_screenshot_decoder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            source = run_dir / "source"
+            cwd = source / "torturer"
+            logs = run_dir / "logs"
+            profile = run_dir / "profile"
+            python_target = run_dir / "screenshot-python"
+            for path in (cwd, logs, profile, python_target):
+                path.mkdir(parents=True)
+
+            scripts: dict[str, str] = {}
+
+            def run_powershell(script: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+                label = str(kwargs["label"])
+                scripts[label] = script
+                if label == "native-ui-access":
+                    scripts["native-ui-wrapper"] = (
+                        run_dir / "native-ui-task.ps1"
+                    ).read_text(encoding="utf-8")
+                if label == "native-ui-task-register":
+                    (run_dir / "native-ui.exit").write_text("0\n", encoding="ascii")
+                return subprocess.CompletedProcess(["powershell.exe"], 0, b"", b"")
+
+            environment = {
+                "DOBBYVPN_CONTROL_PIPE_USER": r"Dobby Lab\runner",
+                "PYTHONPATH": str(python_target),
+            }
+            command = [
+                r"C:\Windows\py.exe", "-3", "-m", "torturer_runner.ui.journey",
+                "--ui", r"C:\candidate\DobbyVPN.exe",
+            ]
+            with (
+                mock.patch.object(local_vm_windows, "_preflight_interactive_desktop"),
+                mock.patch.object(local_vm_windows, "_powershell", side_effect=run_powershell),
+            ):
+                result = local_vm_windows.run_interactive_task(
+                    command,
+                    run_dir=run_dir,
+                    cwd=cwd,
+                    logs=logs,
+                    timeout=1,
+                    environment=environment,
+                    task_label="native-ui",
+                )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(
+                f"$info.EnvironmentVariables['PYTHONPATH'] = '{python_target}'",
+                scripts["native-ui-wrapper"],
+            )
+            self.assertIn(
+                f"Grant-Access '{python_target}' '(OI)(CI)RX' $true",
+                scripts["native-ui-access"],
             )
 
 

@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -42,61 +43,86 @@ func openManagedLocalLog(path string) (*os.File, error) {
 }
 
 func initExplicitLocalLog() error {
+	root, path, err := explicitLocalLogPaths()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1" {
+		return initManagedLocalLog(root, path)
+	}
+	return initUnmanagedLocalLog(root, path)
+}
+
+func explicitLocalLogPaths() (logRoot, logPath string, resultErr error) {
 	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
 	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
 	if requested == "" {
-		var err error
-		root, requested, err = defaultDesktopLogPath()
-		if err != nil {
-			return err
+		var pathErr error
+		root, requested, pathErr = defaultDesktopLogPath()
+		if pathErr != nil {
+			return "", "", pathErr
 		}
 	} else if root == "" {
-		var err error
-		root, err = explicitLogRoot()
-		if err != nil {
-			return err
+		var rootErr error
+		root, rootErr = explicitLogRoot()
+		if rootErr != nil {
+			return "", "", rootErr
 		}
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	path, err := filepath.Abs(requested)
 	if err != nil {
-		return err
+		return "", "", err
 	}
+	if err := requireLocalLogPath(root, path, "explicit log path is outside the local temporary directory"); err != nil {
+		return "", "", err
+	}
+	return root, path, nil
+}
+
+func requireLocalLogPath(root, path, message string) error {
 	relative, err := filepath.Rel(root, path)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return fmt.Errorf("explicit log path is outside the local temporary directory")
+		return errors.New(message)
 	}
+	return nil
+}
+
+func initManagedLocalLog(root, path string) error {
+	if err := validateManagedLocalLog(root, path); err != nil {
+		return err
+	}
+	file, err := openManagedLocalLog(path)
+	if err != nil {
+		return err
+	}
+	return log.SetOpenedFile(file)
+}
+
+func validateManagedLocalLog(root, path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("managed explicit log target is unavailable: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("managed explicit log target must be a regular file")
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	return requireLocalLogPath(resolvedRoot, resolvedParent, "managed explicit log path traverses outside its root")
+}
+
+func initUnmanagedLocalLog(root, path string) error {
 	parent := filepath.Dir(path)
-	managed := strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1"
-	if managed {
-		info, statErr := os.Lstat(path)
-		if statErr != nil {
-			return fmt.Errorf("managed explicit log target is unavailable: %w", statErr)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("managed explicit log target must be a regular file")
-		}
-		resolvedRoot, resolveErr := filepath.EvalSymlinks(root)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		resolvedParent, resolveErr := filepath.EvalSymlinks(parent)
-		if resolveErr != nil {
-			return resolveErr
-		}
-		relative, resolveErr = filepath.Rel(resolvedRoot, resolvedParent)
-		if resolveErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-			return fmt.Errorf("managed explicit log path traverses outside its root")
-		}
-		file, openErr := openManagedLocalLog(path)
-		if openErr != nil {
-			return openErr
-		}
-		return log.SetOpenedFile(file)
-	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
@@ -111,29 +137,28 @@ func initExplicitLocalLog() error {
 	if err != nil {
 		return err
 	}
-	relative, err = filepath.Rel(resolvedRoot, resolvedParent)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return fmt.Errorf("explicit log path traverses outside the local temporary directory")
+	if err := requireLocalLogPath(resolvedRoot, resolvedParent, "explicit log path traverses outside the local temporary directory"); err != nil {
+		return err
 	}
-	if info, statErr := os.Lstat(path); statErr == nil {
+	info, statErr := os.Lstat(path)
+	switch {
+	case statErr == nil:
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("explicit log target must be a regular file")
 		}
-	} else if !os.IsNotExist(statErr) {
+	case !os.IsNotExist(statErr):
 		return statErr
 	}
-	if err := log.SetPath(path); err != nil {
-		return err
-	}
-	return nil
+	return log.SetPath(path)
 }
 
 func defaultDesktopLogPath() (root, path string, err error) {
-	if runtime.GOOS == "darwin" && os.Getuid() == 0 {
+	switch {
+	case runtime.GOOS == "darwin" && os.Getuid() == 0:
 		root = "/Library/Logs/DobbyVPN"
-	} else if os.Getuid() == 0 {
+	case os.Getuid() == 0:
 		root = "/var/log/dobbyvpn"
-	} else {
+	default:
 		var base string
 		base, err = os.UserConfigDir()
 		if err != nil {

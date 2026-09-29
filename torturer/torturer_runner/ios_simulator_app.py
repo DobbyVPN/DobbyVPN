@@ -444,12 +444,15 @@ def _active_iphonesimulator_sdk_version(
 
 def xcodebuild_app_command(
     contract: IOSSimulatorAppContract,
-    *, work_dir: Path,
+    *, work_dir: Path, source_sha: str | None = None,
 ) -> list[str]:
-    return [
+    command = [
         "/bin/bash", "scripts/package_ios_app.sh", "iossimulator",
         str(contract.app_path(work_dir)), "", contract.architecture,
     ]
+    if source_sha is None:
+        return command
+    return ["/usr/bin/env", f"SOURCE_COMMIT={source_sha}", *command]
 
 
 def _stage_timeout(
@@ -1342,6 +1345,7 @@ def prepare_ios_simulator_candidate(
     runner: CommandRunner,
     contract: IOSSimulatorAppContract,
     budget: RunBudget,
+    source_sha: str | None = None,
 ) -> None:
     """Build the SwiftUI simulator app without a packet tunnel or Go runtime."""
     candidate_root = Path(candidate_root).resolve()
@@ -1358,7 +1362,9 @@ def prepare_ios_simulator_candidate(
     def build_app() -> None:
         _require_success(
             runner,
-            xcodebuild_app_command(contract, work_dir=work_dir),
+            xcodebuild_app_command(
+                contract, work_dir=work_dir, source_sha=source_sha
+            ),
             "package-ios-app",
             cwd=go_root,
             budget=budget,
@@ -1369,5 +1375,18 @@ def prepare_ios_simulator_candidate(
                 "package-ios-app",
                 f"SwiftUI build produced no Simulator app: {app_path}",
             )
+        if source_sha is not None:
+            try:
+                with (app_path / "Info.plist").open("rb") as source:
+                    metadata = plistlib.load(source)
+            except (OSError, plistlib.InvalidFileException, ValueError) as error:
+                raise _stage_error("verify-source-commit", error) from error
+            observed_sha = metadata.get("DobbySourceCommit") if isinstance(metadata, dict) else None
+            if observed_sha != source_sha:
+                raise IOSSimulatorStageError(
+                    "verify-source-commit",
+                    "Simulator app source commit metadata mismatch: "
+                    f"expected={source_sha!r} observed={observed_sha!r}",
+                )
 
     _timed_stage("build", build_app)

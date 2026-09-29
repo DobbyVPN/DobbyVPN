@@ -14,6 +14,7 @@ def prepare(
     logs: Path,
     timeout: float,
     architecture: str | None,
+    source_sha: str | None = None,
 ) -> dict:
     contract = ios.public_ios_simulator_app_contract(
         architecture or ("amd64" if platform.machine().lower() in {"x86_64", "amd64"} else "arm64")
@@ -24,7 +25,7 @@ def prepare(
     try:
         ios.prepare_ios_simulator_candidate(
             candidate_root=run_dir / "source", work_dir=work, runner=runner,
-            contract=contract, budget=budget,
+            contract=contract, budget=budget, source_sha=source_sha,
         )
     except BaseException as error:
         try:

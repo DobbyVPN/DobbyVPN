@@ -44,7 +44,7 @@ func ControlSocketPath() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		runtimeDir := filepath.Join("/run/user", strconv.Itoa(uid))
+		runtimeDir := filepath.Join(string(filepath.Separator), "run", "user", strconv.Itoa(uid))
 		if info, statErr := os.Stat(runtimeDir); statErr == nil && info.IsDir() {
 			return filepath.Join(runtimeDir, "DobbyVPN", "control.sock"), nil
 		}
@@ -124,68 +124,96 @@ func AuthenticateLocalPeer(conn net.Conn) error {
 }
 
 func listenControlSocket(path string) (net.Listener, error) {
-	expected, err := expectedPeerUID()
+	expected, expectedErr := expectedPeerUID()
+	if expectedErr != nil {
+		return nil, expectedErr
+	}
+	if directoryErr := ensureControlSocketDirectory(path); directoryErr != nil {
+		return nil, directoryErr
+	}
+	supervisedUnprivileged, supervisedErr := supervisedUnprivilegedSocket(path, expected)
+	if supervisedErr != nil {
+		return nil, supervisedErr
+	}
+	if permissionErr := setControlSocketDirectoryPermissions(path, expected, supervisedUnprivileged); permissionErr != nil {
+		return nil, permissionErr
+	}
+	if cleanupErr := removeStaleControlSocket(path); cleanupErr != nil {
+		return nil, cleanupErr
+	}
+	var listenConfig net.ListenConfig
+	lis, listenErr := listenConfig.Listen(context.Background(), "unix", path)
+	if listenErr != nil {
+		return nil, listenErr
+	}
+	if permissionErr := setControlSocketPermissions(path, expected, supervisedUnprivileged); permissionErr != nil {
+		return nil, errors.Join(permissionErr, lis.Close())
+	}
+	return &removingUnixListener{Listener: lis, path: path}, nil
+}
+
+func ensureControlSocketDirectory(path string) error {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	dirInfo, err := os.Lstat(directory)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("inspect control socket parent: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("control socket parent is not a directory")
 	}
-	dirInfo, err := os.Lstat(filepath.Dir(path))
-	if err != nil || !dirInfo.IsDir() {
-		return nil, fmt.Errorf("control socket parent is not a directory")
+	return nil
+}
+
+func setControlSocketDirectoryPermissions(path string, expected int, supervisedUnprivileged bool) error {
+	directory := filepath.Dir(path)
+	if expected != currentUID() && !supervisedUnprivileged {
+		// Keep the directory root-owned so the desktop user cannot replace the
+		// socket. Execute-only access permits connecting to the user-owned socket.
+		if err := os.Chown(directory, currentUID(), -1); err != nil {
+			return err
+		}
 	}
-	supervisedUnprivileged, err := supervisedUnprivilegedSocket(path, expected)
-	if err != nil {
-		return nil, err
-	}
+	mode := os.FileMode(0o700)
 	if expected != currentUID() {
-		// A privileged daemon keeps the directory root-owned so the desktop
-		// user cannot replace the socket. Execute-only access is sufficient to
-		// connect to the user-owned 0600 socket below.
-		if !supervisedUnprivileged {
-			if err := os.Chown(filepath.Dir(path), currentUID(), -1); err != nil {
-				return nil, err
-			}
-		}
-		if err := os.Chmod(filepath.Dir(path), 0711); err != nil {
-			return nil, err
-		}
-	} else if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
-		return nil, err
+		mode = 0o711
 	}
-	if info, err := os.Lstat(path); err == nil {
-		if info.Mode()&os.ModeSocket == 0 {
-			return nil, fmt.Errorf("control socket path is not a socket")
-		}
-		if err := os.Remove(path); err != nil {
-			return nil, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+	return os.Chmod(directory, mode)
+}
+
+func removeStaleControlSocket(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	lis, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	socketMode := os.FileMode(0600)
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("control socket path is not a socket")
+	}
+	return os.Remove(path)
+}
+
+func setControlSocketPermissions(path string, expected int, supervisedUnprivileged bool) error {
+	socketMode := os.FileMode(0o600)
 	if supervisedUnprivileged {
 		// The disposable runner is a different UID. Filesystem write permission
 		// permits connect(2); Unix peer credentials still authenticate that one
 		// exact UID before any RPC is accepted.
-		socketMode = 0622
+		socketMode = 0o622
 	}
 	if err := os.Chmod(path, socketMode); err != nil {
-		_ = lis.Close()
-		return nil, err
+		return err
 	}
 	if expected != currentUID() && !supervisedUnprivileged {
 		if err := os.Chown(path, expected, -1); err != nil {
-			_ = lis.Close()
-			return nil, err
+			return err
 		}
 	}
-	return &removingUnixListener{Listener: lis, path: path}, nil
+	return nil
 }
 
 type removingUnixListener struct {

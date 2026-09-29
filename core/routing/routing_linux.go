@@ -15,10 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	linuxOwnedRouteProtocol = 233
-	linuxOwnedProxyMetric   = 233
-)
+const linuxOwnedRouteProtocol netlink.RouteProtocol = 233
+
+const linuxOwnedProxyMetric = 233
 
 var (
 	linuxRouteList = func(family int) ([]netlink.Route, error) {
@@ -57,10 +56,10 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 		if route.Gw == nil || route.Gw.To4() == nil || !route.Gw.Equal(gateway) || route.LinkIndex <= 0 {
 			continue
 		}
-		link, err := linuxLinkByIndex(route.LinkIndex)
-		if err != nil {
-			log.Debugf(Category, "[Routing][Detect][ERROR] LinkByIndex(%d) failed: %v", route.LinkIndex, err)
-			return "", fmt.Errorf("failed to get link by index %d: %w", route.LinkIndex, err)
+		link, linkErr := linuxLinkByIndex(route.LinkIndex)
+		if linkErr != nil {
+			log.Debugf(Category, "[Routing][Detect][ERROR] LinkByIndex(%d) failed: %v", route.LinkIndex, linkErr)
+			return "", fmt.Errorf("failed to get link by index %d: %w", route.LinkIndex, linkErr)
 		}
 		iface := link.Attrs().Name
 		log.Debugf(Category, "[Routing][Detect][OK] Found interface=%s for gateway=%s", iface, gatewayIP)
@@ -160,7 +159,7 @@ func linuxLinkIndex(name string) (int, error) {
 	if index := link.Attrs().Index; index > 0 {
 		return index, nil
 	}
-	return 0, fmt.Errorf("Linux interface %q has invalid index %d", name, link.Attrs().Index)
+	return 0, fmt.Errorf("linux interface %q has invalid index %d", name, link.Attrs().Index)
 }
 
 func linuxAlreadyExists(err error) bool {
@@ -199,7 +198,7 @@ func ReconcileLinuxSessionRoutesWithRule(proxyIP, gatewayIP, iface string, table
 		return fmt.Errorf("invalid Linux routing rule priority %d", priority)
 	}
 	if !isLoopbackIP(proxyIP) {
-		route, err := linuxGatewayRoute(proxyIP, gatewayIP, iface, unix.RT_TABLE_MAIN, linuxOwnedRouteProtocol, linuxOwnedProxyMetric)
+		route, err := linuxGatewayRoute(proxyIP, gatewayIP, iface, unix.RT_TABLE_MAIN, linuxOwnedProxyMetric)
 		if err != nil {
 			return fmt.Errorf("restore proxy route: %w", err)
 		}
@@ -207,7 +206,7 @@ func ReconcileLinuxSessionRoutesWithRule(proxyIP, gatewayIP, iface string, table
 			return fmt.Errorf("restore proxy route %s via %s dev %s: %w", proxyIP, gatewayIP, iface, err)
 		}
 	}
-	route, err := linuxGatewayRoute("", gatewayIP, iface, tableID, linuxOwnedRouteProtocol, 0)
+	route, err := linuxGatewayRoute("", gatewayIP, iface, tableID, 0)
 	if err != nil {
 		return fmt.Errorf("restore marked default route: %w", err)
 	}
@@ -223,7 +222,7 @@ func ReconcileLinuxSessionRoutesWithRule(proxyIP, gatewayIP, iface string, table
 	return nil
 }
 
-func linuxGatewayRoute(destination, gatewayIP, iface string, tableID, protocol, metric int) (netlink.Route, error) {
+func linuxGatewayRoute(destination, gatewayIP, iface string, tableID, metric int) (netlink.Route, error) {
 	gateway := net.ParseIP(gatewayIP).To4()
 	if gateway == nil {
 		return netlink.Route{}, fmt.Errorf("invalid IPv4 gateway %q", gatewayIP)
@@ -243,7 +242,7 @@ func linuxGatewayRoute(destination, gatewayIP, iface string, tableID, protocol, 
 		Dst:       dst,
 		Gw:        gateway,
 		LinkIndex: linkIndex,
-		Protocol:  netlink.RouteProtocol(protocol),
+		Protocol:  linuxOwnedRouteProtocol,
 		Priority:  metric,
 		Family:    netlink.FAMILY_V4,
 		Table:     tableID,
@@ -253,27 +252,55 @@ func linuxGatewayRoute(destination, gatewayIP, iface string, tableID, protocol, 
 }
 
 func linuxSessionRule(tableID, priority int) *netlink.Rule {
+	mark, valid := linuxSessionTableMark(tableID)
+	if !valid {
+		return nil
+	}
 	rule := netlink.NewRule()
 	rule.Family = netlink.FAMILY_V4
 	rule.Table = tableID
-	rule.Mark = uint32(tableID)
+	rule.Mark = mark
 	rule.Priority = priority
 	return rule
 }
 
 func linuxSessionRuleMatches(rule netlink.Rule, tableID, priority int) bool {
-	if rule.Family != netlink.FAMILY_V4 || rule.Priority != priority || rule.Table != tableID ||
-		rule.Mark != uint32(tableID) || rule.Src != nil || rule.Dst != nil || rule.Tos != 0 ||
-		rule.Goto != -1 || rule.Flow != -1 || rule.IifName != "" || rule.OifName != "" ||
-		rule.SuppressIfgroup != -1 || rule.SuppressPrefixlen != -1 || rule.Invert ||
-		rule.Dport != nil || rule.Sport != nil || rule.UIDRange != nil || rule.IPProto != 0 ||
-		rule.TunID != 0 || rule.Protocol != 0 || rule.Type != 0 {
-		return false
+	mark, valid := linuxSessionTableMark(tableID)
+	return valid && rule.Family == netlink.FAMILY_V4 && rule.Priority == priority &&
+		rule.Table == tableID && rule.Mark == mark && linuxSessionRuleHasNoAddressSelectors(rule) &&
+		linuxSessionRuleHasNoFlowSelectors(rule) && linuxSessionRuleHasNoTransportSelectors(rule) &&
+		linuxSessionRuleHasFullMarkMask(rule)
+}
+
+func linuxSessionTableMark(tableID int) (uint32, bool) {
+	if tableID <= 0 || uint64(tableID) > uint64(^uint32(0)) {
+		return 0, false
 	}
+	return uint32(tableID), true
+}
+
+func linuxSessionRuleHasNoAddressSelectors(rule netlink.Rule) bool {
+	return rule.Src == nil && rule.Dst == nil && rule.Tos == 0 && !rule.Invert
+}
+
+func linuxSessionRuleHasNoFlowSelectors(rule netlink.Rule) bool {
+	return rule.Goto == -1 && rule.Flow == -1 && rule.IifName == "" && rule.OifName == "" &&
+		rule.SuppressIfgroup == -1 && rule.SuppressPrefixlen == -1
+}
+
+func linuxSessionRuleHasNoTransportSelectors(rule netlink.Rule) bool {
+	return rule.Dport == nil && rule.Sport == nil && rule.UIDRange == nil && rule.IPProto == 0 &&
+		rule.TunID == 0 && rule.Protocol == 0 && rule.Type == 0
+}
+
+func linuxSessionRuleHasFullMarkMask(rule netlink.Rule) bool {
 	return rule.Mask == nil || *rule.Mask == ^uint32(0)
 }
 
 func linuxAddSessionRule(tableID, priority int) error {
+	if _, valid := linuxSessionTableMark(tableID); !valid {
+		return fmt.Errorf("invalid Linux routing table %d", tableID)
+	}
 	exists, err := linuxSessionRuleExists(tableID, priority)
 	if err != nil {
 		return fmt.Errorf("inspect existing fwmark rules: %w", err)
@@ -282,10 +309,12 @@ func linuxAddSessionRule(tableID, priority int) error {
 		return nil
 	}
 	rule := linuxSessionRule(tableID, priority)
-	if err := linuxRuleOperation("add", rule, linuxRuleAdd); err == nil {
+	operationErr := linuxRuleOperation("add", rule, linuxRuleAdd)
+	if operationErr == nil {
 		return nil
-	} else if !linuxAlreadyExists(err) {
-		return err
+	}
+	if !linuxAlreadyExists(operationErr) {
+		return operationErr
 	}
 	exists, err = linuxSessionRuleExists(tableID, priority)
 	if err != nil {
