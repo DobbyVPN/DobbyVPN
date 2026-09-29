@@ -1762,7 +1762,9 @@ def prepare(args: argparse.Namespace) -> int:
     _required_input(run_dir, "source", directory=True)
     if args.platform == "android" and (args.source_sha is None) != (args.source_tree is None):
         raise LocalVMError("complete Android build requires both source commit and source tree")
-    _validate_suite(args.platform, args.suite, args.scenarios)
+    # Focused scenarios belong to the execution request.  Preparation only
+    # validates the platform and suite selected for the eventual run.
+    _validate_suite(args.platform, args.suite, None)
     if args.release_manifest is not None and (
         args.suite != "full" or args.platform not in {"windows", "macos"}
     ):
