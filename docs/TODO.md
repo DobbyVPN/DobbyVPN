@@ -25,15 +25,6 @@ not accepted unavailable skips:
   Simulator job, and Android/F-Droid builds while preserving coverage and pass
   criteria.
 
-## Focused GitHub checks
-
-- Add a manual entrypoint that selects a diagnostic branch or commit and
-  the checks to run, calling the existing product build and test scripts.
-- Include the setup and cleanup required by the selected checks.
-- Report focused coverage explicitly; a diagnostic run must not authorize
-  Release or Publish.
-- Document supported commands when implemented.
-
 A Linux GUI is outside the current scope. Linux remains CLI/service-only.
 The supported mini and full suite coverage is owned by the
 [functional contract](../torturer/docs/contract.md).

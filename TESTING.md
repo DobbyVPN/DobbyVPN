@@ -42,6 +42,29 @@ and the iOS Simulator UI check. The Android CI job calls the shared
 local fast Android candidate build. The iOS Simulator job prepares its Go
 runtime and runs the app contract on a macOS runner.
 
+## Focused hosted checks
+
+Manually dispatch `ci.yml` against a branch with
+`gh workflow run ci.yml --ref <branch> -f platform=android-mini` (replace the
+selector for another platform). `ci` is the default and runs the ordinary full
+CI check set. The platform selectors run only that platform's existing hosted
+mini check:
+
+| Selector | Coverage |
+| --- | --- |
+| `ci` | Full CI check set |
+| `linux-mini` | Linux hosted mini |
+| `windows-mini` | Windows hosted mini |
+| `macos-mini` | macOS hosted mini |
+| `android-mini` | Android hosted mini |
+| `ios-simulator-mini` | iOS Simulator mini UI contract |
+
+These checks use the existing product build and test entrypoints and the
+functional contract in `torturer/docs/contract.md`; they do not define a
+separate scenario set or pass criteria. A focused result reports only the
+selected coverage. It does not qualify the complete platform matrix, Release,
+or Publish.
+
 ## Go
 
 `go-tests` runs the Go unit suite and targeted race suite on Linux. It prepares

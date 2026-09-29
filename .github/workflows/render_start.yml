@@ -1,0 +1,64 @@
+name: Start disposable functional VPN
+
+on:
+  workflow_call:
+
+jobs:
+  start:
+    name: Start disposable Render VPN
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: render-functional
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Reject reruns before creating a Render service
+        shell: bash
+        run: |
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "Workflow reruns are unsupported; dispatch a fresh workflow." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Start Render VPN
+        working-directory: torturer
+        env:
+          RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
+          RENDER_IMAGE_OWNER_ID: ${{ vars.RENDER_IMAGE_OWNER_ID }}
+          RENDER_IMAGE_PATH: ${{ vars.RENDER_IMAGE_PATH }}
+          RENDER_IMAGE_DIGEST: ${{ vars.RENDER_IMAGE_DIGEST }}
+          RENDER_REGION: ${{ vars.RENDER_REGION }}
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_API_TOKEN"
+          test -n "$RENDER_OWNER_ID"
+          test -n "$RENDER_IMAGE_OWNER_ID"
+          test -n "$RENDER_IMAGE_PATH"
+          test -n "$RENDER_IMAGE_DIGEST"
+          test -n "$RENDER_REGION"
+          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_provider.render_service start \
+            --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" \
+            --owner-id "$RENDER_OWNER_ID" \
+            --image-owner-id "$RENDER_IMAGE_OWNER_ID" \
+            --image-path "$RENDER_IMAGE_PATH" \
+            --image-digest "$RENDER_IMAGE_DIGEST" \
+            --region "$RENDER_REGION" \
+            --output "$RUNNER_TEMP/render"
+
+      - name: Upload shared Render profile
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v7
+        with:
+          name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/render/profile.toml
+            ${{ runner.temp }}/render/deadline_epoch.txt
+          if-no-files-found: error
+          retention-days: 1

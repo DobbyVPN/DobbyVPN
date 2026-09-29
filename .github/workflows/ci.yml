@@ -1,11 +1,26 @@
 name: CI
 
+run-name: CI / ${{ inputs.platform || 'ci' }}
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Run the complete CI suite or one hosted mini platform check.
+        required: true
+        type: choice
+        default: ci
+        options:
+          - ci
+          - linux-mini
+          - windows-mini
+          - macos-mini
+          - android-mini
+          - ios-simulator-mini
 
 permissions:
   contents: read
@@ -17,6 +32,7 @@ concurrency:
 jobs:
   go:
     name: Go unit and race tests
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -39,6 +55,7 @@ jobs:
 
   go_native_runtime:
     name: Selected Go runtime tests on ARM64 Linux
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
@@ -54,6 +71,7 @@ jobs:
 
   go_native_windows:
     name: Selected Go runtime tests on Windows
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: windows-2022
     timeout-minutes: 25
     steps:
@@ -66,6 +84,7 @@ jobs:
 
   go_native_macos:
     name: Selected Go runtime tests on macOS
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: macos-15
     timeout-minutes: 25
     steps:
@@ -78,6 +97,7 @@ jobs:
 
   swift:
     name: Swift lifecycle unit tests
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -103,6 +123,7 @@ jobs:
 
   android_lint:
     name: Android lint
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -128,6 +149,7 @@ jobs:
 
   lint_go:
     name: Go source analysis
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -140,6 +162,7 @@ jobs:
 
   lint_swift:
     name: Swift source analysis
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -155,6 +178,7 @@ jobs:
 
   security:
     name: Dependency and credential scans
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -168,6 +192,7 @@ jobs:
 
   actionlint:
     name: GitHub workflow validation
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -180,6 +205,7 @@ jobs:
 
   android_build:
     name: Android build and native library checks
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -230,6 +256,7 @@ jobs:
 
   ios_simulator:
     name: iOS Simulator UI test
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'ios-simulator-mini' }}
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -278,6 +305,182 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
+  ci_selected_version:
+    name: Read selected mini build version
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' && inputs.platform != 'ios-simulator-mini' }}
+    runs-on: ubuntu-24.04
+    outputs:
+      major: ${{ steps.version.outputs.major }}
+      minor: ${{ steps.version.outputs.minor }}
+      maintenance: ${{ steps.version.outputs.maintenance }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      android_version_code: ${{ steps.version.outputs.android_version_code }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Read VERSION
+        id: version
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 .github/scripts/version_metadata.py \
+            --version-file VERSION --github-output "$GITHUB_OUTPUT"
+
+  focused_desktop_build:
+    name: Build selected desktop mini candidate
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini') }}
+    needs: [ci_selected_version]
+    uses: ./.github/workflows/desktop_platform.yml
+    with:
+      platform: ${{ inputs.platform == 'linux-mini' && 'linux' || inputs.platform == 'windows-mini' && 'windows' || 'macos' }}
+      architecture: ${{ inputs.platform == 'macos-mini' && 'arm64' || 'amd64' }}
+      source_sha: ${{ github.sha }}
+      version_name: ${{ needs.ci_selected_version.outputs.version_name }}
+
+  android_mini_build:
+    name: Build Android mini candidate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'android-mini' }}
+    needs: [ci_selected_version]
+    uses: ./.github/workflows/android_build.yml
+    with:
+      source_sha: ${{ github.sha }}
+      app_major_version: ${{ needs.ci_selected_version.outputs.major }}
+      app_minor_version: ${{ needs.ci_selected_version.outputs.minor }}
+      app_maintenance_version: ${{ needs.ci_selected_version.outputs.maintenance }}
+      android_version_code: ${{ needs.ci_selected_version.outputs.android_version_code }}
+
+  mini_render_start:
+    name: Start Render VPN for selected mini
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini' || inputs.platform == 'android-mini') }}
+    needs: [ci_selected_version]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/render_start.yml
+
+  focused_desktop_mini:
+    name: Selected desktop hosted mini
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini') }}
+    needs: [focused_desktop_build, mini_render_start]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/qualification_platform.yml
+    with:
+      platform: ${{ inputs.platform == 'linux-mini' && 'linux' || inputs.platform == 'windows-mini' && 'windows' || 'macos' }}
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+
+  android_mini:
+    name: Android hosted mini
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'android-mini' }}
+    needs: [android_mini_build, mini_render_start]
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/qualification_platform.yml
+    with:
+      platform: android
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+
+  mini_render_cleanup:
+    name: Delete Render VPN after selected mini
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini' || inputs.platform == 'android-mini') }}
+    needs: [mini_render_start, focused_desktop_mini, android_mini]
+    uses: ./.github/workflows/render_cleanup.yml
+
+  focused_mini_result:
+    name: Require selected mini and cleanup success
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' }}
+    needs: [ci_selected_version, focused_desktop_build, android_mini_build, mini_render_start, focused_desktop_mini, android_mini, mini_render_cleanup, ios_simulator]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check selected platform result
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          VERSION_RESULT: ${{ needs.ci_selected_version.result }}
+          DESKTOP_BUILD_RESULT: ${{ needs.focused_desktop_build.result }}
+          ANDROID_BUILD_RESULT: ${{ needs.android_mini_build.result }}
+          RENDER_START_RESULT: ${{ needs.mini_render_start.result }}
+          DESKTOP_RESULT: ${{ needs.focused_desktop_mini.result }}
+          ANDROID_RESULT: ${{ needs.android_mini.result }}
+          RENDER_CLEANUP_RESULT: ${{ needs.mini_render_cleanup.result }}
+          IOS_RESULT: ${{ needs.ios_simulator.result }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            linux-mini|windows-mini|macos-mini)
+              test "$VERSION_RESULT" = success
+              test "$DESKTOP_BUILD_RESULT" = success
+              test "$RENDER_START_RESULT" = success
+              test "$DESKTOP_RESULT" = success
+              test "$RENDER_CLEANUP_RESULT" = success
+              ;;
+            android-mini)
+              test "$VERSION_RESULT" = success
+              test "$ANDROID_BUILD_RESULT" = success
+              test "$RENDER_START_RESULT" = success
+              test "$ANDROID_RESULT" = success
+              test "$RENDER_CLEANUP_RESULT" = success
+              ;;
+            ios-simulator-mini)
+              test "$IOS_RESULT" = success
+              ;;
+            *) echo "unsupported focused platform: $PLATFORM" >&2; exit 1 ;;
+          esac
+          echo "Selected hosted mini passed: $PLATFORM"
+
+  complete_ci:
+    name: Complete CI
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') }}
+    needs:
+      - go
+      - go_native_runtime
+      - go_native_windows
+      - go_native_macos
+      - swift
+      - android_lint
+      - lint_go
+      - lint_swift
+      - security
+      - actionlint
+      - android_build
+      - ios_simulator
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every full CI job
+        env:
+          GO_RESULT: ${{ needs.go.result }}
+          GO_NATIVE_RUNTIME_RESULT: ${{ needs.go_native_runtime.result }}
+          GO_NATIVE_WINDOWS_RESULT: ${{ needs.go_native_windows.result }}
+          GO_NATIVE_MACOS_RESULT: ${{ needs.go_native_macos.result }}
+          SWIFT_RESULT: ${{ needs.swift.result }}
+          ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
+          LINT_GO_RESULT: ${{ needs.lint_go.result }}
+          LINT_SWIFT_RESULT: ${{ needs.lint_swift.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
+          ANDROID_BUILD_RESULT: ${{ needs.android_build.result }}
+          IOS_SIMULATOR_RESULT: ${{ needs.ios_simulator.result }}
+        run: |
+          set -euo pipefail
+          for result in \
+            "$GO_RESULT" \
+            "$GO_NATIVE_RUNTIME_RESULT" \
+            "$GO_NATIVE_WINDOWS_RESULT" \
+            "$GO_NATIVE_MACOS_RESULT" \
+            "$SWIFT_RESULT" \
+            "$ANDROID_LINT_RESULT" \
+            "$LINT_GO_RESULT" \
+            "$LINT_SWIFT_RESULT" \
+            "$SECURITY_RESULT" \
+            "$ACTIONLINT_RESULT" \
+            "$ANDROID_BUILD_RESULT" \
+            "$IOS_SIMULATOR_RESULT"; do
+            test "$result" = success
+          done
+          echo "Complete CI passed"
+
   retain:
     name: Retain newest trusted run
     if: ${{ always() && github.event_name != 'pull_request' }}
@@ -294,6 +497,15 @@ jobs:
       - actionlint
       - android_build
       - ios_simulator
+      - ci_selected_version
+      - focused_desktop_build
+      - android_mini_build
+      - mini_render_start
+      - focused_desktop_mini
+      - android_mini
+      - mini_render_cleanup
+      - focused_mini_result
+      - complete_ci
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -313,4 +525,8 @@ jobs:
             --delete-intermediate-artifacts \
             --keep-artifact dobbyvpn-go-coverage \
             --keep-artifact dobbyvpn-swift-coverage \
-            --keep-artifact dobbyvpn-ios-simulator-mini
+            --keep-artifact dobbyvpn-ios-simulator-mini \
+            --keep-artifact dobbyvpn-qualification-linux \
+            --keep-artifact dobbyvpn-qualification-windows \
+            --keep-artifact dobbyvpn-qualification-macos \
+            --keep-artifact dobbyvpn-qualification-android

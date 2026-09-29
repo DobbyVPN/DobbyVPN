@@ -1,8 +1,8 @@
-"""Start or stop the one disposable Render VPN used by a release run.
+"""Start or stop one disposable Render VPN for a hosted functional run.
 
 The test service is deliberately boring: Render runs the pinned Outline image,
-this command writes the generated profile, and the final Release job deletes
-the service named for that run. Public HTTPS services provide IP and transfer probes;
+this command writes the generated profile, and the cleanup job deletes the
+service named for that run. Public HTTPS services provide IP and transfer probes;
 there is no second test server to provision or keep in sync.
 """
 
