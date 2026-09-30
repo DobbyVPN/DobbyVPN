@@ -67,11 +67,12 @@ public struct DobbyRootView: View {
             .padding(24)
         }
 #if os(iOS)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
+        .safeAreaInset(edge: .bottom, alignment: .trailing) {
+            if configurationFocused {
                 Button("Done") { configurationFocused = false }
                     .accessibilityIdentifier("Dismiss configuration keyboard")
+                    .padding()
+                    .background(.regularMaterial)
             }
         }
 #endif

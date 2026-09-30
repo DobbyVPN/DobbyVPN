@@ -108,13 +108,15 @@ _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
 # The rendered lane selects one original-format profile while the binding
 # lane exercises the complete profile set. tomllib validates the source and
 # each bounded candidate; the product's Go parser remains authoritative.
-_GUI_PROFILE_HEADER = re.compile(
-    rb"(?m)^[ \t]*\[\[[ \t]*(Outline|Xray|TrustTunnel)[ \t]*\]\]"
+_GUI_SECTION_HEADER = re.compile(
+    rb"(?m)^[ \t]*(?:\[\[[ \t]*(?P<protocol>Outline|Xray|TrustTunnel)[ \t]*\]\]"
+    rb"|\[[ \t]*(?P<shared>ExcludeIPs)[ \t]*\])"
     rb"[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
 )
 _GUI_PROFILE_PROTOCOLS = frozenset({"Outline", "Xray"})
 # Keep emulator input bounded; the binding lane owns the complete profile set.
 _GUI_PROFILE_MAX_BYTES = 64 * 1024
+_GUI_CONFIG_MAX_BYTES = 1024 * 1024
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
     "foreground": frozenset({"VPN_DIALOG", "PRODUCT", "OTHER", "NONE"}),
@@ -214,9 +216,12 @@ def _select_gui_profile(raw: bytes) -> bytes:
         if not isinstance(ips, list) or any(not isinstance(ip, str) for ip in ips):
             raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
 
-    headers = tuple(_GUI_PROFILE_HEADER.finditer(raw))
+    headers = tuple(_GUI_SECTION_HEADER.finditer(raw))
     for index, header in enumerate(headers):
-        protocol = header.group(1).decode("ascii")
+        protocol_header = header.group("protocol")
+        if protocol_header is None:
+            continue
+        protocol = protocol_header.decode("ascii")
         if protocol not in _GUI_PROFILE_PROTOCOLS:
             continue
         source_profiles = source.get(protocol)
@@ -252,8 +257,8 @@ def _select_gui_profile(raw: bytes) -> bytes:
                     exclude_lines.append(f"IPs = {json.dumps(exclusions['IPs'])}")
                 if selected and not selected.endswith((b"\n", b"\r")):
                     selected += b"\n"
-                selected += ("\n" + "\n".join(exclude_lines) + "\n").encode("utf-8")
-                if len(selected) > _GUI_PROFILE_MAX_BYTES:
+                selected += ("\n".join(exclude_lines) + "\n").encode("utf-8")
+                if len(selected) > _GUI_CONFIG_MAX_BYTES:
                     continue
 
             expected = {protocol: [profile]}

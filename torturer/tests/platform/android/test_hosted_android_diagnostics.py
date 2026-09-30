@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr
 from hashlib import sha256
 from io import BytesIO
+import json
 from pathlib import Path
 import tempfile
 import time
@@ -97,6 +98,38 @@ class AndroidGuiProfileSelectionTests(unittest.TestCase):
             _select_gui_profile(raw),
             profile,
         )
+
+    def test_large_shared_exclusions_before_or_after_single_profile_are_preserved(self) -> None:
+        ips = [f"198.18.{index >> 8}.{index & 255}/32" for index in range(13_954)]
+        profile = (
+            b'[[Outline]]\nDescription = "synthetic Outline"\n'
+            b'Server = "outline.invalid"\nPassword = "synthetic"\nPort = 443\n'
+        )
+        exclusions = b"[ExcludeIPs]\nIPs = " + json.dumps(ips).encode("utf-8") + b"\n"
+        cases = {
+            "before-profile": exclusions + b"\n" + profile,
+            "after-profile": profile + b"\n" + exclusions,
+        }
+
+        for placement, raw in cases.items():
+            with self.subTest(placement=placement):
+                selected = _select_gui_profile(raw)
+                parsed = tomllib.loads(selected.decode("utf-8"))
+
+                self.assertEqual(parsed["Outline"][0]["Description"], "synthetic Outline")
+                self.assertEqual(parsed["ExcludeIPs"]["IPs"], ips)
+                self.assertGreater(len(selected), 64 * 1024)
+                self.assertLessEqual(len(selected), 1024 * 1024)
+
+    def test_oversized_protocol_profile_is_still_rejected(self) -> None:
+        raw = (
+            b'[[Outline]]\nDescription = "'
+            + b"x" * (64 * 1024)
+            + b'"\nServer = "outline.invalid"\nPassword = "synthetic"\nPort = 443\n'
+        )
+
+        with self.assertRaisesRegex(ScenarioExecutionError, "ANDROID_GUI_PROFILE_UNAVAILABLE"):
+            _select_gui_profile(raw)
 
 
 class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
