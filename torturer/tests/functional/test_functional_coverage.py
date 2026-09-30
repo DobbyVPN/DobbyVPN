@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -150,6 +151,15 @@ class FunctionalCoverageTests(unittest.TestCase):
 
 
 class LocalFunctionalCoverageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These tests use scratch paths outside any supervised request.
+        env = mock.patch.dict(os.environ, {
+            "DOBBYVPN_SUPERVISED_REQUEST": "0",
+            "DOBBYVPN_REQUEST_ROOT": "",
+        })
+        env.start()
+        self.addCleanup(env.stop)
+
     def test_local_runner_keeps_passing_focused_diagnostic_nonqualifying(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
