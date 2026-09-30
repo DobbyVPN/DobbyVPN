@@ -53,6 +53,13 @@ public struct DobbyRootView: View {
                 .accessibilityIdentifier("Connection configuration")
                 .focused($configurationFocused)
                 .disabled(model.busy)
+#if os(iOS)
+                if configurationFocused {
+                    Button("Done") { configurationFocused = false }
+                        .accessibilityIdentifier("Dismiss configuration keyboard")
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+#endif
                 Text("Enter an HTTPS connection URL or inline configuration.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -66,16 +73,6 @@ public struct DobbyRootView: View {
             }
             .padding(24)
         }
-#if os(iOS)
-        .safeAreaInset(edge: .bottom, alignment: .trailing) {
-            if configurationFocused {
-                Button("Done") { configurationFocused = false }
-                    .accessibilityIdentifier("Dismiss configuration keyboard")
-                    .padding()
-                    .background(.regularMaterial)
-            }
-        }
-#endif
     }
 
     private var logs: some View {
