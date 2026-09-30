@@ -13,6 +13,52 @@ from torturer_runner.adapters.macos import MacOSAdapter
 
 
 class MacOSPreflightTests(unittest.TestCase):
+    def test_native_ui_forwards_prepared_pythonpath_and_filters_other_loader_vars(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            completed = subprocess.CompletedProcess(["native-ui"], 0, b"", b"")
+            allowed = {
+                "PATH": "/usr/bin",
+                "HOME": str(root / "ui-home"),
+                "PYTHONPATH": str(root / "screenshot-python"),
+                "DOBBYVPN_CONTROL_SOCKET": str(root / "control.sock"),
+            }
+            environment = {
+                **allowed,
+                "DYLD_LIBRARY_PATH": str(root / "developer-libraries"),
+                "UNRELATED_SECRET": "must-not-forward",
+            }
+            with (
+                mock.patch.object(
+                    local_vm_macos,
+                    "preflight_interactive_desktop",
+                    return_value=("tester", 501),
+                ),
+                mock.patch.object(local_vm_macos, "_run_logged", return_value=completed) as logged,
+            ):
+                result = local_vm_macos.run_interactive_ui(
+                    ["native-ui"],
+                    run_dir=root,
+                    cwd=root,
+                    logs=root / "logs",
+                    timeout=30,
+                    environment=environment,
+                )
+
+        self.assertIs(result, completed)
+        self.assertEqual(logged.call_args.kwargs["environment"], allowed)
+        command = logged.call_args.args[0]
+        self.assertEqual(
+            command[:11],
+            ["sudo", "-n", "launchctl", "asuser", "501", "sudo", "-n", "-u",
+             "tester", "--", "/usr/bin/env"],
+        )
+        self.assertEqual(
+            command[11:-1],
+            [f"{key}={value}" for key, value in sorted(allowed.items())],
+        )
+        self.assertEqual(command[-1], "native-ui")
+
     def test_hosted_macos_discovers_uplink_for_routing_proof(self) -> None:
         commands: list[tuple[str, ...]] = []
 

@@ -46,7 +46,7 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
 }
 
 func names(_ element: AXUIElement) throws -> [String] {
-    try [kAXIdentifierAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute]
+    try [kAXIdentifierAttribute, kAXTitleAttribute, kAXValueAttribute]
         .compactMap { name in
             // Text fields are verified by type, not copied into every tree response.
             if name == kAXValueAttribute {

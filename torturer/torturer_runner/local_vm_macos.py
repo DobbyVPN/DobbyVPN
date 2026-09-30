@@ -41,12 +41,13 @@ end tell'''
 # Keep the final macOS command boundary defensive even when called directly by
 # a test or another local worker.  PATH is needed for the smoke driver's
 # ``osascript``, ``pgrep`` and clipboard helpers; HOME is needed by the Go
-# desktop UI/CLI user stores.  The socket is the one product runtime value
-# needed by the macOS client.  Developer/build loader variables are not needed
-# by the packaged app and are intentionally not forwarded.
+# desktop UI/CLI user stores.  PYTHONPATH contains the prepared Pillow decoder
+# for screenshot validation, and the socket is the runtime value needed by the
+# macOS client.  Other developer/build loader variables are not forwarded.
 _MACOS_NATIVE_UI_ENVIRONMENT = frozenset({
     "PATH",
     "HOME",
+    "PYTHONPATH",
     "DOBBYVPN_CONTROL_SOCKET",
 })
 
