@@ -46,8 +46,8 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
 }
 
 func names(_ element: AXUIElement) throws -> [String] {
-    try [kAXIdentifierAttribute, kAXTitleAttribute, kAXValueAttribute]
-        .compactMap { name in
+    var values = try [kAXIdentifierAttribute, kAXTitleAttribute, kAXValueAttribute]
+        .compactMap { name -> String? in
             // Text fields are verified by type, not copied into every tree response.
             if name == kAXValueAttribute {
                 let role = try label(element, kAXRoleAttribute)
@@ -56,6 +56,16 @@ func names(_ element: AXUIElement) throws -> [String] {
             let value = try label(element, name)
             return value.isEmpty ? nil : value
         }
+    let role = try label(element, kAXRoleAttribute)
+    do {
+        let description = try attribute(element, kAXDescriptionAttribute) as? String ?? ""
+        if !description.isEmpty { values.append(description) }
+    } catch let error as AccessibilityReadError where error.code == .failure {
+        FileHandle.standardError.write(
+            Data("Optional AXDescription read failed; role=\(role) error=\(error) errorCode=\(error.code.rawValue)\n".utf8)
+        )
+    }
+    return values
 }
 
 func find(_ nodes: [AXUIElement], _ name: String, editor: Bool = false) throws -> AXUIElement {
@@ -140,7 +150,8 @@ func capture(_ pid: pid_t, path: String) throws {
         var displays = [CGDirectDisplayID](repeating: 0, count: 32)
         var count: UInt32 = 0
         try require(CGGetActiveDisplayList(UInt32(displays.count), &displays, &count) == .success, "Display geometry unavailable")
-        try require(displays.prefix(Int(count)).contains { CGDisplayBounds($0).contains(bounds) }, "Native window is partly offscreen")
+        let displayBounds = displays.prefix(Int(count)).map { CGDisplayBounds($0) }
+        try require(displayBounds.contains { $0.contains(bounds) }, "Native window is partly offscreen")
         for obstruction in windows[..<index] {
             if (obstruction[kCGWindowLayer as String] as? Int) == Int(CGWindowLevelForKey(.cursorWindow)) {
                 continue
@@ -148,6 +159,16 @@ func capture(_ pid: pid_t, path: String) throws {
             guard (obstruction[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let raw = obstruction[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), rect.intersects(bounds) else { continue }
+            let owner = obstruction[kCGWindowOwnerName as String] as? String
+            let layer = obstruction[kCGWindowLayer as String] as? Int
+            let systemSurface = (owner == "Dock" && layer == 20) ||
+                (owner == "Notification Center" && layer == 23)
+            if systemSurface && displayBounds.contains(where: { $0 == rect }) {
+                FileHandle.standardError.write(
+                    Data("Ignoring full-display system backing surface: \(obstruction)\n".utf8)
+                )
+                continue
+            }
             throw HelperError("Native screenshot obstructed: \(obstruction)")
         }
         return (number, bounds)
