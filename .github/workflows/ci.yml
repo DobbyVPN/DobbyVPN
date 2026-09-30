@@ -243,14 +243,6 @@ jobs:
           go-version-file: .go-version
           cache: false
 
-      - name: Install pinned screenshot decoder
-        run: |
-          set -euo pipefail
-          package_dir="$RUNNER_TEMP/dobbyvpn-screenshot-python"
-          python3 -m pip install --disable-pip-version-check --only-binary=:all: \
-            --no-deps --target "$package_dir" \
-            --requirement .github/scripts/requirements-native-ui.txt
-
       - name: Verify pinned Go installation
         run: |
           set -euo pipefail
@@ -318,6 +310,14 @@ jobs:
           test -n "$runtime_binary"
           runtime_arches="$(xcrun lipo -archs "$runtime_binary" | tee /dev/stderr)"
           [[ " $runtime_arches " == *" arm64 "* ]]
+
+      - name: Install pinned screenshot decoder
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/dobbyvpn-screenshot-python"
+          python3 -m pip install --disable-pip-version-check --only-binary=:all: \
+            --no-deps --target "$package_dir" \
+            --requirement .github/scripts/requirements-native-ui.txt
 
       - name: Build and launch app on iPhone Simulator
         env:
