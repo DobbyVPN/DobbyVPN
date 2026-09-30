@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ctypes
-from contextlib import nullcontext, redirect_stderr
+from contextlib import contextmanager, nullcontext, redirect_stderr
 from io import BytesIO, StringIO
 import json
 import os
@@ -33,6 +33,37 @@ class BinaryStderr:
 
     def flush(self) -> None:
         pass
+
+
+@contextmanager
+def _native_ui_journey_args():
+    with tempfile.TemporaryDirectory() as name:
+        root = Path(name)
+        paths = {name: root / name for name in ("cli", "ui", "profile", "native-helper")}
+        for path in paths.values():
+            path.write_text("test", encoding="utf-8")
+        raw_logs = root / "logs"
+        raw_logs.mkdir()
+        args = SimpleNamespace(
+            platform="windows",
+            service_pipe="DobbyVPN.Control",
+            service_socket=None,
+            cli=paths["cli"],
+            ui=paths["ui"],
+            profile=paths["profile"],
+            ui_helper=paths["native-helper"],
+            raw_log_dir=raw_logs,
+            output=root / "native-ui.json",
+            service_pid=123,
+            service_binary=paths["cli"],
+            service_library_path=None,
+            service_pid_file=None,
+            service_identity_file=None,
+            network_interface=None,
+            routing_firewall_helper=None,
+            timeout=5,
+        )
+        yield root, args
 
 
 def _windows_process_exited(pid: int, timeout_ms: int) -> bool:
@@ -203,43 +234,21 @@ class InformationRetentionTests(unittest.TestCase):
             )
 
     def test_native_ui_failure_result_keeps_completed_checks(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            cli = root / "cli"
-            ui = root / "ui"
-            profile = root / "profile"
-            output = root / "native-ui.json"
-            raw_logs = root / "logs"
-            raw_logs.mkdir()
-            for path in (cli, ui, profile):
-                path.write_text("test", encoding="utf-8")
-            args = SimpleNamespace(
-                platform="windows",
-                service_pipe="DobbyVPN.Control",
-                service_socket=None,
-                cli=cli,
-                ui=ui,
-                profile=profile,
-                raw_log_dir=raw_logs,
-                output=output,
-                service_pid=123,
-                service_binary=cli,
-                service_library_path=None,
-                service_pid_file=None,
-                service_identity_file=None,
-                network_interface=None,
-                routing_firewall_helper=None,
-                timeout=5,
-            )
+        with _native_ui_journey_args() as (_, args):
+            output = args.output
             base = mock.Mock()
             base._snapshot.return_value = {"configured": True, "profiles": [{"index": 0}]}
             controller = mock.Mock()
             controller.bounded_by.side_effect = lambda _timeout: nullcontext()
             controller.configure.return_value = {"input_verified": True}
-            args.ui_helper = root / "native-helper"
-            args.ui_helper.write_text("test", encoding="utf-8")
-            controller.connect.side_effect = native_ui.NativeUIJourneyError("connect failed")
-            controller.capture.return_value = {}
+            action_error = native_ui.NativeUIJourneyError("connect failed")
+            screenshot_error = OSError("failure screenshot unavailable")
+            screenshot_error.add_note("secondary decoder cleanup detail")
+            controller.connect.side_effect = action_error
+            controller.capture.side_effect = [
+                {"path": "configured.png", "width": 1, "height": 1},
+                screenshot_error,
+            ]
             smoke = SimpleNamespace(
                 NativeUIController=mock.Mock(return_value=controller),
             )
@@ -255,10 +264,19 @@ class InformationRetentionTests(unittest.TestCase):
 
             failure = caught.exception
             self.assertEqual(failure.native_ui_checks, {"configure_native": True})
+            self.assertIs(failure.__cause__, action_error)
+            self.assertIn("OSError: failure screenshot unavailable", "\n".join(failure.__notes__))
+            self.assertIn("secondary decoder cleanup detail", "\n".join(failure.__notes__))
             base.discover_connections.assert_not_called()
             controller.connect.assert_called_once()
+            self.assertEqual(
+                controller.capture.call_args_list,
+                [mock.call("configured"), mock.call("failure-connect")],
+            )
             base._snapshot.assert_not_called()
             controller.close_for_cleanup.assert_called_once()
+            base.reset.assert_called_once()
+            base.finalize.assert_called_once()
 
             with (
                 mock.patch.object(native_ui, "build_parser", return_value=SimpleNamespace(
@@ -274,6 +292,110 @@ class InformationRetentionTests(unittest.TestCase):
                 json.loads(output.read_text(encoding="utf-8"))["checks"],
                 {"configure_native": True},
             )
+
+    def test_native_ui_milestone_screenshot_failure_fails_action(self) -> None:
+        controller = mock.Mock()
+        controller.bounded_by.side_effect = lambda _timeout: nullcontext()
+        screenshot_error = OSError("configured screenshot could not be written")
+        screenshot_error.add_note("decoder cleanup detail")
+        controller.capture.side_effect = screenshot_error
+
+        with self.assertRaises(native_ui.NativeUIJourneyError) as caught:
+            native_ui._native_ui_action(
+                controller,
+                "configure",
+                "native-input",
+                30.0,
+                lambda: {"input_verified": True},
+                milestone="configured",
+            )
+
+        self.assertEqual(caught.exception.operation, "configure")
+        self.assertEqual(caught.exception.stage, "native-input")
+        self.assertIs(caught.exception.__cause__, screenshot_error)
+        self.assertIn("milestone screenshot configured failed", str(caught.exception))
+        self.assertIn("decoder cleanup detail", caught.exception.__notes__)
+        controller.capture.assert_called_once_with("configured")
+
+    def test_native_ui_unavailable_milestone_screenshot_fails_action(self) -> None:
+        controller = mock.Mock()
+        controller.bounded_by.side_effect = lambda _timeout: nullcontext()
+        controller.capture.return_value = {"unavailable": "native window is closed"}
+
+        with self.assertRaises(native_ui.NativeUIJourneyError) as caught:
+            native_ui._native_ui_action(
+                controller,
+                "connect",
+                "visible-connect",
+                30.0,
+                lambda: {"connected": True},
+                milestone="connected",
+            )
+
+        self.assertEqual(caught.exception.operation, "connect")
+        self.assertEqual(caught.exception.stage, "visible-connect")
+        self.assertIn("native window is closed", str(caught.exception))
+        controller.capture.assert_called_once_with("connected")
+
+    def test_native_ui_successful_journey_captures_visible_milestones_only(self) -> None:
+        with _native_ui_journey_args() as (root, args):
+            base = mock.Mock()
+            base._snapshot.return_value = {
+                "configured": True,
+                "profiles": [{"index": 0}],
+                "active_profile": {"index": 0},
+            }
+            base._connected.side_effect = [False, True, True, True, False]
+            base._cleanup_verified.return_value = True
+            base.restart_service_for_native_ui.return_value = {"process_loss_verified": True}
+            base.execute.side_effect = lambda step: {
+                "observe_tunnel": {"tunnel_interface": True},
+                "observe_routing_identity": {"routing_verified": True},
+                "measure_stability": {"stability_verified": True, "stability_sample_count": 1},
+                "measure_throughput": {
+                    "latency_ms": 1.0, "download_mbps": 1.0, "upload_mbps": 1.0,
+                },
+            }[step.operation]
+            controller = mock.Mock()
+            controller.bounded_by.side_effect = lambda _timeout: nullcontext()
+            controller.start.side_effect = lambda: controller.capture("startup")
+            controller.configure.return_value = {"input_verified": True}
+            controller.connect.return_value = {"status": "Connected"}
+            controller.disconnect.return_value = {"status": "Disconnected"}
+            controller.settings.side_effect = lambda: (
+                controller.capture("settings"),
+                {"settings_version": True, "settings_source_commit": True},
+            )[1]
+            controller.close.return_value = {"closed": True}
+            controller.reopen.side_effect = lambda: (
+                controller.start(), {"status": "Connected"}
+            )[1]
+            controller.recover_after_process_loss.return_value = {
+                "status": "Connected", "reconnecting_seen": True,
+            }
+            controller.capture.side_effect = lambda milestone: {
+                "path": str(root / "screenshots" / f"{milestone}.png"),
+                "width": 1,
+                "height": 1,
+            }
+            smoke = SimpleNamespace(NativeUIController=mock.Mock(return_value=controller))
+
+            with (
+                mock.patch.object(native_ui, "_ensure_directory"),
+                mock.patch.object(native_ui, "SubprocessRunner"),
+                mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
+                mock.patch.object(native_ui, "smoke", smoke),
+            ):
+                result = native_ui.run_journey(args)
+
+            self.assertTrue(result["complete"])
+            milestones = [call.args[0] for call in controller.capture.call_args_list]
+            self.assertNotIn("closed", milestones)
+            self.assertEqual(milestones.count("settings"), 1)
+            self.assertTrue({
+                "startup", "configured", "connected", "disconnected", "reconnected",
+                "settings", "reopened", "process-recovered",
+            }.issubset(milestones))
 
     def test_simulator_second_timeout_streams_reach_primary_failure(self) -> None:
         initial_stdout = b"initial\x00\xff"

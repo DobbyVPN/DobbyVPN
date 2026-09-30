@@ -166,7 +166,7 @@ def _native_ui_action(
         except Exception as screenshot_error:
             failure.add_note(
                 "native-ui-failure-screenshot: "
-                f"{type(screenshot_error).__name__}: {screenshot_error}"
+                + _exception_details(screenshot_error)
             )
         raise failure from error
     if milestone is not None:
@@ -174,10 +174,23 @@ def _native_ui_action(
             with controller.bounded_by(reserve):
                 screenshot = controller.capture(milestone)
         except Exception as screenshot_error:
-            result = {**result, "screenshot_error": str(screenshot_error)}
-        else:
-            if screenshot is not None:
-                result = {**result, "screenshot": screenshot}
+            failure = NativeUIJourneyError(
+                f"native UI {operation} milestone screenshot {milestone} failed: "
+                f"{type(screenshot_error).__name__}: {screenshot_error}",
+                operation=operation,
+                stage=stage,
+            )
+            for note in getattr(screenshot_error, "__notes__", ()):
+                failure.add_note(note)
+            raise failure from screenshot_error
+        if not isinstance(screenshot, dict) or not isinstance(screenshot.get("path"), str):
+            raise NativeUIJourneyError(
+                f"native UI {operation} milestone screenshot {milestone} was not retained: "
+                f"{screenshot!r}",
+                operation=operation,
+                stage=stage,
+            )
+        result = {**result, "screenshot": screenshot}
     return result
 
 
@@ -378,14 +391,14 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
 
         settings = _native_ui_action(
             ui, "settings", "settings-window", request_timeout,
-            ui.settings, milestone="settings",
+            ui.settings,
         )
         checks["settings_version"] = settings.get("settings_version") is True
         checks["settings_source_commit"] = settings.get("settings_source_commit") is True
 
         _native_ui_action(
             ui, "close-window", "close-window", request_timeout,
-            ui.close, milestone="closed",
+            ui.close,
         )
         checks["close_window"] = True
         _native_ui_action(
