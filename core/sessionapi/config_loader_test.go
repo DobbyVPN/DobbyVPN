@@ -15,8 +15,7 @@ import (
 	"time"
 )
 
-const loaderTestConfig = "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n" +
-	"[profiles.config]\nServer='vpn.invalid'\nPort=443\nPassword='synthetic'\n"
+const loaderTestConfig = "[[Outline]]\nServer='vpn.invalid'\nPort=443\nPassword='synthetic'\n"
 
 func TestDefaultConfigLoaderAcceptsInlineAndHTTPSURL(t *testing.T) {
 	inline := []byte(loaderTestConfig)

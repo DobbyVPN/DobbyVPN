@@ -349,9 +349,9 @@ class TimingProgressTests(unittest.TestCase):
         profile = SimpleNamespace(
             config_yaml=lambda _port: "service: test\n",
             client_toml=lambda _url: (
-                "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n"
-                "[profiles.config]\nServer = 'vpn.invalid'\nPort = 443\n"
-                "Password = 'synthetic'\n"
+                "[[Outline]]\nDescription = 'synthetic Render profile'\n"
+                "Server = 'vpn.invalid'\nPort = 443\nPassword = 'synthetic'\n"
+                "\n[ExcludeIPs]\nIPs = []\n"
             ),
         )
         output = StringIO()

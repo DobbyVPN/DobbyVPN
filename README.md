@@ -39,49 +39,38 @@ lag releases; availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Use schema version 2 TOML inline or fetch it from an HTTPS subscription URL.
-HTTP URLs are rejected, redirects must remain HTTPS, and downloaded or inline
-configuration is limited to 1 MiB. Add each connection variant as an ordered
-`[[profiles]]` entry with `protocol` set to `OUTLINE`, `XRAY`, or
-`TRUST_TUNNEL`; place its protocol settings under `[profiles.config]`. The
-optional root `exclude_ips` list bypasses the VPN for those destinations. Any
-other root section or key rejects the whole configuration. TrustTunnel
+Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
+URLs are rejected, redirects must remain HTTPS, and downloaded or inline
+configuration is limited to 1 MiB. Add each connection variant in an ordered
+`[[Outline]]`, `[[Xray]]`, or `[[TrustTunnel]]` section. The optional root
+`[ExcludeIPs]` section bypasses the VPN for the destinations in its `IPs` list.
+Any other root section or key rejects the whole configuration. TrustTunnel
 certificate verification is required, so keep `skip_verification = false`
-(or omit it). This setting is valid only inside
-`[profiles.config.endpoint]`; a profile-level `skip_verification` key is
-rejected.
+(or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a
+profile-level `skip_verification` key is rejected.
 
 **Connection variants** (automatic first-working selection and failover)
 ```toml
-schema_version = 2
-exclude_ips = ["200.200.200.200/32"] # Shared by all variants
-
-[[profiles]] # First variant
-protocol = "OUTLINE"
-description = "My fast SS"
-[profiles.config]
+[[Outline]] # First variant
+Description = "My fast SS"
 Server = "1.1.1.1"
 Port = 443
 Password = "Qwerty123"
 DisguisePrefix = "POST "
 
-[[profiles]] # Second variant
-protocol = "XRAY"
-description = "My VLESS Reality"
-[profiles.config]
+[[Xray]] # Second variant
+Description = "My VLESS Reality"
 log = { loglevel = "info" }
 outbounds = [
 { tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
 {tag = "direct", protocol = "freedom"}]
 
-[[profiles]] # Third variant
-protocol = "TRUST_TUNNEL"
-[profiles.config]
+[[TrustTunnel]] # Third variant
 loglevel = "info"
 vpn_mode = "general"
 post_quantum_group_enabled = true
 exclusions = []
-[profiles.config.endpoint]
+[TrustTunnel.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -92,8 +81,11 @@ skip_verification = false
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-[profiles.config.listener.socks]
+[TrustTunnel.listener.socks]
 address = "127.0.0.1:10808"
+
+[ExcludeIPs] # Optional; shared by all variants
+IPs = ["200.200.200.200/32"]
 ```
 
 DobbyVPN starts configured variants in order and keeps the first one whose
@@ -111,73 +103,68 @@ After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs
 before five uninterrupted connected minutes, the session fails and the user
 must connect again manually. Five uninterrupted connected minutes reset the
-recovery allowance. The same ordered `[[profiles]]` format works for one
-profile or several; `protocol` selects the settings under that entry's `config`
-table.
+recovery allowance. The same ordered `[[Outline]]`, `[[Xray]]`, and
+`[[TrustTunnel]]` section format works for one profile or several.
 
-`exclude_ips` intentionally bypasses the VPN for the listed destinations. The
+`[ExcludeIPs]` intentionally bypasses the VPN for the destinations in `IPs`. The
 traffic still enters the tunnel on some platforms before the runtime routes it
 outside the proxy; platform routing details differ. DobbyVPN does not claim a
 system-wide kill switch or leak-free recovery during tunnel teardown.
 
 **Clean ShadowSocks** (best performance)
 ```toml
-schema_version = 2
-exclude_ips = ["200.200.200.200/32"] # Optional
-
-[[profiles]] # Implementation library
-protocol = "OUTLINE"
-description = "My fast SS" # whatever you like
-[profiles.config]
+[[Outline]] # Implementation library
+Description = "My fast SS" # whatever you like
 Server = "1.1.1.1" # IP or DNS name for the server
 Port = 443 # ShadowSocks port
 Password = "Qwerty123" # user's 'secret' from the Outline's config - NOT the part in 'ss://' config
 DisguisePrefix = "POST " # one - for TCP & UDP for now; for options - see ref. # 1 below
+
+[ExcludeIPs] # Optional
+IPs = [
+  "200.200.200.200/32" # IP address or subnet to exclude from VPN routing
+]
 ```
 
 **ShadowSocks via WebSocket** (caddy -> outline-ss-server) 
 ```toml
-schema_version = 2
-exclude_ips = ["200.200.200.200/32"] # Optional
-
-[[profiles]] # Implementation library
-protocol = "OUTLINE"
-description = "My beautiful SS in WS" # whatever you like
-[profiles.config]
+[[Outline]] # Implementation library
+Description = "My beautiful SS in WS" # whatever you like
 WebSocket = true # flag to enable WebSocket
 Server = "www.myserver.com" # DNS name of the server
 Password = "Qwerty123" # user's 'secret' from the Outline's config
 WebSocketPath = "/WS_Ooth5OoCoo7reDah5oich1gai0che2ugh8pho" # listeners.path (one for both TCP & UDP for now) 
 DisguisePrefix = "POST " # for options see ref. # 1 below
+
+[ExcludeIPs] # Optional
+IPs = [
+  "200.200.200.200/32" # IP address or subnet to exclude from VPN routing
+]
 ```
 
 **VLESS + Reality over xray-core** ([more details](https://xtls.github.io/en/config/outbounds/vless.html))
 ```toml
-schema_version = 2
-exclude_ips = ["200.200.200.200/32"] # Optional
-
-[[profiles]] # Implementation library
-protocol = "XRAY"
-[profiles.config]
+[[Xray]] # Implementation library
 log = { loglevel = "info" } # Providing DobbyVPN and xray's log level
 # Warning: Inbound field will be modified due to custom tunneling settings
 outbounds = [
 { tag = "proxy", protocol = "vless", settings = { vnext = [{address = "www.myserver.com", port = 443, users = [{id = "hi8WIXyln+amtgfQeT11zQ==", flow = "xtls-rprx-vision", encryption = "none"}]}]}, streamSettings = {network = "tcp",security = "reality", realitySettings = {show= false, fingerprint = "randomized", serverName = "secretSNI.com", publicKey = "9x3F9q3piIG9yZamqnbl+e6Tr9ZZZrjhfrsqHkG3+Yo=", shortId = "a1b2c3d4", spiderX = "/"}}},
 {tag = "direct", protocol = "freedom"}]
+
+[ExcludeIPs] # Optional
+IPs = [
+  "200.200.200.200/32" # IP address or subnet to exclude from VPN routing
+]
 ```
 
 **TrustTunnel** ([more details](https://github.com/TrustTunnel/TrustTunnel))
 ```toml
-schema_version = 2
-
-[[profiles]]
-protocol = "TRUST_TUNNEL"
-[profiles.config]
+[[TrustTunnel]]
 loglevel = "info"
 vpn_mode = "general"
 post_quantum_group_enabled = true
 exclusions = []
-[profiles.config.endpoint]
+[TrustTunnel.endpoint]
 hostname = "domain.com"
 addresses = ["ip:port"]
 custom_sni = "domain.com"
@@ -188,7 +175,7 @@ skip_verification = false
 upstream_protocol = "http3"
 anti_dpi = true
 dns_upstreams = []
-[profiles.config.listener.socks]
+[TrustTunnel.listener.socks]
 address = "127.0.0.1:10808"
 ```
 

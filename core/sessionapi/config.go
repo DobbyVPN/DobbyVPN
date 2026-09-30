@@ -13,18 +13,18 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// The container owns profile ordering. Protocol payloads remain open and are
-// validated by their existing protocol-specific normalizers and runtimes.
+// Protocol payloads remain open and are validated by their existing
+// protocol-specific normalizers and runtimes. TOML metadata preserves the
+// order in which the root protocol array tables appeared.
 type configRoot struct {
-	SchemaVersion int             `toml:"schema_version"`
-	ExcludeIPs    []string        `toml:"exclude_ips"`
-	Profiles      []configProfile `toml:"profiles"`
+	ExcludeIPs  excludeIPsConfig         `toml:"ExcludeIPs"`
+	Outline     []map[string]interface{} `toml:"Outline"`
+	Xray        []map[string]interface{} `toml:"Xray"`
+	TrustTunnel []map[string]interface{} `toml:"TrustTunnel"`
 }
 
-type configProfile struct {
-	Protocol    Protocol               `toml:"protocol"`
-	Description string                 `toml:"description"`
-	Config      map[string]interface{} `toml:"config"`
+type excludeIPsConfig struct {
+	IPs []string `toml:"IPs"`
 }
 
 type parsedConfig struct {
@@ -35,11 +35,11 @@ type parsedConfig struct {
 const maxConfigBytes = 1 << 20
 
 func parseConfig(raw []byte) (parsedConfig, error) {
-	root, err := decodeConfig(raw)
+	root, protocols, err := decodeConfig(raw)
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	profiles, err := parseProfiles(root)
+	profiles, err := parseProfiles(root, protocols)
 	if err != nil {
 		return parsedConfig{}, err
 	}
@@ -47,39 +47,51 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles}, nil
 }
 
-func decodeConfig(raw []byte) (configRoot, error) {
+func decodeConfig(raw []byte) (configRoot, []string, error) {
 	if len(raw) > maxConfigBytes {
-		return configRoot{}, failure(FailureMalformedConfig, "configuration exceeds the 1 MiB size limit")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "configuration exceeds the 1 MiB size limit")
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return configRoot{}, failure(FailureMalformedConfig, "configuration is blank")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "configuration is blank")
 	}
 	var root configRoot
 	metadata, err := toml.Decode(string(raw), &root)
 	if err != nil {
-		return configRoot{}, failureWithCause(FailureMalformedConfig, "TOML could not be parsed", err)
+		return configRoot{}, nil, failureWithCause(FailureMalformedConfig, "TOML could not be parsed", err)
 	}
-	if err := validateContainerKeys(metadata.Keys()); err != nil {
-		return configRoot{}, err
+	if err := validateRootKeys(metadata.Keys()); err != nil {
+		return configRoot{}, nil, err
 	}
-	if root.SchemaVersion != 2 {
-		return configRoot{}, failure(FailureUnsupported, "configuration requires schema_version = 2")
-	}
-	if len(root.Profiles) == 0 {
-		return configRoot{}, failure(FailureMalformedConfig, "configuration requires one or more [[profiles]] sections")
-	}
+
+	var protocols []string
 	for _, key := range metadata.Keys() {
-		if len(key) == 1 && key[0] == "profiles" && metadata.Type(key...) != "ArrayHash" {
-			return configRoot{}, failure(FailureMalformedConfig, "profiles must be an array of tables")
+		if len(key) != 1 || metadata.Type(key...) != "ArrayHash" {
+			continue
+		}
+		switch key[0] {
+		case "Outline", "Xray", "TrustTunnel":
+			protocols = append(protocols, key[0])
 		}
 	}
-	return root, nil
+	if len(protocols) == 0 {
+		return configRoot{}, nil, failure(FailureMalformedConfig, "expected one or more [[Outline]], [[Xray]], or [[TrustTunnel]] sections")
+	}
+
+	counts := map[string]int{}
+	for _, protocol := range protocols {
+		counts[protocol]++
+	}
+	if counts["Outline"] != len(root.Outline) || counts["Xray"] != len(root.Xray) || counts["TrustTunnel"] != len(root.TrustTunnel) {
+		return configRoot{}, nil, failure(FailureMalformedConfig, "protocol section count does not match TOML data")
+	}
+	return root, protocols, nil
 }
 
-func parseProfiles(root configRoot) ([]RuntimeProfile, error) {
-	profiles := make([]RuntimeProfile, 0, len(root.Profiles))
-	for index, block := range root.Profiles {
-		profile, err := parseProfile(root, block, int32(index))
+func parseProfiles(root configRoot, protocols []string) ([]RuntimeProfile, error) {
+	next := map[string]int{}
+	profiles := make([]RuntimeProfile, 0, len(protocols))
+	for index, protocolName := range protocols {
+		profile, err := parseProfile(root, next, protocolName, int32(index))
 		if err != nil {
 			return nil, err
 		}
@@ -88,14 +100,9 @@ func parseProfiles(root configRoot) ([]RuntimeProfile, error) {
 	return profiles, nil
 }
 
-func parseProfile(root configRoot, profile configProfile, profileIndex int32) (RuntimeProfile, error) {
-	block, protocol := profile.Config, profile.Protocol
-	if protocol != ProtocolOutline && protocol != ProtocolXray && protocol != ProtocolTrustTunnel {
-		return RuntimeProfile{}, failure(FailureUnsupported, "configuration contains an unsupported profile protocol")
-	}
-	if block == nil {
-		return RuntimeProfile{}, failure(FailureMalformedConfig, "profile requires a config table")
-	}
+func parseProfile(root configRoot, next map[string]int, protocolName string, profileIndex int32) (RuntimeProfile, error) {
+	block, protocol := nextProfile(root, next, protocolName)
+	next[protocolName]++
 	if cloakValue, present := block["Cloak"]; present {
 		cloak, ok := cloakValue.(bool)
 		if !ok {
@@ -108,6 +115,14 @@ func parseProfile(root configRoot, profile configProfile, profileIndex int32) (R
 	if protocol == ProtocolTrustTunnel {
 		if err := validateTrustTunnelVerification(block); err != nil {
 			return RuntimeProfile{}, err
+		}
+	}
+	description := ""
+	if value, present := block["Description"]; present {
+		var ok bool
+		description, ok = value.(string)
+		if !ok {
+			return RuntimeProfile{}, failure(FailureMalformedConfig, "Description must be a string")
 		}
 	}
 	var payload []byte
@@ -123,31 +138,37 @@ func parseProfile(root configRoot, profile configProfile, profileIndex int32) (R
 		return RuntimeProfile{}, err
 	}
 	return RuntimeProfile{
-		Summary:          ProfileSummary{Index: profileIndex, Protocol: protocol, Description: profile.Description},
+		Summary:          ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
 		NormalizedConfig: normalized,
-		ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs...),
+		ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),
 	}, nil
 }
 
-func validateContainerKeys(keys []toml.Key) error {
+func nextProfile(root configRoot, next map[string]int, name string) (map[string]interface{}, Protocol) {
+	switch name {
+	case "Outline":
+		return root.Outline[next[name]], ProtocolOutline
+	case "Xray":
+		return root.Xray[next[name]], ProtocolXray
+	case "TrustTunnel":
+		return root.TrustTunnel[next[name]], ProtocolTrustTunnel
+	default:
+		return nil, ""
+	}
+}
+
+func validateRootKeys(keys []toml.Key) error {
 	for _, key := range keys {
 		if len(key) == 0 {
 			continue
 		}
+		if key[0] == "ExcludeIPs" && len(key) > 1 && (key[1] != "IPs" || len(key) > 2) {
+			return failure(FailureUnsupported, "configuration contains an unsupported ExcludeIPs setting")
+		}
 		switch key[0] {
-		case "schema_version", "exclude_ips":
-			if len(key) != 1 {
-				return failure(FailureUnsupported, "configuration contains an unsupported container setting")
-			}
-		case "profiles":
-			if len(key) > 1 && key[1] != "protocol" && key[1] != "description" && key[1] != "config" {
-				return failure(FailureUnsupported, "profile contains an unsupported container setting")
-			}
-			if len(key) > 2 && key[1] != "config" {
-				return failure(FailureUnsupported, "profile contains an unsupported container setting")
-			}
+		case "Outline", "Xray", "TrustTunnel", "ExcludeIPs":
 		default:
-			return failure(FailureUnsupported, "configuration contains an unsupported container setting")
+			return failure(FailureUnsupported, "configuration contains an unsupported section")
 		}
 	}
 	return nil

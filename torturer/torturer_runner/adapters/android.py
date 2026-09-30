@@ -105,17 +105,16 @@ _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
-# The rendered lane selects one schema-v2 profile while the binding lane
-# exercises the complete profile set. tomllib validates the source and each
-# candidate; the product's Go parser remains authoritative.
+# The rendered lane selects one original-format profile while the binding
+# lane exercises the complete profile set. tomllib validates the source and
+# each bounded candidate; the product's Go parser remains authoritative.
 _GUI_PROFILE_HEADER = re.compile(
-    rb"(?m)^[ \t]*\[\[[ \t]*profiles[ \t]*\]\]"
+    rb"(?m)^[ \t]*\[\[[ \t]*(Outline|Xray|TrustTunnel)[ \t]*\]\]"
     rb"[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
 )
-_GUI_PROFILE_PROTOCOLS = frozenset({"OUTLINE", "XRAY"})
+_GUI_PROFILE_PROTOCOLS = frozenset({"Outline", "Xray"})
 # Keep emulator input bounded; the binding lane owns the complete profile set.
 _GUI_PROFILE_MAX_BYTES = 64 * 1024
-_GUI_PROFILE_PREFIX = b"schema_version = 2\n"
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
     "foreground": frozenset({"VPN_DIALOG", "PRODUCT", "OTHER", "NONE"}),
@@ -183,53 +182,89 @@ def _remaining(deadline: float, code: str) -> float:
 
 
 def _select_gui_profile(raw: bytes) -> bytes:
-    """Return one source-preserving, complete schema-v2 GUI profile.
+    """Return one complete Outline or Xray profile from public-format TOML.
 
-    Android's rendered lane intentionally proves one real UI journey while
-    the binding lane retains full profile-matrix coverage. It validates the
-    original TOML and each bounded single-profile candidate with tomllib,
-    matching the parsed profile to the original so a header-like line inside
-    a multiline string cannot be selected as a profile. Profile bytes remain
-    untouched; Go remains authoritative for product validation.
+    The rendered lane proves one real UI journey; the binding lane exercises
+    every configured profile. Bounded header candidates retain the source's
+    nested TOML and are accepted only when tomllib parses exactly one profile
+    equal to one from the fully parsed source. This also rejects header-like
+    text inside multiline strings. Shared exclusions are retained whether
+    they appear before or after the selected protocol block.
     """
     try:
         source = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError):
         raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE") from None
-    source_profiles = source.get("profiles")
-    if source.get("schema_version") != 2 or not isinstance(source_profiles, list):
+    allowed_sections = {"Outline", "Xray", "TrustTunnel", "ExcludeIPs"}
+    if set(source) - allowed_sections:
         raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
+
+    for protocol in ("Outline", "Xray", "TrustTunnel"):
+        profiles = source.get(protocol)
+        if profiles is not None and (
+            not isinstance(profiles, list)
+            or any(not isinstance(profile, dict) for profile in profiles)
+        ):
+            raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
+    exclusions = source.get("ExcludeIPs")
+    if "ExcludeIPs" in source:
+        if not isinstance(exclusions, dict) or set(exclusions) - {"IPs"}:
+            raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
+        ips = exclusions.get("IPs", [])
+        if not isinstance(ips, list) or any(not isinstance(ip, str) for ip in ips):
+            raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
 
     headers = tuple(_GUI_PROFILE_HEADER.finditer(raw))
     for index, header in enumerate(headers):
+        protocol = header.group(1).decode("ascii")
+        if protocol not in _GUI_PROFILE_PROTOCOLS:
+            continue
+        source_profiles = source.get(protocol)
+        if not isinstance(source_profiles, list):
+            continue
+
         for end_index in range(index + 1, len(headers) + 1):
-            end = (
-                headers[end_index].start()
-                if end_index < len(headers)
-                else len(raw)
-            )
-            candidate = _GUI_PROFILE_PREFIX + raw[header.start():end]
+            end = headers[end_index].start() if end_index < len(headers) else len(raw)
+            candidate = raw[header.start():end]
             if len(candidate) > _GUI_PROFILE_MAX_BYTES:
                 break
             try:
                 parsed = tomllib.loads(candidate.decode("utf-8"))
             except (UnicodeDecodeError, tomllib.TOMLDecodeError):
                 continue
-            profiles = parsed.get("profiles")
-            if (
-                parsed.get("schema_version") != 2
-                or not isinstance(profiles, list)
-            ):
-                continue
-            if len(profiles) > 1:
-                break
-            if not profiles:
+            profiles = parsed.get(protocol)
+            if not isinstance(profiles, list) or len(profiles) != 1:
+                if isinstance(profiles, list) and len(profiles) > 1:
+                    break
                 continue
             profile = profiles[0]
-            if isinstance(profile, dict) and profile in source_profiles:
-                if profile.get("protocol") in _GUI_PROFILE_PROTOCOLS:
-                    return candidate
-                break
+            if not isinstance(profile, dict) or profile not in source_profiles:
+                continue
+            if set(parsed) - {protocol, "ExcludeIPs"}:
+                continue
+            if "ExcludeIPs" in parsed and parsed["ExcludeIPs"] != exclusions:
+                continue
+
+            selected = candidate
+            if "ExcludeIPs" in source and "ExcludeIPs" not in parsed:
+                exclude_lines = ["[ExcludeIPs]"]
+                if "IPs" in exclusions:
+                    exclude_lines.append(f"IPs = {json.dumps(exclusions['IPs'])}")
+                if selected and not selected.endswith((b"\n", b"\r")):
+                    selected += b"\n"
+                selected += ("\n" + "\n".join(exclude_lines) + "\n").encode("utf-8")
+                if len(selected) > _GUI_PROFILE_MAX_BYTES:
+                    continue
+
+            expected = {protocol: [profile]}
+            if "ExcludeIPs" in source:
+                expected["ExcludeIPs"] = exclusions
+            try:
+                validated = tomllib.loads(selected.decode("utf-8"))
+            except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+                continue
+            if validated == expected:
+                return selected
     raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
 
 

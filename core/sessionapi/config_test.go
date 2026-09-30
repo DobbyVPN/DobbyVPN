@@ -33,11 +33,10 @@ func TestParseConfigRejectsUnsupportedRootKeys(t *testing.T) {
 	}
 }
 
-func TestParseConfigKeepsSupportedRootAndProtocolPayloadsOpen(t *testing.T) {
-	raw := "schema_version = 2\nexclude_ips = ['192.0.2.0/24']\n\n" +
-		"[[profiles]]\nprotocol = 'XRAY'\n[profiles.config]\n" +
-		"outbounds = [{ address = 'vpn.invalid', nested = { arbitrary = true } }]\n" +
-		"[[profiles]]\nprotocol = 'TRUST_TUNNEL'\n[profiles.config.endpoint]\n" +
+func TestParseConfigKeepsProtocolPayloadsOpen(t *testing.T) {
+	raw := "[ExcludeIPs]\nIPs = ['192.0.2.0/24']\n\n" +
+		"[[Xray]]\noutbounds = [{ address = 'vpn.invalid', nested = { arbitrary = true } }]\n" +
+		"[[TrustTunnel]]\n[TrustTunnel.endpoint]\n" +
 		"hostname = 'vpn.invalid'\ncustom_protocol_option = 'accepted'\n"
 	parsed, err := parseConfig([]byte(raw))
 	if err != nil {
@@ -46,41 +45,40 @@ func TestParseConfigKeepsSupportedRootAndProtocolPayloadsOpen(t *testing.T) {
 	if len(parsed.profiles) != 2 {
 		t.Fatalf("profile count = %d, want 2", len(parsed.profiles))
 	}
+	if parsed.profiles[0].Summary.Protocol != ProtocolXray || parsed.profiles[1].Summary.Protocol != ProtocolTrustTunnel {
+		t.Fatalf("profile order = %#v", parsed.profiles)
+	}
+	if got := parsed.profiles[0].ExcludeCIDRs; len(got) != 1 || got[0] != "192.0.2.0/24" {
+		t.Fatalf("exclude IPs = %#v", got)
+	}
 }
 
-func TestParseConfigUsesOrderedArrayTableEvents(t *testing.T) {
-	raw := `schema_version = 2
-
-[[profiles]]
-protocol = "OUTLINE"
-description = """
+func TestParseConfigUsesOrderedArrayTableMetadata(t *testing.T) {
+	raw := `[[Outline]]
+Description = """
 This multiline description contains a literal header:
-[[profiles]]
+[[Outline]]
 It is still description text.
 """
-[profiles.config]
 Server = 'outline.invalid'
 Port = 443
 Password = 'synthetic'
 
-[[profiles]]
-protocol = 'XRAY'
-description = 'Xray profile'
-[profiles.config]
+[[Xray]]
+Description = 'Xray profile'
 outbounds = [{ address = 'xray.invalid' }]
 
-[[profiles]]
-protocol = 'TRUST_TUNNEL'
-description = 'TrustTunnel profile'
-[profiles.config]
+[[TrustTunnel]]
+Description = 'TrustTunnel profile'
 
-[[profiles]]
-protocol = 'OUTLINE'
-description = 'second Outline profile'
-[profiles.config]
+[[Outline]]
+Description = 'second Outline profile'
 Server = 'outline-two.invalid'
 Port = 443
 Password = 'synthetic'
+
+[ExcludeIPs]
+IPs = ['192.0.2.0/24']
 `
 	parsed, err := parseConfig([]byte(raw))
 	if err != nil {
@@ -90,7 +88,7 @@ Password = 'synthetic'
 		protocol    Protocol
 		description string
 	}{
-		{ProtocolOutline, "This multiline description contains a literal header:\n[[profiles]]\nIt is still description text.\n"},
+		{ProtocolOutline, "This multiline description contains a literal header:\n[[Outline]]\nIt is still description text.\n"},
 		{ProtocolXray, "Xray profile"},
 		{ProtocolTrustTunnel, "TrustTunnel profile"},
 		{ProtocolOutline, "second Outline profile"},
@@ -103,34 +101,44 @@ Password = 'synthetic'
 		if got.Index != int32(i) || got.Protocol != expected.protocol || got.Description != expected.description {
 			t.Errorf("profile %d = %#v, want protocol %s and description %q", i, got, expected.protocol, expected.description)
 		}
+		if len(parsed.profiles[i].ExcludeCIDRs) != 1 || parsed.profiles[i].ExcludeCIDRs[0] != "192.0.2.0/24" {
+			t.Errorf("profile %d exclude IPs = %#v", i, parsed.profiles[i].ExcludeCIDRs)
+		}
 	}
 }
 
 func TestParseConfigRejectsUnknownRootSettings(t *testing.T) {
-	raw := "schema_version = 2\nexclude_ips = ['192.0.2.0/24']\n" +
-		"unexpected = ['198.51.100.0/24']\n" + outlineProfile
+	raw := "unexpected = ['198.51.100.0/24']\n" + outlineProfile
 	if _, err := parseConfig([]byte(raw)); CodeOf(err) != FailureUnsupported {
 		t.Fatalf("unknown root setting error = %v", err)
 	}
 }
 
+func TestParseConfigRejectsVersionedProfilesEnvelope(t *testing.T) {
+	raw := "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n" +
+		"[profiles.config]\nServer = 'vpn.invalid'\nPort = 443\nPassword = 'synthetic'\n"
+	if _, err := parseConfig([]byte(raw)); CodeOf(err) != FailureUnsupported {
+		t.Fatalf("versioned profiles envelope error = %v, want unsupported", err)
+	}
+}
+
 func TestParseConfigTrustTunnelRequiresCertificateVerification(t *testing.T) {
-	base := "schema_version = 2\n\n[[profiles]]\nprotocol = 'TRUST_TUNNEL'\n[profiles.config]\nname = 'synthetic'\n"
+	base := "[[TrustTunnel]]\nDescription = 'synthetic'\n"
 	tests := []struct {
 		name     string
 		field    string
 		wantCode FailureCode
 	}{
 		{name: "absent defaults to enabled", wantCode: ""},
-		{name: "false accepted", field: "[profiles.config.endpoint]\nskip_verification = false\n", wantCode: ""},
-		{name: "true rejected", field: "[profiles.config.endpoint]\nskip_verification = true\n", wantCode: FailureMalformedConfig},
-		{name: "wrong type rejected", field: "[profiles.config.endpoint]\nskip_verification = 'false'\n", wantCode: FailureMalformedConfig},
+		{name: "false accepted", field: "[TrustTunnel.endpoint]\nskip_verification = false\n", wantCode: ""},
+		{name: "true rejected", field: "[TrustTunnel.endpoint]\nskip_verification = true\n", wantCode: FailureMalformedConfig},
+		{name: "wrong type rejected", field: "[TrustTunnel.endpoint]\nskip_verification = 'false'\n", wantCode: FailureMalformedConfig},
 		{name: "root true rejected", field: "skip_verification = true\n", wantCode: FailureMalformedConfig},
 		{name: "root false rejected", field: "skip_verification = false\n", wantCode: FailureMalformedConfig},
 		{name: "root string rejected", field: "skip_verification = 'false'\n", wantCode: FailureMalformedConfig},
 		{name: "root integer rejected", field: "skip_verification = 0\n", wantCode: FailureMalformedConfig},
-		{name: "root false with endpoint true rejected", field: "skip_verification = false\n[profiles.config.endpoint]\nskip_verification = true\n", wantCode: FailureMalformedConfig},
-		{name: "root true with endpoint false rejected", field: "skip_verification = true\n[profiles.config.endpoint]\nskip_verification = false\n", wantCode: FailureMalformedConfig},
+		{name: "root false with endpoint true rejected", field: "skip_verification = false\n[TrustTunnel.endpoint]\nskip_verification = true\n", wantCode: FailureMalformedConfig},
+		{name: "root true with endpoint false rejected", field: "skip_verification = true\n[TrustTunnel.endpoint]\nskip_verification = false\n", wantCode: FailureMalformedConfig},
 		{name: "inline endpoint true rejected", field: "endpoint = { skip_verification = true }\n", wantCode: FailureMalformedConfig},
 	}
 	for _, tt := range tests {
@@ -148,10 +156,10 @@ func TestParseConfigTrustTunnelRequiresCertificateVerification(t *testing.T) {
 }
 
 func TestParseConfigRejectsMisplacedTrustTunnelVerificationWithOtherProfiles(t *testing.T) {
-	trustTunnel := "[[profiles]]\nprotocol = 'TRUST_TUNNEL'\n[profiles.config]\nskip_verification = false\n"
+	trustTunnel := "[[TrustTunnel]]\nskip_verification = false\n"
 	for name, raw := range map[string]string{
 		"outline first":     outlineConfig + trustTunnel,
-		"trusttunnel first": "schema_version = 2\n" + trustTunnel + outlineProfile,
+		"trusttunnel first": trustTunnel + outlineProfile,
 	} {
 		t.Run(name, func(t *testing.T) {
 			parsed, err := parseConfig([]byte(raw))
@@ -171,12 +179,18 @@ func TestParseConfigRejectsMalformedCloakValues(t *testing.T) {
 		"number":      "1",
 	} {
 		t.Run(name, func(t *testing.T) {
-			raw := "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n" +
-				"[profiles.config]\nCloak = " + value + "\nServer = 'vpn.invalid'\nPort = 443\nPassword = 'synthetic'\n"
+			raw := "[[Outline]]\nCloak = " + value + "\nServer = 'vpn.invalid'\nPort = 443\nPassword = 'synthetic'\n"
 			if _, err := parseConfig([]byte(raw)); CodeOf(err) != FailureMalformedConfig {
 				t.Fatalf("parseConfig error = %v, want malformed config", err)
 			}
 		})
+	}
+}
+
+func TestParseConfigRejectsNonStringDescription(t *testing.T) {
+	raw := "[[Outline]]\nDescription = 7\nServer = 'vpn.invalid'\nPort = 443\nPassword = 'synthetic'\n"
+	if _, err := parseConfig([]byte(raw)); CodeOf(err) != FailureMalformedConfig {
+		t.Fatalf("non-string Description error = %v, want malformed config", err)
 	}
 }
 
@@ -187,5 +201,5 @@ func TestParseConfigRejectsOversizedInputBeforeDecode(t *testing.T) {
 	}
 }
 
-const outlineProfile = "[[profiles]]\nprotocol = 'OUTLINE'\n[profiles.config]\nServer = 'vpn.invalid'\nPort = 443\nPassword = 'synthetic'\n\n"
-const outlineConfig = "schema_version = 2\n\n" + outlineProfile
+const outlineProfile = "[[Outline]]\nServer = 'vpn.invalid'\nPort = 443\nPassword = 'synthetic'\n\n"
+const outlineConfig = outlineProfile

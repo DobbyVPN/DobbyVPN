@@ -78,8 +78,8 @@ func TestConfigurePreservesMixedSourceOrder(t *testing.T) {
 	if got.Digest == "" {
 		t.Fatal("empty digest")
 	}
-	malformedSchema2 := []byte("schema_version = 2\n[[profiles]]\nprotocol = 'XRAY'\n[profiles.config]\n")
-	if _, err := configureForTest(t, m, id, malformedSchema2); CodeOf(err) != FailureMalformedConfig {
+	malformedTOML := []byte("[[Outline]\nServer = 'vpn.invalid'\n")
+	if _, err := configureForTest(t, m, id, malformedTOML); CodeOf(err) != FailureMalformedConfig {
 		t.Fatalf("bad config error = %v", err)
 	}
 }
@@ -332,7 +332,7 @@ func TestConfigurationFailuresRetainOriginalCauses(t *testing.T) {
 
 	manager = NewManager(ManagerOptions{})
 	initial = snapshotForTest(t, manager, "")
-	_, err = manager.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("[[profiles]"))
+	_, err = manager.Configure(context.Background(), initial.SessionID, initial.Sequence, []byte("[[Outline]"))
 	if CodeOf(err) != FailureMalformedConfig || errors.Unwrap(err) == nil {
 		t.Fatalf("TOML parse lost original cause: %v", err)
 	}
@@ -351,18 +351,15 @@ func (acceptedSourceURLLoader) Load(_ context.Context, source []byte) (LoadedCon
 
 func TestConfigureRejectsRemovedCloakProfiles(t *testing.T) {
 	raw := strings.Join([]string{
-		"schema_version = 2",
+		"[[Outline]]", `Description = "supported-before"`,
+		`Server = "198.51.100.20"`, "Port = 443", `Password = "synthetic-password"`,
 		"",
-		"[[profiles]]", `protocol = "OUTLINE"`, `description = "supported-before"`,
-		"[profiles.config]", `Server = "198.51.100.20"`, "Port = 443", `Password = "synthetic-password"`,
+		"[[Xray]]", `Description = "legacy-cloak"`,
+		"Cloak = true", `Server = "cloak.invalid"`, `Password = "do-not-return"`,
 		"",
-		"[[profiles]]", `protocol = "XRAY"`, `description = "legacy-cloak"`,
-		"[profiles.config]", "Cloak = true", `Server = "cloak.invalid"`, `Password = "do-not-return"`,
-		"",
-		"[[profiles]]", `protocol = "TRUST_TUNNEL"`, `description = "supported-after"`,
-		"[profiles.config]", `vpn_mode = "general"`,
-		"[profiles.config.endpoint]", `hostname = "vpn.invalid"`, `addresses = ["198.51.100.21:443"]`, `username = "synthetic-user"`, `password = "synthetic-password"`,
-		"[profiles.config.listener.socks]", `address = "127.0.0.1:10808"`,
+		"[[TrustTunnel]]", `Description = "supported-after"`, `vpn_mode = "general"`,
+		"[TrustTunnel.endpoint]", `hostname = "vpn.invalid"`, `addresses = ["198.51.100.21:443"]`, `username = "synthetic-user"`, `password = "synthetic-password"`,
+		"[TrustTunnel.listener.socks]", `address = "127.0.0.1:10808"`,
 	}, "\n")
 	m := NewManager(ManagerOptions{})
 	id, err := currentSessionForTest(t, m)
@@ -381,15 +378,13 @@ func TestConfigureRejectsMultipleAndAllCloakInputsBeforeExecution(t *testing.T) 
 	const syntheticCredential = "cloak-secret-token"
 	tests := map[string]string{
 		"multiple Cloak profiles": strings.Join([]string{
-			"schema_version = 2", "",
-			"[[profiles]]", `protocol = "XRAY"`, "[profiles.config]", "Cloak = true", `outbounds = [{"address" = "` + syntheticEndpoint + `"}]`,
-			"", "[[profiles]]", `protocol = "OUTLINE"`, "[profiles.config]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
+			"[[Xray]]", "Cloak = true", `outbounds = [{"address" = "` + syntheticEndpoint + `"}]`,
+			"", "[[Outline]]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
 		}, "\n"),
 		"all Cloak profiles": strings.Join([]string{
-			"schema_version = 2", "",
-			"[[profiles]]", `protocol = "OUTLINE"`, "[profiles.config]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
-			"", "[[profiles]]", `protocol = "TRUST_TUNNEL"`, "[profiles.config]", "Cloak = true",
-			"[profiles.config.endpoint]", `hostname = "` + syntheticEndpoint + `"`, `password = "` + syntheticCredential + `"`, `addresses = ["` + syntheticEndpoint + `"]`,
+			"[[Outline]]", "Cloak = true", `Server = "` + syntheticURL + `"`, `Password = "` + syntheticCredential + `"`, "Port = 443",
+			"", "[[TrustTunnel]]", "Cloak = true",
+			"[TrustTunnel.endpoint]", `hostname = "` + syntheticEndpoint + `"`, `password = "` + syntheticCredential + `"`, `addresses = ["` + syntheticEndpoint + `"]`,
 		}, "\n"),
 	}
 	for name, raw := range tests {
@@ -617,10 +612,10 @@ func TestConcurrentConfigureAtSameRevisionOnlyOneMutationWins(t *testing.T) {
 
 func TestConfigureRejectsMalformedProtocolProfiles(t *testing.T) {
 	for name, raw := range map[string]string{
-		"outline password": "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n[profiles.config]\nServer='vpn.invalid'\nPort=443\n",
-		"outline server":   "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n[profiles.config]\nPassword='secret'\nPort=443\n",
-		"outline port":     "schema_version = 2\n[[profiles]]\nprotocol = 'OUTLINE'\n[profiles.config]\nServer='vpn.invalid'\nPassword='secret'\n",
-		"xray outbounds":   "schema_version = 2\n[[profiles]]\nprotocol = 'XRAY'\ndescription='empty'\n[profiles.config]\n",
+		"outline password": "[[Outline]]\nServer='vpn.invalid'\nPort=443\n",
+		"outline server":   "[[Outline]]\nPassword='secret'\nPort=443\n",
+		"outline port":     "[[Outline]]\nServer='vpn.invalid'\nPassword='secret'\n",
+		"xray outbounds":   "[[Xray]]\nDescription='empty'\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := NewManager(ManagerOptions{})

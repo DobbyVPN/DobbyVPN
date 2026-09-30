@@ -6,6 +6,7 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 import time
+import tomllib
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -13,6 +14,7 @@ from unittest import mock
 from torturer_contract.engine import ScenarioExecutionError
 from torturer_runner.adapters.android import AndroidAdapter, _select_gui_profile
 from torturer_runner.adapters.cli import CommandResult
+from disposable_vpn_server.outline import OutlineWSSProfile
 
 
 class BinaryStderr:
@@ -24,37 +26,76 @@ class BinaryStderr:
 
 
 class AndroidGuiProfileSelectionTests(unittest.TestCase):
-    def test_selects_one_supported_schema_v2_profile_and_adds_schema_header(self) -> None:
+    def test_selects_one_profile_and_preserves_shared_exclusions(self) -> None:
         raw = (
-            b"schema_version = 2\n"
-            b"[[profiles]]\nprotocol = 'TRUST_TUNNEL'\n"
-            b"[profiles.config]\nendpoint = 'https://trust.invalid'\n"
-            b"[[profiles]]\nprotocol = 'OUTLINE'\n"
-            b"[profiles.config]\nServer = 'outline.invalid'\nPassword = 'synthetic'\nPort = 443\n"
-            b"[[profiles]]\nprotocol = 'XRAY'\n"
-            b"[profiles.config]\noutbounds = []\n"
+            b"[ExcludeIPs]\nIPs = ['192.0.2.0/24']\n\n"
+            b"[[TrustTunnel]]\nDescription = 'not selected'\n"
+            b"[TrustTunnel.endpoint]\nhostname = 'trust.invalid'\n\n"
+            b"[[Outline]]\nDescription = 'synthetic Outline'\n"
+            b"Server = 'outline.invalid'\nPassword = 'synthetic'\nPort = 443\n\n"
+            b"[[Xray]]\nDescription = 'synthetic Xray'\noutbounds = []\n"
         )
-        start = raw.index(b"[[profiles]]\nprotocol = 'OUTLINE'")
-        end = raw.index(b"[[profiles]]\nprotocol = 'XRAY'")
 
         selected = _select_gui_profile(raw)
+        parsed = tomllib.loads(selected.decode("utf-8"))
 
-        self.assertEqual(selected, b"schema_version = 2\n" + raw[start:end])
+        self.assertEqual(set(parsed), {"Outline", "ExcludeIPs"})
+        self.assertEqual(parsed["Outline"][0]["Description"], "synthetic Outline")
+        self.assertEqual(parsed["Outline"][0]["Server"], "outline.invalid")
+        self.assertEqual(parsed["ExcludeIPs"], {"IPs": ["192.0.2.0/24"]})
         self.assertLessEqual(len(selected), 64 * 1024)
+
+    def test_selects_xray_and_keeps_nested_configuration(self) -> None:
+        raw = (
+            b"[[Xray]]\n"
+            b"Description = 'synthetic Xray'\n"
+            b"log = { loglevel = 'info', output = { access = 'none' } }\n"
+            b"outbounds = [{ tag = 'proxy', protocol = 'vless', settings = { vnext = ["
+            b"{ address = 'xray.invalid', port = 443, users = ["
+            b"{ id = 'synthetic-id', flow = 'vision', encryption = 'none' }] }] } }]\n"
+            b"[Xray.extra]\nlabel = 'kept'\n\n"
+            b"[ExcludeIPs]\nIPs = ['198.51.100.8/32']\n"
+        )
+
+        selected = _select_gui_profile(raw)
+        parsed = tomllib.loads(selected.decode("utf-8"))
+
+        self.assertEqual(set(parsed), {"Xray", "ExcludeIPs"})
+        self.assertEqual(parsed["Xray"][0]["Description"], "synthetic Xray")
+        self.assertEqual(
+            parsed["Xray"][0]["outbounds"][0]["settings"]["vnext"][0]["users"][0]["id"],
+            "synthetic-id",
+        )
+        self.assertEqual(parsed["Xray"][0]["extra"], {"label": "kept"})
+        self.assertEqual(parsed["ExcludeIPs"], {"IPs": ["198.51.100.8/32"]})
+
+    def test_generated_render_profile_uses_original_public_toml(self) -> None:
+        profile = OutlineWSSProfile(web_path="/synthetic-path", secret="synthetic-secret")
+
+        selected = _select_gui_profile(profile.client_toml("https://vpn.invalid").encode())
+        parsed = tomllib.loads(selected.decode("utf-8"))
+
+        self.assertEqual(set(parsed), {"Outline", "ExcludeIPs"})
+        self.assertEqual(
+            parsed["Outline"][0]["Description"],
+            "DobbyVPN Torturer disposable Render service",
+        )
+        self.assertEqual(parsed["Outline"][0]["WebSocketPath"], "/synthetic-path")
+        self.assertEqual(parsed["ExcludeIPs"], {"IPs": []})
 
     def test_header_inside_multiline_string_is_preserved_as_profile_content(self) -> None:
         profile = (
-            b'[[profiles]]\nprotocol = "OUTLINE"\n'
-            b'description = """Synthetic details include a header-like line.\n'
-            b'[[profiles]]\nprotocol = "XRAY"\n"""\n'
-            b'[profiles.config]\nServer = "outline.invalid"\n'
-            b'Password = "synthetic"\nPort = 443\n'
+            b'[[Outline]]\nDescription = """Synthetic details include a header-like line.\n'
+            b'[ExcludeIPs]\n'
+            b'[[Xray]]\nDescription = "not an actual profile"\n"""\n'
+            b'Server = "outline.invalid"\nPassword = "synthetic"\nPort = 443\n'
+            b'\n[ExcludeIPs]\nIPs = ["203.0.113.0/24"]\n'
         )
-        raw = b"schema_version = 2\n" + profile
+        raw = profile
 
         self.assertEqual(
             _select_gui_profile(raw),
-            b"schema_version = 2\n" + profile,
+            profile,
         )
 
 

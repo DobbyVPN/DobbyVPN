@@ -36,9 +36,9 @@ func TestReadSourceRejectsMissingFileAndInlineTOML(t *testing.T) {
 	if _, err := readSource(missingPath); err == nil || !strings.Contains(err.Error(), "cannot read configuration file") {
 		t.Fatalf("readSource(%q) error = %v", missingPath, err)
 	}
-	inlineTOML := "schema_version = 2\n[[profiles]]\nprotocol = \"XRAY\"\n"
+	inlineTOML := "[[Xray]]\nName = \"inline\"\n"
 	if _, err := readSource(inlineTOML); err == nil {
-		t.Fatalf("readSource(inline TOML) unexpectedly succeeded")
+		t.Fatalf("readSource(%q) unexpectedly succeeded", inlineTOML)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestConfigureAcceptsOneSourceAndReturnsBackendInventory(t *testing.T) {
 			"profiles": []map[string]any{{"index": 0, "protocol": "Xray"}}}
 	})
 	path := filepath.Join(t.TempDir(), "config.toml")
-	const config = "schema_version = 2\n[[profiles]]\nprotocol = \"XRAY\"\n[profiles.config]\nName = \"test\"\n"
+	const config = "[[Xray]]\nName = \"test\"\n"
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}

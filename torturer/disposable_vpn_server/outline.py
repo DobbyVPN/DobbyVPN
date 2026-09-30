@@ -109,15 +109,14 @@ class OutlineWSSProfile:
 
         block = self.client_block(service_url)
         return (
-            "schema_version = 2\n"
-            "\n[[profiles]]\n"
-            'protocol = "OUTLINE"\n'
-            'description = "DobbyVPN Torturer disposable Render service"\n'
-            "[profiles.config]\n"
+            "[[Outline]]\n"
+            'Description = "DobbyVPN Torturer disposable Render service"\n'
             f"WebSocket = {str(block['WebSocket']).lower()}\n"
             f'Server = "{block["Server"]}"\n'
             f"Port = {block['Port']}\n"
             f'Password = "{block["Password"]}"\n'
             f'WebSocketPath = "{block["WebSocketPath"]}"\n'
             f'DisguisePrefix = "{block["DisguisePrefix"]}"\n'
+            "\n[ExcludeIPs]\n"
+            "IPs = []\n"
         )

@@ -13,10 +13,7 @@ import (
 	"core/sessionapi"
 )
 
-const syntheticConfig = `schema_version = 2
-[[profiles]]
-protocol = "OUTLINE"
-[profiles.config]
+const syntheticConfig = `[[Outline]]
 Server = "vpn.example.invalid"
 Port = 443
 Password = "super-secret-token"
