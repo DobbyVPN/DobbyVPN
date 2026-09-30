@@ -30,6 +30,9 @@ internal static class Program
         Console.Error.Flush();
     }
 
+    private static string NormalizeLineEndings(string value) =>
+        value.Replace("\r\n", "\n").Replace('\r', '\n');
+
     [STAThread]
     private static int Main()
     {
@@ -138,7 +141,10 @@ internal static class Program
                     try
                     {
                         TracePhase("type-set-clipboard-text");
-                        Forms.Clipboard.SetText(value);
+                        // Windows text clipboard data requires CRLF line endings.
+                        Forms.Clipboard.SetText(
+                            NormalizeLineEndings(value).Replace("\n", "\r\n"),
+                            Forms.TextDataFormat.UnicodeText);
                         TracePhase("type-send-select-all");
                         Forms.SendKeys.SendWait("^a");
                         TracePhase("type-send-paste");
@@ -149,10 +155,10 @@ internal static class Program
                         do
                         {
                             observed = ((ValuePattern)editor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-                            if (observed.Replace("\r\n", "\n") == value.Replace("\r\n", "\n")) break;
+                            if (NormalizeLineEndings(observed) == NormalizeLineEndings(value)) break;
                             Thread.Sleep(50);
                         } while (limit.Elapsed.TotalSeconds < 5);
-                        if (observed.Replace("\r\n", "\n") != value.Replace("\r\n", "\n"))
+                        if (NormalizeLineEndings(observed) != NormalizeLineEndings(value))
                             throw new InvalidOperationException("Native pasted configuration does not match the source");
                     }
                     catch (Exception error) { primary = error; throw; }
