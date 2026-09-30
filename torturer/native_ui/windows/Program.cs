@@ -22,6 +22,8 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW")]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
@@ -31,6 +33,7 @@ internal static class Program
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
 
     private static void TracePhase(string name)
     {
@@ -67,14 +70,76 @@ internal static class Program
                $"name=\"{current.Name}\" patterns[invoke={invoke},selectionItem={selection},value={value}]";
     }
 
-    private static void PrepareCaptureCursor(Rectangle target)
+    private static Rectangle ClientScreenBounds(IntPtr window, Rectangle target)
     {
-        // Moving to the inert title bar dismisses tooltips from hovered controls.
-        var destination = new Point(target.Left + target.Width / 2,
-            target.Top + Math.Max(1, Forms.SystemInformation.CaptionHeight / 2));
+        if (!GetClientRect(window, out var client) || client.Right <= client.Left || client.Bottom <= client.Top)
+            throw new InvalidOperationException("UI client bounds unavailable");
+        var topLeft = new NativePoint { X = client.Left, Y = client.Top };
+        var bottomRight = new NativePoint { X = client.Right, Y = client.Bottom };
+        if (!ClientToScreen(window, ref topLeft) || !ClientToScreen(window, ref bottomRight))
+            throw new InvalidOperationException("UI client screen coordinates unavailable");
+        var bounds = Rectangle.FromLTRB(topLeft.X, topLeft.Y, bottomRight.X, bottomRight.Y);
+        if (bounds.Width <= 0 || bounds.Height <= 0 || !target.Contains(bounds))
+            throw new InvalidOperationException("UI client bounds fall outside the native window");
+        return bounds;
+    }
+
+    private static void PrepareCaptureCursor(IntPtr window, Rectangle target, Rectangle client, Rectangle display)
+    {
+        if (!SetForegroundWindow(window))
+            throw new InvalidOperationException("Could not activate UI before screenshot");
+        // CTRL dismisses keyboard-focus tooltips without changing page or input.
+        Forms.SendKeys.SendWait("^");
+        var corners = new[]
+        {
+            new Point(display.Left, display.Top),
+            new Point(display.Right - 1, display.Top),
+            new Point(display.Left, display.Bottom - 1),
+            new Point(display.Right - 1, display.Bottom - 1),
+        };
+        // A full-display window has no outside corner; use the client margin then.
+        var destination = new Point(client.Right - 2, client.Bottom - 2);
+        foreach (var corner in corners)
+        {
+            if (target.Contains(corner)) continue;
+            destination = corner;
+            break;
+        }
         if (!SetCursorPos(destination.X, destination.Y))
             throw new InvalidOperationException("Could not move pointer before screenshot");
         Thread.Sleep(200);
+    }
+
+    private static bool HasNonuniformClientPixels(
+        Bitmap bitmap, Rectangle clientInBitmap, Stopwatch renderWait)
+    {
+        var row = new byte[clientInBitmap.Width * 4];
+        var data = bitmap.LockBits(
+            clientInBitmap, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb
+        );
+        try
+        {
+            Marshal.Copy(data.Scan0, row, 0, row.Length);
+            var firstBlue = row[0];
+            var firstGreen = row[1];
+            var firstRed = row[2];
+            for (var y = 0; y < clientInBitmap.Height; y++)
+            {
+                if (renderWait.Elapsed.TotalSeconds >= 5) return false;
+                Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), row, 0, row.Length);
+                for (var offset = 0; offset < row.Length; offset += 4)
+                {
+                    if (row[offset] != firstBlue || row[offset + 1] != firstGreen ||
+                        row[offset + 2] != firstRed)
+                        return true;
+                }
+            }
+            return false;
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
     }
 
     [STAThread]
@@ -310,9 +375,17 @@ internal static class Program
         if (!GetWindowRect(window, out var r) || r.Right - r.Left < 300 || r.Bottom - r.Top < 300)
             throw new InvalidOperationException("UI window bounds unavailable or too small");
         var target = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
-        if (!Forms.Screen.AllScreens.Any(screen => screen.Bounds.Contains(target)))
+        var display = Forms.Screen.AllScreens.FirstOrDefault(screen => screen.Bounds.Contains(target));
+        if (display is null)
             throw new InvalidOperationException("UI window is partly offscreen or crosses a display gap");
-        PrepareCaptureCursor(target);
+        var client = ClientScreenBounds(window, target);
+        var clientInBitmap = new Rectangle(
+            client.Left - target.Left,
+            client.Top - target.Top,
+            client.Width,
+            client.Height
+        );
+        PrepareCaptureCursor(window, target, client, display.Bounds);
         void RequireUnobstructed()
         {
             for (var other = GetWindow(window, 3); other != IntPtr.Zero; other = GetWindow(other, 3))
@@ -322,10 +395,24 @@ internal static class Program
                     throw new InvalidOperationException($"UI screenshot obstructed by {DescribeWindow(other)}");
             }
         }
-        RequireUnobstructed();
-        using var bitmap = new Bitmap(target.Width, target.Height);
-        using (var graphics = Graphics.FromImage(bitmap))
-            graphics.CopyFromScreen(target.Location, Point.Empty, target.Size);
+        using var bitmap = new Bitmap(target.Width, target.Height, PixelFormat.Format32bppArgb);
+        var clientRendered = false;
+        var renderWait = Stopwatch.StartNew();
+        var frameCount = 0;
+        do
+        {
+            if (renderWait.Elapsed.TotalSeconds >= 5) break;
+            Thread.Sleep(50);
+            RequireUnobstructed();
+            using (var graphics = Graphics.FromImage(bitmap))
+                graphics.CopyFromScreen(target.Location, Point.Empty, target.Size);
+            frameCount++;
+            clientRendered = HasNonuniformClientPixels(bitmap, clientInBitmap, renderWait);
+        } while (!clientRendered && renderWait.Elapsed.TotalSeconds < 5);
+        if (!clientRendered)
+            throw new InvalidOperationException(
+                $"UI client area did not render within 5 seconds ({frameCount} frames captured)"
+            );
         bitmap.Save(path, ImageFormat.Png);
         RequireUnobstructed();
         GetWindowThreadProcessId(window, out var afterOwner);

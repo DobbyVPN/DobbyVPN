@@ -5,7 +5,10 @@
     Title="DobbyVPN">
   <Grid MinWidth="560" MinHeight="520">
     <TabView x:Name="Pages" Margin="18" IsAddTabButtonVisible="False" SelectionChanged="Pages_SelectionChanged">
-      <TabViewItem Header="Connection">
+      <TabViewItem Header="Connection" IsClosable="False">
+        <ToolTipService.ToolTip>
+          <ToolTip IsEnabled="False" />
+        </ToolTipService.ToolTip>
         <Grid RowDefinitions="Auto,*,Auto" Margin="8" RowSpacing="12">
           <StackPanel Spacing="6">
             <TextBlock Text="DobbyVPN" Style="{StaticResource TitleTextBlockStyle}" />
@@ -18,7 +21,10 @@
           <Button x:Name="ConnectionButton" Grid.Row="2" Content="Connect" Click="ConnectionButton_Click" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="VPN connection action" />
         </Grid>
       </TabViewItem>
-      <TabViewItem Header="Logs">
+      <TabViewItem Header="Logs" IsClosable="False">
+        <ToolTipService.ToolTip>
+          <ToolTip IsEnabled="False" />
+        </ToolTipService.ToolTip>
         <Grid RowDefinitions="Auto,*" Margin="8" RowSpacing="10">
           <StackPanel Orientation="Horizontal" Spacing="10">
             <TextBlock Text="Go backend logs" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
@@ -31,7 +37,10 @@
           </Grid>
         </Grid>
       </TabViewItem>
-      <TabViewItem Header="Settings">
+      <TabViewItem Header="Settings" IsClosable="False">
+        <ToolTipService.ToolTip>
+          <ToolTip IsEnabled="False" />
+        </ToolTipService.ToolTip>
         <StackPanel Margin="8" Spacing="10">
           <TextBlock Text="Settings" Style="{StaticResource TitleTextBlockStyle}" />
           <TextBlock x:Name="VersionText" />

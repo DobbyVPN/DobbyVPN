@@ -272,6 +272,10 @@ class NativeUIController:
         self._wait(metadata, "Settings metadata unavailable")
         self.capture("settings")
         self._click("Connection")
+        self._wait(
+            lambda: "Connection configuration" in self.snapshot()["labels"],
+            "native UI did not return to its connection page after Settings",
+        )
         return {"settings_version": True, "settings_source_commit": True}
 
     def capture(self, milestone: str) -> dict:
