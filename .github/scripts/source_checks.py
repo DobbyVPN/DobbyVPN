@@ -457,7 +457,7 @@ def require_android_sdk() -> Path:
     return sdk
 
 
-def lint_android() -> None:
+def lint_android(tools: Tools) -> None:
     require_platform("linux")
     go = ensure_go()
     java = require_command("java", "Android Lint")
@@ -477,6 +477,19 @@ def lint_android() -> None:
         raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
     run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "ui" / "android")
 
+    lock_file = tools.root / "gradle.lockfile"
+    run(
+        [
+            str(gradle), f"-PdobbyGradleLockFile={lock_file}",
+            ":app:resolveAndroidSecurityDependencies",
+            "--write-locks", "--no-daemon", "--stacktrace",
+        ],
+        cwd=ROOT / "ui" / "android",
+    )
+    if not lock_file.is_file() or lock_file.stat().st_size == 0:
+        raise CheckError("Gradle did not produce the Android release dependency lockfile")
+    trivy_scan(tools, (lock_file,))
+
 
 def lint_swift(tools: Tools) -> None:
     require_platform("darwin")
@@ -484,15 +497,14 @@ def lint_swift(tools: Tools) -> None:
     run([str(swiftlint), "lint", "--config", ".swiftlint.yml"], cwd=ROOT / "ui" / "apple")
 
 
-def trivy_scan(tools: Tools) -> None:
+def trivy_scan(
+    tools: Tools,
+    targets: tuple[Path, ...] = (GO_MODULE, SCRIPT_DIR / "requirements-native-ui.txt"),
+) -> None:
     require_platform("linux")
     trivy = tools.get("trivy")
     cache_dir = tools.root / "trivy-cache"
-    for target in (
-        ROOT / "core",
-        ROOT / "ui" / "android",
-        SCRIPT_DIR / "requirements-native-ui.txt",
-    ):
+    for target in targets:
         run(
             [
                 str(trivy), "fs", "--cache-dir", str(cache_dir),
@@ -583,7 +595,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    needs_tools = args.check in {"lint-go", "lint-swift", "security", "actionlint"}
+    needs_tools = args.check in {"lint-go", "lint-android", "lint-swift", "security", "actionlint"}
     temporary_tools: tempfile.TemporaryDirectory[str] | None = None
     try:
         tools: Tools | None = None
@@ -606,7 +618,8 @@ def main() -> int:
             assert tools is not None
             lint_go(tools)
         elif args.check == "lint-android":
-            lint_android()
+            assert tools is not None
+            lint_android(tools)
         elif args.check == "lint-swift":
             assert tools is not None
             lint_swift(tools)

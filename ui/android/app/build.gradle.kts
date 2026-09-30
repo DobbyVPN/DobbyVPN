@@ -18,11 +18,29 @@ fun nonBlankGradleProperty(name: String) =
     providers.gradleProperty(name)
         .map(String::trim)
         .filter { it.isNotEmpty() }
+val generatedGradleLockFile = nonBlankGradleProperty("dobbyGradleLockFile")
+    .map { project.file(it) }
 // The caller must pass the exact Go executable selected during toolchain
 // preparation. Do not infer it from ambient environment: Gradle may run in a
 // separate process with a different PATH.
 val goBinary = nonBlankGradleProperty("dobbyGoBinary")
 val expectedGoVersion = repoRoot.resolve(".go-version").readText().trim()
+
+dependencyLocking {
+    generatedGradleLockFile.orNull?.let {
+        lockAllConfigurations()
+        lockFile = it
+    }
+}
+
+val resolveAndroidSecurityDependencies by tasks.registering {
+    doLast {
+        check(generatedGradleLockFile.isPresent) {
+            "dobbyGradleLockFile is required to resolve Android security dependencies"
+        }
+        configurations.getByName("releaseRuntimeClasspath").resolve()
+    }
+}
 
 val validateGoToolchain by tasks.registering {
     doLast {

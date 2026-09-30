@@ -160,7 +160,7 @@ jobs:
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
-      - name: Run Android lint
+      - name: Run Android lint and dependency scan
         run: python3 .github/scripts/source_checks.py lint-android
 
   lint_go:
