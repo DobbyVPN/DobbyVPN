@@ -21,10 +21,16 @@ import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 
+import androidx.compose.ui.platform.ViewRootForTest;
+import androidx.compose.ui.semantics.SemanticsNode;
+import androidx.compose.ui.semantics.SemanticsProperties;
+import androidx.compose.ui.semantics.SemanticsPropertyKey;
+import androidx.compose.ui.text.AnnotatedString;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitor;
@@ -774,10 +780,61 @@ public final class NativeUiHostedProfileTest {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
             UiObject2 input = findNativeInput();
-            if (input != null && expectedRenderedSource.equals(input.getText())) return;
+            UiObject2 label = findUiObject("Connection configuration");
+            String visibleText = input == null ? null : input.getText();
+            if (input != null
+                    && label != null
+                    && visibleText != null
+                    && !visibleText.isEmpty()
+                    && expectedRenderedSource.equals(readComposeEditableText())) {
+                return;
+            }
             SystemClock.sleep(POLL_MILLIS);
         }
         throw new IllegalStateException("ANDROID_UI_ACCEPTED_SOURCE_NOT_VISIBLE");
+    }
+
+    // Compose truncates accessibility text to 100,000 characters. Read the
+    // editor's complete semantics value instead of accepting a partial match.
+    private String readComposeEditableText() {
+        AtomicReference<String> renderedText = new AtomicReference<>();
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+            if (foregroundActivity == null) return;
+            View content = foregroundActivity.findViewById(android.R.id.content);
+            if (content != null) renderedText.set(findComposeEditableText(content));
+        });
+        return renderedText.get();
+    }
+
+    private static String findComposeEditableText(View view) {
+        if (view instanceof ViewRootForTest) {
+            SemanticsNode root = ((ViewRootForTest) view)
+                    .getSemanticsOwner()
+                    .getUnmergedRootSemanticsNode();
+            SemanticsPropertyKey<AnnotatedString> editableTextKey =
+                    SemanticsProperties.INSTANCE.getEditableText();
+            ArrayList<SemanticsNode> pending = new ArrayList<>();
+            pending.add(root);
+            String result = null;
+            int matches = 0;
+            for (int index = 0; index < pending.size(); index++) {
+                SemanticsNode node = pending.get(index);
+                if (node.getConfig().contains(editableTextKey)) {
+                    matches++;
+                    result = node.getConfig().get(editableTextKey).getText();
+                }
+                pending.addAll(node.getChildren());
+            }
+            return matches == 1 ? result : null;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                String result = findComposeEditableText(group.getChildAt(index));
+                if (result != null) return result;
+            }
+        }
+        return null;
     }
 
     private UiObject2 findNativeInput() {
