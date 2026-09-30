@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Windows.Automation;
@@ -21,6 +22,13 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW")]
+    private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
+    private static extern int GetWindowTextLength(IntPtr window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
+    private static extern int GetWindowText(IntPtr window, StringBuilder text, int maxCount);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
 
@@ -32,6 +40,42 @@ internal static class Program
 
     private static string NormalizeLineEndings(string value) =>
         value.Replace("\r\n", "\n").Replace('\r', '\n');
+
+    private static string DescribeWindow(IntPtr window)
+    {
+        GetWindowThreadProcessId(window, out var pid);
+        var hasBounds = GetWindowRect(window, out var bounds);
+        var classBuffer = new StringBuilder(256);
+        var classLength = GetClassName(window, classBuffer, classBuffer.Capacity);
+        var textBuffer = new StringBuilder(Math.Max(1, GetWindowTextLength(window) + 1));
+        var textLength = GetWindowText(window, textBuffer, textBuffer.Capacity);
+        var boundsText = hasBounds
+            ? $"{bounds.Left},{bounds.Top} {bounds.Right - bounds.Left}x{bounds.Bottom - bounds.Top}"
+            : "unavailable";
+        var classText = classLength > 0 ? classBuffer.ToString() : "unavailable";
+        var windowText = textLength > 0 ? textBuffer.ToString() : "unavailable";
+        return $"HWND=0x{window.ToInt64():X} PID={pid} bounds=[{boundsText}] class=\"{classText}\" text=\"{windowText}\"";
+    }
+
+    private static string DescribeElement(AutomationElement element)
+    {
+        var current = element.Current;
+        var invoke = element.TryGetCurrentPattern(InvokePattern.Pattern, out _);
+        var selection = element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out _);
+        var value = element.TryGetCurrentPattern(ValuePattern.Pattern, out _);
+        return $"type={current.ControlType.ProgrammaticName} id=\"{current.AutomationId}\" " +
+               $"name=\"{current.Name}\" patterns[invoke={invoke},selectionItem={selection},value={value}]";
+    }
+
+    private static void PrepareCaptureCursor(Rectangle target)
+    {
+        // Moving to the inert title bar dismisses tooltips from hovered controls.
+        var destination = new Point(target.Left + target.Width / 2,
+            target.Top + Math.Max(1, Forms.SystemInformation.CaptionHeight / 2));
+        if (!SetCursorPos(destination.X, destination.Y))
+            throw new InvalidOperationException("Could not move pointer before screenshot");
+        Thread.Sleep(200);
+    }
 
     [STAThread]
     private static int Main()
@@ -86,27 +130,73 @@ internal static class Program
             GetWindowThreadProcessId(window, out var owner);
             if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
             var root = AutomationElement.FromHandle(window);
-            var elements = Walk(root).Where(e => !e.Current.IsOffscreen).ToList();
-            AutomationElement Find(string name, bool editor = false)
+            AutomationElement Find(string name, bool editor = false, bool actionable = false)
             {
-                var matches = elements.Where(e =>
-                    (e.Current.AutomationId == name || e.Current.Name == name) &&
-                    (!editor || e.Current.ControlType == ControlType.Edit)).ToList();
-                // Prefer the stable identifier over a static label with the same text.
-                var identified = matches.Where(e => e.Current.AutomationId == name).ToList();
-                if (identified.Count > 0) matches = identified;
-                if (matches.Count != 1) throw new InvalidOperationException($"Expected one visible {name}, found {matches.Count}");
-                if (!matches[0].Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
-                return matches[0];
+                AutomationElementCollection FindBy(AutomationProperty property)
+                {
+                    var conditions = new List<Condition>
+                    {
+                        new PropertyCondition(property, name),
+                        new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
+                        // Keep targeted lookup within the same UIA control view as Walk.
+                        new PropertyCondition(AutomationElement.IsControlElementProperty, true),
+                    };
+                    if (editor)
+                        conditions.Add(new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+                    if (actionable)
+                    {
+                        conditions.Add(new OrCondition(
+                            new PropertyCondition(AutomationElement.IsInvokePatternAvailableProperty, true),
+                            new PropertyCondition(AutomationElement.IsSelectionItemPatternAvailableProperty, true)
+                        ));
+                    }
+                    return root.FindAll(TreeScope.Subtree, new AndCondition(conditions.ToArray()));
+                }
+
+                // Resolve stable identifiers before user-facing labels to avoid matching a tab and its label.
+                var matches = FindBy(AutomationElement.AutomationIdProperty);
+                if (matches.Count == 0) matches = FindBy(AutomationElement.NameProperty);
+                if (matches.Count != 1)
+                {
+                    var details = string.Join("; ", matches.Cast<AutomationElement>().Select(DescribeElement));
+                    throw new InvalidOperationException(
+                        $"Expected one visible {name}, found {matches.Count}; matches=[{details}]"
+                    );
+                }
+                var element = matches[0];
+                if (!element.Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
+                return element;
+            }
+            if (operation == "tree")
+            {
+                string[] labels;
+                try
+                {
+                    var elements = Walk(root).Where(e => !e.Current.IsOffscreen).ToList();
+                    labels = elements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
+                        .Where(s => s.Length > 0).Distinct().ToArray();
+                }
+                catch (ElementNotAvailableException error)
+                {
+                    Console.Error.WriteLine(error.ToString());
+                    Console.Error.Flush();
+                    Console.WriteLine(JsonSerializer.Serialize(new {
+                        ready = false, alive = true, pid = process.Id, identity
+                    }));
+                    return 0;
+                }
+                Console.WriteLine(JsonSerializer.Serialize(new {
+                    ready = true, pid = process.Id, identity, labels
+                }));
+                return 0;
             }
             switch (operation)
             {
-                case "tree": break;
                 case "focus":
                     if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
                     break;
                 case "click":
-                    var element = Find(Text("target"));
+                    var element = Find(Text("target"), actionable: true);
                     if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
                     if (element.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke))
                         ((InvokePattern)invoke).Invoke();
@@ -191,9 +281,7 @@ internal static class Program
             }
             Console.WriteLine(JsonSerializer.Serialize(new {
                 ready = true, pid = process.Id, identity,
-                labels = operation == "tree"
-                    ? elements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray()
-                    : Array.Empty<string>()
+                labels = Array.Empty<string>()
             }));
             return 0;
         }
@@ -224,13 +312,14 @@ internal static class Program
         var target = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
         if (!Forms.Screen.AllScreens.Any(screen => screen.Bounds.Contains(target)))
             throw new InvalidOperationException("UI window is partly offscreen or crosses a display gap");
+        PrepareCaptureCursor(target);
         void RequireUnobstructed()
         {
             for (var other = GetWindow(window, 3); other != IntPtr.Zero; other = GetWindow(other, 3))
             {
                 if (!IsWindowVisible(other) || IsIconic(other) || !GetWindowRect(other, out var bounds)) continue;
                 if (target.IntersectsWith(Rectangle.FromLTRB(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom)))
-                    throw new InvalidOperationException($"UI screenshot obstructed by window {other}");
+                    throw new InvalidOperationException($"UI screenshot obstructed by {DescribeWindow(other)}");
             }
         }
         RequireUnobstructed();
