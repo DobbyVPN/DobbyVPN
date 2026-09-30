@@ -119,11 +119,24 @@ func paste(_ editor: AXUIElement, source: String) throws {
         try key(9) // Cmd+V
         let deadline = Date().addingTimeInterval(5)
         var observed = ""
+        var lastTransientValueError: AccessibilityReadError?
         repeat {
-            observed = try label(editor, kAXValueAttribute)
+            do {
+                observed = try label(editor, kAXValueAttribute)
+            } catch let error as AccessibilityReadError where error.code == .cannotComplete {
+                lastTransientValueError = error
+                FileHandle.standardError.write(
+                    Data("AXValue read failed; role=AXTextArea error=\(error) errorCode=\(error.code.rawValue); retrying\n".utf8)
+                )
+            }
             if observed == value { break }
-            Thread.sleep(forTimeInterval: 0.05)
+            if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
         } while Date() < deadline
+        if observed != value, let error = lastTransientValueError {
+            throw HelperError(
+                "Native pasted configuration does not match the source; last transient AXValue read error=\(error) errorCode=\(error.code.rawValue)"
+            )
+        }
         try require(observed == value, "Native pasted configuration does not match the source")
     } catch { primary = error }
     board.clearContents()
