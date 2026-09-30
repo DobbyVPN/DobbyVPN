@@ -35,7 +35,7 @@ class BinaryStderr:
         pass
 
 
-def _windows_process_exited(pid: int) -> bool:
+def _windows_process_exited(pid: int, timeout_ms: int) -> bool:
     from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -52,7 +52,7 @@ def _windows_process_exited(pid: int) -> bool:
             return True
         raise ctypes.WinError(error)
     try:
-        result = kernel32.WaitForSingleObject(handle, 0)
+        result = kernel32.WaitForSingleObject(handle, timeout_ms)
         if result == 0:  # WAIT_OBJECT_0
             return True
         if result != 258:  # WAIT_TIMEOUT
@@ -456,7 +456,7 @@ class InformationRetentionTests(unittest.TestCase):
                 b"child-stderr-marker", b"parent-stderr-marker"
             )))
             self.assertFalse(getattr(caught.exception, "__notes__", ()))
-            self.assertTrue(_windows_process_exited(child_pid))
+            self.assertTrue(_windows_process_exited(child_pid, int(cleanup_seconds * 1000)))
             self.assertTrue(all(not reader.is_alive() for reader in (
                 process.stdout_thread, process.stderr_thread
             )))
