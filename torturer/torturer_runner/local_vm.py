@@ -1571,8 +1571,13 @@ def _functional_command(
         if scenarios:
             raise LocalVMError("focused scenarios are unavailable for installed desktop packages")
         return command
+    module = (
+        "torturer_runner.hosted"
+        if platform == "android" and not scenarios
+        else "torturer_runner.functional"
+    )
     command = [
-        sys.executable, "-m", "torturer_runner.functional", "--platform", platform,
+        sys.executable, "-m", module, "--platform", platform,
         "--profile", str(run_dir / "profile"), "--output", str(logs / "functional.json"),
         "--raw-log-dir", str(logs), "--platform-version", f"local-{platform}",
         "--lane-timeout-seconds", str(timeout),
@@ -1580,6 +1585,11 @@ def _functional_command(
     ]
     if platform == "android":
         command.extend(("--adb", str(descriptor["runtime"]["adb"])))
+        source_sha = descriptor.get("source_sha")
+        if source_sha is not None:
+            if not isinstance(source_sha, str) or _SOURCE_SHA.fullmatch(source_sha) is None:
+                raise LocalVMError("prepared Android candidate source SHA is invalid")
+            command.extend(("--source-sha", source_sha))
     else:
         command.extend(("--cli", str(_candidate_path(descriptor, "cli")),))
         runtime = descriptor.get("runtime", {})
@@ -1845,6 +1855,8 @@ def prepare(args: argparse.Namespace) -> int:
                 platform=args.platform,
             )
 
+        if args.platform == "android" and args.source_sha is not None:
+            candidate["source_sha"] = args.source_sha
         state["candidate"] = candidate
         if args.platform == "linux":
             service = _candidate_path(candidate, "service")
