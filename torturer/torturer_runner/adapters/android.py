@@ -1140,6 +1140,7 @@ class AndroidAdapter:
                     current_seen = True
                 if screenshot_path not in seen_screenshot_paths:
                     screenshot = self._pull_rendered_screenshot(
+                        command_name,
                         screenshot_path,
                         screenshot_label,
                         deadline,
@@ -1437,6 +1438,7 @@ class AndroidAdapter:
 
     def _pull_rendered_screenshot(
         self,
+        command_name: str,
         remote: str,
         label: str,
         deadline: float,
@@ -1458,7 +1460,8 @@ class AndroidAdapter:
             raise AndroidScreenshotCollectionError(
                 "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: screenshot path/label mismatch"
             )
-        directory = raw_directory / "screenshots" / "android"
+        command_id = Path(command_name).name.removesuffix(".command.json")
+        directory = raw_directory / "screenshots" / "android" / command_id
         try:
             _ensure_directory(directory)
         except BaseException as error:

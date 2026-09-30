@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr
+from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
 import tempfile
@@ -319,6 +320,51 @@ class HostedAndroidRoutingProofDiagnosticsTests(unittest.TestCase):
             AndroidAdapter._assert_routing_blocked(observation),
             "203.0.113.7",
         )
+
+
+class AndroidRenderedScreenshotRetentionTests(unittest.TestCase):
+    def test_same_label_from_distinct_commands_retains_both_exact_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            raw_directory = Path(name)
+            adapter = AndroidAdapter.__new__(AndroidAdapter)
+            adapter.runner = SimpleNamespace(raw_directory=raw_directory)
+            frames = {
+                "android-hosted-11111111111111111111111111111111": b"first command frame",
+                "android-hosted-22222222222222222222222222222222": b"second command frame",
+            }
+
+            def pull(arguments, _timeout, _failure_code, **_kwargs):
+                destination = Path(arguments[-1])
+                destination.write_bytes(frames[destination.parent.name])
+                return CommandResult(tuple(arguments), 0, b"", b"")
+
+            adapter._adb = mock.Mock(side_effect=pull)
+            remote = (
+                "/data/user/0/com.dobby.vpn/cache/"
+                "dobbyvpn-rendered-screenshots/0004-configure-surface.png"
+            )
+            retained = []
+            for command_id, payload in frames.items():
+                retained.append(adapter._pull_rendered_screenshot(
+                    f"{command_id}.command.json",
+                    remote,
+                    "0004-configure-surface.png",
+                    time.monotonic() + 30,
+                    expected_bytes=len(payload),
+                    expected_sha256=sha256(payload).hexdigest(),
+                    expected_width=720,
+                    expected_height=1280,
+                ))
+
+            self.assertNotEqual(retained[0], retained[1])
+            self.assertEqual(
+                [path.read_bytes() for path in retained],
+                list(frames.values()),
+            )
+            self.assertEqual(
+                len(list((raw_directory / "screenshots" / "android").glob("*/*.png"))),
+                2,
+            )
 
 
 if __name__ == "__main__":
