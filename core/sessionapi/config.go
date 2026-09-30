@@ -32,7 +32,12 @@ type parsedConfig struct {
 	profiles []RuntimeProfile
 }
 
-const maxConfigBytes = 1 << 20
+const (
+	configSectionOutline     = "Outline"
+	configSectionXray        = "Xray"
+	configSectionTrustTunnel = "TrustTunnel"
+	maxConfigBytes           = 1 << 20
+)
 
 func parseConfig(raw []byte) (parsedConfig, error) {
 	root, protocols, err := decodeConfig(raw)
@@ -69,7 +74,7 @@ func decodeConfig(raw []byte) (configRoot, []string, error) {
 			continue
 		}
 		switch key[0] {
-		case "Outline", "Xray", "TrustTunnel":
+		case configSectionOutline, configSectionXray, configSectionTrustTunnel:
 			protocols = append(protocols, key[0])
 		}
 	}
@@ -81,7 +86,7 @@ func decodeConfig(raw []byte) (configRoot, []string, error) {
 	for _, protocol := range protocols {
 		counts[protocol]++
 	}
-	if counts["Outline"] != len(root.Outline) || counts["Xray"] != len(root.Xray) || counts["TrustTunnel"] != len(root.TrustTunnel) {
+	if counts[configSectionOutline] != len(root.Outline) || counts[configSectionXray] != len(root.Xray) || counts[configSectionTrustTunnel] != len(root.TrustTunnel) {
 		return configRoot{}, nil, failure(FailureMalformedConfig, "protocol section count does not match TOML data")
 	}
 	return root, protocols, nil
@@ -146,11 +151,11 @@ func parseProfile(root configRoot, next map[string]int, protocolName string, pro
 
 func nextProfile(root configRoot, next map[string]int, name string) (map[string]interface{}, Protocol) {
 	switch name {
-	case "Outline":
+	case configSectionOutline:
 		return root.Outline[next[name]], ProtocolOutline
-	case "Xray":
+	case configSectionXray:
 		return root.Xray[next[name]], ProtocolXray
-	case "TrustTunnel":
+	case configSectionTrustTunnel:
 		return root.TrustTunnel[next[name]], ProtocolTrustTunnel
 	default:
 		return nil, ""
@@ -166,7 +171,7 @@ func validateRootKeys(keys []toml.Key) error {
 			return failure(FailureUnsupported, "configuration contains an unsupported ExcludeIPs setting")
 		}
 		switch key[0] {
-		case "Outline", "Xray", "TrustTunnel", "ExcludeIPs":
+		case configSectionOutline, configSectionXray, configSectionTrustTunnel, "ExcludeIPs":
 		default:
 			return failure(FailureUnsupported, "configuration contains an unsupported section")
 		}
