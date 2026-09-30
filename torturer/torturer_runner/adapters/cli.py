@@ -1512,7 +1512,7 @@ class CLIAdapter:
         try:
             result = self.runner.run(
                 (
-                    "curl", "--location", "--show-error",
+                    "curl", "--location", "--show-error", "--verbose", "--trace-time",
                     "--max-time", str(max(1, int(timeout))), *transfer_args, url,
                 ),
                 timeout_seconds=timeout,
