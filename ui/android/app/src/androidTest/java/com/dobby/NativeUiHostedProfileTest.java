@@ -1065,11 +1065,7 @@ public final class NativeUiHostedProfileTest {
                 output.append("  root=null\n");
                 continue;
             }
-            try {
-                appendAccessibilityNode(output, root, "  ", "root");
-            } finally {
-                root.recycle();
-            }
+            appendAccessibilityNode(output, root, "  ", "root");
         }
         return output.toString();
     }
@@ -1100,11 +1096,7 @@ public final class NativeUiHostedProfileTest {
                         .append(" child=null\n");
                 continue;
             }
-            try {
-                appendAccessibilityNode(output, child, indent + "  ", path + "/" + index);
-            } finally {
-                child.recycle();
-            }
+            appendAccessibilityNode(output, child, indent + "  ", path + "/" + index);
         }
     }
 

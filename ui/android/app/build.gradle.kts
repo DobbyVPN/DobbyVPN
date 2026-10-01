@@ -1,5 +1,6 @@
 import java.io.File
 import java.util.Properties
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -123,12 +124,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
-
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/go-libs"))
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.fromTarget("17")
     }
 }
 
@@ -142,61 +147,60 @@ val downloadGoModules by tasks.registering(Exec::class) {
     environment("GOFLAGS", "-trimpath -buildvcs=false")
 }
 
-val buildGoBackend by tasks.registering {
-    val ndkHome = androidSdkRoot
-        .map { File(it, "ndk/$pinnedAndroidNdkVersion").absolutePath }
-        .orElse(nonBlankEnvironment("ANDROID_NDK_HOME"))
-        .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
-        .orElse("")
-    val api = providers.gradleProperty("android.ndk.api").orElse("26")
-    val abis = mapOf(
-        "arm64-v8a" to ("arm64" to "aarch64-linux-android"),
-        "x86_64" to ("amd64" to "x86_64-linux-android"),
-    )
-    val outputFiles = abis.map { (androidAbi, _) ->
-        layout.buildDirectory.file("generated/go-libs/$androidAbi/libdobby_vpn.so").get().asFile
-    }
-    val goBuildRoot = layout.buildDirectory.dir("generated/go-build")
-    inputs.files(fileTree(goModule) { include("**/*.go", "go.mod", "go.sum") })
-    outputs.files(outputFiles)
-    dependsOn(validateGoToolchain, downloadGoModules)
-    doLast {
-        check(ndkHome.get().isNotBlank()) {
-            "ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) is required to build the shared Go Android backend"
-        }
-        val ndk = File(ndkHome.get())
-        val observedNdkRevision = ndk.resolve("source.properties")
-            .takeIf { it.isFile }
-            ?.readLines()
-            ?.firstOrNull { it.trimStart().startsWith("Pkg.Revision") }
-            ?.substringAfter("=")
-            ?.trim()
-        check(observedNdkRevision == pinnedAndroidNdkVersion) {
-            "Android NDK $pinnedAndroidNdkVersion is required, found ${observedNdkRevision ?: "<missing>"} at $ndk"
-        }
-        val toolchain = ndk.resolve("toolchains/llvm/prebuilt")
-            .listFiles()?.singleOrNull()
-            ?: error("Android NDK LLVM toolchain is unavailable under $ndk")
-        val apiLevel = api.get()
-        // Keep Go/cgo's process-visible inputs identical for the hosted
-        // Android builder and the F-Droid buildserver. In particular, do
-        // not let each builder's HOME, GOENV, temporary directory, or
-        // inherited CGO flags enter the native shared object.
-        val reproducibleBuildRoot = goBuildRoot.get().asFile
-        val goCache = reproducibleBuildRoot.resolve("cache")
-        val goTemp = reproducibleBuildRoot.resolve("tmp")
-        goCache.mkdirs()
-        goTemp.mkdirs()
-        abis.forEach { (androidAbi, pair) ->
-            val (goArch, triple) = pair
-            val output = layout.buildDirectory.dir("generated/go-libs/$androidAbi").get().asFile
-                .resolve("libdobby_vpn.so")
+val ndkHome = androidSdkRoot
+    .map { File(it, "ndk/$pinnedAndroidNdkVersion").absolutePath }
+    .orElse(nonBlankEnvironment("ANDROID_NDK_HOME"))
+    .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
+    .orElse("")
+val api = providers.gradleProperty("android.ndk.api").orElse("26")
+val abis = mapOf(
+    "arm64-v8a" to ("arm64" to "aarch64-linux-android"),
+    "x86_64" to ("amd64" to "x86_64-linux-android"),
+)
+val backendInputs = fileTree(goModule) { include("**/*.go", "go.mod", "go.sum") }
+val goBuildRoot = layout.buildDirectory.dir("generated/go-build")
+val backendTasks = abis.map { (androidAbi, pair) ->
+    val (goArch, triple) = pair
+    tasks.register<Exec>("buildGoBackend_${androidAbi.replace('-', '_')}") {
+        dependsOn(validateGoToolchain, downloadGoModules)
+        inputs.files(backendInputs)
+        outputs.file(layout.buildDirectory.file("generated/go-libs/$androidAbi/libdobby_vpn.so"))
+        doFirst {
+            check(ndkHome.get().isNotBlank()) {
+                "ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) is required to build the shared Go Android backend"
+            }
+            val ndk = File(ndkHome.get())
+            val observedNdkRevision = ndk.resolve("source.properties")
+                .takeIf { it.isFile }
+                ?.readLines()
+                ?.firstOrNull { it.trimStart().startsWith("Pkg.Revision") }
+                ?.substringAfter("=")
+                ?.trim()
+            check(observedNdkRevision == pinnedAndroidNdkVersion) {
+                "Android NDK $pinnedAndroidNdkVersion is required, found ${observedNdkRevision ?: "<missing>"} at $ndk"
+            }
+            val toolchain = ndk.resolve("toolchains/llvm/prebuilt")
+                .listFiles()?.singleOrNull()
+                ?: error("Android NDK LLVM toolchain is unavailable under $ndk")
+            val apiLevel = api.get()
+            val output = layout.buildDirectory.file("generated/go-libs/$androidAbi/libdobby_vpn.so")
+                .get().asFile
             output.parentFile.mkdirs()
             val compiler = toolchain.resolve("bin/${triple}${apiLevel}-clang")
             val linker = toolchain.resolve("bin/${triple}${apiLevel}-clang++")
             check(compiler.isFile) { "Android NDK compiler is unavailable: $compiler" }
             check(linker.isFile) { "Android NDK C++ linker is unavailable: $linker" }
-            val command = listOf(
+
+            // Keep Go/cgo's process-visible inputs identical for the hosted
+            // Android builder and the F-Droid buildserver. In particular, do
+            // not let each builder's HOME, GOENV, temporary directory, or
+            // inherited CGO flags enter the native shared object.
+            val reproducibleBuildRoot = goBuildRoot.get().asFile
+            val goCache = reproducibleBuildRoot.resolve("cache")
+            val goTemp = reproducibleBuildRoot.resolve("tmp")
+            goCache.mkdirs()
+            goTemp.mkdirs()
+            commandLine(
                 goBinary.get(), "build", "-buildmode=c-shared", "-tags=android,accessibility,static",
                 "-trimpath",
                 // The bridge arrives as a static archive, so Go does not
@@ -205,41 +209,42 @@ val buildGoBackend by tasks.registering {
                 "-ldflags=-buildid= -s -w -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
                 "-o", output.absolutePath, "./cmd/dobbyandroid"
             )
-            // Gradle's Exec task is intentionally one process per ABI. Running
-            // the same Go command sequentially keeps generated c-shared
-            // outputs deterministic and avoids concurrent writes to the Go
-            // build cache.
-            project.exec {
-                commandLine(command)
-                workingDir(goModule)
-                environment("GOOS", "android")
-                environment("GOARCH", goArch)
-                environment("CGO_ENABLED", "1")
-                environment("CC", compiler.absolutePath)
-                environment("GO111MODULE", "on")
-                environment("GOENV", "off")
-                environment("GOTOOLCHAIN", "local")
-                environment("GOFLAGS", "-trimpath -buildvcs=false")
-                environment("GOCACHE", goCache.absolutePath)
-                environment("GOTMPDIR", goTemp.absolutePath)
-                // Gradle inherits the caller's environment. Clear every
-                // conventional C flag family so a buildserver image cannot
-                // silently alter cgo's wrapper compilation or final link.
-                environment("CGO_CFLAGS", "")
-                environment("CGO_CPPFLAGS", "")
-                environment("CGO_CXXFLAGS", "")
-                environment("CGO_LDFLAGS", "")
-                environment("CFLAGS", "")
-                environment("CPPFLAGS", "")
-                environment("CXXFLAGS", "")
-                environment("LDFLAGS", "")
-                environment("LANG", "C")
-                environment("LC_ALL", "C")
-                environment("TZ", "UTC")
-                environment("SOURCE_DATE_EPOCH", "0")
-            }
+            workingDir(goModule)
+            environment("GOOS", "android")
+            environment("GOARCH", goArch)
+            environment("CGO_ENABLED", "1")
+            environment("CC", compiler.absolutePath)
+            environment("GO111MODULE", "on")
+            environment("GOENV", "off")
+            environment("GOTOOLCHAIN", "local")
+            environment("GOFLAGS", "-trimpath -buildvcs=false")
+            environment("GOCACHE", goCache.absolutePath)
+            environment("GOTMPDIR", goTemp.absolutePath)
+            // Gradle inherits the caller's environment. Clear every
+            // conventional C flag family so a buildserver image cannot
+            // silently alter cgo's wrapper compilation or final link.
+            environment("CGO_CFLAGS", "")
+            environment("CGO_CPPFLAGS", "")
+            environment("CGO_CXXFLAGS", "")
+            environment("CGO_LDFLAGS", "")
+            environment("CFLAGS", "")
+            environment("CPPFLAGS", "")
+            environment("CXXFLAGS", "")
+            environment("LDFLAGS", "")
+            environment("LANG", "C")
+            environment("LC_ALL", "C")
+            environment("TZ", "UTC")
+            environment("SOURCE_DATE_EPOCH", "0")
         }
     }
+}
+// The ABI builds share the Go cache and must run one at a time, including
+// when Gradle is invoked with parallel execution enabled.
+backendTasks.zipWithNext().forEach { (previous, current) ->
+    current.configure { mustRunAfter(previous) }
+}
+val buildGoBackend by tasks.registering {
+    dependsOn(backendTasks)
 }
 
 tasks.named("preBuild") { dependsOn(buildGoBackend) }

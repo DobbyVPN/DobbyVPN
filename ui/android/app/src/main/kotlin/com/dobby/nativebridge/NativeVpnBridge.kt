@@ -10,6 +10,7 @@ import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.FileProvider
+import com.dobby.ui.MainActivity
 import java.io.File
 import java.io.IOException
 import java.io.OutputStreamWriter
@@ -27,7 +28,6 @@ import org.json.JSONObject
  * in the Go manager.
  */
 object NativeVpnBridge {
-    internal const val VPN_PERMISSION_REQUEST = 4201
     private const val CONSENT_LAUNCH_NOT_REQUESTED = "NOT_REQUESTED"
     private const val CONSENT_LAUNCH_QUEUED = "QUEUED"
     private const val CONSENT_LAUNCH_STARTED = "STARTED"
@@ -67,11 +67,15 @@ object NativeVpnBridge {
             // consent activity must be launched on the main thread or newer
             // releases can leave the request queued without showing a dialog.
             val launchConsent = Runnable {
-                if (context is Activity) {
-                    // Keep the consent activity in the caller's task. Adding
-                    // FLAG_ACTIVITY_NEW_TASK to startActivityForResult can
-                    // detach the system dialog from the visible Activity.
-                    context.startActivityForResult(permission, VPN_PERMISSION_REQUEST)
+                if (context is MainActivity) {
+                    // Keep the consent activity in the caller's task and let
+                    // the Activity Result API deliver its grant or denial.
+                    context.launchVpnConsent(permission)
+                } else if (context is Activity) {
+                    // Activity callers without the UI result handler still
+                    // keep the system dialog in their task; the next prepare
+                    // call re-checks VpnService.prepare().
+                    context.startActivity(permission)
                 } else {
                     // Instrumentation and recovery callers may only have the
                     // application context. The VPN consent is process-global,

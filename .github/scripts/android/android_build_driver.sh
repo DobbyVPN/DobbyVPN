@@ -318,7 +318,7 @@ verify_source_integrity_after_build() {
   }
 }
 
-gradle_flags=(--no-build-cache --no-daemon --rerun-tasks --stacktrace)
+gradle_flags=(--no-build-cache --no-daemon --rerun-tasks --stacktrace --warning-mode=all)
 run_unsigned_build() {
   local cache=$1 tmp=$2 destination=$3 built
   export GOCACHE="$cache" GOTMPDIR="$tmp"

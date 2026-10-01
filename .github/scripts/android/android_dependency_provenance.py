@@ -122,7 +122,9 @@ def _read_android_gradle_values(path: Path) -> tuple[int, str, int]:
     except (OSError, UnicodeError) as error:
         raise ValueError("Android application Gradle build file is unavailable") from error
     java_versions = set(re.findall(r"JavaVersion\.VERSION_(\d+)", build_file))
-    jvm_targets = set(re.findall(r'jvmTarget\s*=\s*"(\d+)"', build_file))
+    jvm_targets = set(
+        re.findall(r'jvmTarget\s*=\s*JvmTarget\.fromTarget\("(\d+)"\)', build_file)
+    )
     ndk_versions = set(re.findall(r'pinnedAndroidNdkVersion\s*=\s*"([^"]+)"', build_file))
     compile_sdks = set(re.findall(r"(?m)^\s*compileSdk\s*=\s*(\d+)\s*$", build_file))
     if len(java_versions) != 1 or jvm_targets != java_versions:

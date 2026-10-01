@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,8 +42,6 @@ import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-private const val VPN_PERMISSION_REQUEST = 4201
-
 class MainActivity : ComponentActivity() {
     companion object {
         @Volatile
@@ -51,6 +50,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private lateinit var controller: SessionController
+    private val vpnConsentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        controller.permissionResult(result.resultCode == android.app.Activity.RESULT_OK)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,11 +70,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == NativeVpnBridge.VPN_PERMISSION_REQUEST) {
-            controller.permissionResult(resultCode == android.app.Activity.RESULT_OK)
-        }
+    internal fun launchVpnConsent(permission: Intent) {
+        vpnConsentLauncher.launch(permission)
     }
 
     override fun onDestroy() {

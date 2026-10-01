@@ -991,7 +991,12 @@ def build_service(
         if target_platform == "macos":
             # Keep the package's declared macOS 12 floor valid for both
             # the Go backend and the native operator CLI.
-            ldflags += f" -linkmode=external -extldflags=-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION}"
+            # CGO_LDFLAGS is repeated for every cgo package, so add libc++
+            # only to the final external link.
+            ldflags += (
+                f" -linkmode=external -extldflags="
+                f"'-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION} -lc++'"
+            )
         if target_platform == "linux":
             bridge_search_path = f"-L{GO_MODULE_DIR}"
             runtime_search_path = f"-L{linux_libcxx_runtime}"
