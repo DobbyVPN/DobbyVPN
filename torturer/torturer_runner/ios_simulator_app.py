@@ -993,19 +993,13 @@ def _restore_simulator_hardware_keyboard(
     )
 
 
-def _toggle_simulator_hardware_keyboard(
+def _open_simulator(
     runner: CommandRunner,
     simulator_udid: str,
     *,
-    stage: str,
     budget: RunBudget,
     cleanup: bool = False,
 ) -> None:
-    open_timeout = (
-        budget.cleanup_timeout()
-        if cleanup
-        else _stage_timeout(budget, "open-simulator")
-    )
     _require_success(
         runner,
         [
@@ -1014,9 +1008,18 @@ def _toggle_simulator_hardware_keyboard(
         ],
         "open-simulator",
         budget=budget,
-        timeout_seconds=open_timeout,
+        timeout_seconds=budget.cleanup_timeout() if cleanup else None,
         bounded_timeout=cleanup,
     )
+
+
+def _toggle_simulator_hardware_keyboard(
+    runner: CommandRunner,
+    *,
+    stage: str,
+    budget: RunBudget,
+    cleanup: bool = False,
+) -> None:
     keyboard_timeout = (
         budget.cleanup_timeout()
         if cleanup
@@ -1052,7 +1055,6 @@ def _disable_per_device_hardware_keyboard(
     state.changed = True
     _toggle_simulator_hardware_keyboard(
         runner,
-        state.simulator_udid,
         stage="toggle-hardware-keyboard",
         budget=budget,
     )
@@ -1075,9 +1077,14 @@ def _restore_per_device_hardware_keyboard(
     if _read_simulator_hardware_keyboard_override(state.simulator_udid) == state.was_connected:
         state.changed = False
         return
-    _toggle_simulator_hardware_keyboard(
+    _open_simulator(
         runner,
         state.simulator_udid,
+        budget=budget,
+        cleanup=True,
+    )
+    _toggle_simulator_hardware_keyboard(
+        runner,
         stage="restore-hardware-keyboard",
         budget=budget,
         cleanup=True,
@@ -1172,6 +1179,7 @@ def run_ios_simulator_app_contract(
                 "bootstatus",
                 budget=budget,
             )
+            _open_simulator(runner, simulator.udid, budget=budget)
 
         _timed_stage("boot", boot_simulator)
         if keyboard_state is not None:

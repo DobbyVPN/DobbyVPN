@@ -108,6 +108,10 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
 
     def test_install_timeout_reports_elapsed_time_and_preserves_cleanup_window(self) -> None:
         udid = "01234567-89ab-cdef-0123-456789abcdef"
+        open_command = [
+            "/usr/bin/open", "-a", "Simulator", "--args",
+            "-CurrentDeviceUDID", udid.upper(),
+        ]
         clock = [0.0]
         commands: list[tuple[list[str], float | None]] = []
 
@@ -129,6 +133,9 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                     return ios_simulator_app.CommandResult(0, json.dumps(inventory), "")
                 if arguments[:3] == ["xcrun", "--sdk", "iphonesimulator"]:
                     return ios_simulator_app.CommandResult(0, "17.5", "")
+                if arguments == open_command:
+                    self.open_simulator_timeout = timeout_seconds
+                    return ios_simulator_app.CommandResult(0, "", "")
                 if arguments[:3] == ["xcrun", "simctl", "install"]:
                     self.asserted_install_timeout = timeout_seconds
                     clock[0] += (timeout_seconds or 0) + ios_simulator_app.COMMAND_TERMINATION_RESERVE_SECONDS
@@ -181,6 +188,16 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         self.assertIn("install stderr", notes)
         # The remaining lane budget still caps the five-minute stage limit.
         self.assertEqual(runner.asserted_install_timeout, 180)
+        self.assertEqual(runner.open_simulator_timeout, 30)
+        command_arguments = [arguments for arguments, _ in commands]
+        open_index = command_arguments.index(open_command)
+        install_index = command_arguments.index(
+            [
+                "xcrun", "simctl", "install", udid.upper(),
+                str(contract.app_path(work_dir)),
+            ]
+        )
+        self.assertLess(open_index, install_index)
         # The simulated install and its bounded process-group stop consume 225s
         # of a 345s run. Cleanup still receives the reserved 120s; the shutdown
         # command leaves its own 45s process-stop bound inside that window.
