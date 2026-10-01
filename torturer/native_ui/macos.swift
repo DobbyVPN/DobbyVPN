@@ -256,7 +256,7 @@ func run() throws -> [String: Any] {
         throw error
     }
     func activate() throws {
-        try require(app.activate(options: [.activateIgnoringOtherApps]), "Could not activate native app")
+        try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")
         let deadline = Date().addingTimeInterval(2)
         while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
