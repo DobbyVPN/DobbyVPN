@@ -1227,6 +1227,7 @@ def run_ios_simulator_app_contract(
                     project,
                     work_dir / "derived-data",
                     result_bundle=result_bundle,
+                    architecture=contract.architecture,
                 ),
                 "xctest-ui",
                 cwd=candidate_root,

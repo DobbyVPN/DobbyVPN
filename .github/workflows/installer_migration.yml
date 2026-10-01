@@ -33,10 +33,14 @@ jobs:
           persist-credentials: false
 
       - name: Download installer
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyVPN-${{ inputs.platform }}-${{ inputs.platform == 'windows' && 'amd64.msi' || inputs.architecture == 'arm64' && 'aarch64.pkg' || 'amd64.pkg' }}
-          path: ${{ runner.temp }}/dobbyvpn-installer-migration/package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: dobbyVPN-${{ inputs.platform }}-${{ inputs.platform == 'windows' && 'amd64.msi' || inputs.architecture == 'arm64' && 'aarch64.pkg' || 'amd64.pkg' }}
+          DOWNLOAD_DIR: ${{ runner.temp }}/dobbyvpn-installer-migration/package
+        run: |
+          python3 .github/scripts/release/download_artifact.py \
+            "$GITHUB_RUN_ID" "$ARTIFACT_NAME" "$DOWNLOAD_DIR"
 
       - name: Qualify fresh install, upgrade, rollback, and final uninstall
         shell: bash

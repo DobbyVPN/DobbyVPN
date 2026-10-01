@@ -81,13 +81,24 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             contract, work_dir=work_dir
         )
         run = ios_simulator_app.xcodebuild_ui_test_without_building_command(
-            udid, project, derived_data, result_bundle
+            udid, project, derived_data, result_bundle,
+            architecture=contract.architecture,
+        )
+        intel_run = ios_simulator_app.xcodebuild_ui_test_without_building_command(
+            udid, project, derived_data, result_bundle, architecture="amd64"
         )
 
         self.assertEqual(build[1:3], ["scripts/package_ios_app.sh", "iossimulator"])
         self.assertEqual(build[3], str(contract.app_path(work_dir)))
         self.assertEqual(run[-1], "test-without-building")
-        self.assertIn(f"platform=iOS Simulator,id={udid.upper()}", run)
+        self.assertEqual(
+            run[run.index("-destination") + 1],
+            f"platform=iOS Simulator,id={udid.upper()},arch=arm64",
+        )
+        self.assertEqual(
+            intel_run[intel_run.index("-destination") + 1],
+            f"platform=iOS Simulator,id={udid.upper()},arch=x86_64",
+        )
         self.assertEqual(run[run.index("-scheme") + 1], "iosAppUITests")
         self.assertIn(str(derived_data), build[3])
         self.assertEqual(run[run.index("-derivedDataPath") + 1], str(derived_data))

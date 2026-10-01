@@ -43,7 +43,7 @@ sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
 [[ -n "$sdk_root" && -d "$sdk_root" ]] || { echo 'Android SDK is required' >&2; exit 2; }
 export ANDROID_SDK_ROOT="$sdk_root"
 ndk_version=$(python3 "$source_root/.github/scripts/android/android_dependency_provenance.py" --source-root "$source_root" --print-pin android_ndk)
-export ANDROID_NDK_HOME="$sdk_root/ndk/$ndk_version"
+export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$sdk_root/ndk/$ndk_version}"
 [[ -f "$ANDROID_NDK_HOME/source.properties" ]] || {
   echo "Android NDK $ndk_version is required: $ANDROID_NDK_HOME" >&2
   exit 2

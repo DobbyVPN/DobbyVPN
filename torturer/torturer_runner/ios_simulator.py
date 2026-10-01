@@ -77,6 +77,8 @@ def xcodebuild_ui_test_without_building_command(
     project: str | Path,
     derived_data: str | Path,
     result_bundle: str | Path | None = None,
+    *,
+    architecture: str,
 ) -> list[str]:
     """Run prepared XCTest products and retain their result bundle."""
     app_project = Path(project)
@@ -95,13 +97,15 @@ def xcodebuild_ui_test_without_building_command(
             "iOS UI test result bundle must end in .xcresult"
         )
     udid = _validate_udid(device_udid)
+    simulator_architecture = "x86_64" if architecture == "amd64" else architecture
     return [
         "xcodebuild",
         "-project", str(app_project),
         "-scheme", "iosAppUITests",
         "-configuration", "Release",
         "-sdk", "iphonesimulator",
-        "-destination", f"platform=iOS Simulator,id={udid}",
+        "-destination",
+        f"platform=iOS Simulator,id={udid},arch={simulator_architecture}",
         "-derivedDataPath", str(data_path),
         "-resultBundlePath", str(result_path),
         "-parallel-testing-enabled", "NO",

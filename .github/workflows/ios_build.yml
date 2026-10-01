@@ -47,10 +47,12 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - name: Download iOS runtime framework
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: DobbyVPNRuntime.xcframework
-          path: ui/apple/DobbyVPNRuntime.xcframework
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/release/download_artifact.py \
+            "$GITHUB_RUN_ID" DobbyVPNRuntime.xcframework ui/apple/DobbyVPNRuntime.xcframework
 
       - name: Analyze production iOS app and tunnel without signing
         run: |

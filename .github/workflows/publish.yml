@@ -191,12 +191,13 @@ jobs:
           echo "APP_BUILD=${{ needs.resolve_release.outputs.android_version_code }}" >> "$GITHUB_ENV"
           echo "SOURCE_COMMIT=${{ needs.resolve_release.outputs.source_sha }}" >> "$GITHUB_ENV"
       - name: Download selected unsigned archive
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: DobbyVPN.xcarchive.tar.gz
-          path: selected-release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          python3 .github/scripts/release/download_artifact.py \
+            "$RELEASE_RUN_ID" DobbyVPN.xcarchive.tar.gz selected-release
       - name: Prepare Apple signing identity and profiles
         env:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
@@ -355,58 +356,22 @@ jobs:
             echo "version=$RELEASE_VERSION"
             echo "version_code=$ANDROID_VERSION_CODE"
           } >> "$GITHUB_OUTPUT"
-      # Artifact names are deliberately exact.  A multiline `pattern` is one
-      # glob to download-artifact, not a list, and a broad glob would also
-      # publish build intermediates.
-      - name: Download Linux package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyVPN-linux.deb
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
-      - name: Download Windows package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyVPN-windows-amd64.msi
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
-      - name: Download macOS arm64 package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyVPN-macos-aarch64.pkg
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
-      - name: Download macOS amd64 package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyVPN-macos-amd64.pkg
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
-      - name: Download unsigned Android package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyvpn-android-unsign.apk
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
-      - name: Download unsigned Android test companion
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyvpn-android-test-companion-unsigned.apk
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
-      - name: Download Android provenance
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyvpn-android-provenance
-          path: release
-          run-id: ${{ inputs.release_run_id }}
-          github-token: ${{ github.token }}
+      # Artifact names are deliberately exact; broad matching could include
+      # build intermediates.
+      - name: Download selected Release packages
+        shell: bash
+        run: |
+          for artifact in \
+            dobbyVPN-linux.deb \
+            dobbyVPN-windows-amd64.msi \
+            dobbyVPN-macos-aarch64.pkg \
+            dobbyVPN-macos-amd64.pkg \
+            dobbyvpn-android-unsign.apk \
+            dobbyvpn-android-test-companion-unsigned.apk \
+            dobbyvpn-android-provenance; do
+            python3 .github/scripts/release/download_artifact.py \
+              "$RELEASE_RUN_ID" "$artifact" release
+          done
       - name: Read Android dependency versions
         id: pins
         run: |

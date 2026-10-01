@@ -44,42 +44,31 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Download Linux package
-        if: inputs.platform == 'linux'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          name: dobbyVPN-linux.deb
-          path: release-packages
-      - name: Download Windows package
-        if: inputs.platform == 'windows'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          name: dobbyVPN-windows-amd64.msi
-          path: release-packages
-      - name: Download macOS packages
-        if: inputs.platform == 'macos'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          pattern: dobbyVPN-macos-*.pkg
-          path: release-packages
-          merge-multiple: true
-      - name: Download unsigned Android application
-        if: inputs.platform == 'android'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          name: dobbyvpn-android-unsign.apk
-          path: release-packages
-      - name: Download unsigned Android test companion
-        if: inputs.platform == 'android'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          name: dobbyvpn-android-test-companion-unsigned.apk
-          path: release-packages
-      - name: Download shared Render VPN profile
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
-        with:
-          name: ${{ inputs.render_artifact_name }}
-          path: render
+      - name: Download qualification artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RENDER_ARTIFACT_NAME: ${{ inputs.render_artifact_name }}
+        run: |
+          case "$PLATFORM" in
+            linux) artifacts=(dobbyVPN-linux.deb) ;;
+            windows) artifacts=(dobbyVPN-windows-amd64.msi) ;;
+            android) artifacts=(dobbyvpn-android-unsign.apk dobbyvpn-android-test-companion-unsigned.apk) ;;
+            macos)
+              case "$ARCHITECTURE" in
+                arm64) artifacts=(dobbyVPN-macos-aarch64.pkg) ;;
+                amd64) artifacts=(dobbyVPN-macos-amd64.pkg) ;;
+                *) echo "unsupported macOS package architecture: $ARCHITECTURE" >&2; exit 1 ;;
+              esac
+              ;;
+            *) echo "unsupported qualification platform: $PLATFORM" >&2; exit 1 ;;
+          esac
+          for artifact in "${artifacts[@]}"; do
+            python3 .github/scripts/release/download_artifact.py \
+              "$GITHUB_RUN_ID" "$artifact" release-packages
+          done
+          python3 .github/scripts/release/download_artifact.py \
+            "$GITHUB_RUN_ID" "$RENDER_ARTIFACT_NAME" render
 
       - name: Initialize runner-local qualification paths
         shell: bash

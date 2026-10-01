@@ -33,17 +33,17 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
-      - name: Download unsigned Android app
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyvpn-android-unsign.apk
-          path: ${{ runner.temp }}/fdroid-reference
-
-      - name: Download unsigned Android test companion
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyvpn-android-test-companion-unsigned.apk
-          path: ${{ runner.temp }}/fdroid-reference
+      - name: Download unsigned Android reference artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in \
+            dobbyvpn-android-unsign.apk \
+            dobbyvpn-android-test-companion-unsigned.apk; do
+            python3 .github/scripts/release/download_artifact.py \
+              "$GITHUB_RUN_ID" "$artifact" "$RUNNER_TEMP/fdroid-reference"
+          done
 
       - name: Verify release inputs
         run: |

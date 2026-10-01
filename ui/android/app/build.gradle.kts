@@ -147,10 +147,9 @@ val downloadGoModules by tasks.registering(Exec::class) {
     environment("GOFLAGS", "-trimpath -buildvcs=false")
 }
 
-val ndkHome = androidSdkRoot
-    .map { File(it, "ndk/$pinnedAndroidNdkVersion").absolutePath }
-    .orElse(nonBlankEnvironment("ANDROID_NDK_HOME"))
+val ndkHome = nonBlankEnvironment("ANDROID_NDK_HOME")
     .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
+    .orElse(androidSdkRoot.map { File(it, "ndk/$pinnedAndroidNdkVersion").absolutePath })
     .orElse("")
 val api = providers.gradleProperty("android.ndk.api").orElse("26")
 val abis = mapOf(
