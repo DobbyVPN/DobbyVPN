@@ -390,6 +390,9 @@ jobs:
   fdroid_preflight:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'fdroid-preflight' }}
     needs: [ci_selected_version, android_mini_build]
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/fdroid_preflight.yml
     with:
       source_sha: ${{ github.sha }}
