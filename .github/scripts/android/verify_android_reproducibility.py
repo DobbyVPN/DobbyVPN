@@ -122,8 +122,28 @@ def _logical_payload_records(apk: Path) -> list[dict[str, object]]:
 def verify_signed_payload(unsigned_apk: Path, signed_apk: Path) -> None:
     _regular_file(unsigned_apk, "unsigned APK")
     _regular_file(signed_apk, "signed APK")
-    if _logical_payload_records(unsigned_apk) != _logical_payload_records(signed_apk):
-        raise VerificationError("signed APK payload differs from the verified unsigned APK")
+    expected_records = _logical_payload_records(unsigned_apk)
+    actual_records = _logical_payload_records(signed_apk)
+    if expected_records != actual_records:
+        expected_by_path: dict[str, list[dict[str, object]]] = {}
+        actual_by_path: dict[str, list[dict[str, object]]] = {}
+        for record in expected_records:
+            expected_by_path.setdefault(str(record["path"]), []).append(record)
+        for record in actual_records:
+            actual_by_path.setdefault(str(record["path"]), []).append(record)
+        differences = [
+            {
+                "actual": actual_by_path.get(path, []),
+                "expected": expected_by_path.get(path, []),
+                "path": path,
+            }
+            for path in sorted(expected_by_path.keys() | actual_by_path.keys())
+            if expected_by_path.get(path, []) != actual_by_path.get(path, [])
+        ]
+        raise VerificationError(
+            "signed APK payload differs from the verified unsigned APK"
+            f"\nDiffering payload records:\n{json.dumps(differences, indent=2, sort_keys=True)}"
+        )
 
 
 def verify_publication_provenance(
