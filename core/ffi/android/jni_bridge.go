@@ -28,7 +28,7 @@ static JNIEnv *dobby_env(bool *attached) {
 	jint status = (*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6);
 	if (status == JNI_OK) return env;
 	if (status != JNI_EDETACHED) return NULL;
-	if ((*vm)->AttachCurrentThread(vm, (void **)&env, NULL) != JNI_OK) return NULL;
+	if ((*vm)->AttachCurrentThread(vm, &env, NULL) != JNI_OK) return NULL;
 	if (attached != NULL) *attached = true;
 	return env;
 }

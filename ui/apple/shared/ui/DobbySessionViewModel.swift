@@ -117,47 +117,22 @@ public final class DobbySessionViewModel: ObservableObject {
         let submitSource = action == "START" && (!current.configured || sourceIsDirty)
         let client = client
         worker.async { [weak self, client, current, source, submitSource, action] in
-            let outcome = Result {
-                if action == "STOP" {
-                    let response = client.call("Stop", parameters: [
-                        "session_id": current.sessionID,
-                        "generation": current.generation,
-                    ])
-                    try DobbyResponse.check(response)
-                } else if action == "START" {
-                    guard !submitSource || !source.isEmpty else { throw DobbyClientError.noConfiguration }
-                    var parameters: [String: Any] = [
-                        "session_id": current.sessionID,
-                        "expected_sequence": current.sequence,
-                        "mode": "AUTO_SELECT",
-                        "index": 0,
-                    ]
-                    if submitSource { parameters["source"] = source }
-                    let response = client.call("Start", parameters: parameters)
-                    try DobbyResponse.check(response)
-                } else {
-                    throw DobbyClientError.invalidResponse
-                }
-            }
-            let snapshotAfterFailure: DobbySessionSnapshot?
-            if case .failure = outcome {
-                if case let .success((value, _)) = readSnapshot(client: client, sessionID: current.sessionID) {
-                    snapshotAfterFailure = value
-                } else {
-                    snapshotAfterFailure = nil
-                }
-            } else {
-                snapshotAfterFailure = nil
-            }
+            let result = runPrimaryAction(
+                client: client,
+                current: current,
+                source: source,
+                submitSource: submitSource,
+                action: action
+            )
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.busy = false
-                switch outcome {
+                switch result.outcome {
                 case .success:
                     if submitSource && action == "START" { self.markSourceAccepted(source) }
                     self.refreshSnapshot()
                 case let .failure(failure):
-                    if let refreshed = snapshotAfterFailure {
+                    if let refreshed = result.snapshotAfterFailure {
                         self.snapshot = refreshed
                     }
                     self.error = failure.localizedDescription
@@ -213,4 +188,43 @@ private func readSnapshot(
     } catch {
         return .failure(error)
     }
+}
+
+private func runPrimaryAction(
+    client: DobbySessionClient,
+    current: DobbySessionSnapshot,
+    source: String,
+    submitSource: Bool,
+    action: String
+) -> (outcome: Result<Void, Error>, snapshotAfterFailure: DobbySessionSnapshot?) {
+    let outcome = Result {
+        if action == "STOP" {
+            let response = client.call("Stop", parameters: [
+                "session_id": current.sessionID,
+                "generation": current.generation,
+            ])
+            try DobbyResponse.check(response)
+        } else if action == "START" {
+            guard !submitSource || !source.isEmpty else { throw DobbyClientError.noConfiguration }
+            var parameters: [String: Any] = [
+                "session_id": current.sessionID,
+                "expected_sequence": current.sequence,
+                "mode": "AUTO_SELECT",
+                "index": 0,
+            ]
+            if submitSource { parameters["source"] = source }
+            let response = client.call("Start", parameters: parameters)
+            try DobbyResponse.check(response)
+        } else {
+            throw DobbyClientError.invalidResponse
+        }
+    }
+    let snapshotAfterFailure: DobbySessionSnapshot?
+    if case .failure = outcome,
+       case let .success((value, _)) = readSnapshot(client: client, sessionID: current.sessionID) {
+        snapshotAfterFailure = value
+    } else {
+        snapshotAfterFailure = nil
+    }
+    return (outcome, snapshotAfterFailure)
 }

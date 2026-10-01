@@ -1007,11 +1007,10 @@ def build_service(
                 retain_runtime_dependencies,
             )
         elif target_platform == "macos":
-            # The in-process bridge is a static C++ archive and uses these
-            # macOS frameworks. cgo does not infer them from the archive.
+            # The external C++ driver supplies libc++ on macOS. cgo does not
+            # infer the frameworks required by the bridge.
             append_cgo_ldflags(
                 env,
-                "-lc++",
                 "-framework", "CoreFoundation",
                 "-framework", "Security",
                 "-framework", "Foundation",

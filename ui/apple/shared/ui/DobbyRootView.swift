@@ -26,53 +26,68 @@ public struct DobbyRootView: View {
     private var connection: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("DobbyVPN").font(.largeTitle.bold())
-                Text(model.status)
-                    .font(.title2.weight(.semibold))
-                    .accessibilityIdentifier(model.status)
-                if let profile = model.snapshot.activeProfile {
-                    Text([profile.protocolName, profile.description]
-                        .filter { !$0.isEmpty }
-                        .joined(separator: " · "))
-                }
-                if let failure = model.snapshot.lastFailure {
-                    Text("\(failure.message) (\(failure.code))")
-                        .foregroundStyle(.red)
-                }
-                if !model.error.isEmpty {
-                    Text(model.error).foregroundStyle(.red)
-                }
-                Text("Connection configuration")
-                    .font(.headline)
-                TextEditor(text: Binding(
-                    get: { model.sourceText },
-                    set: { model.sourceChanged($0) }
-                ))
-                .frame(height: 180)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.4)))
-                .accessibilityIdentifier("Connection configuration")
-                .focused($configurationFocused)
-                .disabled(model.busy)
-#if os(iOS)
-                if configurationFocused {
-                    Button("Done") { configurationFocused = false }
-                        .accessibilityIdentifier("Dismiss configuration keyboard")
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-#endif
-                Text("Enter an HTTPS connection URL or inline configuration.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button(action: model.performPrimaryAction) {
-                    if model.busy { ProgressView().frame(maxWidth: .infinity) }
-                    else { Text(model.actionTitle).frame(maxWidth: .infinity) }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.busy || !model.canPerformPrimaryAction)
-                .accessibilityIdentifier("VPN connection action")
+                connectionSummary
+                configurationEditor
+                primaryAction
             }
             .padding(24)
         }
+    }
+
+    @ViewBuilder
+    private var connectionSummary: some View {
+        Text("DobbyVPN").font(.largeTitle.bold())
+        Text(model.status)
+            .font(.title2.weight(.semibold))
+            .accessibilityIdentifier(model.status)
+        if let profile = model.snapshot.activeProfile {
+            Text([profile.protocolName, profile.description]
+                .filter { !$0.isEmpty }
+                .joined(separator: " · "))
+        }
+        if let failure = model.snapshot.lastFailure {
+            Text("\(failure.message) (\(failure.code))")
+                .foregroundStyle(.red)
+        }
+        if !model.error.isEmpty {
+            Text(model.error).foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private var configurationEditor: some View {
+        Text("Connection configuration")
+            .font(.headline)
+        TextEditor(text: Binding(
+            get: { model.sourceText },
+            set: { model.sourceChanged($0) }
+        ))
+        .frame(height: 180)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.4)))
+        .accessibilityIdentifier("Connection configuration")
+        .focused($configurationFocused)
+        .disabled(model.busy)
+#if os(iOS)
+        if configurationFocused {
+            Button("Done") { configurationFocused = false }
+                .accessibilityIdentifier("Dismiss configuration keyboard")
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+#endif
+        Text("Enter an HTTPS connection URL or inline configuration.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+    }
+
+    private var primaryAction: some View {
+        Button(action: model.performPrimaryAction) {
+            if model.busy { ProgressView().frame(maxWidth: .infinity) } else {
+                Text(model.actionTitle).frame(maxWidth: .infinity)
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(model.busy || !model.canPerformPrimaryAction)
+        .accessibilityIdentifier("VPN connection action")
     }
 
     private var logs: some View {

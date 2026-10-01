@@ -327,7 +327,8 @@ rm -rf "$fdroid_home/build" "$fdroid_home/metadata" "$fdroid_home/tmp" "$fdroid_
 mkdir -p "$fdroid_home/build" "$fdroid_home/metadata" "$fdroid_home/tmp" "$fdroid_home/logs"
 cp "$metadata_path" "$fdroid_home/metadata/com.dobby.vpn.yml"
 if [[ -f "$fdroiddata_dir/config.yml" ]]; then
-  cp "$fdroiddata_dir/config.yml" "$fdroid_home/config.yml"
+  install -o vagrant -g vagrant -m 600 \
+    "$fdroiddata_dir/config.yml" "$fdroid_home/config.yml"
 fi
 rm -rf "$fdroid_home/srclibs" "$fdroid_home/fdroiddata"
 ln -s "$fdroiddata_dir/srclibs" "$fdroid_home/srclibs"

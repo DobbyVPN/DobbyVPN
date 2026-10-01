@@ -92,7 +92,9 @@ public final class IOSSessionShell: NSObject {
                 response = try IOSProviderPayload.decode(providerResponse.payload)
             } catch let error as IOSProviderPayloadError {
                 logs.writeLog(
-                    log: "iOS session provider payload decoding failed; reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n\(diagnosticErrorDescription(error))"
+                    log: "iOS session provider payload decoding failed; " +
+                        "reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n" +
+                        diagnosticErrorDescription(error)
                 )
                 return (failure("INTERNAL", message: "iOS session provider response was not valid UTF-8"), false)
             }
@@ -125,6 +127,7 @@ public final class IOSSessionShell: NSObject {
     }
 
     private func failure(_ code: String, message: String) -> String {
-        String(decoding: VpnManagerImpl.transportFailure(code, message: message), as: UTF8.self)
+        let response = VpnManagerImpl.transportFailure(code, message: message)
+        return String(bytes: response, encoding: .utf8) ?? ""
     }
 }

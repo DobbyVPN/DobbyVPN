@@ -43,12 +43,12 @@ public struct IOSConfigurationMailbox: Equatable {
         return bytes
     }
 
-    public static func decode(_ data: Data) throws -> IOSConfigurationMailbox {
-        guard data.starts(with: header) else {
+    public static func decode(_ data: Data) throws -> Self {
+        guard data.starts(with: Self.header) else {
             throw IOSProviderMessageError.malformed
         }
-        let content = data.dropFirst(header.count)
-        guard let separatorIndex = content.firstIndex(of: separator) else {
+        let content = data.dropFirst(Self.header.count)
+        guard let separatorIndex = content.firstIndex(of: Self.separator) else {
             throw IOSProviderMessageError.malformed
         }
         let requestIDBytes = content[..<separatorIndex]
@@ -56,7 +56,7 @@ public struct IOSConfigurationMailbox: Equatable {
             throw IOSProviderMessageError.malformed
         }
         let configurationStart = content.index(after: separatorIndex)
-        return try IOSConfigurationMailbox(
+        return try Self(
             requestID: requestID,
             configuration: Data(content[configurationStart...])
         )
@@ -77,7 +77,6 @@ public enum IOSMailboxLifecycle {
               let code = error["code"] as? String else { return false }
         return !code.isEmpty
     }
-
 }
 
 /// Provider command envelope. `method` and `params` keep the same shape as the
@@ -119,7 +118,7 @@ public struct IOSProviderCommand: Equatable {
         )
     }
 
-    public static func decode(_ data: Data) throws -> IOSProviderCommand {
+    public static func decode(_ data: Data) throws -> Self {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let version = try int64(object["version"]),
               version == Int64(Self.version),
@@ -132,7 +131,7 @@ public struct IOSProviderCommand: Equatable {
             withJSONObject: parameters,
             options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
         )
-        return try IOSProviderCommand(method: method, requestID: requestID, params: params)
+        return try Self(method: method, requestID: requestID, params: params)
     }
 
     fileprivate static func int64(_ value: Any?) throws -> Int64? {
@@ -148,7 +147,6 @@ public struct IOSProviderCommand: Equatable {
         }
         return integer
     }
-
 }
 
 /// Provider response envelope. The payload is the exact UTF-8
@@ -178,7 +176,7 @@ public struct IOSProviderResponse: Equatable {
     public static func decode(
         _ data: Data,
         expectedRequestID: String
-    ) throws -> IOSProviderResponse {
+    ) throws -> Self {
         guard !expectedRequestID.isEmpty else {
             throw IOSProviderMessageError.malformed
         }
@@ -194,7 +192,7 @@ public struct IOSProviderResponse: Equatable {
               let payload = Data(base64Encoded: encodedPayload) else {
             throw IOSProviderMessageError.malformed
         }
-        return try IOSProviderResponse(requestID: requestID, kind: kind, payload: payload)
+        return try Self(requestID: requestID, kind: kind, payload: payload)
     }
 
     private func jsonData() throws -> Data {
@@ -206,5 +204,4 @@ public struct IOSProviderResponse: Equatable {
         ]
         return try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes])
     }
-
 }

@@ -34,6 +34,7 @@ let package = Package(
                 "IOSSessionShell.swift",
                 "SharedKeychainSecretStore.swift",
                 "VpnManagerImpl.swift",
+                "VpnManagerPreferences.swift",
                 "AppCompositionRoot.swift",
             ],
             sources: [

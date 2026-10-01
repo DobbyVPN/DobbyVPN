@@ -22,7 +22,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let lastFailure: DobbyFailure?
     public let recovering: Bool
 
-    public static let empty = DobbySessionSnapshot(
+    public static let empty = Self(
         sessionID: "", sequence: 0, generation: 0, state: "IDLE", primaryAction: "NONE",
         configured: false, sourceURL: "", sourceError: "", activeProfile: nil,
         lastFailure: nil, recovering: false
