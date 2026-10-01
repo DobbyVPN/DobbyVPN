@@ -169,10 +169,10 @@ def sign_test_pair(
     environment[key_password_env] = password
     try:
         with tempfile.TemporaryDirectory(prefix="dobbyvpn-android-test-key-") as temporary:
-            keystore = Path(temporary) / "qualification.jks"
+            keystore = Path(temporary) / "qualification.p12"
             _run(
                 [
-                    str(keytool), "-genkeypair", "-noprompt", "-storetype", "JKS",
+                    str(keytool), "-genkeypair", "-noprompt", "-storetype", "PKCS12",
                     "-keystore", str(keystore), "-alias", "dobbyvpn-qualification",
                     "-keyalg", "RSA", "-keysize", "2048", "-validity", "1",
                     "-dname", "CN=DobbyVPN temporary Android qualification",
