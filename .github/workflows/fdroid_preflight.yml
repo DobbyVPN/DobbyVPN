@@ -53,11 +53,13 @@ jobs:
       - name: Run the unmodified updater, metadata checks, build and scanner
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fdroid-build"
           docker run --rm --init \
             --volume "$GITHUB_WORKSPACE:/workspace/product:ro" \
             --volume "$RUNNER_TEMP/fdroiddata:/workspace/fdroiddata:ro" \
             --volume "$RUNNER_TEMP/fdroidserver:/workspace/fdroidserver:ro" \
             --volume "$RUNNER_TEMP/fdroid-reference:/workspace/reference:ro" \
+            --volume "$RUNNER_TEMP/fdroid-build:/home/vagrant/tmp" \
             --env SOURCE_SHA --env VERSION_NAME --env VERSION_CODE \
             --env SOURCE_REPOSITORY="$GITHUB_REPOSITORY" \
             "$FDROID_IMAGE" bash -euo pipefail -c '
@@ -89,3 +91,11 @@ jobs:
                 --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" \
                 --version-name "$VERSION_NAME" --version-code "$VERSION_CODE"
             '
+      - name: Retain failed F-Droid rebuilt APK
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-fdroid-rebuild.apk
+          path: ${{ runner.temp }}/fdroid-build/com.dobby.vpn_${{ env.VERSION_CODE }}.apk
+          if-no-files-found: ignore
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
