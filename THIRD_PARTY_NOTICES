@@ -1,0 +1,33 @@
+DobbyVPN third-party notices
+
+DobbyVPN is licensed under the Business Source License 1.1 in LICENSE.
+Third-party components retain their own licenses and copyright notices.
+
+Retained Apache-2.0 material
+---------------------------
+
+The Apache License, Version 2.0 is included in LICENSES/Apache-2.0.txt for
+retained material from earlier Apache-licensed DobbyVPN contributions and
+the following source components:
+
+* core/sessionapi/runtime/internal/app.go
+  Copyright 2023 The Outline Authors.
+  Includes Outline-derived material; the source retains its attribution.
+
+* ui/android/gradlew and ui/android/gradlew.bat
+  Copyright 2015 the original author or authors.
+  Gradle wrapper scripts; the source retains the original notices.
+
+Earlier versions distributed under Apache-2.0 retain the rights granted by
+that license. The project license change does not revoke those grants.
+
+Dependencies
+------------
+
+Dependencies are separately licensed by their respective authors. Their
+licenses and notices remain applicable, including Apache-2.0 for Outline SDK
+and the TrustTunnel Go integration, and MPL-2.0 for Xray-core. Exact dependency
+versions and source locations are recorded in core/go.mod, core/go.sum,
+ui/android/app/build.gradle.kts, and the platform dependency manifests.
+Xray-core source is available at https://github.com/XTLS/Xray-core; the version
+used by this release is recorded in core/go.mod.

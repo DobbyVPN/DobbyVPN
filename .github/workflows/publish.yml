@@ -437,13 +437,12 @@ jobs:
             --version-code "$ANDROID_VERSION_CODE" \
             --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
           rm -- "$companion"
-      - name: Create F-Droid metadata and release provenance
+      - name: Create release provenance
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
           ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
         run: |
           set -euo pipefail
-          printf 'versionName=%s\nversionCode=%s\n' "$RELEASE_VERSION" "$ANDROID_VERSION_CODE" > release/version.txt
           python3 .github/scripts/release/release_provenance.py create \
             --directory release --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
             --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
@@ -452,8 +451,7 @@ jobs:
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
             --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
-            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
-            --asset version.txt
+            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
       - name: Create tag and GitHub Release
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
@@ -478,8 +476,7 @@ jobs:
               --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
               --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
               --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
-              --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
-              --asset version.txt
+              --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
             exit 0
           fi
           set +e
@@ -512,5 +509,4 @@ jobs:
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
             --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
-            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
-            --asset version.txt
+            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi

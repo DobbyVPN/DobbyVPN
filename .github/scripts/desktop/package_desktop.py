@@ -47,15 +47,21 @@ def copy_file(source: Path, destination: Path, *, executable: bool = False) -> N
 
 def copy_directory(source: Path, destination: Path) -> None:
     if not source.is_dir():
-        fail(f"required native UI output directory is missing: {source}")
+        fail(f"required directory is missing: {source}")
     for path in sorted(source.rglob("*")):
         if path.is_symlink():
-            fail(f"native UI output contains an unexpected symbolic link: {path}")
+            fail(f"directory contains an unexpected symbolic link: {path}")
         if path.is_file():
             target = destination / path.relative_to(source)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, target)
             target.chmod(path.stat().st_mode)
+
+
+def copy_license_documents(destination: Path) -> None:
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES"):
+        copy_file(ROOT / name, destination / name)
+    copy_directory(ROOT / "LICENSES", destination / "LICENSES")
 
 
 def write_zip(root: Path, output: Path) -> None:
@@ -98,6 +104,7 @@ def package_windows(version: str, output: Path, source: Path) -> None:
             required(binary / name)
         required(binary / "DobbyVPN.exe")
         windows_icon(root / "app" / "app.ico")
+        copy_license_documents(root / "app" / "licenses")
         write_zip(root, output / f"dobby-vpn-{version}-windows-amd64.zip")
 
 
@@ -111,6 +118,7 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path) -> Non
         copy_file(source / "DobbyVPNMacApp", executable, executable=True)
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
+        copy_license_documents(resources / "licenses")
         info = {
             "CFBundleDisplayName": "Dobby VPN",
             "CFBundleExecutable": "DobbyVPNMacApp",
@@ -143,6 +151,7 @@ def package_linux(version: str, output: Path, source: Path) -> None:
         app = root / "opt" / "dobbyvpn"
         copy_file(source / "dobbyvpn-backend", app / "bin" / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", app / "bin" / "dobby-cli", executable=True)
+        copy_license_documents(root / "usr" / "share" / "doc" / "dobbyvpn")
         for name in ("libdobby_bridge.so", "libc++.so.1", "libc++abi.so.1"):
             copy_file(source / name, app / "lib" / name)
 

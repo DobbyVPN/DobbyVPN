@@ -10,6 +10,7 @@ plugins {
 
 val repoRoot = rootProject.projectDir.parentFile.parentFile
 val goModule = repoRoot.resolve("core")
+val distributionLicenseAssets = layout.buildDirectory.dir("generated/distribution-license-assets")
 val pinnedAndroidNdkVersion = "28.1.13356709"
 fun nonBlankEnvironment(name: String) =
     providers.environmentVariable(name)
@@ -86,6 +87,13 @@ val releaseVersionCode: Int = nonBlankGradleProperty("android.injected.version.c
     .orElse(nonBlankGradleProperty("versionCode")).map(String::toInt).get()
     ?: error("versionCode is required for the Android manifest")
 val sourceCommit = providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")
+val copyLicenseAssets by tasks.registering(Copy::class) {
+    from(repoRoot) {
+        include("LICENSE", "THIRD_PARTY_NOTICES", "LICENSES/**")
+        into("licenses")
+    }
+    into(distributionLicenseAssets)
+}
 
 android {
     namespace = "com.dobby.vpn"
@@ -103,10 +111,8 @@ android {
         targetSdk = 35
         this.versionCode = releaseVersionCode
         this.versionName = releaseVersionName
-        // Keep the release identity explicit in the merged manifest.  AGP's
-        // injected version properties are consumed by the DSL above, but the
-        // standalone F-Droid build must also expose the same values to
-        // fdroidserver's APK metadata parser.
+        // Keep the release identity explicit in the merged manifest so APK
+        // metadata and the Android DSL use the same values.
         manifestPlaceholders["dobbyVersionCode"] = releaseVersionCode.toString()
         manifestPlaceholders["dobbyVersionName"] = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -131,6 +137,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/go-libs"))
+    sourceSets["main"].assets.srcDir(distributionLicenseAssets)
     buildFeatures {
         buildConfig = true
         compose = true
@@ -192,10 +199,9 @@ val backendTasks = abis.map { (androidAbi, pair) ->
             check(compiler.isFile) { "Android NDK compiler is unavailable: $compiler" }
             check(linker.isFile) { "Android NDK C++ linker is unavailable: $linker" }
 
-            // Keep Go/cgo's process-visible inputs identical for the hosted
-            // Android builder and the F-Droid buildserver. In particular, do
-            // not let each builder's HOME, GOENV, temporary directory, or
-            // inherited CGO flags enter the native shared object.
+            // Keep Go/cgo's process-visible inputs identical across the two
+            // reproducibility builds. In particular, do not let HOME, GOENV,
+            // temporary directories, or inherited CGO flags affect the output.
             val reproducibleBuildRoot = goBuildRoot.get().asFile
             val goCache = reproducibleBuildRoot.resolve("cache")
             val goTemp = reproducibleBuildRoot.resolve("tmp")
@@ -248,20 +254,8 @@ val buildGoBackend by tasks.registering {
     dependsOn(backendTasks)
 }
 
-tasks.named("preBuild") { dependsOn(buildGoBackend) }
+tasks.named("preBuild") { dependsOn(buildGoBackend, copyLicenseAssets) }
 
-// F-Droid's Gradle output discovery looks below the selected Gradle root
-// (ui/android/build), while AGP normally writes this app to app/build.
-// Keep the normal app output for the Android driver and mirror the unsigned
-// release APK at the root only when that task completes.
-val mirrorFroidReleaseApk by tasks.registering(Copy::class) {
-    from(layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk"))
-    into(rootProject.projectDir.resolve("build/outputs/apk/release"))
-}
-
-tasks.matching { it.name == "assembleRelease" }.configureEach {
-    finalizedBy(mirrorFroidReleaseApk)
-}
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")

@@ -30,8 +30,8 @@ jobs:
       ANDROID_VERSION_CODE: ${{ inputs.android_version_code }}
       APP_SOURCE_SHA: ${{ inputs.source_sha }}
       APP_SOURCE_REPOSITORY: ${{ github.repository }}
-      FDROID_COMPAT_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
-      FDROID_COMPAT_GO_ROOT: /home/vagrant/build/srclib/go
+      ANDROID_REPRO_SOURCE_ROOT: /home/vagrant/build/com.dobby.vpn
+      ANDROID_REPRO_GO_ROOT: /home/vagrant/build/srclib/go
       GOPATH: /home/vagrant/go
       GOFLAGS: -trimpath -buildvcs=false
       GOTOOLCHAIN: local
@@ -50,13 +50,13 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
-      # setup-go consults the job-level GOPATH. Create the F-Droid-compatible
-      # owner-controlled path before the action attempts to use it.
-      - name: Prepare F-Droid-compatible tool paths
+      # setup-go consults the job-level GOPATH. Create the reproducible
+      # owner-controlled build paths before the action attempts to use them.
+      - name: Prepare reproducible Android build paths
         run: |
           sudo mkdir -p \
-            "$(dirname "$FDROID_COMPAT_SOURCE_ROOT")" \
-            "$(dirname "$FDROID_COMPAT_GO_ROOT")" \
+            "$(dirname "$ANDROID_REPRO_SOURCE_ROOT")" \
+            "$(dirname "$ANDROID_REPRO_GO_ROOT")" \
             "$GOPATH"
           sudo chown -R "$USER:$USER" /home/vagrant
 
@@ -103,7 +103,7 @@ jobs:
             --spec .github/scripts/android/dependency-spec.json \
             --print-pin go_version)"
           test "$GO_VERSION" = "$SPEC_GO_VERSION"
-          GO_SRC="$FDROID_COMPAT_GO_ROOT"
+          GO_SRC="$ANDROID_REPRO_GO_ROOT"
           GO_COMMIT="$(python3 .github/scripts/android/android_dependency_provenance.py \
             --spec .github/scripts/android/dependency-spec.json \
             --print-pin go_source_commit)"
@@ -154,12 +154,12 @@ jobs:
           grep -Fqx 'Pkg.Revision = ${{ steps.pins.outputs.android_ndk }}' "$ndk_home/source.properties"
           printf 'ANDROID_NDK_HOME=%s\n' "$ndk_home" >> "$GITHUB_ENV"
 
-      - name: Prepare F-Droid-compatible source path
+      - name: Prepare reproducible Android source path
         run: |
           # Keep the exact detached Git objects with the source copy.  The
           # shared public driver proves that the checkout bytes still equal
           # HEAD^{tree} before it creates any build output.
-          rsync -a --delete "$GITHUB_WORKSPACE/" "$FDROID_COMPAT_SOURCE_ROOT/"
+          rsync -a --delete "$GITHUB_WORKSPACE/" "$ANDROID_REPRO_SOURCE_ROOT/"
 
       - name: Build and verify isolated unsigned APKs through the public driver
         working-directory: /home/vagrant/build/com.dobby.vpn
@@ -170,13 +170,13 @@ jobs:
           set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           "$GITHUB_WORKSPACE/.github/scripts/android/android_build_driver.sh" \
-            --source-root "$FDROID_COMPAT_SOURCE_ROOT" \
+            --source-root "$ANDROID_REPRO_SOURCE_ROOT" \
             --source-sha "$APP_SOURCE_SHA" \
-            --output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-unsign.apk" \
-            --test-companion-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
-            --manifest "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
-            --first-output "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-repro-first.apk" \
-            --reproducibility "$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-reproducibility.json" \
+            --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-unsign.apk" \
+            --test-companion-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
+            --manifest "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
+            --first-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-repro-first.apk" \
+            --reproducibility "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-reproducibility.json" \
             --gradle-archive "$GRADLE_ARCHIVE" \
             --gradle-root "$GRADLE_ROOT" \
             --go-binary "$GOROOT/bin/go" \
@@ -191,13 +191,13 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
-          unsigned="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-unsign.apk"
-          companion="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-test-companion-unsigned.apk"
-          reproducibility="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
-          driver_manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
-          manifest="$FDROID_COMPAT_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-provenance.json"
+          unsigned="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-unsign.apk"
+          companion="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-test-companion-unsigned.apk"
+          reproducibility="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
+          driver_manifest="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
+          manifest="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-provenance.json"
           test -f "$unsigned"; test -f "$companion"
-          source_tree="$(git -C "$FDROID_COMPAT_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
+          source_tree="$(git -C "$ANDROID_REPRO_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
           python3 .github/scripts/android/android_apk_signing.py create-provenance \
             --output "$manifest" \
             --unsigned-apk "$unsigned" \
@@ -214,7 +214,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-unsign.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
+          path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
           if-no-files-found: error
           retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
 
@@ -222,7 +222,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-test-companion-unsigned.apk
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
+          path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
           if-no-files-found: error
           retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
 
@@ -230,6 +230,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-provenance
-          path: ${{ env.FDROID_COMPAT_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
+          path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
           if-no-files-found: error
           retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}

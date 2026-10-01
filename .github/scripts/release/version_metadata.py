@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Parse VERSION and derive the stable Android/F-Droid version code."""
+"""Parse VERSION and derive the stable Android version code."""
 
 from __future__ import annotations
 

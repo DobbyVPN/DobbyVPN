@@ -433,7 +433,7 @@ private fun SettingsScreen(controller: SessionController) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.semantics { contentDescription = "Source commit" },
         )
-        OutlinedButton(onClick = controller::openSourceCommit) { Text("Open source") }
+        OutlinedButton(onClick = controller::openSourceCommit) { Text("Source code") }
         Spacer(Modifier.height(8.dp))
         Button(onClick = { controller.show("connection") }) { Text("Back") }
     }

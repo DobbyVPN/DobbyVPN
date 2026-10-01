@@ -2,6 +2,13 @@
 
 DobbyVPN is a VPN client for Outline, Xray, and TrustTunnel configurations.
 
+DobbyVPN is source available under the [Business Source License 1.1](LICENSE),
+with an additional grant for non-commercial production use. Commercial
+production use requires a separate license from Alexander Potemkin. The
+Change Date is October 1, 2030, and the Change License is Apache 2.0; see the
+license for the conversion terms. [Third-party notices](THIRD_PARTY_NOTICES)
+identify components that retain their own licenses.
+
 ## Architecture
 
 Every supported platform uses the same Go backend for configuration loading and
@@ -33,9 +40,6 @@ builds. Publication is a separate manual step and requires an explicit owner
 request.
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
-
-F-Droid: https://f-droid.org/en/packages/com.dobby.vpn/ (official metadata may
-lag releases; availability is not claimed until the index is updated.)
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 

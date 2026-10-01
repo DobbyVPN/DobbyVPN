@@ -1,7 +1,7 @@
 require "shellwords"
 
 # CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
-# Android/F-Droid versionCode is stable for the marketing version. Apple's
+# Android versionCode is stable for the marketing version. Apple's
 # CFBundleVersion remains the GitHub Actions run number.
 FULL_VERSION    = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
 SEMANTIC_ANDROID_VERSION_CODE =
@@ -191,7 +191,7 @@ platform :ios do
       platform: "ios",
       app_version: version,
       build_number: selected_build,
-      copyright: "#{Time.now.year} DobbyVPN contributors",
+      copyright: "#{Time.now.year} Alexander Potemkin",
       support_url: {
         "en-US" => "https://github.com/DobbyVPN/DobbyVPN/issues"
       },

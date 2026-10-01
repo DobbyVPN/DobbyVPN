@@ -32,6 +32,9 @@
 		F20000000000000000000017 /* DobbySessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000005 /* DobbySessionViewModel.swift */; };
 		F20000000000000000000018 /* DobbyRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000006 /* DobbyRootView.swift */; };
 		F20000000000000000000019 /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
+		C20000000000000000000001 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000001 /* LICENSE */; };
+		C20000000000000000000002 /* THIRD_PARTY_NOTICES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000002 /* THIRD_PARTY_NOTICES */; };
+		C20000000000000000000003 /* LICENSES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000003 /* LICENSES */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -86,6 +89,9 @@
 		F10000000000000000000007 /* DobbyShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyShareSheet.swift; sourceTree = "<group>"; };
 		F10000000000000000000008 /* Dobby-Vpn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F10000000000000000000009 /* Dobby-Vpn-Simulator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn-Simulator.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10000000000000000000001 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../LICENSE; sourceTree = "<group>"; };
+		C10000000000000000000002 /* THIRD_PARTY_NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../THIRD_PARTY_NOTICES; sourceTree = "<group>"; };
+		C10000000000000000000003 /* LICENSES */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ../../../LICENSES; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -219,6 +225,7 @@
 				A12013A12D80DE3200D43A3A /* tunnel */,
 				A15F0FCF2D874CDC007FA45D /* IOSIntegration */,
 				F10000000000000000000001 /* NativeUI */,
+				C30000000000000000000001 /* Distribution Licenses */,
 				7555FF7C242A565900829871 /* Products */,
 				42799AB246E5F90AF97AA0EF /* Frameworks */,
 			);
@@ -266,6 +273,16 @@
 				F10000000000000000000007 /* DobbyShareSheet.swift */,
 			);
 			path = ../shared/ui;
+			sourceTree = "<group>";
+		};
+		C30000000000000000000001 /* Distribution Licenses */ = {
+			isa = PBXGroup;
+			children = (
+				C10000000000000000000001 /* LICENSE */,
+				C10000000000000000000002 /* THIRD_PARTY_NOTICES */,
+				C10000000000000000000003 /* LICENSES */,
+			);
+			name = "Distribution Licenses";
 			sourceTree = "<group>";
 		};
 		AB1DB47929225F7C00F7AF9C /* Configuration */ = {
@@ -467,6 +484,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				F20000000000000000000004 /* Assets.xcassets in Resources */,
+				C20000000000000000000001 /* LICENSE in Resources */,
+				C20000000000000000000002 /* THIRD_PARTY_NOTICES in Resources */,
+				C20000000000000000000003 /* LICENSES in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -691,14 +711,14 @@
 				CODE_SIGN_ENTITLEMENTS = app/iosApp.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 2000000;
+				CURRENT_PROJECT_VERSION = 1005002;
 				DEVELOPMENT_TEAM = A9RKXATNC8;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = app/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
-				MARKETING_VERSION = 2.0.0;
+				MARKETING_VERSION = 1.5.2;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "Dobby-Vpn";
 				PROVISIONING_PROFILE_SPECIFIER = DobbyVPNAppStore;
@@ -718,14 +738,14 @@
 				CODE_SIGN_ENTITLEMENTS = app/iosApp.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 2000000;
+				CURRENT_PROJECT_VERSION = 1005002;
 				DEVELOPMENT_TEAM = A9RKXATNC8;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = app/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
-				MARKETING_VERSION = 2.0.0;
+				MARKETING_VERSION = 1.5.2;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "Dobby-Vpn";
 				PROVISIONING_PROFILE_SPECIFIER = DobbyVPNAppStore;
@@ -758,7 +778,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = tunnel/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = tunnel;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 DobbyVPN. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Alexander Potemkin. All rights reserved.";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -800,7 +820,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = tunnel/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = tunnel;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 DobbyVPN. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Alexander Potemkin. All rights reserved.";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -845,7 +865,7 @@
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 DobbyVPN. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Alexander Potemkin. All rights reserved.";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -896,7 +916,7 @@
 				);
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 DobbyVPN. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Alexander Potemkin. All rights reserved.";
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -963,12 +983,12 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
-				CURRENT_PROJECT_VERSION = 2000000;
+				CURRENT_PROJECT_VERSION = 1005002;
 				DOBBY_SOURCE_COMMIT = "$(APP_SOURCE_SHA)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = app/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 2.0.0;
+				MARKETING_VERSION = 1.5.2;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "Dobby-Vpn-Simulator";
 				SDKROOT = iphonesimulator;
@@ -985,12 +1005,12 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
-				CURRENT_PROJECT_VERSION = 2000000;
+				CURRENT_PROJECT_VERSION = 1005002;
 				DOBBY_SOURCE_COMMIT = "$(APP_SOURCE_SHA)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = app/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
-				MARKETING_VERSION = 2.0.0;
+				MARKETING_VERSION = 1.5.2;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "Dobby-Vpn-Simulator";
 				SDKROOT = iphonesimulator;

@@ -122,7 +122,7 @@ public struct DobbyRootView: View {
                 .accessibilityIdentifier("Settings source commit metadata")
             if let url = URL(string: "https://github.com/DobbyVPN/DobbyVPN/tree/\(model.client.sourceCommit)"),
                model.client.sourceCommit.count == 40 {
-                Link("Open source", destination: url)
+                Link("Source code", destination: url)
             }
             Spacer()
         }
