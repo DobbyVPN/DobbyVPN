@@ -158,6 +158,7 @@ def python_tests() -> None:
                 sys.executable, "-m", "pip", "install",
                 "--disable-pip-version-check", "--only-binary=:all:", "--no-deps",
                 "--target", package_dir, "--requirement", str(requirements),
+                "--requirement", str(SCRIPT_DIR / "android" / "requirements-fdroid.txt"),
             ]
         )
         environment = os.environ.copy()
@@ -495,7 +496,10 @@ def lint_swift(tools: Tools) -> None:
 
 def trivy_scan(
     tools: Tools,
-    targets: tuple[Path, ...] = (GO_MODULE, SCRIPT_DIR / "requirements-native-ui.txt"),
+    targets: tuple[Path, ...] = (
+        GO_MODULE, SCRIPT_DIR / "requirements-native-ui.txt",
+        SCRIPT_DIR / "android" / "requirements-fdroid.txt",
+    ),
 ) -> None:
     require_platform("linux")
     trivy = tools.get("trivy")
@@ -505,7 +509,7 @@ def trivy_scan(
             [
                 str(trivy), "fs", "--cache-dir", str(cache_dir),
                 "--severity", "HIGH,CRITICAL", "--ignore-unfixed",
-                "--exit-code", "1", "--file-patterns", r"pip:requirements-native-ui\.txt",
+                "--exit-code", "1", "--file-patterns", r"pip:requirements-(native-ui|fdroid)\.txt",
                 str(target),
             ],
             cwd=ROOT,

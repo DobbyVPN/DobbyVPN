@@ -89,6 +89,14 @@ jobs:
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
       android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
+  fdroid_preflight:
+    needs: [verification, prepare_version, android_build]
+    uses: ./.github/workflows/fdroid_preflight.yml
+    with:
+      source_sha: ${{ github.sha }}
+      version_name: ${{ needs.prepare_version.outputs.version_name }}
+      version_code: ${{ needs.prepare_version.outputs.android_version_code }}
+
   ios_build:
     needs: [verification, prepare_version, ios_libraries_build]
     uses: ./.github/workflows/ios_build.yml
@@ -221,7 +229,7 @@ jobs:
   qualification_result:
     name: Require hosted mini and Render cleanup
     if: always()
-    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_build, migrate_windows, migrate_macos_arm, migrate_macos_intel]
+    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_build, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -234,6 +242,7 @@ jobs:
           ANDROID_RESULT: ${{ needs.qualify_android.result }}
           RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
           IOS_BUILD_RESULT: ${{ needs.ios_build.result }}
+          FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
           WINDOWS_MIGRATION_RESULT: ${{ needs.migrate_windows.result }}
           MACOS_ARM_MIGRATION_RESULT: ${{ needs.migrate_macos_arm.result }}
           MACOS_INTEL_MIGRATION_RESULT: ${{ needs.migrate_macos_intel.result }}
@@ -250,6 +259,7 @@ jobs:
           test "$ANDROID_RESULT" = success
           test "$RENDER_CLEANUP_RESULT" = success
           test "$IOS_BUILD_RESULT" = success
+          test "$FDROID_RESULT" = success
           test "$WINDOWS_MIGRATION_RESULT" = success
           test "$MACOS_ARM_MIGRATION_RESULT" = success
           test "$MACOS_INTEL_MIGRATION_RESULT" = success

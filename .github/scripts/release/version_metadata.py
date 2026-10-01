@@ -36,6 +36,10 @@ class VersionMetadata:
             "android_version_code": str(self.android_version_code),
         }
 
+    def update_document(self) -> str:
+        """Return the exact document consumed by the HTTP version updater."""
+        return f"versionCode={self.android_version_code}\nversionName={self.version_name}\n"
+
 
 def parse_version(raw: str) -> VersionMetadata:
     value = raw.strip()
@@ -51,18 +55,22 @@ def parse_version(raw: str) -> VersionMetadata:
     return metadata
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--version")
     source.add_argument("--version-file", type=Path)
     parser.add_argument("--github-output", type=Path)
     parser.add_argument("--field", choices=VersionMetadata(1, 2, 3).outputs())
-    args = parser.parse_args()
+    parser.add_argument("--update-file", type=Path, help="write the HTTP version update document")
+    args = parser.parse_args(argv)
 
     raw = args.version if args.version is not None else args.version_file.read_text()
     metadata = parse_version(raw)
     outputs = metadata.outputs()
+
+    if args.update_file:
+        args.update_file.write_text(metadata.update_document(), encoding="utf-8")
 
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as output:

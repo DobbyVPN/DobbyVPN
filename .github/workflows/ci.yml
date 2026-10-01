@@ -18,6 +18,7 @@ on:
           - windows-mini
           - macos-mini
           - android-mini
+          - fdroid-preflight
           - ios-simulator-mini
 
 permissions:
@@ -342,7 +343,7 @@ jobs:
           retention-days: 1
 
   ci_selected_version:
-    name: Read selected mini build version
+    name: Read selected build version
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' && inputs.platform != 'ios-simulator-mini' }}
     runs-on: ubuntu-24.04
     outputs:
@@ -375,8 +376,8 @@ jobs:
       version_name: ${{ needs.ci_selected_version.outputs.version_name }}
 
   android_mini_build:
-    name: Build Android mini candidate
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'android-mini' }}
+    name: Build selected Android candidate
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'android-mini' || inputs.platform == 'fdroid-preflight') }}
     needs: [ci_selected_version]
     uses: ./.github/workflows/android_build.yml
     with:
@@ -385,6 +386,15 @@ jobs:
       app_minor_version: ${{ needs.ci_selected_version.outputs.minor }}
       app_maintenance_version: ${{ needs.ci_selected_version.outputs.maintenance }}
       android_version_code: ${{ needs.ci_selected_version.outputs.android_version_code }}
+
+  fdroid_preflight:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'fdroid-preflight' }}
+    needs: [ci_selected_version, android_mini_build]
+    uses: ./.github/workflows/fdroid_preflight.yml
+    with:
+      source_sha: ${{ github.sha }}
+      version_name: ${{ needs.ci_selected_version.outputs.version_name }}
+      version_code: ${{ needs.ci_selected_version.outputs.android_version_code }}
 
   mini_render_start:
     name: Start Render VPN for selected mini
@@ -429,9 +439,9 @@ jobs:
     secrets: inherit
 
   focused_mini_result:
-    name: Require selected mini and cleanup success
+    name: Require selected check success
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' }}
-    needs: [ci_selected_version, focused_desktop_build, android_mini_build, mini_render_start, focused_desktop_mini, android_mini, mini_render_cleanup, ios_simulator]
+    needs: [ci_selected_version, focused_desktop_build, android_mini_build, mini_render_start, focused_desktop_mini, android_mini, mini_render_cleanup, ios_simulator, fdroid_preflight]
     runs-on: ubuntu-24.04
     steps:
       - name: Check selected platform result
@@ -445,6 +455,7 @@ jobs:
           ANDROID_RESULT: ${{ needs.android_mini.result }}
           RENDER_CLEANUP_RESULT: ${{ needs.mini_render_cleanup.result }}
           IOS_RESULT: ${{ needs.ios_simulator.result }}
+          FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
         run: |
           set -euo pipefail
           case "$PLATFORM" in
@@ -462,12 +473,17 @@ jobs:
               test "$ANDROID_RESULT" = success
               test "$RENDER_CLEANUP_RESULT" = success
               ;;
+            fdroid-preflight)
+              test "$VERSION_RESULT" = success
+              test "$ANDROID_BUILD_RESULT" = success
+              test "$FDROID_RESULT" = success
+              ;;
             ios-simulator-mini)
               test "$IOS_RESULT" = success
               ;;
             *) echo "unsupported focused platform: $PLATFORM" >&2; exit 1 ;;
           esac
-          echo "Selected hosted mini passed: $PLATFORM"
+          echo "Selected check passed: $PLATFORM"
 
   complete_ci:
     name: Complete CI

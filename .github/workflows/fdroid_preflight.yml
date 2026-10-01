@@ -1,0 +1,89 @@
+name: F-Droid Preflight
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      version_name:
+        type: string
+        required: true
+      version_code:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    name: Validate F-Droid update, build and APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      FDROID_IMAGE: registry.gitlab.com/fdroid/fdroidserver:buildserver-trixie
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION_NAME: ${{ inputs.version_name }}
+      VERSION_CODE: ${{ inputs.version_code }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download the candidate unsigned Android APK
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dobbyvpn-android-unsign.apk
+          path: ${{ runner.temp }}/fdroid-reference
+      - name: Fetch the current official F-Droid tools and metadata
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f "$RUNNER_TEMP/fdroid-reference/DobbyVPN-v${VERSION_NAME}-unsign.apk"
+          df -h /
+          git clone --depth 1 https://gitlab.com/fdroid/fdroiddata.git "$RUNNER_TEMP/fdroiddata"
+          git clone --depth 1 https://gitlab.com/fdroid/fdroidserver.git "$RUNNER_TEMP/fdroidserver"
+          git -C "$RUNNER_TEMP/fdroiddata" rev-parse HEAD
+          git -C "$RUNNER_TEMP/fdroidserver" rev-parse HEAD
+          docker pull "$FDROID_IMAGE"
+          docker image inspect --format='{{index .RepoDigests 0}}' "$FDROID_IMAGE"
+      - name: Run the unmodified updater, metadata checks, build and scanner
+        run: |
+          set -euo pipefail
+          docker run --rm --init \
+            --volume "$GITHUB_WORKSPACE:/workspace/product:ro" \
+            --volume "$RUNNER_TEMP/fdroiddata:/workspace/fdroiddata:ro" \
+            --volume "$RUNNER_TEMP/fdroidserver:/workspace/fdroidserver:ro" \
+            --volume "$RUNNER_TEMP/fdroid-reference:/workspace/reference:ro" \
+            --env SOURCE_SHA --env VERSION_NAME --env VERSION_CODE \
+            --env SOURCE_REPOSITORY="$GITHUB_REPOSITORY" \
+            "$FDROID_IMAGE" bash -euo pipefail -c '
+              source /etc/profile.d/bsenv.sh
+              export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
+              export ANDROID_SDK_ROOT="$ANDROID_HOME"
+              export DEBIAN_FRONTEND=noninteractive
+              printf "%s\n" "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/dobby-jdk17.list
+              apt-get update
+              apt-get install -y sudo
+              apt-get install -y -t trixie-backports golang-go
+              apt-get install -y -t bookworm openjdk-17-jdk-headless
+              test -x /usr/lib/jvm/java-17-openjdk-amd64/bin/java
+              sdkmanager "cmdline-tools;latest"
+              export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+              export PATH="$JAVA_HOME/bin:$PATH"
+              chown -R vagrant:vagrant /home/vagrant
+              sudo --preserve-env --set-home --user vagrant env "PATH=$PATH" \
+                python3 /workspace/product/.github/scripts/android/fdroid_preflight.py \
+                --source-root /workspace/product \
+                --work-root /home/vagrant \
+                --fdroiddata /workspace/fdroiddata \
+                --fdroidserver /workspace/fdroidserver \
+                --reference-apk "/workspace/reference/DobbyVPN-v${VERSION_NAME}-unsign.apk" \
+                --source-sha "$SOURCE_SHA" \
+                --repository "$SOURCE_REPOSITORY" \
+                --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" \
+                --version-name "$VERSION_NAME" --version-code "$VERSION_CODE"
+            '

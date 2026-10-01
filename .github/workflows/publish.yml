@@ -420,6 +420,7 @@ jobs:
           python3 .github/scripts/android/verify_android_apk_source.py \
             --apk "$unsigned" --source-sha "$RELEASE_SOURCE_SHA" \
             --repository "$GITHUB_REPOSITORY" --apkanalyzer "$apkanalyzer" \
+            --version-name "$RELEASE_VERSION" --version-code "$ANDROID_VERSION_CODE" \
             --test-companion "$companion"
 
           python3 .github/scripts/android/android_apk_signing.py sign-release \
@@ -443,6 +444,8 @@ jobs:
           ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
         run: |
           set -euo pipefail
+          python3 .github/scripts/release/version_metadata.py \
+            --version "$RELEASE_VERSION" --update-file release/version.txt
           python3 .github/scripts/release/release_provenance.py create \
             --directory release --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
             --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
@@ -450,7 +453,7 @@ jobs:
             --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
-            --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
+            --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
             --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
       - name: Create tag and GitHub Release
         env:
@@ -475,7 +478,7 @@ jobs:
               --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
               --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
               --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
-              --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
+              --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
               --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
             exit 0
           fi
@@ -508,5 +511,5 @@ jobs:
             --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
-            --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
+            --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
             --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi

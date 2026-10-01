@@ -392,7 +392,12 @@ if [[ -z "$apkanalyzer_bin" ]]; then
   fi
 fi
 [[ -n "$apkanalyzer_bin" && -x "$apkanalyzer_bin" ]] || { echo 'apkanalyzer is required for source identity verification' >&2; exit 2; }
-source_verifier_args=(--apk "$first_output" --apk "$output" --source-sha "$source_commit" --repository "$source_repository" --apkanalyzer "$apkanalyzer_bin")
+source_verifier_args=(
+  --apk "$first_output" --apk "$output"
+  --source-sha "$source_commit" --repository "$source_repository"
+  --version-name "$version_name" --version-code "$version_code"
+  --apkanalyzer "$apkanalyzer_bin"
+)
 if [[ -n "$test_companion_output" ]]; then
   source_verifier_args+=(--test-companion "$test_companion_output")
 fi

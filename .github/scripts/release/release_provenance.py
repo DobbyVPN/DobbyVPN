@@ -15,6 +15,8 @@ import re
 import sys
 from typing import Any, Iterable
 
+from version_metadata import parse_version
+
 
 MANIFEST_NAME = "release-provenance.json"
 SCHEMA = 1
@@ -87,6 +89,28 @@ def _validate_asset_names(asset_names: Iterable[Any]) -> list[str]:
         if name == MANIFEST_NAME:
             raise ProvenanceError("the provenance manifest cannot describe itself")
     return sorted(set(names))
+
+
+def _validate_version_document(directory: Path, metadata: dict[str, Any], asset_names: list[str]) -> None:
+    """Check the legacy HTTP updater document when it is in this manifest."""
+    if "version.txt" not in asset_names:
+        return
+
+    try:
+        parsed = parse_version(metadata["version"])
+    except ValueError as error:
+        raise ProvenanceError(f"release version cannot produce a version.txt document: {error}") from error
+    if parsed.android_version_code != metadata["android_version_code"]:
+        raise ProvenanceError("Android version code does not match the canonical release version")
+    expected = parsed.update_document().encode("utf-8")
+    try:
+        actual = (directory / "version.txt").read_bytes()
+    except FileNotFoundError as error:
+        raise ProvenanceError("missing asset: version.txt") from error
+    except OSError as error:
+        raise ProvenanceError("cannot read asset: version.txt") from error
+    if actual != expected:
+        raise ProvenanceError("version.txt does not match the asserted release version metadata")
 
 
 def _file_record(path: Path, name: str) -> dict[str, Any]:
@@ -173,6 +197,7 @@ def create_manifest(
         release_run_number=release_run_number,
         android_version_code=android_version_code,
     )
+    _validate_version_document(directory, metadata, asset_names)
     manifest = directory / MANIFEST_NAME
     records = [_file_record(directory / name, name) for name in asset_names]
     payload = {"schema": SCHEMA, **metadata, "assets": records}
@@ -203,6 +228,7 @@ def verify_manifest(
         release_run_number=release_run_number,
         android_version_code=android_version_code,
     )
+    _validate_version_document(directory, metadata, asset_names)
     manifest = directory / MANIFEST_NAME
     payload = _load_manifest(manifest)
     records = _validate_manifest_payload(payload, metadata, asset_names)
