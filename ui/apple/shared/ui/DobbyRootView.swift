@@ -68,10 +68,12 @@ public struct DobbyRootView: View {
         .focused($configurationFocused)
         .disabled(model.busy)
 #if os(iOS)
-        if configurationFocused {
-            Button("Done") { configurationFocused = false }
-                .accessibilityIdentifier("Dismiss configuration keyboard")
-                .frame(maxWidth: .infinity, alignment: .trailing)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { configurationFocused = false }
+                    .accessibilityIdentifier("Dismiss configuration keyboard")
+            }
         }
 #endif
         Text("Enter an HTTPS connection URL or inline configuration.")
