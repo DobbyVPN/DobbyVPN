@@ -161,7 +161,9 @@ jobs:
             ndk;${{ steps.pins.outputs.android_ndk }}
 
       - name: Run Android lint and dependency scan
-        run: python3 .github/scripts/source_checks.py lint-android
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
+          python3 .github/scripts/source_checks.py lint-android
 
   lint_go:
     name: Go source analysis
@@ -272,6 +274,7 @@ jobs:
       - name: Build Android app and instrumentation companion, then verify native ABI
         run: |
           set -euo pipefail
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
           build_root="$RUNNER_TEMP/dobbyvpn-android-ci"
           .github/scripts/android/android_build_check.sh \
             --source-root "$GITHUB_WORKSPACE" \
