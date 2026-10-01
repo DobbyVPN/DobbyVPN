@@ -75,6 +75,8 @@ jobs:
               export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
               export PATH="$JAVA_HOME/bin:$PATH"
               chown -R vagrant:vagrant /home/vagrant
+              sudo --set-home --user vagrant git config --global --add safe.directory /workspace/product
+              sudo --set-home --user vagrant git config --global --add safe.directory /workspace/product/.git
               sudo --preserve-env --set-home --user vagrant env "PATH=$PATH" \
                 python3 /workspace/product/.github/scripts/android/fdroid_preflight.py \
                 --source-root /workspace/product \

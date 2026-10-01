@@ -85,9 +85,6 @@ def preflight(args: argparse.Namespace, work: Path) -> None:
         "GOPATH": "/home/vagrant/go",
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "safe.directory",
-        "GIT_CONFIG_VALUE_0": str(args.source_root),
     })
     environment.pop("CI", None)
     mirror = work / "candidate.git"
