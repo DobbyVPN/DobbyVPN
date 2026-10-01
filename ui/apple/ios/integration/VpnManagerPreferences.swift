@@ -1,5 +1,4 @@
 import Foundation
-import IOSIntegration
 import NetworkExtension
 
 extension VpnManagerImpl {
