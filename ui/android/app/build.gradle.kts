@@ -75,6 +75,10 @@ val localSdkRoot = providers.provider {
 val androidSdkRoot = nonBlankEnvironment("ANDROID_SDK_ROOT")
     .orElse(nonBlankEnvironment("ANDROID_HOME"))
     .orElse(localSdkRoot.map(String::trim).filter { it.isNotEmpty() })
+val ndkHome = nonBlankEnvironment("ANDROID_NDK_HOME")
+    .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
+    .orElse(androidSdkRoot.map { File(it, "ndk/$pinnedAndroidNdkVersion").absolutePath })
+    .orElse("")
 val releaseVersionName: String = nonBlankGradleProperty("android.injected.version.name")
     .orElse(nonBlankGradleProperty("versionName")).get()
     ?: error("versionName is required for the Android manifest")
@@ -86,6 +90,8 @@ val sourceCommit = providers.gradleProperty("projectRepositoryCommit").getOrElse
 android {
     namespace = "com.dobby.vpn"
     compileSdk = 35
+    ndkVersion = pinnedAndroidNdkVersion
+    ndkPath = ndkHome.get()
     // Keep the release APK and its instrumented companion as one tested
     // variant.  Without this explicit selection AGP does not register the
     // assembleReleaseAndroidTest task for the plain application module.
@@ -147,10 +153,6 @@ val downloadGoModules by tasks.registering(Exec::class) {
     environment("GOFLAGS", "-trimpath -buildvcs=false")
 }
 
-val ndkHome = nonBlankEnvironment("ANDROID_NDK_HOME")
-    .orElse(nonBlankEnvironment("ANDROID_NDK_ROOT"))
-    .orElse(androidSdkRoot.map { File(it, "ndk/$pinnedAndroidNdkVersion").absolutePath })
-    .orElse("")
 val api = providers.gradleProperty("android.ndk.api").orElse("26")
 val abis = mapOf(
     "arm64-v8a" to ("arm64" to "aarch64-linux-android"),
