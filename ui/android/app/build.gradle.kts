@@ -111,10 +111,6 @@ android {
         targetSdk = 35
         this.versionCode = releaseVersionCode
         this.versionName = releaseVersionName
-        // Keep the release identity explicit in the merged manifest so APK
-        // metadata and the Android DSL use the same values.
-        manifestPlaceholders["dobbyVersionCode"] = releaseVersionCode.toString()
-        manifestPlaceholders["dobbyVersionName"] = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["dobbyTestSourceSha"] = sourceCommit
         buildConfigField("String", "PROJECT_REPOSITORY_COMMIT", "\"$sourceCommit\"")
