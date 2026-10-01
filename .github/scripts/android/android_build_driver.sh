@@ -347,7 +347,7 @@ run_test_companion_build() {
 }
 
 if [[ "$local_build" == 1 ]]; then
-  gradle_flags=(--no-daemon --stacktrace)
+  gradle_flags=(--no-daemon --stacktrace --warning-mode=all)
   run_unsigned_build "$build_cache/local" "$build_tmp/local" "$output"
   if [[ -n "$test_companion_output" ]]; then
     run_test_companion_build "$test_companion_output"

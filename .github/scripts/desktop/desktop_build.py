@@ -1012,8 +1012,7 @@ def build_service(
                 retain_runtime_dependencies,
             )
         elif target_platform == "macos":
-            # The external C++ driver supplies libc++ on macOS. cgo does not
-            # infer the frameworks required by the bridge.
+            # Frameworks used by the in-process bridge must be passed to cgo.
             append_cgo_ldflags(
                 env,
                 "-framework", "CoreFoundation",
