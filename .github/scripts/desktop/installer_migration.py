@@ -30,7 +30,7 @@ from urllib.request import Request, urlopen
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_MANIFEST = SCRIPT_DIR / "installer_rollback_manifest.json"
-CURRENT_VERSION = "1.5.1"
+CURRENT_VERSION = (SCRIPT_DIR.parents[2] / "VERSION").read_text(encoding="utf-8").strip()
 OLD_VERSION = "1.5.0"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 PLATFORMS = ("windows", "macos")
@@ -689,7 +689,7 @@ def qualify(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
-    parser.add_argument("--package", type=Path, required=True, help="exact 1.5.1 package from this Release run")
+    parser.add_argument("--package", type=Path, required=True, help="exact package from this Release run")
     parser.add_argument("--current-version", default=CURRENT_VERSION)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--log-dir", type=Path, help="optional diagnostic log directory")

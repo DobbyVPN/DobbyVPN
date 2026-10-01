@@ -23,7 +23,7 @@ script_root=$(cd -- "$(dirname -- "$0")/../.." && pwd -P)
 swift_root="$script_root/ui/apple"
 runtime=${3:-"$swift_root/DobbyVPNRuntime.xcframework"}
 version=${VERSION_NAME:-$(tr -d '[:space:]' < "$script_root/VERSION")}
-build=${APP_BUILD:-1005001}
+build=${APP_BUILD:-$(python3 "$script_root/.github/scripts/release/version_metadata.py" --version "$version" --field android_version_code)}
 if [[ -n "${SOURCE_COMMIT:-}" ]]; then
   source_commit=$SOURCE_COMMIT
 elif source_commit=$(git -C "$script_root" rev-parse HEAD); then
