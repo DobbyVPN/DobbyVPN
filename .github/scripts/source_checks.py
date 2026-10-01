@@ -31,7 +31,6 @@ sys.path.insert(0, str(SCRIPT_DIR / "android"))
 from android_dependency_provenance import (
     ANDROID_BUILD_TOOLS,
     ANDROID_COMPILE_SDK,
-    ANDROID_NDK,
     JAVA_MAJOR,
 )
 
@@ -448,9 +447,6 @@ def require_android_sdk() -> Path:
     sdk = next((Path(value).expanduser() for value in candidates if value and value.strip()), None)
     if sdk is None or not sdk.is_dir():
         raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or ui/android/local.properties")
-    ndk = sdk / "ndk" / ANDROID_NDK
-    if not ndk.is_dir():
-        raise CheckError(f"Android Lint requires NDK {ANDROID_NDK} at {ndk}")
     platform_dir = sdk / "platforms" / f"android-{ANDROID_COMPILE_SDK}"
     if not platform_dir.is_dir():
         raise CheckError(f"Android Lint requires Android SDK platform {ANDROID_COMPILE_SDK} at {platform_dir}")
