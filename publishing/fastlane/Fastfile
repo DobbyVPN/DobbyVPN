@@ -1,8 +1,7 @@
 require "shellwords"
 
 # CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
-# Android versionCode is stable for the marketing version. Apple's
-# CFBundleVersion remains the GitHub Actions run number.
+# Apple CFBundleVersion uses the stable VERSION-derived number shared with Android.
 FULL_VERSION    = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
 SEMANTIC_ANDROID_VERSION_CODE =
   ENV['APP_MAJOR_VERSION'].to_i * 1_000_000 +
