@@ -14,6 +14,7 @@ import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.Uri;
 import android.net.VpnService;
 import android.os.Build;
@@ -48,6 +49,7 @@ import com.dobby.ui.MainActivity;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -70,6 +72,8 @@ import java.util.Base64;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -194,6 +198,8 @@ public final class NativeUiHostedProfileTest {
     private final Context testContext = InstrumentationRegistry.getInstrumentation().getContext();
     private final ConnectivityManager connectivity =
             context.getSystemService(ConnectivityManager.class);
+    private final Set<Network> observedNetworks = ConcurrentHashMap.newKeySet();
+    private ConnectivityManager.NetworkCallback networkCallback;
     private Activity foregroundActivity;
     private File progressFile;
     private JSONObject progressObservation;
@@ -233,6 +239,43 @@ public final class NativeUiHostedProfileTest {
         while (screenshotHistory.length() > 0) screenshotHistory.remove(0);
         while (commandOutputDiagnostics.length() > 0) commandOutputDiagnostics.remove(0);
         while (consentDiagnosticFailures.length() > 0) consentDiagnosticFailures.remove(0);
+        observedNetworks.clear();
+        if (connectivity != null) {
+            NetworkRequest request = new NetworkRequest.Builder()
+                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build();
+            ConnectivityManager.NetworkCallback callback =
+                    new ConnectivityManager.NetworkCallback() {
+                        @Override
+                        public void onAvailable(Network network) {
+                            observedNetworks.add(network);
+                        }
+
+                        @Override
+                        public void onLost(Network network) {
+                            observedNetworks.remove(network);
+                        }
+                    };
+            connectivity.registerNetworkCallback(request, callback);
+            networkCallback = callback;
+        }
+    }
+
+    @After
+    public void unregisterObservedNetworks() {
+        ConnectivityManager.NetworkCallback callback = networkCallback;
+        networkCallback = null;
+        if (callback == null) {
+            observedNetworks.clear();
+            return;
+        }
+        try {
+            connectivity.unregisterNetworkCallback(callback);
+        } catch (RuntimeException failure) {
+            throw new IllegalStateException("ANDROID_NETWORK_CALLBACK_CLEANUP_FAILED", failure);
+        } finally {
+            observedNetworks.clear();
+        }
     }
 
     @Test
@@ -1577,7 +1620,7 @@ public final class NativeUiHostedProfileTest {
 
     private Network findNetwork(int transport) {
         if (connectivity == null) return null;
-        for (Network network : connectivity.getAllNetworks()) {
+        for (Network network : observedNetworks) {
             NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
             if (capabilities != null && capabilities.hasTransport(transport)) return network;
         }
@@ -1821,7 +1864,7 @@ public final class NativeUiHostedProfileTest {
     private Network findPhysicalNetwork() {
         if (connectivity == null) return null;
         Network fallback = null;
-        for (Network network : connectivity.getAllNetworks()) {
+        for (Network network : observedNetworks) {
             NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
             if (capabilities == null
                     || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)

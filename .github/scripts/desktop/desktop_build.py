@@ -994,7 +994,7 @@ def build_service(
             # CGO_LDFLAGS is repeated for every cgo package, so add libc++
             # only to the final external link.
             ldflags += (
-                f" -linkmode=external -extldflags="
+                f" -linkmode=external -extldflags "
                 f"'-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION} -lc++'"
             )
         if target_platform == "linux":
