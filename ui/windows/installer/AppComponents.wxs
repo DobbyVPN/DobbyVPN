@@ -47,11 +47,6 @@
 					Stop="both"
 					Remove="uninstall"
 					Wait="yes" />
-			<ServiceConfig 
-					Id="svc.Config"
-					ServiceName="DobbyVPN Go backend"
-					OnInstall="yes"
-					ServiceSid="unrestricted" />
 			<!-- Default to the installer SID; test installs may supply the interactive account SID. -->
 			<RegistryValue
 					Root="HKLM"
@@ -71,9 +66,6 @@
 			<Exclude Files="dobbyVPN-windows\bin\wintun.dll" />
 		</Files>
 		<Files Directory="DobbyVPNFolderApp" Include="dobbyVPN-windows\app\**" />
-		<Files Directory="DobbyVPNFolderLib" Include="dobbyVPN-windows\lib\**" />
-		<Files Directory="DobbyVPNFolderConf" Include="dobbyVPN-windows\conf\**" />
-		<Files Directory="DobbyVPNFolderLegal" Include="dobbyVPN-windows\legal\**" />
     </ComponentGroup>
   </Fragment>
 </Wix>
