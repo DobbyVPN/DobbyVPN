@@ -235,7 +235,8 @@ def prepare_metadata(
     parts = _validate_update_modes(live, "metadata")
     repo_url = _file_repo_url(mirror_repo)
 
-    # The baseline is a byte-for-byte copy of the selected live fdroiddata YAML.
+    # Preserve the source-owned baseline before redirecting the disposable
+    # candidate metadata to its local mirror and staged update document.
     baseline_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(metadata_path, baseline_path)
 

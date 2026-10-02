@@ -68,7 +68,11 @@ jobs:
           test "$(jq -r .conclusion "$run_file")" = success
           capture_gh completed-runs api --paginate \
             "repos/$GITHUB_REPOSITORY/actions/runs?status=completed&per_page=100"
-          completed_runs="$(jq -sr '.[] | .workflow_runs[] | .id' "$CAPTURED_GH_STDOUT")"
+          # Infrastructure initialization does not invalidate qualification.
+          # A newer completed CI or Release run still supersedes this selection.
+          completed_runs="$(jq -sr '.[] | .workflow_runs[] |
+            select(.path == ".github/workflows/ci.yml" or .path == ".github/workflows/release.yml") |
+            .id' "$CAPTURED_GH_STDOUT")"
           latest_completed_run="${completed_runs%%$'\n'*}"
           test "$latest_completed_run" = "$RELEASE_RUN_ID"
           if [[ "$(jq -r .run_attempt "$run_file")" != "1" ]]; then
@@ -513,3 +517,18 @@ jobs:
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
             --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
             --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
+
+  fdroid:
+    name: Publish F-Droid catalog
+    needs: [resolve_release, promote]
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@9aa69aeda9645e6e5bf2ca6edfb7a89a0b9c6669
+    with:
+      source_sha: ${{ needs.resolve_release.outputs.source_sha }}
+      tag: v${{ needs.resolve_release.outputs.version_name }}
+      release_run_id: ${{ inputs.release_run_id }}
+      release_run_number: ${{ needs.resolve_release.outputs.release_run_number }}

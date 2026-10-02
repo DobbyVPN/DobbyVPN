@@ -38,7 +38,7 @@ jobs:
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ runner.temp }}/fdroid-reference
-      - name: Fetch the current official F-Droid tools and metadata
+      - name: Fetch current official F-Droid tools and shared build resources
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"

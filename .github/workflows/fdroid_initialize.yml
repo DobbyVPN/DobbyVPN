@@ -1,0 +1,17 @@
+name: Initialize empty F-Droid repository
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  initialize:
+    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@9aa69aeda9645e6e5bf2ca6edfb7a89a0b9c6669
+    with:
+      source_sha: ${{ github.sha }}
+      initialize: true

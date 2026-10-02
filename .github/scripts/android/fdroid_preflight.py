@@ -26,6 +26,13 @@ from verify_android_reproducibility import verify_signed_payload, _validate_meta
 APP_ID = "com.dobby.vpn"
 
 
+def stage_app_metadata(source_root: Path, destination: Path) -> None:
+    """Seed the disposable fdroidserver workspace from this source's baseline."""
+    source_metadata = source_root / ".github" / "fdroid" / f"{APP_ID}.yml"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_metadata, destination)
+
+
 def run(command: list[str], cwd: Path, environment: dict[str, str]) -> None:
     print(f"Running: {command!r}", flush=True)
     subprocess.run(command, cwd=cwd, env=environment, check=True)
@@ -93,9 +100,8 @@ def preflight(args: argparse.Namespace, work: Path) -> None:
     run(["git", "--git-dir", str(mirror), "symbolic-ref", "HEAD", "refs/heads/fdroid-candidate"], work, environment)
     run(["git", "--git-dir", str(mirror), "update-ref", f"refs/tags/v{args.version_name}", args.source_sha], work, environment)
     metadata = work / "metadata" / f"{APP_ID}.yml"
-    metadata.parent.mkdir()
     baseline = work / "baseline.yml"
-    shutil.copyfile(args.fdroiddata / "metadata" / metadata.name, metadata)
+    stage_app_metadata(args.source_root, metadata)
     (work / "srclibs").symlink_to(args.fdroiddata / "srclibs", target_is_directory=True)
     (work / "config").symlink_to(args.fdroiddata / "config", target_is_directory=True)
     sdk_path = environment.get("ANDROID_HOME", "/opt/android-sdk")
