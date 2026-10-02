@@ -319,9 +319,7 @@ jobs:
                 test "$booted" = true
               }
               run_timed android-emulator-boot wait_for_android_boot
-              run_timed android-emulator-root adb root
-              run_timed android-emulator-root-ready timeout 120s adb wait-for-device
-              run_timed android-emulator-root-verify bash -c 'test "$(adb shell id -u | tr -d "\r")" = 0'
+              run_timed android-emulator-root timeout 120s bash .github/scripts/android/require_adb_root.sh "$RUN_DIR"
               signed="$signed_app"
               companion="$signed_companion"
               test -f "$signed"; test -f "$companion"
