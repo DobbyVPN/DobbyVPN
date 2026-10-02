@@ -258,6 +258,31 @@ jobs:
             --build-number "$APP_BUILD"
           stat -f "Signed IPA bytes: %z" selected-release/DobbyVPN.ipa
           shasum -a 256 selected-release/DobbyVPN.ipa
+      - name: Verify Fastlane can read the selected IPA
+        env:
+          IPA_PATH: ${{ github.workspace }}/selected-release/DobbyVPN.ipa
+        run: |
+          cd publishing
+          bundle exec ruby <<'RUBY'
+          require "fastlane_core"
+          require "fastlane_core/ipa_file_analyser"
+          ipa = ENV.fetch("IPA_PATH")
+          info = FastlaneCore::IpaFileAnalyser.fetch_info_plist_file(ipa)
+          expected = {
+            "CFBundleIdentifier" => "vpn.dobby.app",
+            "CFBundleShortVersionString" => ENV.fetch("VERSION_NAME"),
+            "CFBundleVersion" => ENV.fetch("APP_BUILD"),
+            "DobbySourceCommit" => ENV.fetch("SOURCE_COMMIT")
+          }
+          abort "Fastlane read unexpected IPA metadata" unless info && expected.all? { |key, value| info[key].to_s == value }
+          Zip::File.open(ipa) do |archive|
+            archive.each do |entry|
+              next if entry.directory?
+              entry.get_input_stream { |stream| while (chunk = stream.read(1024 * 1024)) && !chunk.empty?; end }
+            end
+          end
+          puts "Fastlane metadata and complete ZIP payload reading passed"
+          RUBY
       - name: Upload or reuse exact IPA and wait for processing
         env:
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}

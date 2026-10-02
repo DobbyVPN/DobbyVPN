@@ -1,0 +1,127 @@
+name: Diagnose selected iOS export
+
+on:
+  push:
+    branches: [fix/ipa-zip-metadata]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  submit_testflight:
+    name: Verify export of retained 1.5.2 archive
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Check out selected source entitlements
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: 553076bad4f28d36fd848a869ddd1359e6dbb285
+          path: selected-source
+          persist-credentials: false
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: false
+      - name: Install Ruby dependencies
+        run: cd publishing && bundle install --jobs 4 --retry 3
+      - name: Set release metadata
+        run: |
+          set -euo pipefail
+          echo "APP_STORE_VERSION=1.5.2" >> "$GITHUB_ENV"
+          echo "APP_STORE_BUILD_NUMBER=1005002" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.5.2" >> "$GITHUB_ENV"
+          echo "APP_BUILD=1005002" >> "$GITHUB_ENV"
+          echo "SOURCE_COMMIT=553076bad4f28d36fd848a869ddd1359e6dbb285" >> "$GITHUB_ENV"
+      - name: Download selected unsigned archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: 37029487478
+        run: |
+          python3 .github/scripts/release/download_artifact.py \
+            "$RELEASE_RUN_ID" DobbyVPN.xcarchive.tar.gz selected-release
+      - name: Prepare Apple signing identity and profiles
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          CERT_P12_PASSWORD: ${{ secrets.CERT_P12_PASSWORD }}
+          CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
+          PROVISION_DOBBY_BASE64: ${{ secrets.PROVISION_DOBBY_BASE64 }}
+          PROVISION_DOBBY_TUNNEL_BASE64: ${{ secrets.PROVISION_DOBBY_TUNNEL_BASE64 }}
+        run: cd publishing && bundle exec fastlane ios prepare_signing
+      - name: Sign and export selected archive without compiling
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          IOS_ENTITLEMENTS_DIR: ${{ github.workspace }}/selected-source/ui/apple/ios
+        run: |
+          set -euo pipefail
+          bash core/scripts/package_ios_app.sh iosexport \
+            selected-release/DobbyVPN.ipa \
+            selected-release/DobbyVPN.xcarchive.tar.gz
+      - name: Verify signed IPA entitlements and profile binding
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-ios-entitlements.XXXXXX")"
+          trap 'rm -rf "$work"' EXIT
+          ditto -x -k selected-release/DobbyVPN.ipa "$work/extracted"
+          apps=("$work"/extracted/Payload/*.app)
+          test "${#apps[@]}" -eq 1
+          tunnels=("${apps[0]}"/PlugIns/*.appex)
+          test "${#tunnels[@]}" -eq 1
+          codesign --verify --strict "${apps[0]}"
+          codesign --verify --strict "${tunnels[0]}"
+          codesign --display --entitlements :- "${apps[0]}" | tee "$work/app-entitlements.plist"
+          codesign --display --entitlements :- "${tunnels[0]}" | tee "$work/tunnel-entitlements.plist"
+          security cms -D -i "${apps[0]}/embedded.mobileprovision" > "$work/app-profile.plist"
+          security cms -D -i "${tunnels[0]}/embedded.mobileprovision" > "$work/tunnel-profile.plist"
+          python3 .github/scripts/ios/verify_ios_app_group.py \
+            --app-entitlements "$work/app-entitlements.plist" \
+            --app-profile "$work/app-profile.plist" \
+            --tunnel-entitlements "$work/tunnel-entitlements.plist" \
+            --tunnel-profile "$work/tunnel-profile.plist" \
+            --app-info "${apps[0]}/Info.plist" \
+            --tunnel-info "${tunnels[0]}/Info.plist" \
+            --team-id "$APPLE_TEAM_ID" \
+            --source-sha "$SOURCE_COMMIT" \
+            --version "$VERSION_NAME" \
+            --build-number "$APP_BUILD"
+          stat -f "Signed IPA bytes: %z" selected-release/DobbyVPN.ipa
+          shasum -a 256 selected-release/DobbyVPN.ipa
+      - name: Verify Fastlane can read the selected IPA
+        env:
+          IPA_PATH: ${{ github.workspace }}/selected-release/DobbyVPN.ipa
+        run: |
+          cd publishing
+          bundle exec ruby <<'RUBY'
+          require "fastlane_core"
+          require "fastlane_core/ipa_file_analyser"
+          ipa = ENV.fetch("IPA_PATH")
+          info = FastlaneCore::IpaFileAnalyser.fetch_info_plist_file(ipa)
+          expected = {
+            "CFBundleIdentifier" => "vpn.dobby.app",
+            "CFBundleShortVersionString" => ENV.fetch("VERSION_NAME"),
+            "CFBundleVersion" => ENV.fetch("APP_BUILD"),
+            "DobbySourceCommit" => ENV.fetch("SOURCE_COMMIT")
+          }
+          abort "Fastlane read unexpected IPA metadata" unless info && expected.all? { |key, value| info[key].to_s == value }
+          Zip::File.open(ipa) do |archive|
+            archive.each do |entry|
+              next if entry.directory?
+              entry.get_input_stream { |stream| while (chunk = stream.read(1024 * 1024)) && !chunk.empty?; end }
+            end
+          end
+          puts "Fastlane metadata and complete ZIP payload reading passed"
+          RUBY

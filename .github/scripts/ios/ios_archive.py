@@ -392,7 +392,7 @@ def compress_ipa(ipa: Path) -> None:
                     compressed_info = copy.copy(source_info)
                     compressed_info.compress_type = zipfile.ZIP_DEFLATED
                     compressed_info._compresslevel = 9
-                    compressed_info.extra = _ipa_extra_without_zip64(source_info.extra)
+                    compressed_info.extra = _ipa_extra_for_repack(source_info.extra)
                     with source.open(source_info, mode="r") as source_file:
                         with compressed.open(compressed_info, mode="w") as compressed_file:
                             shutil.copyfileobj(source_file, compressed_file, length=1024 * 1024)
@@ -407,8 +407,8 @@ def compress_ipa(ipa: Path) -> None:
         raise
 
 
-def _ipa_extra_without_zip64(extra: bytes) -> bytes:
-    """Drop stale ZIP64 size and offset metadata so zipfile can regenerate it."""
+def _ipa_extra_for_repack(extra: bytes) -> bytes:
+    """Drop ZIP64 and legacy Unix metadata that cannot be copied into new headers."""
     retained = bytearray()
     offset = 0
     while offset < len(extra):
@@ -418,7 +418,9 @@ def _ipa_extra_without_zip64(extra: bytes) -> bytes:
         end = offset + 4 + field_size
         if end > len(extra):
             raise ArchiveError("signed iOS IPA contains a truncated ZIP extra field")
-        if field_id != 0x0001:
+        # Xcode may store only atime/mtime in central 0x5855 fields, while
+        # the local form also has uid/gid; rebuilding from the central form is unsafe.
+        if field_id not in (0x0001, 0x5855):
             retained.extend(extra[offset:end])
         offset = end
     return bytes(retained)

@@ -104,19 +104,34 @@ def _extra(field_id: int, payload: bytes) -> bytes:
     return struct.pack("<HH", field_id, len(payload)) + payload
 
 
-def _extra_ids(extra: bytes) -> set[int]:
-    result = set()
+def _extra_fields(extra: bytes) -> list[tuple[int, bytes]]:
+    result = []
     offset = 0
     while offset < len(extra):
         field_id, length = struct.unpack_from("<HH", extra, offset)
-        result.add(field_id)
-        offset += 4 + length
+        start = offset + 4
+        result.append((field_id, extra[start : start + length]))
+        offset = start + length
     return result
+
+
+def _extra_ids(extra: bytes) -> set[int]:
+    return {field_id for field_id, _ in _extra_fields(extra)}
+
+
+def _local_extra(path: Path, info: zipfile.ZipInfo) -> bytes:
+    with path.open("rb") as stream:
+        stream.seek(info.header_offset)
+        header = stream.read(30)
+        name_length, extra_length = struct.unpack_from("<HH", header, 26)
+        stream.seek(info.header_offset + 30 + name_length)
+        return stream.read(extra_length)
 
 
 def _write_signed_ipa(path: Path) -> dict[str, bytes]:
     app_root = "Payload/DobbyVPN.app"
     tunnel_root = f"{app_root}/PlugIns/DobbyVPNTunnel.appex"
+    symlink_target = b"Versions/A/Current"
     app_info = plistlib.dumps(
         {
             "CFBundleIdentifier": ios_archive.APP_BUNDLE_ID,
@@ -148,7 +163,7 @@ def _write_signed_ipa(path: Path) -> dict[str, bytes]:
         f"{tunnel_root}/Info.plist": tunnel_info,
         f"{tunnel_root}/Tunnel": b"synthetic signed tunnel executable",
         f"{tunnel_root}/archived-expanded-entitlements.xcent": b"synthetic tunnel entitlements",
-        f"{app_root}/Frameworks/Current": b"Versions/A/Current",
+        f"{app_root}/Frameworks/Current": symlink_target,
     }
     symlink = f"{app_root}/Frameworks/Current"
     unicode_path = (
@@ -157,6 +172,10 @@ def _write_signed_ipa(path: Path) -> dict[str, bytes]:
         + symlink.encode()
     )
     benign_timestamp = b"\x01" + struct.pack("<I", 1_700_000_000)
+    legacy_unix_local = struct.pack("<IIHH", 1_700_000_000, 1_700_000_001, 501, 20)
+    legacy_unix_central = struct.pack("<II", 1_700_000_000, 1_700_000_001)
+    zip64 = _extra(0x0001, struct.pack("<QQ", len(symlink_target), len(symlink_target)))
+    unicode = _extra(0x7075, unicode_path)
     with zipfile.ZipFile(
         path,
         mode="w",
@@ -175,8 +194,9 @@ def _write_signed_ipa(path: Path) -> dict[str, bytes]:
                 info.extra = b"".join(
                     (
                         _extra(0x5455, benign_timestamp),
-                        _extra(0x0001, struct.pack("<QQ", len(data), len(data))),
-                        _extra(0x7075, unicode_path),
+                        zip64,
+                        _extra(0x5855, legacy_unix_local),
+                        unicode,
                     )
                 )
             archive.writestr(
@@ -185,6 +205,17 @@ def _write_signed_ipa(path: Path) -> dict[str, bytes]:
                 compress_type=zipfile.ZIP_DEFLATED,
                 compresslevel=1,
             )
+            if name == symlink:
+                # Xcode's local header can carry uid/gid while its central
+                # directory record contains only the 8-byte time pair.
+                info.extra = b"".join(
+                    (
+                        _extra(0x5455, benign_timestamp),
+                        zip64,
+                        _extra(0x5855, legacy_unix_central),
+                        unicode,
+                    )
+                )
             if name.endswith("Localizable.strings"):
                 info.external_attr = 0
     return entries
@@ -200,6 +231,22 @@ class IOSArchiveCompressionTests(unittest.TestCase):
                 original_attributes = {
                     info.filename: info.external_attr for info in archive.infolist()
                 }
+                source_symlink = archive.getinfo("Payload/DobbyVPN.app/Frameworks/Current")
+                central_extra = _extra_fields(source_symlink.extra)
+                local_extra = _extra_fields(_local_extra(ipa, source_symlink))
+                self.assertEqual(
+                    next(payload for field, payload in central_extra if field == 0x5855),
+                    struct.pack("<II", 1_700_000_000, 1_700_000_001),
+                )
+                self.assertEqual(
+                    next(payload for field, payload in local_extra if field == 0x5855),
+                    struct.pack("<IIHH", 1_700_000_000, 1_700_000_001, 501, 20),
+                )
+                expected_other_extras = [
+                    (field, payload)
+                    for field, payload in central_extra
+                    if field not in (0x0001, 0x5855)
+                ]
 
             ios_archive.compress_ipa(ipa)
 
@@ -224,6 +271,10 @@ class IOSArchiveCompressionTests(unittest.TestCase):
                 )
                 self.assertEqual(stat.S_IMODE(symlink.external_attr >> 16), 0o777)
                 self.assertEqual(_extra_ids(symlink.extra), {0x5455, 0x7075})
+                self.assertEqual(_extra_fields(symlink.extra), expected_other_extras)
+                self.assertEqual(
+                    _extra_fields(_local_extra(ipa, symlink)), expected_other_extras
+                )
 
             ios_archive.verify_ipa(
                 ipa,
