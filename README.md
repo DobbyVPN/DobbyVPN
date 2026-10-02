@@ -41,6 +41,11 @@ request.
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
+Android: [Add the DobbyVPN repository to F-Droid](https://fdroid.link/#https://f-repo.dobbyvpn.com/fdroid/repo?fingerprint=F22F23E62C095BEED3A71C4B0D69C7F3A768E52DFE6A83AAF6A2E6AB9E2FEDC4).
+With F-Droid installed, open this link, confirm the repository, then install
+DobbyVPN. Updates will arrive through F-Droid.
+[Repository details and QR code](https://f-repo.dobbyvpn.com/).
+
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
 Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
