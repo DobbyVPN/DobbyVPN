@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import plistlib
 import re
 import shutil
+import subprocess
 import struct
 import sys
 import tarfile
@@ -21,6 +22,11 @@ ARCHIVE_NAME = "DobbyVPN.xcarchive"
 APP_BUNDLE_ID = "vpn.dobby.app"
 TUNNEL_BUNDLE_ID = "vpn.dobby.app.tunnel"
 TUNNEL_POINT = "com.apple.networkextension.packet-tunnel"
+TEAM_ID = re.compile(r"^[A-Z0-9]{10}$")
+UNRESOLVED_SUBSTITUTION = re.compile(r"\$\([^)]*\)|\$\{[^}]*\}")
+APP_GET_TASK_ALLOW = "com.apple.security.get-task-allow"
+GET_TASK_ALLOW = "get-task-allow"
+KEYCHAIN_GROUPS = "keychain-access-groups"
 
 
 class ArchiveError(ValueError):
@@ -106,6 +112,139 @@ def _validate_archive(
         version=version,
         build_number=build_number,
     )
+
+
+def _expand_entitlement_value(value: object, team_id: str) -> object:
+    """Expand the supported source entitlement variable and reject leftovers."""
+    if isinstance(value, dict):
+        return {
+            key: _expand_entitlement_value(item, team_id)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_expand_entitlement_value(item, team_id) for item in value]
+    if isinstance(value, str):
+        expanded = value.replace("$(AppIdentifierPrefix)", f"{team_id}.")
+        if UNRESOLVED_SUBSTITUTION.search(expanded):
+            raise ArchiveError("source iOS entitlements contain an unresolved substitution")
+        return expanded
+    return value
+
+
+def _export_entitlements(
+    source: Path,
+    *,
+    team_id: str,
+    bundle_id: str,
+) -> dict[str, object]:
+    values = _expand_entitlement_value(
+        _read_plist(source, f"source iOS entitlements ({source.name})"), team_id
+    )
+    if not isinstance(values, dict):
+        raise ArchiveError("source iOS entitlements must contain a dictionary")
+
+    source_get_task_allow = values.pop(APP_GET_TASK_ALLOW, False)
+    if source_get_task_allow is not False or values.get(GET_TASK_ALLOW, False) is not False:
+        raise ArchiveError("source iOS entitlements must disable debugger attachment")
+    values[GET_TASK_ALLOW] = False
+
+    expected_application = f"{team_id}.{bundle_id}"
+    expected_keychain_group = f"{team_id}.{APP_BUNDLE_ID}"
+    if values.get(KEYCHAIN_GROUPS) != [expected_keychain_group]:
+        raise ArchiveError("source keychain group does not match the shared app group")
+    for key, expected in (
+        ("application-identifier", expected_application),
+        ("com.apple.developer.team-identifier", team_id),
+    ):
+        if key in values and values[key] != expected:
+            raise ArchiveError(f"source iOS entitlement {key} conflicts with the selected signing identity")
+        values[key] = expected
+    return values
+
+
+def _bind_info_keychain_group(
+    archive_info_path: Path,
+    source_info_path: Path,
+    *,
+    signing_entitlements: dict[str, object],
+    team_id: str,
+) -> None:
+    source_info = _read_plist(source_info_path, f"source Info.plist ({source_info_path.name})")
+    source_group = _expand_entitlement_value(
+        source_info.get("DobbyKeychainAccessGroup"), team_id
+    )
+    if not isinstance(source_group, str) or signing_entitlements.get(KEYCHAIN_GROUPS) != [source_group]:
+        raise ArchiveError("source Info.plist keychain group does not match its signing entitlement")
+
+    archive_info = _read_plist(archive_info_path, f"archive Info.plist ({archive_info_path.name})")
+    if archive_info.get("DobbyKeychainAccessGroup") not in (APP_BUNDLE_ID, source_group):
+        raise ArchiveError("archive Info.plist keychain group is unrelated to the selected app")
+    archive_info["DobbyKeychainAccessGroup"] = source_group
+    archive_info_path.write_bytes(plistlib.dumps(archive_info))
+
+
+def sign_archive_for_export(
+    archive: Path,
+    *,
+    source_entitlements_dir: Path,
+    output_dir: Path,
+    team_id: str,
+    identity: str,
+    source_sha: str,
+    version: str,
+    build_number: str,
+) -> None:
+    """Apply selected source entitlements and sign the extracted archive in place."""
+    if not TEAM_ID.fullmatch(team_id):
+        raise ArchiveError("Apple team ID must be ten uppercase letters or digits")
+    if not identity:
+        raise ArchiveError("iOS signing identity is empty")
+    app, tunnel = _validate_archive(
+        archive,
+        source_sha=source_sha,
+        version=version,
+        build_number=build_number,
+    )
+    app_entitlements = _export_entitlements(
+        source_entitlements_dir / "app" / "iosApp.entitlements",
+        team_id=team_id,
+        bundle_id=APP_BUNDLE_ID,
+    )
+    tunnel_entitlements = _export_entitlements(
+        source_entitlements_dir / "tunnel" / "tunnel.entitlements",
+        team_id=team_id,
+        bundle_id=TUNNEL_BUNDLE_ID,
+    )
+    _bind_info_keychain_group(
+        app / "Info.plist",
+        source_entitlements_dir / "app" / "Info.plist",
+        signing_entitlements=app_entitlements,
+        team_id=team_id,
+    )
+    _bind_info_keychain_group(
+        tunnel / "Info.plist",
+        source_entitlements_dir / "tunnel" / "Info.plist",
+        signing_entitlements=tunnel_entitlements,
+        team_id=team_id,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    app_entitlements_path = output_dir / "app-entitlements.plist"
+    tunnel_entitlements_path = output_dir / "tunnel-entitlements.plist"
+    app_entitlements_path.write_bytes(plistlib.dumps(app_entitlements))
+    tunnel_entitlements_path.write_bytes(plistlib.dumps(tunnel_entitlements))
+
+    # Seal embedded frameworks before the extension and containing app.
+    frameworks = sorted(app.rglob("*.framework"), key=lambda path: len(path.parts), reverse=True)
+    signing = [(framework, None) for framework in frameworks]
+    signing.extend(((tunnel, tunnel_entitlements_path), (app, app_entitlements_path)))
+    for bundle, entitlements in signing:
+        command = ["codesign", "--force", "--sign", identity]
+        if entitlements is not None:
+            command.extend(
+                ["--entitlements", str(entitlements), "--generate-entitlement-der"]
+            )
+        command.append(str(bundle))
+        subprocess.run(command, check=True)
 
 
 def _safe_tar_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
@@ -306,6 +445,15 @@ def _parser() -> argparse.ArgumentParser:
     ipa.add_argument("--build-number", required=True)
     compress = commands.add_parser("compress-ipa")
     compress.add_argument("--ipa", type=Path, required=True)
+    sign = commands.add_parser("sign-for-export")
+    sign.add_argument("--archive-dir", type=Path, required=True)
+    sign.add_argument("--source-entitlements-dir", type=Path, required=True)
+    sign.add_argument("--output-dir", type=Path, required=True)
+    sign.add_argument("--team-id", required=True)
+    sign.add_argument("--identity", required=True)
+    sign.add_argument("--source-sha", required=True)
+    sign.add_argument("--version", required=True)
+    sign.add_argument("--build-number", required=True)
     return parser
 
 
@@ -326,6 +474,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "compress-ipa":
             compress_ipa(args.ipa)
             print(f"Compressed signed iOS IPA: {args.ipa}")
+        elif args.command == "sign-for-export":
+            sign_archive_for_export(
+                args.archive_dir,
+                source_entitlements_dir=args.source_entitlements_dir,
+                output_dir=args.output_dir,
+                team_id=args.team_id,
+                identity=args.identity,
+                source_sha=args.source_sha,
+                version=args.version,
+                build_number=args.build_number,
+            )
+            print("Signed the extracted iOS archive with selected source entitlements")
         else:
             _validate_archive(
                 args.archive_dir,
@@ -345,7 +505,13 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print("Unsigned iOS archive content matches Release metadata")
         return 0
-    except (OSError, tarfile.TarError, ArchiveError, plistlib.InvalidFileException) as error:
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        tarfile.TarError,
+        ArchiveError,
+        plistlib.InvalidFileException,
+    ) as error:
         print(f"iOS archive validation failed: {error}", file=sys.stderr)
         return 1
 

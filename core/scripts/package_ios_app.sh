@@ -72,6 +72,14 @@ if [[ "$target" == iosexport ]]; then
   python3 "$script_root/.github/scripts/ios/ios_archive.py" verify \
     --archive-dir "$archive" --source-sha "$source_commit" \
     --version "$version" --build-number "$build"
+  entitlements_dir=${IOS_ENTITLEMENTS_DIR:-"$swift_root/ios"}
+  identity=${IOS_SIGNING_IDENTITY:-Apple\ Distribution}
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" sign-for-export \
+    --archive-dir "$archive" \
+    --source-entitlements-dir "$entitlements_dir" \
+    --output-dir "$derived/signing" \
+    --team-id "$team_id" --identity "$identity" \
+    --source-sha "$source_commit" --version "$version" --build-number "$build"
   export_options="$derived/ExportOptions.plist"
   export_dir="$derived/export"
   cat > "$export_options" <<PLIST

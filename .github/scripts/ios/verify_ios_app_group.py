@@ -111,11 +111,14 @@ def verify_bundle_metadata(
     info: dict[str, Any],
     *,
     bundle_id: str,
+    team_id: str,
     source_sha: str,
     version: str,
     build_number: str,
     tunnel: bool,
 ) -> None:
+    if not TEAM_ID.fullmatch(team_id):
+        raise VerificationError("Apple team ID must be ten uppercase letters or digits")
     if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
         raise VerificationError("source SHA must be a lowercase full commit")
     expected = {
@@ -127,6 +130,8 @@ def verify_bundle_metadata(
     for key, value in expected.items():
         if str(info.get(key, "")) != value:
             raise VerificationError(f"bundle metadata {key} does not match the release input")
+    if info.get("DobbyKeychainAccessGroup") != f"{team_id}.{APP_BUNDLE}":
+        raise VerificationError("bundle metadata keychain access group does not match the selected team")
     if tunnel:
         extension = info.get("NSExtension")
         if not isinstance(extension, dict):
@@ -169,6 +174,7 @@ def main() -> int:
         verify_bundle_metadata(
             load_plist(args.app_info, "app Info.plist"),
             bundle_id=APP_BUNDLE,
+            team_id=args.team_id,
             source_sha=args.source_sha,
             version=args.version,
             build_number=args.build_number,
@@ -177,6 +183,7 @@ def main() -> int:
         verify_bundle_metadata(
             load_plist(args.tunnel_info, "tunnel Info.plist"),
             bundle_id=TUNNEL_BUNDLE,
+            team_id=args.team_id,
             source_sha=args.source_sha,
             version=args.version,
             build_number=args.build_number,
