@@ -76,6 +76,8 @@ build_package() {
              --identifier com.dobby.pkg \
              --version "$APP_VERSION" \
              --install-location / \
+             --compression latest \
+             --min-os-version 12.0 \
              "dobbyVPN-macos-$payload_arch.pkg"
   )
 }

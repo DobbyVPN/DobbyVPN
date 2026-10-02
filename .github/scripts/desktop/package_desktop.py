@@ -165,7 +165,17 @@ def package_linux(version: str, output: Path, source: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             subprocess.run(
-                ["dpkg-deb", "--build", "--root-owner-group", str(root), str(output_path)],
+                [
+                    "dpkg-deb",
+                    "--build",
+                    "--root-owner-group",
+                    "-Zxz",
+                    "-z9",
+                    "-Sextreme",
+                    "--threads-max=1",
+                    str(root),
+                    str(output_path),
+                ],
                 check=True,
                 text=True,
                 env={**os.environ, "SOURCE_DATE_EPOCH": "0"},

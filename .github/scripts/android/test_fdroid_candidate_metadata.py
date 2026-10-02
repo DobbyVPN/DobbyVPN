@@ -208,14 +208,14 @@ class FdroidCandidateMetadataTests(unittest.TestCase):
         self.assertEqual(candidate["gradle"], ["yes"])
         self.assertEqual(
             candidate["srclibs"],
-            [f"go@go{pins['go_version']}", "reproducible-apk-tools@v0.3.2"],
+            [f"go@go{pins['go_version']}"],
         )
         self.assertEqual(candidate["target"], f"android-{pins['android_compile_sdk']}")
         self.assertEqual(candidate["ndk"], str(pins["android_ndk"]))
         self.assertEqual(candidate["output"], "app/build/outputs/apk/release/app-release-unsigned.apk")
         self.assertNotIn("preassemble", candidate)
         self.assertNotIn("rm", candidate)
-        self.assertEqual(candidate["postbuild"], baseline["Builds"][0]["postbuild"])
+        self.assertNotIn("postbuild", candidate)
         recipe_script = "\n".join(candidate["build"])
         self.assertIn(f"test \"$(git -C \"$go_root\" rev-parse --verify HEAD^{{commit}})\" = \"{pins['go_source_commit']}\"", recipe_script)
         self.assertIn("./make.bash", recipe_script)

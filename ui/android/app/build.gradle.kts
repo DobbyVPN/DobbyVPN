@@ -1,5 +1,6 @@
 import java.io.File
 import java.util.Properties
+import org.gradle.api.tasks.PathSensitivity
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -143,6 +144,33 @@ android {
     buildFeatures {
         buildConfig = true
         compose = true
+    }
+}
+
+tasks.configureEach {
+    if (name == "packageRelease") {
+        val apkNormalizer = repoRoot.resolve(".github/scripts/android/normalize_android_apk.py")
+        val androidDependencySpec = repoRoot.resolve(".github/scripts/android/dependency-spec.json")
+        val dependencyResolver = repoRoot.resolve(".github/scripts/android/android_dependency_provenance.py")
+        val payloadVerifier = repoRoot.resolve(".github/scripts/android/verify_android_reproducibility.py")
+        inputs.files(apkNormalizer, androidDependencySpec, dependencyResolver, payloadVerifier)
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        doLast {
+            val apk = layout.buildDirectory.file("outputs/apk/release/app-release-unsigned.apk").get().asFile
+            check(apk.isFile) { "Gradle did not produce the unsigned release APK: $apk" }
+            val sdkRoot = androidSdkRoot.orNull?.takeIf { it.isNotBlank() }
+                ?: error("ANDROID_SDK_ROOT (or ANDROID_HOME) is required to normalize the release APK")
+            val process = ProcessBuilder(
+                "python3",
+                apkNormalizer.absolutePath,
+                "--apk",
+                apk.absolutePath,
+                "--sdk-root",
+                sdkRoot,
+            ).directory(repoRoot).inheritIO().start()
+            val exitCode = process.waitFor()
+            check(exitCode == 0) { "Android APK normalization failed with exit code $exitCode" }
+        }
     }
 }
 

@@ -93,6 +93,8 @@ PLIST
   shopt -s nullglob
   ipas=("$export_dir"/*.ipa)
   [[ "${#ipas[@]}" -eq 1 ]] || { echo "Xcode export did not produce exactly one IPA" >&2; exit 1; }
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" compress-ipa \
+    --ipa "${ipas[0]}"
   python3 "$script_root/.github/scripts/ios/ios_archive.py" verify-ipa \
     --ipa "${ipas[0]}" --source-sha "$source_commit" \
     --version "$version" --build-number "$build"
@@ -200,6 +202,11 @@ PLIST
   shopt -s nullglob
   ipas=("$export_dir"/*.ipa)
   [[ "${#ipas[@]}" -eq 1 ]] || { echo "Xcode export did not produce exactly one IPA" >&2; exit 1; }
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" compress-ipa \
+    --ipa "${ipas[0]}"
+  python3 "$script_root/.github/scripts/ios/ios_archive.py" verify-ipa \
+    --ipa "${ipas[0]}" --source-sha "$source_commit" \
+    --version "$version" --build-number "$build"
   mkdir -p "$(dirname -- "$output")"
   cp "${ipas[0]}" "$output"
 fi

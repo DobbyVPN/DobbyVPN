@@ -22,7 +22,7 @@
 			Sequence="both"
 			Condition="NOT DOBBYVPN_CONTROL_PIPE_SID" />
 
-		<MediaTemplate EmbedCab="yes" />
+		<MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
 		<!-- Remove v1.5.0 before installing components with changed key files. -->
 		<MajorUpgrade

@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 from pathlib import Path, PurePosixPath
 import plistlib
 import re
+import shutil
+import struct
 import sys
 import tarfile
 import zipfile
@@ -232,6 +235,56 @@ def verify_ipa(
         raise ArchiveError("signed iOS IPA is not a valid app archive") from error
 
 
+def compress_ipa(ipa: Path) -> None:
+    """Repack an IPA with maximum ZIP Deflate compression, preserving entries."""
+    if not ipa.is_file():
+        raise ArchiveError("signed iOS IPA is missing")
+    temporary = ipa.with_name(f".{ipa.name}.compressed.tmp")
+    try:
+        with zipfile.ZipFile(ipa, mode="r") as source:
+            with zipfile.ZipFile(
+                temporary,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            ) as compressed:
+                compressed.comment = source.comment
+                for source_info in source.infolist():
+                    compressed_info = copy.copy(source_info)
+                    compressed_info.compress_type = zipfile.ZIP_DEFLATED
+                    compressed_info._compresslevel = 9
+                    compressed_info.extra = _ipa_extra_without_zip64(source_info.extra)
+                    with source.open(source_info, mode="r") as source_file:
+                        with compressed.open(compressed_info, mode="w") as compressed_file:
+                            shutil.copyfileobj(source_file, compressed_file, length=1024 * 1024)
+                    # zipfile supplies default permissions for a zero value.
+                    compressed_info.external_attr = source_info.external_attr
+        with zipfile.ZipFile(temporary, mode="r") as compressed:
+            if any(info.compress_type != zipfile.ZIP_DEFLATED for info in compressed.infolist()):
+                raise ArchiveError("signed iOS IPA was not fully compressed")
+        temporary.replace(ipa)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _ipa_extra_without_zip64(extra: bytes) -> bytes:
+    """Drop stale ZIP64 size and offset metadata so zipfile can regenerate it."""
+    retained = bytearray()
+    offset = 0
+    while offset < len(extra):
+        if len(extra) - offset < 4:
+            raise ArchiveError("signed iOS IPA contains a truncated ZIP extra field")
+        field_id, field_size = struct.unpack_from("<HH", extra, offset)
+        end = offset + 4 + field_size
+        if end > len(extra):
+            raise ArchiveError("signed iOS IPA contains a truncated ZIP extra field")
+        if field_id != 0x0001:
+            retained.extend(extra[offset:end])
+        offset = end
+    return bytes(retained)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -251,6 +304,8 @@ def _parser() -> argparse.ArgumentParser:
     ipa.add_argument("--source-sha", required=True)
     ipa.add_argument("--version", required=True)
     ipa.add_argument("--build-number", required=True)
+    compress = commands.add_parser("compress-ipa")
+    compress.add_argument("--ipa", type=Path, required=True)
     return parser
 
 
@@ -268,6 +323,9 @@ def main(argv: list[str] | None = None) -> int:
                 build_number=args.build_number,
             )
             print("Signed iOS IPA metadata matches the qualified source and version")
+        elif args.command == "compress-ipa":
+            compress_ipa(args.ipa)
+            print(f"Compressed signed iOS IPA: {args.ipa}")
         else:
             _validate_archive(
                 args.archive_dir,

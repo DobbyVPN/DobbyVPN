@@ -26,7 +26,6 @@ from android_dependency_provenance import dependency_pins
 
 COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 APP_ID = "com.dobby.vpn"
-REPRODUCIBLE_APK_TOOLS = "reproducible-apk-tools@v0.3.2"
 GRADLE_OUTPUT = "app/build/outputs/apk/release/app-release-unsigned.apk"
 UPDATE_CHECK_MODE = "HTTP"
 AUTO_UPDATE_MODE = "Version v%v"
@@ -418,7 +417,7 @@ sed -i '/^[[:space:]]*ndk[.]dir[[:space:]]*=/d' "$product_root/ui/android/local.
     return {
         "subdir": "ui/android",
         "gradle": ["yes"],
-        "srclibs": [f"go@go{go_version}", REPRODUCIBLE_APK_TOOLS],
+        "srclibs": [f"go@go{go_version}"],
         "sudo": [
             "apt-get install -y -t trixie-backports golang-go",
         ],
@@ -479,6 +478,7 @@ def finalize_metadata(
     patched_build = deepcopy(new_build)
     patched_build.pop("preassemble", None)
     patched_build.pop("rm", None)
+    patched_build.pop("postbuild", None)
     patched_build.update(recipe)
     finalized["Builds"] = [*builds[:-1], patched_build]
     finalized.pop("Binaries", None)
