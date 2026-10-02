@@ -27,8 +27,9 @@ import os
 from pathlib import Path
 import platform as host_platform
 import re
-import socket
+import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -956,6 +957,18 @@ def _prepare_desktop_package(
     if skip_deps:
         build.append("--skip-deps")
     _run_logged(build, cwd=source, logs=logs, label="desktop-package-build", timeout=timeout)
+    if platform == "windows":
+        _run_logged(
+            [
+                sys.executable,
+                str(source / ".github" / "scripts" / "source_checks.py"),
+                "cache-clean",
+            ],
+            cwd=source,
+            logs=logs,
+            label="windows-pre-installer-cache-clean",
+            timeout=timeout,
+        )
     if platform in {"windows", "macos"}:
         package_name = "dobbyVPN-windows-amd64.msi" if platform == "windows" else (
             "dobbyVPN-macos-aarch64.pkg" if host_platform.machine().lower() in {"arm64", "aarch64"}
@@ -978,6 +991,11 @@ def _prepare_desktop_package(
             if control_pipe_sid is None:
                 raise LocalVMError("Windows installer migration requires the configured account SID")
             migration_environment = os.environ.copy()
+            print(
+                f"CFreeBytes={shutil.disk_usage(run_dir).free}; "
+                f"CurrentMSIBytes={(output / package_name).stat().st_size}",
+                flush=True,
+            )
             result = run_interactive_task(
                 migration,
                 run_dir=run_dir,
