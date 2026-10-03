@@ -297,8 +297,13 @@ androidComponents.onVariants(androidComponents.selector().withBuildType("debug")
 backendTasks.zipWithNext().forEach { (previous, current) ->
     current.configure { mustRunAfter(previous) }
 }
-listOf("release", "debug").forEach { variant ->
-    tasks.named("pre${variant.replaceFirstChar(Char::uppercaseChar)}Build") {
+tasks.configureEach {
+    val variant = when (name) {
+        "preReleaseBuild" -> "release"
+        "preDebugBuild" -> "debug"
+        else -> null
+    }
+    if (variant != null) {
         dependsOn(backendTasks.filter { it.name.startsWith("buildGoBackend_${variant}_") })
     }
 }

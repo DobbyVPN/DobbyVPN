@@ -448,7 +448,7 @@ jobs:
   focused_mini_result:
     name: Require selected check success
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' }}
-    needs: [ci_selected_version, focused_desktop_build, android_mini_build, mini_render_start, focused_desktop_mini, android_mini, mini_render_cleanup, ios_simulator, fdroid_preflight]
+    needs: [ci_selected_version, focused_desktop_build, android_mini_build, mini_render_start, focused_desktop_mini, android_mini, mini_render_cleanup, ios_simulator, fdroid_preflight, debug_packages, android_build]
     runs-on: ubuntu-24.04
     steps:
       - name: Check selected platform result
@@ -463,6 +463,8 @@ jobs:
           RENDER_CLEANUP_RESULT: ${{ needs.mini_render_cleanup.result }}
           IOS_RESULT: ${{ needs.ios_simulator.result }}
           FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
+          DEBUG_RESULT: ${{ needs.debug_packages.result }}
+          DEBUG_ANDROID_RESULT: ${{ needs.android_build.result }}
         run: |
           set -euo pipefail
           case "$PLATFORM" in
@@ -484,6 +486,11 @@ jobs:
               test "$VERSION_RESULT" = success
               test "$ANDROID_BUILD_RESULT" = success
               test "$FDROID_RESULT" = success
+              ;;
+            debug-packages)
+              test "$VERSION_RESULT" = success
+              test "$DEBUG_RESULT" = success
+              test "$DEBUG_ANDROID_RESULT" = success
               ;;
             ios-simulator-mini)
               test "$IOS_RESULT" = success

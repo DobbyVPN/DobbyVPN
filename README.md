@@ -54,6 +54,20 @@ With F-Droid installed, open this link, confirm the repository, then install
 DobbyVPN. Updates will arrive through F-Droid.
 [Repository details and QR code](https://f-repo.dobbyvpn.com/).
 
+From 1.5.3, [GitHub Releases](https://github.com/DobbyVPN/DobbyVPN/releases)
+include native Debug builds with a `-debug` filename suffix: Linux DEB,
+Windows MSI, macOS PKGs for Intel and Apple silicon, an Android APK, and an
+unsigned iOS Xcode archive. These builds retain symbols and disable Go
+optimization and inlining for debugging. Prebuilt third-party libraries retain
+their upstream build settings.
+
+Desktop Debug installers replace the regular installation. Android Debug uses
+a separate app named **DobbyVPN Debug** and a development certificate; a later
+Debug APK may require uninstalling the previous Debug app first. The iOS archive
+includes dSYMs and requires your own development signing and provisioning for
+the app and packet-tunnel extension before device installation. Production
+updates remain available through the usual channels.
+
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
 Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
