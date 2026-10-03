@@ -924,7 +924,7 @@ def build_cli(
     env = os.environ.copy()
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
     configure_macos_deployment_target(target_platform, env)
-    ldflags = f"-buildid= -X main.appVersion={read_version()}"
+    ldflags = go_build_identity(debug)
     run(
         [str(go_executable), "build", "-trimpath", *(["-gcflags=all=-N -l"] if debug else []), f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
         cwd=GO_MODULE_DIR,
@@ -1001,7 +1001,7 @@ def build_service(
         if debug:
             env["CGO_CFLAGS"] = "-O0 -g"
             env["CGO_CXXFLAGS"] = "-O0 -g"
-        ldflags = "-buildid="
+        ldflags = go_build_identity(debug)
         if target_platform == "macos":
             # Keep the package's declared macOS 12 floor valid for both
             # the Go backend and the native operator CLI.
@@ -1071,6 +1071,13 @@ def build_service(
         target.chmod(target.stat().st_mode | 0o111)
     log(f"Copied {output.name} to {target}")
     return target
+
+
+def go_build_identity(debug: bool) -> str:
+    commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"], cwd=ROOT_DIR) or "N/A"
+    configuration = "Debug" if debug else "Release"
+    return (f"-buildid= -X core/buildinfo.Version={read_version()}"
+            f" -X core/buildinfo.Commit={commit} -X core/buildinfo.Configuration={configuration}")
 
 
 def read_version() -> str:

@@ -254,7 +254,7 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
                     // NDK C++ driver explicitly so -static-libstdc++ takes effect.
                     // Xray's anet dependency updates Go's IPv6 interface cache on
                     // Android and requires this linker option on Go 1.23+.
-                    "-ldflags=-buildid= ${if (variant == "release") "-s -w" else ""} -checklinkname=0 -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
+                    "-ldflags=-buildid= -X core/buildinfo.Version=$releaseVersionName -X core/buildinfo.Commit=$sourceCommit -X core/buildinfo.Configuration=${if (variant == "debug") "Debug" else "Release"} ${if (variant == "release") "-s -w" else ""} -checklinkname=0 -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
                     "-o", output.absolutePath, "./cmd/dobbyandroid"
                 )
                 workingDir(goModule)

@@ -6,6 +6,7 @@ package sessionapi
 
 import (
 	"context"
+	"core/log"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -266,6 +267,7 @@ type session struct {
 	recoveryCount              int
 	lastConnectedAt            time.Time
 	hasConnectedAt             bool
+	lastTransitionAt           time.Time
 	sequence                   uint64
 }
 
@@ -411,6 +413,9 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 	s.sourceError = ""
 	s.active, s.lastFailure, s.lastFailureMessage, s.state, s.cleanupDone, s.cleanupFailed = nil, "", "", StateConfigured, true, false
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
+	if err := log.SetPolicy(s.digest, map[string]any{"exclude_ips": s.profiles[0].ExcludeCIDRs, "profiles": summaries(s.profiles)}); err != nil {
+		log.Error("CONFIGURATION", "retain routing policy diagnostics failed", map[string]any{"cause": err.Error(), "configuration_digest": s.digest})
+	}
 	m.appendLocked(s)
 	result := ConfigureResult{Digest: s.digest, Sequence: s.sequence, Profiles: summaries(s.profiles), SourceKind: s.sourceKind}
 	return result, nil
@@ -973,6 +978,19 @@ func (m *Manager) appendLocked(s *session) {
 	close(s.changed)
 	s.changed = make(chan struct{})
 	s.sequence++
+	now := m.now()
+	details := map[string]any{"session_id": s.id, "generation": s.generation, "configuration_digest": s.digest, "sequence": s.sequence, "state": s.state, "cleanup_complete": s.cleanupDone, "recovering": s.recovering, "active_profile": s.active}
+	if !s.lastTransitionAt.IsZero() {
+		details["previous_state_duration_ms"] = now.Sub(s.lastTransitionAt).Milliseconds()
+	}
+	s.lastTransitionAt = now
+	log.SetCorrelation(log.Correlation{SessionID: s.id, Generation: s.generation, ConfigurationDigest: s.digest})
+	if s.lastFailure != "" {
+		details["failure_code"], details["cause"] = s.lastFailure, s.lastFailureMessage
+		log.Error("SESSION", "session state changed", details)
+	} else {
+		log.Info("SESSION", "session state changed", details)
+	}
 	m.platform.PublishState(context.Background(), StateChange{
 		SessionID: s.id, Generation: s.generation, State: s.state, Failure: s.lastFailure,
 	})

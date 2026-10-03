@@ -1,12 +1,17 @@
 package log
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"sync/atomic"
+
+	"core/buildinfo"
+	"core/diagnostics"
 	"sort"
 	"sync"
 	"time"
@@ -29,19 +34,21 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 		level = slog.LevelWarn
 	case logrus.InfoLevel:
 		level = slog.LevelInfo
-	case logrus.DebugLevel, logrus.TraceLevel:
+	case logrus.DebugLevel:
 		level = slog.LevelDebug
+	case logrus.TraceLevel:
+		level = slog.LevelDebug - 4
 	}
 	arguments := make(map[string]any, len(entry.Data))
 	for key, value := range entry.Data {
 		arguments[key] = value
 	}
-	write(level, "LOGRUS", entry.Message, arguments)
+	writeEventAt(entry.Time, level, "library.log", "LOGRUS", entry.Message, arguments)
 	return nil
 }
 
 type Logger struct {
-	file    *os.File
+	file    *diagnostics.Writer
 	logger  *slog.Logger
 	pending []pendingEntry
 }
@@ -64,6 +71,7 @@ var (
 func init() {
 	bridge.Do(func() {
 		logrus.SetOutput(io.Discard)
+		logrus.SetLevel(logrus.TraceLevel)
 		logrus.AddHook(&logrusToSlogHook{})
 	})
 }
@@ -102,15 +110,13 @@ func SetPath(path string) error {
 	if lg.logger != nil {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create log directory: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	file, err := diagnostics.OpenWriter(path)
 	if err != nil {
-		return fmt.Errorf("open local log file: %w", err)
+		return fmt.Errorf("open rotating log: %w", err)
 	}
-	lg.file = f
-	lg.logger = slog.New(newJSONLineHandler(f))
+	lg.file = file
+	lg.logger = slog.New(newJSONLineHandler(policyWriter{writer: file}))
+
 	lg.dumpBuffer()
 	return nil
 }
@@ -121,16 +127,67 @@ func SetOpenedFile(file *os.File) error {
 	if file == nil {
 		return fmt.Errorf("managed log file is unavailable")
 	}
-	initMu.Lock()
-	defer initMu.Unlock()
-	if lg.logger != nil {
-		return file.Close()
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		return err
 	}
-	lg.file = file
-	lg.logger = slog.New(newJSONLineHandler(file))
-	lg.dumpBuffer()
+	return SetPath(path)
+}
+
+var processOrder atomic.Uint64
+var processRun = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+var policyContext []byte // Protected by initMu, like all production writes.
+
+type policyWriter struct{ writer *diagnostics.Writer }
+
+func (writer policyWriter) Write(record []byte) (int, error) {
+	_, err := writer.writer.WriteRecord(func(first bool) ([]byte, error) {
+		if !first || len(policyContext) == 0 || bytes.Contains(record, []byte(`"policy_context":`)) {
+			return record, nil
+		}
+		// slog emits one complete JSON object and newline. Attach retained policy
+		// to this event, preserving its timestamp and process ordering.
+		if !bytes.HasSuffix(record, []byte("}\n")) {
+			return nil, fmt.Errorf("structured log record is not a JSON line")
+		}
+		output := make([]byte, 0, len(record)+len(policyContext)+20)
+		output = append(output, record[:len(record)-2]...)
+		output = append(output, `,"policy_context":`...)
+		output = append(output, policyContext...)
+		output = append(output, '}', '\n')
+		return output, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(record), nil
+}
+
+// SetPolicy records full routing context once per accepted configuration and
+// attaches it again to the first event of every new retained generation.
+func SetPolicy(digest string, policy any) error {
+	data, err := json.Marshal(map[string]any{"digest": digest, "policy": policy})
+	if err != nil {
+		return err
+	}
+	initMu.Lock()
+	policyContext = data
+	initMu.Unlock()
+	Info("ROUTING_POLICY", "configuration routing policy accepted", map[string]any{"configuration_digest": digest, "policy_context": json.RawMessage(data)})
 	return nil
 }
+
+// Correlation follows the single Go session owner; producers with a specific
+// callback identity can override these fields in their event arguments.
+type Correlation struct {
+	SessionID           string
+	Generation          uint64
+	ConfigurationDigest string
+}
+
+var currentCorrelation atomic.Pointer[Correlation]
+
+func SetCorrelation(value Correlation) { currentCorrelation.Store(&value) }
 
 func write(level slog.Level, category, message string, arguments map[string]any) {
 	writeEvent(level, "log.message", category, message, arguments)
@@ -147,6 +204,9 @@ func writeEventAt(occurredAt time.Time, level slog.Level, event, category, messa
 	initMu.Lock()
 	defer initMu.Unlock()
 	if lg.logger == nil {
+		if level >= slog.LevelError {
+			emitAt(slog.New(newJSONLineHandler(io.Discard)), occurredAt, level, event, category, message, arguments)
+		}
 		lg.pending = append(lg.pending, pendingEntry{
 			occurredAt: occurredAt, level: level, event: event, category: category,
 			message: message, arguments: cloneArguments(arguments),
@@ -176,13 +236,24 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	if !logger.Enabled(ctx, level) {
 		return
 	}
-	attrs := make([]slog.Attr, 0, 4+len(arguments))
+	attrs := make([]slog.Attr, 0, 8+len(arguments))
 	attrs = append(attrs,
 		slog.String("schema", logSchema),
 		slog.String("source", logSource),
 		slog.String("event", event),
 		slog.String("category", category),
+		slog.Int("process_id", os.Getpid()),
+		slog.String("run_id", processRun),
+		slog.Uint64("process_sequence", processOrder.Add(1)),
+		slog.Any("build", buildinfo.Fields()),
 	)
+	if identity := currentCorrelation.Load(); identity != nil {
+		for key, value := range map[string]any{"session_id": identity.SessionID, "generation": identity.Generation, "configuration_digest": identity.ConfigurationDigest} {
+			if _, explicit := arguments[key]; !explicit {
+				attrs = append(attrs, slog.Any(key, value))
+			}
+		}
+	}
 	keys := make([]string, 0, len(arguments))
 	for key := range arguments {
 		keys = append(keys, key)
@@ -193,11 +264,16 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	}
 	record := slog.NewRecord(occurredAt, level, fmt.Sprintf("[%s] %s", category, message), 0)
 	record.AddAttrs(attrs...)
+	if level >= slog.LevelError {
+		if err := newJSONLineHandler(diagnostics.Stderr).Handle(ctx, record.Clone()); err != nil {
+			_, _ = fmt.Fprintf(diagnostics.Stderr, "mirror structured error failed: %v\n", err)
+		}
+	}
 	if err := logger.Handler().Handle(ctx, record); err != nil {
-		fmt.Fprintf(os.Stderr, "write structured log failed: %v; ", err)
-		fallback := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug - 4})
+		_, _ = fmt.Fprintf(diagnostics.Stderr, "write structured log failed: %v; ", err)
+		fallback := slog.NewTextHandler(diagnostics.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug - 4})
 		if fallbackErr := fallback.Handle(ctx, record.Clone()); fallbackErr != nil {
-			fmt.Fprintf(os.Stderr, "write fallback log failed: %v; event=%q category=%q message=%q arguments=%v\n",
+			_, _ = fmt.Fprintf(diagnostics.Stderr, "write fallback log failed: %v; event=%q category=%q message=%q arguments=%v\n",
 				fallbackErr, event, category, message, arguments)
 		}
 	}
@@ -244,4 +320,14 @@ func newJSONLineHandler(writer io.Writer) slog.Handler {
 			return attribute
 		},
 	})
+}
+
+// CaptureStderr is explicit so CLI commands keep their operator-facing stderr.
+func CaptureStderr() error {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if lg.file == nil {
+		return fmt.Errorf("backend log path is unavailable")
+	}
+	return diagnostics.CaptureStderr(lg.file.Path()+".stderr", lg.file.Path())
 }

@@ -2,6 +2,7 @@ package internal
 
 import (
 	"sync"
+	"sync/atomic"
 
 	appLog "core/log"
 	"core/xray/common"
@@ -22,13 +23,14 @@ func SetupXrayLogging(logLevel xrayLog.Severity) {
 	defer xrayLogBridgeMu.Unlock()
 
 	if registeredXrayBridge != nil {
-		registeredXrayBridge.logLevel = logLevel
+		registeredXrayBridge.logLevel.Store(int32(logLevel))
 		appLog.Infof(common.Category, "Updated xray logging level=%s", XrayLogLevelName(logLevel))
 		return
 	}
 
 	appLog.Infof(common.Category, "Start xray's logging setup level=%s", XrayLogLevelName(logLevel))
-	registeredXrayBridge = &xrayLogBridge{logLevel: logLevel}
+	registeredXrayBridge = &xrayLogBridge{}
+	registeredXrayBridge.logLevel.Store(int32(logLevel))
 	xrayLog.RegisterHandler(registeredXrayBridge)
 	registerXrayConsoleLogCreatorLocked()
 	appLog.Infof(common.Category, "End xray's logging setup")
@@ -49,7 +51,7 @@ func registerXrayConsoleLogCreatorLocked() {
 }
 
 type xrayLogBridge struct {
-	logLevel xrayLog.Severity
+	logLevel atomic.Int32
 }
 
 func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
@@ -59,7 +61,7 @@ func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 	case *xrayLog.DNSLog:
 		appLog.Debugf("Xray-Core", "%s", msg.String())
 	case *xrayLog.GeneralMessage:
-		if msg.Severity <= l.logLevel {
+		if int32(msg.Severity) <= l.logLevel.Load() {
 			switch msg.Severity {
 			case xrayLog.Severity_Debug:
 				appLog.Debugf("Xray-Core", "%s", msg.Content)

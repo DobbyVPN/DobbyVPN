@@ -16,6 +16,7 @@ import (
 	"core/clientserver/controlplane"
 	"core/tunnel/platform_engine"
 
+	"core/diagnostics"
 	"core/log"
 
 	"golang.org/x/sys/windows/svc"
@@ -98,7 +99,8 @@ func initExplicitLocalLog() error {
 		if programData == "" {
 			return fmt.Errorf("ProgramData is unavailable for Go backend logs")
 		}
-		return log.SetPath(filepath.Join(programData, "DobbyVPN", "Logs", "backend.jsonl"))
+		path := filepath.Join(programData, "DobbyVPN", "Logs", "backend.jsonl")
+		return log.SetPath(path)
 	}
 	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
 	if root == "" {
@@ -192,7 +194,11 @@ func run() {
 
 func (c *Executor) Execute(mode string) {
 	if err := initExplicitLocalLog(); err != nil {
-		fmt.Fprintln(os.Stderr, "failed to initialize local logging")
+		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to initialize local logging: %v\n", err)
+		return
+	}
+	if err := log.CaptureStderr(); err != nil {
+		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to capture backend stderr: %v\n", err)
 		return
 	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)

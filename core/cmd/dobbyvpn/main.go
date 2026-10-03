@@ -88,16 +88,9 @@ func run(args []string) int {
 }
 
 func initApplicationLogger() error {
-	path := strings.TrimSpace(os.Getenv("DOBBY_CLI_LOG_PATH"))
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(home) == "" {
-			return errors.New("user home directory is empty")
-		}
-		path = applicationLogPath(home)
+	path, err := cliLogPath()
+	if err != nil {
+		return err
 	}
 	return applicationlog.SetPath(path)
 }
@@ -448,18 +441,12 @@ func applicationLogPath(home string) string {
 }
 
 func clearApplicationLog() int {
-	home, err := os.UserHomeDir()
+	paths, err := diagnosticPaths()
+	if err == nil {
+		err = saveViewBoundary(paths)
+	}
 	if err != nil {
-		reportCLIError("local application log home lookup failed", err)
-		return exitRuntime
-	}
-	if strings.TrimSpace(home) == "" {
-		reportCLIError("local application log unavailable", errors.New("user home directory is empty"))
-		return exitRuntime
-	}
-	if err := clearLocalLogFileAtBase(applicationLogPath(home), home); err != nil {
-		fmt.Fprintf(os.Stderr, "dobby-cli: local application log clear failed: %v\n", err)
-		return exitRuntime
+		return reportFailure(fmt.Errorf("clear diagnostic view: %w", err))
 	}
 	fmt.Println("LOGS_CLEARED")
 	return exitOK
@@ -518,7 +505,7 @@ func failureError(failure *controlFailure) error {
 	return &controljson.CallError{Code: failure.Code, Message: failure.Message}
 }
 
-func readSource(source string) ([]byte, error) {
+func readSource(source string) (data []byte, resultErr error) {
 	sourceURL, isURL, err := parseSourceURL(source)
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration URL: %w", err)
@@ -527,10 +514,20 @@ func readSource(source string) ([]byte, error) {
 		return sourceURL, nil
 	}
 	cleanPath := filepath.Clean(source)
-	data, err := os.ReadFile(cleanPath)
+	file, err := os.Open(cleanPath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	const limit = 1 << 20
+	data, err = io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("cannot read configuration file: %w", err)
+	}
+	if len(data) > limit {
+		return nil, errors.New("configuration exceeds the 1 MiB size limit")
+	}
+
 	return data, nil
 }
 

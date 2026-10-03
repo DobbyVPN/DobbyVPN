@@ -18,7 +18,7 @@ import (
 )
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
-	defer app.finishCleanup(ctx, &runErr)
+	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
 	log.Debugf(Category, "[Darwin][Init] VPN initialization started")
 	defer protected_dialer.ResetDefaultRoute()
 	if app.ProtocolDevice == nil {

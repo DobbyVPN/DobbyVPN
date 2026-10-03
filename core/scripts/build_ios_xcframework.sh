@@ -14,6 +14,11 @@ case "$configuration" in
   *) echo "Unknown build configuration: $configuration" >&2; exit 2 ;;
 esac
 
+version=$(cat ../VERSION)
+commit=${SOURCE_COMMIT:-${GITHUB_SHA:-}}
+if [[ -z "$commit" ]]; then commit=$(git rev-parse HEAD); fi
+go_identity="-buildid= -X core/buildinfo.Version=$version -X core/buildinfo.Commit=$commit -X core/buildinfo.Configuration=$configuration"
+
 readonly output="DobbyVPNRuntime.xcframework"
 readonly mobile_version="v0.0.0-20260520154334-0e4426e1883d"
 
@@ -68,7 +73,7 @@ simulator_output="$workdir/simulator/DobbyVPNRuntime.xcframework"
 if [[ -z "$simulator_architecture" ]]; then
   GO111MODULE=on gomobile bind \
     -tags=static \
-    -ldflags="-buildid=" "${go_debug_flags[@]}" \
+    -ldflags="$go_identity" "${go_debug_flags[@]}" \
     -iosversion=15.6 \
     -target=ios/arm64 \
     -o "$device_output" \
@@ -81,7 +86,7 @@ if [[ -n "$simulator_architecture" ]]; then
 fi
 GO111MODULE=on gomobile bind \
   -tags='static simulator' \
-  -ldflags="-buildid=" "${go_debug_flags[@]}" \
+  -ldflags="$go_identity" "${go_debug_flags[@]}" \
   -iosversion=15.6 \
   -target="$simulator_target" \
   -o "$simulator_output" \

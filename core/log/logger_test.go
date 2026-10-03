@@ -3,6 +3,7 @@ package log
 import (
 	"bufio"
 	"context"
+	"core/diagnostics"
 	"encoding/json"
 	"errors"
 	"io"
@@ -258,5 +259,50 @@ func TestActiveLogIsNotTruncated(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "final complete retention marker") {
 		t.Fatal("final event was lost from the complete active log")
+	}
+}
+
+func TestPolicyAndBuildContextSurviveRotation(t *testing.T) {
+	initMu.Lock()
+	previousLogger, previousPolicy := lg, policyContext
+	lg, policyContext = &Logger{}, nil
+	initMu.Unlock()
+	defer func() {
+		initMu.Lock()
+		if lg.file != nil {
+			_ = lg.file.Close()
+		}
+		lg, policyContext = previousLogger, previousPolicy
+		initMu.Unlock()
+	}()
+	path := filepath.Join(t.TempDir(), "context.jsonl")
+	if err := SetPath(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPolicy("configuration-one", map[string]any{"exclude_ips": []string{"192.0.2.0/24", "edge.invalid"}}); err != nil {
+		t.Fatal(err)
+	}
+	// A sparse oversized generation exercises the production threshold without
+	// allocating a whole history or adding a production-only testing switch.
+	if err := os.Truncate(path, diagnostics.Threshold); err != nil {
+		t.Fatal(err)
+	}
+	Info("SESSION", "next retained generation", nil)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event map[string]any
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatal(err)
+	}
+	context, ok := event["policy_context"].(map[string]any)
+	if !ok || context["digest"] != "configuration-one" || !strings.Contains(string(data), "192.0.2.0/24") {
+		t.Fatalf("retained policy unavailable: %s", data)
+	}
+	for _, key := range []string{"timestamp", "process_id", "run_id", "process_sequence", "build"} {
+		if event[key] == nil {
+			t.Fatalf("missing %s: %s", key, data)
+		}
 	}
 }

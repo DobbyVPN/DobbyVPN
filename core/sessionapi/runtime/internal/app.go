@@ -84,11 +84,12 @@ func (app *App) CleanupError() error {
 	return app.cleanupErr
 }
 
-func (app *App) finishCleanup(ctx context.Context, runErr *error) {
+func (app *App) finishCleanup(ctx context.Context, runErr error) error {
 	if err := app.Close(sessionapi.CleanupContext(ctx)); err != nil {
-		*runErr = errors.Join(*runErr, err)
+		runErr = errors.Join(runErr, err)
 		log.Errorf(Category, "native cleanup pending: %v", err)
 	} else {
 		log.Infof(Category, "native cleanup_complete=true")
 	}
+	return runErr
 }

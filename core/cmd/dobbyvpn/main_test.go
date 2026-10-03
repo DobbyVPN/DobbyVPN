@@ -178,3 +178,20 @@ func TestStartUsesAcceptedSnapshotWithoutSourceAndRejectsStaleDigest(t *testing.
 		t.Fatalf("stale start methods = %v", methods)
 	}
 }
+
+func TestReadSourceLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	for _, size := range []int{1<<20 - 1, 1 << 20, 1<<20 + 1, 8 << 20} {
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", size)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		data, err := readSource(path)
+		if size <= 1<<20 {
+			if err != nil || len(data) != size {
+				t.Fatalf("size %d: len=%d err=%v", size, len(data), err)
+			}
+		} else if err == nil {
+			t.Fatalf("accepted %d bytes", size)
+		}
+	}
+}

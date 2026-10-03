@@ -20,7 +20,7 @@ import (
 var windowsRunSequence atomic.Uint64
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
-	defer app.finishCleanup(ctx, &runErr)
+	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
 	startedAt := time.Now()
 	defer protected_dialer.ResetDefaultRoute()
 	routePlan := routing.NewPlan(fmt.Sprintf("windows-%d-%d", startedAt.UnixNano(), windowsRunSequence.Add(1)))

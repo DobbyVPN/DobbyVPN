@@ -39,8 +39,12 @@ fresh, complete diagnostics with version and platform information.
 
 On Linux and other desktop platforms, use `dobby-cli logs` to view diagnostics,
 `dobby-cli logs --follow` to follow new entries, or
-`dobby-cli logs export diagnostics.txt` to save a fresh snapshot to a new file.
-Product logs and exports remain complete and unsanitized.
+`dobby-cli logs export diagnostics.gz` to save a compressed snapshot to a new file.
+`dobby-cli logs clear` hides earlier entries in the CLI view without removing
+retained diagnostics from exports. `DOBBY_CLI_LOG_PATH` selects the CLI log
+and its saved view boundary. Each backend log keeps a current and previous
+generation, rotating after 150 MB while preserving complete records. Product
+logs and exports remain unsanitized.
 
 The product Go toolchain is pinned in .go-version. The private owner Harness
 runs local checks against disposable guests. Release qualifies the packages it

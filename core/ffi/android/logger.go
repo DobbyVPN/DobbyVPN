@@ -5,6 +5,7 @@ package dobbyvpn
 import (
 	"sync"
 
+	"core/diagnostics"
 	"core/log"
 )
 
@@ -22,6 +23,9 @@ func initializeLogger(path string) string {
 	defer loggerInitMu.Unlock()
 	if loggerReady {
 		return ""
+	}
+	if err := diagnostics.CaptureStderr(path+".stderr", path); err != nil {
+		return err.Error()
 	}
 	if err := log.SetPath(path); err != nil {
 		return err.Error()

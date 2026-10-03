@@ -48,7 +48,7 @@ func ResolveBypassPolicy(ctx context.Context, entries []string) (*BypassPolicy, 
 	if err != nil {
 		return nil, err
 	}
-	log.Debugf(Category, "[Routing] Resolved attempt bypass policy: %v", summarizeCIDRs(cidrs))
+	log.Debug(Category, "attempt bypass policy resolved", map[string]any{"entry_count": len(entries), "resolved_cidr_count": len(cidrs)})
 	return &BypassPolicy{cidrs: cidrs}, nil
 }
 
@@ -106,5 +106,6 @@ func resolveHostToCIDRs(ctx context.Context, host string) ([]*net.IPNet, error) 
 	if len(result) == 0 {
 		return nil, errors.New("resolver returned no IP addresses")
 	}
+	log.Debug(Category, "bypass host resolved", map[string]any{"host": host, "cidrs": summarizeCIDRs(result)})
 	return result, nil
 }

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"core/buildinfo"
+	"core/diagnostics"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,18 +15,24 @@ import (
 	"time"
 )
 
-// Set from the repository VERSION by the desktop builder.
-var appVersion = "development"
+const windowsPlatform = "windows"
 
-func diagnosticPaths() ([]string, error) {
+func cliLogPath() (string, error) {
+	if path := os.Getenv("DOBBY_CLI_LOG_PATH"); path != "" {
+		return filepath.Abs(path)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
+	return applicationLogPath(home), nil
+}
+
+func diagnosticPaths() ([]string, error) {
 	backend := os.Getenv("DOBBY_LOG_PATH")
 	if backend == "" {
 		switch runtime.GOOS {
-		case "windows":
+		case windowsPlatform:
 			backend = filepath.Join(os.Getenv("ProgramData"), "DobbyVPN", "Logs", "backend.jsonl")
 		case "darwin":
 			backend = "/Library/Logs/DobbyVPN/backend.jsonl"
@@ -31,18 +40,27 @@ func diagnosticPaths() ([]string, error) {
 			backend = "/var/log/dobbyvpn/backend.jsonl"
 		}
 	}
-	paths := []string{backend}
-	if base, configErr := os.UserConfigDir(); configErr == nil && runtime.GOOS != "windows" {
+	paths := []string{backend, backend + ".stderr"}
+	if base, err := os.UserConfigDir(); err == nil && runtime.GOOS != windowsPlatform {
 		local := filepath.Join(base, "DobbyVPN", "Logs", "backend.jsonl")
 		if local != backend {
-			paths = append(paths, local)
+			paths = append(paths, local, local+".stderr")
 		}
 	}
-	cli := os.Getenv("DOBBY_CLI_LOG_PATH")
-	if cli == "" {
-		cli = applicationLogPath(home)
+	cli, err := cliLogPath()
+	if err != nil {
+		return nil, err
 	}
-	return append(paths, cli), nil
+	paths = append(paths, cli, cli+".stderr")
+	if home, err := os.UserHomeDir(); err == nil {
+		switch runtime.GOOS {
+		case "darwin":
+			paths = append(paths, filepath.Join(home, "Library", "Logs", "DobbyVPN", "ui_diagnostics.jsonl"))
+		case windowsPlatform:
+			paths = append(paths, filepath.Join(os.Getenv("LOCALAPPDATA"), "DobbyVPN", "Logs", "ui_diagnostics.jsonl"))
+		}
+	}
+	return paths, nil
 }
 
 func runLogs(args []string) int {
@@ -52,7 +70,7 @@ func runLogs(args []string) int {
 	follow := len(args) == 1 && args[0] == "--follow"
 	export := len(args) == 2 && args[0] == "export"
 	if len(args) > 0 && !follow && !export {
-		return usage("logs accepts --follow, export <new-file>, or clear")
+		return usage("logs accepts --follow, export <new-file.gz>, or clear")
 	}
 	paths, err := diagnosticPaths()
 	if err != nil {
@@ -73,72 +91,143 @@ func runLogs(args []string) int {
 	return exitOK
 }
 
-func exportDiagnostics(destination string, paths []string) (err error) {
-	// Never overwrite a diagnostic input or an existing user file.
-	// #nosec G703 -- The CLI operator explicitly selects this new export path; O_EXCL refuses existing files and symlinks.
-	file, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+func diagnosticHeader() string {
+	metadata, _ := json.Marshal(buildinfo.Fields())
+	return fmt.Sprintf("DobbyVPN diagnostics\nBuild: %s\nCaptured: %s\n", metadata, time.Now().UTC().Format(time.RFC3339Nano))
+}
+
+func exportDiagnostics(destination string, paths []string) error {
+	return diagnostics.ExportGzip(destination, paths, diagnosticHeader())
+}
+
+// Clear stores stable file identities and lengths; it never changes producer
+// bytes. A later process and an existing follower both observe this boundary.
+func saveViewBoundary(paths []string) (resultErr error) {
+	snapshot, err := diagnostics.Capture(paths)
+	defer func() { resultErr = errors.Join(resultErr, snapshot.Close()) }()
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, file.Close()) }()
-	return streamDiagnostics(context.Background(), file, paths, false)
+	offsets := make(map[string]int64, len(snapshot.Inputs))
+	for _, input := range snapshot.Inputs {
+		offsets[input.ID] = input.Size
+	}
+	path, err := cliLogPath()
+	if err != nil {
+		return err
+	}
+	if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
+		return mkdirErr
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".view-*")
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, removeViewTemp(file.Name())) }()
+	writeErr := json.NewEncoder(file).Encode(offsets)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path+".view")
 }
 
-type logCursor struct {
-	info   os.FileInfo
-	offset int64
-}
-
-func (cursor *logCursor) copyAvailable(output io.Writer, path string) (err error) {
-	file, err := os.Open(path)
+func removeViewTemp(path string) error {
+	err := os.Remove(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	defer func() { err = errors.Join(err, file.Close()) }()
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("diagnostic path is not a regular file: %s", path)
-	}
-	if cursor.info == nil || !os.SameFile(cursor.info, info) || info.Size() < cursor.offset {
-		cursor.offset = 0
-	}
-	cursor.info = info
-	if info.Size() == cursor.offset {
-		return nil
-	}
-	if _, writeErr := fmt.Fprintf(output, "\n--- %s ---\n", path); writeErr != nil {
-		return writeErr
-	}
-	if _, seekErr := file.Seek(cursor.offset, io.SeekStart); seekErr != nil {
-		return seekErr
-	}
-	count, err := io.CopyN(output, file, info.Size()-cursor.offset)
-	cursor.offset += count
 	return err
 }
 
-func streamDiagnostics(ctx context.Context, output io.Writer, paths []string, follow bool) error {
-	if _, err := fmt.Fprintf(output, "DobbyVPN %s\nPlatform: %s/%s\nCaptured: %s\n", appVersion, runtime.GOOS, runtime.GOARCH, time.Now().UTC().Format(time.RFC3339)); err != nil {
+func readViewBoundary() (offsets map[string]int64, resultErr error) {
+	path, err := cliLogPath()
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path + ".view")
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]int64{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	err = json.NewDecoder(io.LimitReader(file, 64*1024)).Decode(&offsets)
+	return offsets, err
+}
+
+type logView struct {
+	offsets  map[string]int64
+	retained *diagnostics.Snapshot
+}
+
+func (view *logView) close() error {
+	if view.retained == nil {
+		return nil
+	}
+	return view.retained.Close()
+}
+
+func (view *logView) copyAvailable(output io.Writer, paths []string, boundary map[string]int64) error {
+	next, captureErr := diagnostics.Capture(paths)
+	failures := []error{captureErr}
+	if view.offsets == nil {
+		view.offsets = map[string]int64{}
+	}
+	// Drain handles retained from the last poll even if their names were removed
+	// by rotation. Refresh their sizes to include writes since that poll.
+	if view.retained != nil {
+		for _, input := range view.retained.Inputs {
+			info, err := input.File.Stat()
+			if err != nil {
+				failures = append(failures, err)
+				continue
+			}
+			input.Size = info.Size()
+			failures = append(failures, view.copyInput(output, input, boundary))
+		}
+		failures = append(failures, view.retained.Close())
+	}
+	live := make(map[string]int64, len(next.Inputs))
+	for _, input := range next.Inputs {
+		failures = append(failures, view.copyInput(output, input, boundary))
+		live[input.ID] = view.offsets[input.ID]
+	}
+	view.offsets, view.retained = live, next
+	return errors.Join(failures...)
+}
+
+func (view *logView) copyInput(output io.Writer, input diagnostics.Input, boundary map[string]int64) error {
+	offset := max(view.offsets[input.ID], boundary[input.ID])
+	if offset >= input.Size {
+		view.offsets[input.ID] = offset
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "\n--- %s ---\n", input.Path); err != nil {
 		return err
 	}
-	cursors := make([]logCursor, len(paths))
+	count, err := input.CopyTo(output, offset)
+	view.offsets[input.ID] = offset + count
+	return err
+}
+
+func streamDiagnostics(ctx context.Context, output io.Writer, paths []string, follow bool) (resultErr error) {
+	if _, err := io.WriteString(output, diagnosticHeader()); err != nil {
+		return err
+	}
+	view := &logView{}
+	defer func() { resultErr = errors.Join(resultErr, view.close()) }()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var failures []error
-		for index, path := range paths {
-			if err := cursors[index].copyAvailable(output, path); err != nil {
-				failures = append(failures, err)
-			}
+		boundary, err := readViewBoundary()
+		if err != nil {
+			return fmt.Errorf("read log view boundary: %w", err)
 		}
-		if len(failures) > 0 {
-			return errors.Join(failures...)
+		if err := view.copyAvailable(output, paths, boundary); err != nil {
+			return err
 		}
 		if !follow {
 			return nil

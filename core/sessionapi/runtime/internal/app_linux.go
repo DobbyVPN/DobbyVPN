@@ -5,17 +5,16 @@ package internal
 
 import (
 	"context"
-	"core/tunnel/platform_engine"
-	"core/tunnel/protected_dialer"
-	"fmt"
-	"golang.getoutline.org/sdk/network"
-	"time"
-
-	"github.com/jackpal/gateway"
-
 	"core/log"
 	"core/routing"
 	"core/tunnel"
+	"core/tunnel/platform_engine"
+	"core/tunnel/protected_dialer"
+	"fmt"
+	"time"
+
+	"github.com/jackpal/gateway"
+	"golang.getoutline.org/sdk/network"
 )
 
 var discoverLinuxUplink = routing.DiscoverLinuxDefaultRoute
@@ -48,7 +47,7 @@ func (app *App) validateRunInputs() error {
 //
 //nolint:gocyclo // Splitting this transaction would obscure its cleanup ownership.
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
-	defer app.finishCleanup(ctx, &runErr)
+	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
 	log.Debugf(Category, "[Linux][Init] ===== VPN initialization started =====")
 	if err := app.validateRunInputs(); err != nil {
 		signalInit(initResult, err)
