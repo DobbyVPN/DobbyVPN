@@ -2,7 +2,6 @@ package sessionapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -464,14 +463,14 @@ func TestNormalizationAndResults(t *testing.T) {
 	s.mu.Lock()
 	profiles := append([]RuntimeProfile(nil), s.profiles...)
 	s.mu.Unlock()
-	if !strings.HasPrefix(string(profiles[0].NormalizedConfig), "ss://") {
+	if !strings.HasPrefix(profiles[0].Config.OutlineURL, "ss://") {
 		t.Fatalf("outline normalization = %#v", profiles[0])
 	}
-	if !json.Valid(profiles[1].NormalizedConfig) {
-		t.Fatalf("xray normalization = %q", profiles[1].NormalizedConfig)
+	if len(profiles[1].Config.Xray) == 0 {
+		t.Fatalf("xray normalization = %#v", profiles[1].Config)
 	}
-	if !strings.Contains(string(profiles[2].NormalizedConfig), "[endpoint]") {
-		t.Fatalf("trusttunnel normalization = %q", profiles[2].NormalizedConfig)
+	if profiles[2].Config.TrustTunnel["endpoint"] == nil {
+		t.Fatalf("trusttunnel normalization = %#v", profiles[2].Config)
 	}
 	if len(profiles[0].ExcludeCIDRs) != 1 || profiles[0].ExcludeCIDRs[0] != "203.0.113.0/24" {
 		t.Fatalf("routing inputs = %#v", profiles[0].ExcludeCIDRs)

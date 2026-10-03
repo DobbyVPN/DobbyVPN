@@ -7,6 +7,7 @@ package sessionapi
 import (
 	"context"
 	"core/log"
+	"core/protocol"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -173,8 +174,8 @@ type SessionRef struct {
 // RuntimeProfile is deliberately separate from ProfileSummary: it is only
 // supplied inside the trusted process to the protocol runtime.
 type RuntimeProfile struct {
-	Summary          ProfileSummary
-	NormalizedConfig []byte
+	Summary ProfileSummary
+	Config  protocol.Config
 	// ExcludeCIDRs is interpreted once by Go and remains private to the
 	// runtime. Platform shells must not parse routing inputs from the original
 	// configuration.
@@ -883,13 +884,9 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 	return true
 }
 
-func (m *Manager) finish(s *session, generation uint64, cause error) {
-	m.finishWithPolicy(s, generation, cause)
-}
-
-// finishWithPolicy runs only in the attempt worker, after its current native
+// finish runs only in the attempt worker, after its current native
 // operation returns. It drains the generation ledger before another attempt.
-func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error) {
+func (m *Manager) finish(s *session, generation uint64, cause error) {
 	s.mu.Lock()
 	if s.generation != generation || (s.state != StateProbing && s.state != StatePreparing && s.state != StateConnected && s.state != StateStopping) {
 		s.mu.Unlock()

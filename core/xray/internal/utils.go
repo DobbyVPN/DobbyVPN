@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -46,14 +45,10 @@ func XrayLogLevelName(level xrayLog.Severity) string {
 	}
 }
 
-// ExtractServerIP parses the generic VLESS JSON to find the remote server IP.
-func ExtractServerIP(configStr string, dnsCache *dnscache.Cache) (string, error) {
+// ExtractServerIP resolves the accepted configuration for this attempt.
+func ExtractServerIP(config map[string]any, dnsCache *dnscache.Cache) (string, error) {
 	if dnsCache == nil {
 		return "", errors.New("DNS cache is required")
-	}
-	var config map[string]interface{}
-	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-		return "", fmt.Errorf("failed to unmarshal xray config while extracting server IP: %w", err)
 	}
 
 	// Assuming standard Xray config structure where outbound[0] is the proxy
@@ -89,13 +84,10 @@ func firstXrayServerAddress(config map[string]interface{}) (string, bool) {
 	return address, ok
 }
 
-// ExtractLogLevel parses the generic VLESS JSON to find the log level.
+// ExtractLogLevel reads the accepted configuration.
 // In error case returns xrayLog.Severity_Unknown
-func ExtractLogLevel(configStr string) (xrayLog.Severity, error) {
-	var config map[string]interface{}
-	if err := json.Unmarshal([]byte(configStr), &config); err != nil {
-		return xrayLog.Severity_Unknown, fmt.Errorf("failed to unmarshal xray config while extracting log level: %w", err)
-	}
+func ExtractLogLevel(config map[string]any) (xrayLog.Severity, error) {
+
 	// Assuming standard Xray config structure where log[0] is the log settings
 	if log, ok := config["log"].(map[string]interface{}); ok && len(log) > 0 {
 		if loglevel, ok := log["loglevel"].(string); ok {

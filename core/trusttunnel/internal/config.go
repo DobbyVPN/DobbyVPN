@@ -6,41 +6,22 @@ import (
 	"fmt"
 	"net"
 	"time"
-
-	"github.com/BurntSushi/toml"
 )
 
-// Config represents the TOML configuration structure for trusttunnel.
-type Config struct {
-	Endpoint EndpointConfig `toml:"endpoint"`
-}
-
-// EndpointConfig represents the [endpoint] section of the TOML config.
-type EndpointConfig struct {
-	Hostname         string   `toml:"hostname"`
-	Addresses        []string `toml:"addresses"`
-	Username         string   `toml:"username"`
-	Password         string   `toml:"password"`
-	UpstreamProtocol string   `toml:"upstream_protocol"`
-	Certificate      string   `toml:"certificate,omitempty"`
-}
-
-// ExtractServerIP parses the TOML config and extracts the first server IP address
-// from the endpoint.addresses array. If the address is a domain name, it resolves
-// it to an IPv4 address. Returns an error if the config is invalid or no IPv4
-// address can be found.
-func ExtractServerIP(configStr string) (string, error) {
-	var cfg Config
-	if _, err := toml.Decode(configStr, &cfg); err != nil {
-		return "", fmt.Errorf("failed to unmarshal trusttunnel config while extracting server IP: %w", err)
+// ExtractServerIP resolves the first endpoint address at the attempt boundary.
+func ExtractServerIP(config map[string]any) (string, error) {
+	endpoint, ok := config["endpoint"].(map[string]any)
+	if !ok {
+		return "", errors.New("invalid endpoint configuration")
 	}
-
-	if len(cfg.Endpoint.Addresses) == 0 {
+	addresses, ok := endpoint["addresses"].([]any)
+	if !ok || len(addresses) == 0 {
 		return "", errors.New("no addresses found in endpoint configuration")
 	}
-
-	// Use the first address from the addresses array
-	address := cfg.Endpoint.Addresses[0]
+	address, ok := addresses[0].(string)
+	if !ok {
+		return "", errors.New("endpoint address is not a string")
+	}
 	return resolveIP(address)
 }
 

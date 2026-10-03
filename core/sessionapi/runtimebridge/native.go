@@ -32,14 +32,13 @@ func newDevice(
 	_ runtime.SocketProtector,
 	dnsCache *dnscache.Cache,
 ) (vpnprotocol.ProtocolDevice, error) {
-	config := string(profile.NormalizedConfig)
 	switch profile.Summary.Protocol {
 	case sessionapi.ProtocolOutline:
-		return outline.NewOutlineDevice(config, dnsCache)
+		return outline.NewOutlineDevice(profile.Config.OutlineURL, dnsCache)
 	case sessionapi.ProtocolXray:
-		return xray.NewXrayDevice(config, dnsCache)
+		return xray.NewXrayDevice(profile.Config.Xray, dnsCache)
 	case sessionapi.ProtocolTrustTunnel:
-		return trusttunnel.NewTrustTunnelDevice(config)
+		return trusttunnel.NewTrustTunnelDevice(profile.Config.TrustTunnel)
 	default:
 		return nil, fmt.Errorf("unsupported protocol")
 	}

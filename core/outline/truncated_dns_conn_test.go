@@ -99,9 +99,3 @@ func TestTruncatedDNSConnCloseUnblocksWaitingWrite(t *testing.T) {
 		t.Fatal("blocked Write did not exit after Close")
 	}
 }
-
-func TestForceTCPDNSForRequiredPlatform(t *testing.T) {
-	if got := shouldForceTCPDNS(); got != forceTCPDNSForPlatform {
-		t.Fatalf("plain Outline force-TCP policy = %v, platform policy = %v", got, forceTCPDNSForPlatform)
-	}
-}

@@ -122,10 +122,6 @@ public final class IOSSessionShell: NSObject {
         secrets.remove(key)
     }
 
-    internal static func decodeProviderPayload(_ payload: Data) throws -> String {
-        try IOSProviderPayload.decode(payload)
-    }
-
     private func failure(_ code: String, message: String) -> String {
         let response = VpnManagerImpl.transportFailure(code, message: message)
         return String(bytes: response, encoding: .utf8) ?? ""

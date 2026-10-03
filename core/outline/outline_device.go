@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +27,13 @@ const (
 )
 
 type OutlineDevice struct {
+	mu           sync.Mutex
+	closeMu      sync.Mutex
+	connections  map[*ownedConn]struct{}
+	workers      sync.WaitGroup
+	ctx          context.Context
+	cancel       context.CancelFunc
+	closing      bool
 	listener     net.Listener
 	proxyAddr    string
 	svrIP        net.IP
@@ -76,7 +82,9 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 		sd,
 		pd,
 	)
+	ownerContext, cancel := context.WithCancel(context.Background())
 	od := &OutlineDevice{
+		ctx: ownerContext, cancel: cancel, connections: make(map[*ownedConn]struct{}),
 		svrIP:        ip,
 		streamDialer: sd,
 		packetDialer: pd,
@@ -87,6 +95,7 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 
 	username, password := auth.GenerateRandomAuth(), auth.GenerateRandomAuth()
 	server := socks5.NewServer(
+		socks5.WithGPool(od),
 		socks5.WithCredential(socks5.StaticCredentials{username: password}),
 		socks5.WithDial(od.handleDial),
 		socks5.WithLogger(socksLogger{device: od}),
@@ -96,15 +105,16 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 
 	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
 	od.listener = listener
 	od.proxyAddr = url.UserPassword(username, password).String() + "@" + listener.Addr().String()
 
-	od.runGuarded("socks5-serve", func() {
+	_ = od.Submit(func() {
 		log.Debugf(Category, "SOCKS5 started on %s", od.proxyAddr)
-		if err := server.Serve(listener); err != nil {
+		if err := server.Serve(ownedListener{Listener: listener, owner: od}); err != nil {
 			if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
 				log.Debugf(Category, "SOCKS5 stopped on %s: closed", od.proxyAddr)
 			} else {
@@ -139,6 +149,8 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	ctx, cancel := d.dialContext(ctx)
+	defer cancel()
 
 	start := time.Now()
 	serverIP := d.serverIPString()
@@ -158,16 +170,16 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
 		}
 
-		return conn, nil
+		return d.track(conn)
 
 	case "udp":
 		// Some platform resolvers did not receive replies through otherwise
 		// healthy Outline UDP transports in qualification, while their TCP retry
 		// path was reliable. Keep the standards-compliant fallback scoped by OS.
-		if shouldForceTCPDNS() && port == 53 {
+		if forceTCPDNSForPlatform && port == 53 {
 			log.Debugf(Category, "[SOCKS5 DNS] returning truncated DNS addr=%s", addr)
 
-			return newTruncatedDNSConn(), nil
+			return d.track(newTruncatedDNSConn())
 		}
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
@@ -176,27 +188,12 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return nil, fmt.Errorf("PacketDialer failed for %s: %w", addr, err)
 		}
 
-		return conn, nil
+		return d.track(conn)
 	}
 
 	err := fmt.Errorf("unsupported network %s", network)
 	log.Errorf(Category, "[SOCKS5 ERROR] dst=%s server=%s elapsed=%s err=%v", addr, serverIP, time.Since(start), err)
 	return nil, err
-}
-
-func shouldForceTCPDNS() bool {
-	return forceTCPDNSForPlatform
-}
-
-func (d *OutlineDevice) runGuarded(name string, fn func()) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf(Category, "[OUTLINE PANIC] goroutine=%s panic=%v\n%s", name, r, string(debug.Stack()))
-			}
-		}()
-		fn()
-	}()
 }
 
 func (d *OutlineDevice) serverIPString() string {
@@ -393,17 +390,4 @@ func (d *OutlineDevice) GetProxyAddr() string {
 		return ""
 	}
 	return d.proxyAddr
-}
-
-func (d *OutlineDevice) Close() error {
-	if d == nil {
-		return errors.New("outline device is not initialized")
-	}
-	log.Debugf(Category, "SOCKS5 close requested proxy=%s", d.proxyAddr)
-	if d.listener != nil {
-		if err := d.listener.Close(); err != nil {
-			return fmt.Errorf("failed to close outline SOCKS listener: %w", err)
-		}
-	}
-	return nil
 }

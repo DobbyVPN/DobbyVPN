@@ -228,7 +228,7 @@ func (r *runtime) releaseActive(err error) {
 }
 
 func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (*lease, error) {
-	if len(profile.NormalizedConfig) == 0 {
+	if profile.Config.Empty() {
 		return nil, errors.New("runtime profile has no normalized config")
 	}
 	if err := ctx.Err(); err != nil {

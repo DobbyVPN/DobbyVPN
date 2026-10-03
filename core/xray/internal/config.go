@@ -10,6 +10,7 @@ import (
 
 	"core/dnscache"
 	"core/log"
+	"core/protocol"
 	"core/tunnel/protected_dialer"
 	xrayCommon "core/xray/common"
 
@@ -21,7 +22,7 @@ import (
 // GenerateXrayConfig overwrites user's inbounds with a local SOCKS5 inbound
 // (TCP+UDP) for use by tun2socks.
 func GenerateXrayConfig(
-	vlessConfigStr, socksListen string,
+	accepted map[string]any, socksListen string,
 	socksPort, routingTableID int,
 	uplinkIface, user, pass string,
 	dnsCache *dnscache.Cache,
@@ -30,10 +31,7 @@ func GenerateXrayConfig(
 		return nil, errors.New("DNS cache is required")
 	}
 
-	var userConfig map[string]interface{}
-	if err := json.Unmarshal([]byte(vlessConfigStr), &userConfig); err != nil {
-		return nil, fmt.Errorf("invalid user config: %w", err)
-	}
+	userConfig := protocol.CloneFields(accepted)
 
 	if socksListen == "" {
 		socksListen = "127.0.0.1"

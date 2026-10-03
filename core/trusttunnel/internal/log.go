@@ -1,12 +1,11 @@
 package internal
 
 import (
+	"fmt"
 	"sync/atomic"
 
 	log "core/log"
 	tt "trusttunnel-go/manager"
-
-	"github.com/BurntSushi/toml"
 )
 
 var logLevel atomic.Int64
@@ -33,15 +32,13 @@ func SetLogLevel(level tt.LogLevel) {
 	logLevel.Store(int64(level))
 }
 
-func ExtractLogLevel(configStr string) (tt.LogLevel, error) {
-	var cfg struct {
-		LogLevel string `toml:"loglevel"`
-	}
-	if _, err := toml.Decode(configStr, &cfg); err != nil {
-		return tt.LogInfo, err
+func ExtractLogLevel(config map[string]any) (tt.LogLevel, error) {
+	level, ok := config["loglevel"].(string)
+	if !ok && config["loglevel"] != nil {
+		return tt.LogInfo, fmt.Errorf("invalid TrustTunnel loglevel: %v", config["loglevel"])
 	}
 
-	switch cfg.LogLevel {
+	switch level {
 	case "debug":
 		return tt.LogDebug, nil
 	case "info":

@@ -20,9 +20,9 @@ import (
 
 func profile() sessionapi.RuntimeProfile {
 	return sessionapi.RuntimeProfile{
-		Summary:          sessionapi.ProfileSummary{Protocol: sessionapi.ProtocolOutline},
-		NormalizedConfig: []byte("normalized-only"),
-		ExcludeCIDRs:     []string{"203.0.113.0/24"},
+		Summary:      sessionapi.ProfileSummary{Protocol: sessionapi.ProtocolOutline},
+		Config:       protocol.Config{OutlineURL: "normalized-only"},
+		ExcludeCIDRs: []string{"203.0.113.0/24"},
 	}
 }
 
@@ -154,7 +154,7 @@ func options(record *recorded) Options {
 	return Options{
 		Inputs: fakeInputs{record: record},
 		NewDevice: func(_ context.Context, _ sessionapi.SessionRef, got sessionapi.RuntimeProfile, _ SocketProtector, _ *dnscache.Cache) (protocol.ProtocolDevice, error) {
-			if string(got.NormalizedConfig) != "normalized-only" {
+			if got.Config.OutlineURL != "normalized-only" {
 				return nil, errors.New("device did not receive normalized config")
 			}
 			record.add("device")

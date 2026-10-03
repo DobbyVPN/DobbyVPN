@@ -17,7 +17,7 @@ import (
 
 type XrayDevice struct {
 	xrayInstance *core.Instance
-	vlessConfig  string
+	config       map[string]any
 	proxyAddr    string
 	svrIP        net.IP
 	svrPort      int
@@ -26,11 +26,11 @@ type XrayDevice struct {
 	dnsCache     *dnscache.Cache
 }
 
-func NewXrayDevice(vlessConfig string, dnsCache *dnscache.Cache) (*XrayDevice, error) {
+func NewXrayDevice(config map[string]any, dnsCache *dnscache.Cache) (*XrayDevice, error) {
 	if dnsCache == nil {
 		return nil, errors.New("DNS cache is required")
 	}
-	serverIPStr, err := internal.ExtractServerIP(vlessConfig, dnsCache)
+	serverIPStr, err := internal.ExtractServerIP(config, dnsCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract server IP: %w", err)
 	}
@@ -53,7 +53,7 @@ func NewXrayDevice(vlessConfig string, dnsCache *dnscache.Cache) (*XrayDevice, e
 
 	d := &XrayDevice{
 		xrayInstance: nil,
-		vlessConfig:  vlessConfig,
+		config:       config,
 		proxyAddr:    fmt.Sprintf("%s:%s@127.0.0.1:%d", socksUser, socksPass, port),
 		svrIP:        ip.To4(),
 		svrPort:      port,
@@ -105,7 +105,7 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 		return errors.New("xray device is not initialized")
 	}
 
-	loglevel, err := internal.ExtractLogLevel(d.vlessConfig)
+	loglevel, err := internal.ExtractLogLevel(d.config)
 	if err != nil {
 		log.Debugf(common.Category, "failed to parse xray log level, using default=%s err=%v", internal.XrayLogLevelName(internal.DefaultXrayLogLevel()), err)
 		loglevel = internal.DefaultXrayLogLevel()
@@ -115,7 +115,7 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 	internal.SetupXrayLogging(loglevel)
 
-	xrayConfig, err := internal.GenerateXrayConfig(d.vlessConfig, "127.0.0.1", d.svrPort, routingTableID, uplinkIface, d.socksUser, d.socksPass, d.dnsCache)
+	xrayConfig, err := internal.GenerateXrayConfig(d.config, "127.0.0.1", d.svrPort, routingTableID, uplinkIface, d.socksUser, d.socksPass, d.dnsCache)
 	if err != nil {
 		return fmt.Errorf("failed to generate xray config: %w", err)
 	}
@@ -126,12 +126,7 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 
 	if err := d.xrayInstance.Start(); err != nil {
-		closeErr := d.xrayInstance.Close()
-		startErr := fmt.Errorf("failed to start xray: %w", err)
-		if closeErr != nil {
-			startErr = errors.Join(startErr, fmt.Errorf("failed to close xray after start failure: %w", closeErr))
-		}
-		return startErr
+		return fmt.Errorf("failed to start xray: %w", err)
 	}
 
 	return nil
@@ -157,10 +152,10 @@ func (d *XrayDevice) Close() error {
 	}
 	if d.xrayInstance != nil {
 		err := d.xrayInstance.Close()
-		d.xrayInstance = nil
 		if err != nil {
 			return fmt.Errorf("failed to close xray instance: %w", err)
 		}
+		d.xrayInstance = nil
 	}
 	return nil
 }

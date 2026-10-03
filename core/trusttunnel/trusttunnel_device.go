@@ -11,6 +11,7 @@ import (
 
 	"core/auth"
 	log "core/log"
+	"core/protocol"
 	"core/trusttunnel/internal"
 	"core/tunnel/protected_dialer"
 
@@ -19,12 +20,9 @@ import (
 
 type TrustTunnelDevice struct {
 	trusttunnelInstance *tt.TrustTunnelManager
-	config              string
+	config              map[string]any
 	proxyAddr           string
 	svrIP               net.IP
-	svrPort             int
-	socksUser           string
-	socksPass           string
 }
 
 var protectSocket = protected_dialer.ProtectSocketIntErr
@@ -37,8 +35,8 @@ func protectTrustTunnelSocket(fd int) int {
 	return 0
 }
 
-func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) {
-	serverIPStr, err := internal.ExtractServerIP(trusttunnelConfig)
+func NewTrustTunnelDevice(accepted map[string]any) (*TrustTunnelDevice, error) {
+	serverIPStr, err := internal.ExtractServerIP(accepted)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract server IP: %w", err)
 	}
@@ -61,10 +59,7 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 	socksPass := auth.GenerateRandomAuth()
 
 	// Rewrite listener.socks configuration
-	var parsedConfig map[string]interface{}
-	if _, err := toml.Decode(trusttunnelConfig, &parsedConfig); err != nil {
-		return nil, fmt.Errorf("failed to decode config for update: %w", err)
-	}
+	parsedConfig := protocol.CloneFields(accepted)
 
 	listenerIface, ok := parsedConfig["listener"]
 	if !ok {
@@ -90,20 +85,11 @@ func NewTrustTunnelDevice(trusttunnelConfig string) (*TrustTunnelDevice, error) 
 	socks["username"] = socksUser
 	socks["password"] = socksPass
 
-	buf := new(bytes.Buffer)
-	if err := toml.NewEncoder(buf).Encode(parsedConfig); err != nil {
-		return nil, fmt.Errorf("failed to re-encode config: %w", err)
-	}
-	trusttunnelConfig = buf.String()
-
 	d := &TrustTunnelDevice{
 		trusttunnelInstance: tt.NewTrustTunnelManager(),
-		config:              trusttunnelConfig,
+		config:              parsedConfig,
 		proxyAddr:           fmt.Sprintf("%s:%s@127.0.0.1:%d", socksUser, socksPass, port),
 		svrIP:               ip,
-		svrPort:             port,
-		socksUser:           socksUser,
-		socksPass:           socksPass,
 	}
 
 	d.trusttunnelInstance.SetLogCallback(internal.LogFunc)
@@ -121,10 +107,7 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 		return errors.New("trusttunnel device is not initialized")
 	}
 
-	var parsedConfig map[string]interface{}
-	if _, err := toml.Decode(d.config, &parsedConfig); err != nil {
-		return fmt.Errorf("failed to decode config for routing update: %w", err)
-	}
+	parsedConfig := d.config
 
 	routingIface, ok := parsedConfig["routing"]
 	if !ok {
@@ -147,17 +130,14 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	}
 	finalConfig := buf.String()
 
-	err := d.trusttunnelInstance.Start(finalConfig)
+	loglevel, err := internal.ExtractLogLevel(parsedConfig)
 	if err != nil {
-		d.trusttunnelInstance.Stop()
-		return fmt.Errorf("failed to start trusttunnel: %w", err)
-	}
-
-	loglevel, err := internal.ExtractLogLevel(finalConfig)
-	if err != nil {
-		log.Infof("trusttunnel", "[TrustTunnel] failed to parse log level, continuing without logs")
+		log.Warnf("trusttunnel", "[TrustTunnel] invalid log level, using info: %v", err)
 	}
 	internal.SetLogLevel(loglevel)
+	if err := d.trusttunnelInstance.Start(finalConfig); err != nil {
+		return fmt.Errorf("failed to start trusttunnel: %w", err)
+	}
 
 	return nil
 }

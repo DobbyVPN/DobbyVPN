@@ -5,12 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	protocolconfig "core/protocol"
 )
 
 // Protocol payloads remain open and are validated by their existing
@@ -130,22 +131,14 @@ func parseProfile(root configRoot, next map[string]int, protocolName string, pro
 			return RuntimeProfile{}, failure(FailureMalformedConfig, "Description must be a string")
 		}
 	}
-	var payload []byte
-	if protocol == ProtocolTrustTunnel {
-		var err error
-		payload, err = encodeProfile(block)
-		if err != nil {
-			return RuntimeProfile{}, failureWithCause(FailureMalformedConfig, "a TrustTunnel profile could not be encoded", err)
-		}
-	}
-	normalized, err := normalizeProfile(protocol, block, payload)
+	normalized, err := normalizeProfile(protocol, block)
 	if err != nil {
 		return RuntimeProfile{}, err
 	}
 	return RuntimeProfile{
-		Summary:          ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
-		NormalizedConfig: normalized,
-		ExcludeCIDRs:     append([]string(nil), root.ExcludeIPs.IPs...),
+		Summary:      ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
+		Config:       normalized,
+		ExcludeCIDRs: append([]string(nil), root.ExcludeIPs.IPs...),
 	}, nil
 }
 
@@ -201,29 +194,20 @@ func validateTrustTunnelVerification(block map[string]interface{}) error {
 	return nil
 }
 
-func encodeProfile(block map[string]interface{}) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(block); err != nil {
-		return nil, err
-	}
-	return []byte(strings.TrimSpace(buf.String()) + "\n"), nil
-}
-
-func normalizeProfile(protocol Protocol, block map[string]interface{}, raw []byte) ([]byte, error) {
-	switch protocol {
+func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Config, error) {
+	switch kind {
 	case ProtocolXray:
 		if _, ok := block["outbounds"]; !ok {
-			return nil, failure(FailureMalformedConfig, "Xray profile requires outbounds")
+			return protocolconfig.Config{}, failure(FailureMalformedConfig, "Xray profile requires outbounds")
 		}
-		data, err := json.Marshal(block)
-		return data, err
+		return protocolconfig.Config{Xray: protocolconfig.CloneFields(block)}, nil
 	case ProtocolOutline:
 		normalized, err := normalizeOutlineURL(block)
-		return []byte(normalized), err
+		return protocolconfig.Config{OutlineURL: normalized}, err
 	case ProtocolTrustTunnel:
-		return append([]byte(nil), raw...), nil
+		return protocolconfig.Config{TrustTunnel: protocolconfig.CloneFields(block)}, nil
 	default:
-		return nil, failure(FailureUnsupported, "unsupported protocol")
+		return protocolconfig.Config{}, failure(FailureUnsupported, "unsupported protocol")
 	}
 }
 
