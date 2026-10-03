@@ -402,7 +402,7 @@ printf '%s\\n' "$java_output"
 case "$java_output" in *'version "17.'*) ;; *) exit 1 ;; esac
 go_root="$$go$$"
 test "$(git -C "$go_root" rev-parse --verify HEAD^{{commit}})" = "{go_source_commit}"
-export GOROOT_BOOTSTRAP=/usr/lib/go-1.25
+export GOROOT_BOOTSTRAP=/usr/lib/go-1.27
 "$GOROOT_BOOTSTRAP/bin/go" version
 cd "$GOROOT/src"
 ./make.bash
@@ -418,7 +418,7 @@ sed -i '/^[[:space:]]*ndk[.]dir[[:space:]]*=/d' "$product_root/ui/android/local.
         "gradle": ["yes"],
         "srclibs": [f"go@go{go_version}"],
         "sudo": [
-            "apt-get install -y -t trixie-backports golang-1.25-go",
+            "apt-get install -y -t trixie-backports golang-1.27-go",
         ],
         "target": f"android-{compile_sdk}",
         "ndk": ndk,
