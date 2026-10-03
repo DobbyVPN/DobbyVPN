@@ -8,32 +8,24 @@ import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.vpn.BuildConfig
@@ -58,16 +50,27 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         current = this
         NativeGoSession.attach(this)
         controller = SessionController(this)
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     DobbyApp(controller)
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::controller.isInitialized) controller.setVisible(true)
+    }
+
+    override fun onStop() {
+        if (::controller.isInitialized) controller.setVisible(false)
+        super.onStop()
     }
 
     internal fun launchVpnConsent(permission: Intent) {
@@ -112,11 +115,14 @@ private class SessionController(private val activity: MainActivity) {
 
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadScheduledExecutor()
+    private val logWorker = Executors.newSingleThreadScheduledExecutor()
+    @Volatile private var visible = false
     @Volatile private var latest = SessionData()
     @Volatile private var pendingPermission = false
 
     init {
         worker.scheduleWithFixedDelay({ refreshSnapshot() }, 0, 500, TimeUnit.MILLISECONDS)
+        logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
     }
 
     fun sourceChanged(value: String) {
@@ -125,7 +131,7 @@ private class SessionController(private val activity: MainActivity) {
 
     fun show(screen: String) {
         state = state.copy(screen = screen)
-        if (screen == "logs") refreshLogs()
+
     }
 
     fun connectOrDisconnect() {
@@ -160,37 +166,42 @@ private class SessionController(private val activity: MainActivity) {
         state = state.copy(error = "VPN permission granted. Press Connect to continue")
     }
 
-    fun refreshLogs() {
-        worker.execute {
+    fun setVisible(value: Boolean) { visible = value }
+
+    private fun readDiagnostics(): Pair<String, String> {
+        val contents = mutableListOf<String>()
+        val errors = mutableListOf<String>()
+        NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).forEach { path ->
             try {
-                val paths = NativeVpnBridge.diagnosticPaths(activity)
-                    .lineSequence()
-                    .map(String::trim)
-                    .filter(String::isNotEmpty)
-                    .toList()
-                val contents = paths.map { path ->
-                    val file = File(path)
-                    if (!file.exists()) "" else file.readText(Charsets.UTF_8)
-                }.filter(String::isNotEmpty)
-                val text = contents.joinToString("\n")
-                val warning = if (NativeVpnBridge.nativeDiagnosticsUnavailable()) {
-                    "Some native diagnostics could not be saved. Check Android system logs."
-                } else {
-                    ""
-                }
-                main.post { state = state.copy(logs = text, logsError = warning) }
+                val file = File(path)
+                if (file.exists()) contents.add(file.readText(Charsets.UTF_8))
             } catch (failure: Exception) {
-                main.post { state = state.copy(logsError = failure.message ?: "Diagnostic files could not be read") }
+                errors.add("$path: ${failure.stackTraceToString()}")
             }
         }
+        if (NativeVpnBridge.nativeDiagnosticsUnavailable()) {
+            errors.add("Some native diagnostics could not be saved. Check Android system logs.")
+        }
+        return contents.joinToString("\n") to errors.joinToString("\n")
+    }
+
+    private fun readLogs() {
+        val (text, error) = readDiagnostics()
+        main.post { state = state.copy(logs = text, logsError = error) }
     }
 
     fun exportLogs() {
-        val content = state.logs
-        worker.execute {
-            if (content.isEmpty() || !NativeVpnBridge.exportLogs(activity, content.toByteArray(Charsets.UTF_8))) {
+        logWorker.execute {
+            val (text, error) = readDiagnostics()
+            val metadata = JSONObject().put("app_version", BuildConfig.VERSION_NAME)
+                .put("source_commit", BuildConfig.PROJECT_REPOSITORY_COMMIT)
+                .put("platform", "Android ${android.os.Build.VERSION.RELEASE}")
+                .put("captured_at", java.time.Instant.now().toString())
+                .put("collection_errors", error)
+            val content = "$metadata\n$text"
+            if (!NativeVpnBridge.exportLogs(activity, content.toByteArray(Charsets.UTF_8))) {
                 main.post { state = state.copy(logsError = "Android could not open the log share sheet") }
-            }
+            } else { main.post { state = state.copy(logsError = error) } }
         }
     }
 
@@ -203,6 +214,7 @@ private class SessionController(private val activity: MainActivity) {
 
     fun close() {
         worker.shutdownNow()
+        logWorker.shutdownNow()
     }
 
     private fun prepareAndStart(currentUI: ScreenState) {
@@ -246,7 +258,7 @@ private class SessionController(private val activity: MainActivity) {
                 else -> report("Android VPN service could not be prepared")
             }
         } catch (failure: Exception) {
-            report(commandError(failure))
+            report(commandError(failure), failure)
         }
     }
 
@@ -320,6 +332,7 @@ private class SessionController(private val activity: MainActivity) {
         } catch (failure: Exception) {
             latest = SessionData()
             val message = commandError(failure)
+            NativeVpnBridge.recordDiagnostic(activity, "ui.snapshot_failed", message, failure)
             main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
         }
     }
@@ -331,7 +344,7 @@ private class SessionController(private val activity: MainActivity) {
             response.getJSONObject("result")
             refreshSnapshot(clearBusy = true)
         } catch (failure: Exception) {
-            report(commandError(failure, fallback))
+            report(commandError(failure, fallback), failure)
         }
     }
 
@@ -346,25 +359,45 @@ private class SessionController(private val activity: MainActivity) {
     private fun commandError(failure: Exception, fallback: String = "Go backend command failed"): String =
         failure.message?.takeIf(String::isNotBlank) ?: fallback
 
-    private fun report(message: String) {
+    private fun report(message: String, failure: Throwable? = null) {
+        NativeVpnBridge.recordDiagnostic(activity, "ui.failure", message, failure)
         main.post { state = state.copy(busy = false, error = message) }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DobbyApp(controller: SessionController) {
-    val state = controller.state
-    when (state.screen) {
-        "settings" -> SettingsScreen(controller)
-        "logs" -> LogsScreen(controller)
-        else -> ConnectionScreen(controller)
+    var menu by remember { mutableStateOf(false) }
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("DobbyVPN") }, actions = {
+                TextButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = "More options" }) {
+                    Text("More")
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("About") }, onClick = { menu = false; controller.show("about") })
+                }
+            })
+        },
+    ) { padding ->
+        if (controller.state.screen == "about") {
+            AboutScreen(controller, Modifier.padding(padding))
+        } else {
+            ConnectionScreen(controller, Modifier.padding(padding).consumeWindowInsets(padding).imePadding())
+        }
     }
 }
 
 @Composable
-private fun ConnectionScreen(controller: SessionController) {
+private fun ConnectionScreen(controller: SessionController, modifier: Modifier) {
     val state = controller.state
     val session = state.session
+    val focus = LocalFocusManager.current
+    var configurationText by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.source) {
+        if (state.source.contains('\n') || state.source.trimStart().startsWith("[")) configurationText = true
+    }
     val status = when {
         session.recovering -> "Reconnecting"
         state.error.isNotEmpty() -> "Error"
@@ -376,91 +409,135 @@ private fun ConnectionScreen(controller: SessionController) {
     }
     val action = when (session.primaryAction) {
         "START" -> "Connect"
-        "STOP" -> if (session.state == "CONNECTED") "Disconnect" else "Stop"
+        "STOP" -> if (session.state == "CONNECTED") "Disconnect" else "Cancel"
         else -> if (session.state == "STOPPING") "Stopping…" else "Waiting…"
     }
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text("Dobby VPN", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text(status, modifier = Modifier.semantics { contentDescription = status }, style = MaterialTheme.typography.titleLarge)
-        if (session.activeProfile.isNotEmpty()) {
-            Text(
-                session.activeProfile,
-                modifier = Modifier.semantics { contentDescription = "Active profile" },
-            )
-        }
-        if (session.failure.isNotEmpty()) Text(session.failure)
-        if (state.error.isNotEmpty()) Text(state.error)
-        OutlinedTextField(
-            value = state.source,
-            onValueChange = controller::sourceChanged,
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Connection configuration" },
-            label = { Text("Connection configuration") },
-            placeholder = { Text("HTTPS connection URL or inline configuration") },
-            minLines = 3,
-            maxLines = 8,
-        )
-        Button(
-            onClick = controller::connectOrDisconnect,
-            enabled = !state.busy && session.primaryAction in setOf("START", "STOP"),
-            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "VPN connection action" },
-        ) {
-            Text(if (state.busy && session.primaryAction != "NONE") "Working…" else action)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = { controller.show("logs") }) { Text("Logs") }
-            OutlinedButton(
-                onClick = { controller.show("settings") },
-                modifier = Modifier.semantics { contentDescription = "Settings" },
-            ) { Text("Settings") }
+    BoxWithConstraints(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        val controlsHeight = maxHeight * 0.65f
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.heightIn(max = controlsHeight).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                OutlinedTextField(
+                    value = state.source,
+                    onValueChange = controller::sourceChanged,
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Connection configuration" },
+                    label = { Text(if (configurationText) "Configuration text" else "Subscription URL") },
+                    placeholder = { Text(if (configurationText) "Paste your configuration" else "https://…") },
+                    singleLine = !configurationText,
+                    minLines = if (configurationText) 3 else 1,
+                    maxLines = if (configurationText) 5 else 1,
+                    enabled = !state.busy,
+                    keyboardOptions = KeyboardOptions(keyboardType = if (configurationText) KeyboardType.Text else KeyboardType.Uri),
+                )
+                TextButton(onClick = { configurationText = !configurationText }) {
+                    Text(if (configurationText) "Use subscription URL" else "Use configuration text…")
+                }
+                Text(status, modifier = Modifier.semantics { contentDescription = status }, style = MaterialTheme.typography.titleMedium)
+                if (session.activeProfile.isNotEmpty()) {
+                    Text(session.activeProfile, modifier = Modifier.semantics { contentDescription = "Active profile" })
+                }
+                if (state.error.isNotEmpty() || session.failure.isNotEmpty()) {
+                    Text(
+                        when {
+                            state.error.contains("permission", ignoreCase = true) -> state.error
+                            session.sessionId.isEmpty() -> "VPN service is unavailable. See logs for details."
+                            else -> "Check your subscription URL or configuration. See logs for details."
+                        },
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Button(
+                    onClick = { focus.clearFocus(); controller.connectOrDisconnect() },
+                    enabled = !state.busy && session.primaryAction in setOf("START", "STOP"),
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "VPN connection action" },
+                ) {
+                    if (state.busy || session.state in setOf("PROBING", "PREPARING", "STOPPING")) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(action)
+                }
+            }
+            LogsPane(controller, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun SettingsScreen(controller: SessionController) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium)
-        Text("Version: ${BuildConfig.VERSION_NAME}")
-        Text(
-            "Source commit: ${BuildConfig.PROJECT_REPOSITORY_COMMIT}",
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.semantics { contentDescription = "Source commit" },
-        )
-        OutlinedButton(onClick = controller::openSourceCommit) { Text("Source code") }
-        Spacer(Modifier.height(8.dp))
+private fun AboutScreen(controller: SessionController, modifier: Modifier) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("About DobbyVPN", style = MaterialTheme.typography.headlineMedium)
+        SelectionContainer {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Version: ${BuildConfig.VERSION_NAME}")
+                Text("Source commit: ${BuildConfig.PROJECT_REPOSITORY_COMMIT}", modifier = Modifier.semantics { contentDescription = "Source commit" })
+            }
+        }
+        TextButton(onClick = controller::openSourceCommit) { Text("Source code") }
         Button(onClick = { controller.show("connection") }) { Text("Back") }
     }
 }
 
 @Composable
-private fun LogsScreen(controller: SessionController) {
+private fun LogsPane(controller: SessionController, modifier: Modifier) {
     val state = controller.state
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Logs", style = MaterialTheme.typography.headlineMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = controller::refreshLogs) { Text("Refresh") }
-            Button(onClick = controller::exportLogs, enabled = state.logs.isNotEmpty()) { Text("Export logs") }
-            OutlinedButton(onClick = { controller.show("connection") }) { Text("Back") }
+    var jump by remember { mutableIntStateOf(0) }
+    val color = MaterialTheme.colorScheme.onSurface.toArgb()
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Logs", modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
+            TextButton(onClick = { jump++ }) { Text("Jump to latest") }
+            TextButton(onClick = controller::exportLogs) { Text("Share logs") }
         }
-        if (state.logsError.isNotEmpty()) Text(state.logsError)
-        Text(
-            state.logs.ifEmpty { "No logs are available yet" },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .semantics { contentDescription = "Connection logs" },
-            style = MaterialTheme.typography.bodySmall,
+        if (state.logsError.isNotEmpty()) Text(state.logsError, color = MaterialTheme.colorScheme.error)
+        AndroidView(
+            factory = { LiveLogView(it) },
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            update = { it.update(state.logs, jump, color) },
         )
+    }
+}
+
+private class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
+    private val content = android.widget.TextView(context).apply {
+        textSize = 12f
+        typeface = android.graphics.Typeface.MONOSPACE
+        setTextIsSelectable(true)
+        contentDescription = "Connection logs"
+    }
+    private var following = true
+    private var lastJump = 0
+    private var rendered = ""
+
+    init {
+        isFillViewport = true
+        addView(content)
+    }
+
+    override fun onInterceptTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) following = false
+        return super.onInterceptTouchEvent(event)
+    }
+
+    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
+        val handled = super.onTouchEvent(event)
+        if (event.actionMasked == android.view.MotionEvent.ACTION_UP) {
+            post { following = !canScrollVertically(1) }
+        }
+        return handled
+    }
+
+    fun update(text: String, jump: Int, color: Int) {
+        content.setTextColor(color)
+        if (jump != lastJump) { following = true; lastJump = jump }
+        if (rendered != text) {
+            val offset = scrollY
+            if (text.startsWith(rendered)) content.append(text.substring(rendered.length)) else content.text = text
+            rendered = text
+            post { if (following) fullScroll(FOCUS_DOWN) else scrollTo(0, offset) }
+        } else if (following) { post { fullScroll(FOCUS_DOWN) } }
     }
 }

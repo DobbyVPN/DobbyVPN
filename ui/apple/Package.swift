@@ -20,6 +20,11 @@ let package = Package(
             name: "DobbyNativeUI",
             path: "shared/ui"
         ),
+        .testTarget(
+            name: "DobbyNativeUITests",
+            dependencies: ["DobbyNativeUI"],
+            path: "shared/tests"
+        ),
         .executableTarget(
             name: "DobbyVPNMacApp",
             dependencies: ["DobbyNativeUI"],

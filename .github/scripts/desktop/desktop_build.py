@@ -916,7 +916,7 @@ def build_cli(target_platform: str, go_executable: Path, arch: str | None = None
     env = os.environ.copy()
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
     configure_macos_deployment_target(target_platform, env)
-    ldflags = "-buildid="
+    ldflags = f"-buildid= -X main.appVersion={read_version()}"
     run(
         [str(go_executable), "build", "-trimpath", f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
         cwd=GO_MODULE_DIR,

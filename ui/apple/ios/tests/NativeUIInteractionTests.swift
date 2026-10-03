@@ -8,16 +8,16 @@ final class NativeUIInteractionTests: XCTestCase {
         app.launch()
     }
 
-    func testNativeConnectionSettingsAndLogs() throws {
-        let configuration = app.textViews["Connection configuration"]
+    func testNativeConnectionAboutAndLogs() throws {
+        let configuration = app.textFields["Connection configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         attachScreenshot("startup")
 
         configuration.tap()
         configuration.typeText("invalidprofile")
         dismissConfigurationKeyboard()
-        tapTab("Settings")
-        tapTab("Connection")
+        openAbout()
+        app.buttons["Done"].tap()
         XCTAssertEqual(configuration.value as? String, "invalidprofile")
         app.buttons["VPN connection action"].tap()
         XCTAssertTrue(app.staticTexts["Error"].waitForExistence(timeout: 30))
@@ -33,25 +33,23 @@ final class NativeUIInteractionTests: XCTestCase {
         }
         dismissConfigurationKeyboard()
 
-        let settingsTab = app.tabBars.buttons["Settings"]
         let version = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Version:")).firstMatch
-        tapTab("Settings")
-        if !version.waitForExistence(timeout: 3) && !settingsTab.isSelected {
-            tapTab("Settings")
-        }
+        openAbout()
         XCTAssertTrue(version.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Source commit:")).firstMatch
-            .exists)
-
-        tapTab("Connection")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Source commit:")).firstMatch.exists)
+        app.buttons["Done"].tap()
         XCTAssertEqual(configuration.value as? String, editedConfiguration)
-        tapTab("Logs")
-        XCTAssertTrue(app.staticTexts["Logs"].waitForExistence(timeout: 10))
-        app.buttons["Refresh"].tap()
+        XCTAssertTrue(app.staticTexts["Logs"].exists)
+        XCTAssertTrue(app.buttons["Share logs"].exists)
+        app.buttons["Use configuration text…"].tap()
+        XCTAssertTrue(app.textViews["Connection configuration"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.textViews["Connection configuration"].value as? String, editedConfiguration)
+        app.buttons["Use subscription URL"].tap()
+        XCTAssertEqual(configuration.value as? String, editedConfiguration)
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.textViews["Connection configuration"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["VPN connection action"].exists)
         attachScreenshot("reopened")
     }
@@ -64,18 +62,11 @@ final class NativeUIInteractionTests: XCTestCase {
         )
     }
 
-    private func tapTab(_ name: String) {
-        let tab = app.tabBars.buttons[name]
-        let hittable = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isHittable == true"),
-            object: tab
-        )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [hittable], timeout: 10),
-            .completed,
-            "The \(name) tab should be hittable before it is tapped."
-        )
-        tab.tap()
+    private func openAbout() {
+        let button = app.buttons["About"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        button.tap()
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
     }
 
     private func attachScreenshot(_ name: String) {

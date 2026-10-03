@@ -362,9 +362,9 @@ class InformationRetentionTests(unittest.TestCase):
             controller.configure.return_value = {"input_verified": True}
             controller.connect.return_value = {"status": "Connected"}
             controller.disconnect.return_value = {"status": "Disconnected"}
-            controller.settings.side_effect = lambda: (
-                controller.capture("settings"),
-                {"settings_version": True, "settings_source_commit": True},
+            controller.about.side_effect = lambda: (
+                controller.capture("about"),
+                {"about_version": True, "about_source_commit": True},
             )[1]
             controller.close.return_value = {"closed": True}
             controller.reopen.side_effect = lambda: (
@@ -391,10 +391,10 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertTrue(result["complete"])
             milestones = [call.args[0] for call in controller.capture.call_args_list]
             self.assertNotIn("closed", milestones)
-            self.assertEqual(milestones.count("settings"), 1)
+            self.assertEqual(milestones.count("about"), 1)
             self.assertTrue({
                 "startup", "configured", "connected", "disconnected", "reconnected",
-                "settings", "reopened", "process-recovered",
+                "about", "reopened", "process-recovered",
             }.issubset(milestones))
 
     def test_simulator_second_timeout_streams_reach_primary_failure(self) -> None:

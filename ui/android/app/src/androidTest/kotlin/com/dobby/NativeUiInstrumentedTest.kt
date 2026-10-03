@@ -104,9 +104,8 @@ class NativeUiInstrumentedTest {
 
         // Resolve the app-owned diagnostic paths so the controller can
         // collect the native JSONL file after instrumentation completes.
-        tapAndWaitForVisible("Logs", "Refresh")
+        requireObject("Share logs")
         waitForTextContaining("startup.diagnostic_store_ready")
-        tapStable("Back")
         waitForOneOf(arrayOf("Disconnected"), 10_000)
 
         tapStable("Connection configuration")
@@ -120,12 +119,13 @@ class NativeUiInstrumentedTest {
         // Navigate only after typing so a real control transition proves the
         // Entry focus/IME teardown completed and the entered source survives
         // an in-app screen change before Connect is exercised.
-        tapAndWaitForVisible("Settings", "Back")
+        tapStable("More options")
+        tapAndWaitForVisible("About", "Back")
         tapStable("Back")
         waitForOneOf(arrayOf("Disconnected"), 30_000)
 
         // Repeat the UI-only lifecycle that previously exposed an intermittent
-        // Settings lookup timeout. The source is deliberately invalid text, so
+        // About lookup timeout. The source is deliberately invalid text, so
         // these cycles exercise editor and Activity state without starting a
         // VPN connection or requiring a live profile.
         for (iteration in 1..20) {
@@ -140,8 +140,9 @@ class NativeUiInstrumentedTest {
                 dismissNativeInputAfterTextEntry()
                 waitForConfigurationText(expectedSource, 10_000)
 
-                phase = "settings"
-                tapAndWaitForVisible("Settings", "Back")
+                phase = "about"
+                tapStable("More options")
+                tapAndWaitForVisible("About", "Back")
                 phase = "back"
                 tapStable("Back")
                 waitForOneOf(arrayOf("Disconnected"), 10_000)
@@ -156,7 +157,7 @@ class NativeUiInstrumentedTest {
                 waitForConfigurationText(expectedSource, 10_000)
             } catch (failure: Throwable) {
                 throw AssertionError(
-                    "ANDROID_SETTINGS_ROUND_TRIP_FAILED iteration=$iteration " +
+                    "ANDROID_ABOUT_ROUND_TRIP_FAILED iteration=$iteration " +
                         "phase=$phase expected_source=$expectedSource",
                     failure,
                 )

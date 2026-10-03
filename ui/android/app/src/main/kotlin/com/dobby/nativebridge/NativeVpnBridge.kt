@@ -313,11 +313,11 @@ object NativeVpnBridge {
     private fun diagnosticsDirectory(context: Context): File =
         File(context.applicationContext.filesDir, DIAGNOSTIC_DIRECTORY).also { it.mkdirs() }
 
-    private fun recordDiagnostic(context: Context, event: String, message: String) {
+    internal fun recordDiagnostic(context: Context, event: String, message: String) {
         recordDiagnostic(context, event, message, null)
     }
 
-    private fun recordDiagnostic(context: Context, event: String, message: String, failure: Throwable?) {
+    internal fun recordDiagnostic(context: Context, event: String, message: String, failure: Throwable?) {
         val record = JSONObject()
             .put("schema", "dobby.log/v1")
             .put("timestamp", isoTimestamp())

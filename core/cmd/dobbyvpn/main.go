@@ -70,10 +70,7 @@ func run(args []string) int {
 		return exitOK
 	}
 	if args[0] == "logs" {
-		if len(args) != 2 || args[1] != "clear" {
-			return usage("logs accepts only clear")
-		}
-		return clearApplicationLog()
+		return runLogs(args[1:])
 	}
 	if err := initApplicationLogger(); err != nil {
 		fmt.Fprintf(os.Stderr, "dobby-cli: application logging unavailable errorType=%T error=%v\n", err, err)
@@ -641,5 +638,5 @@ func usage(message string) int {
 }
 
 func printHelp() {
-	fmt.Println("dobby-cli configure <file-or-https-url> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs clear | external-ip")
+	fmt.Println("dobby-cli configure <file-or-https-url> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs [--follow] | logs export <new-file> | logs clear | external-ip")
 }

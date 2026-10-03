@@ -227,6 +227,8 @@ class NativeUIController:
         return {"status": status, "labels": labels, "reconnecting_seen": self.reconnecting_seen}
 
     def configure(self) -> dict:
+        if "Use configuration text…" in self.snapshot()["labels"]:
+            self._click("Use configuration text…")
         result = self._call("type", source=str(self.profile))
         if result.get("ready") is not True:
             raise NativeUISmokeError("configuration input is unavailable")
@@ -262,21 +264,21 @@ class NativeUIController:
         self.configure()
         return self.connect()
 
-    def settings(self) -> dict:
-        self._click("Settings")
+    def about(self) -> dict:
+        self._click("About")
         def metadata():
             labels = self.snapshot()["labels"]
             if self.platform == "macos":
-                return all(name in labels for name in ("Settings version metadata", "Settings source commit metadata"))
+                return all(name in labels for name in ("About version metadata", "About source commit metadata"))
             return all(any(label.startswith(prefix) for label in labels) for prefix in ("Version:", "Source commit:"))
-        self._wait(metadata, "Settings metadata unavailable")
-        self.capture("settings")
-        self._click("Connection")
+        self._wait(metadata, "About metadata unavailable")
+        self.capture("about")
+        self._click("Done")
         self._wait(
             lambda: "Connection configuration" in self.snapshot()["labels"],
-            "native UI did not return to its connection page after Settings",
+            "native UI did not return to its connection page after About",
         )
-        return {"settings_version": True, "settings_source_commit": True}
+        return {"about_version": True, "about_source_commit": True}
 
     def capture(self, milestone: str) -> dict:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", milestone):

@@ -675,6 +675,9 @@ public final class NativeUiHostedProfileTest {
         foregroundActivity = ensureForegroundActivity();
         markProgress("configure", "surface", "completed");
         markProgress("configure", "configuration-control", "started");
+        if (findUiObject("Use configuration text…") != null) {
+            tapUiControl("Use configuration text…", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+        }
         tapUiControl("Connection configuration",
                 remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         UiObject2 input = waitForFocusedNativeInput(
@@ -697,7 +700,8 @@ public final class NativeUiHostedProfileTest {
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
 
         markProgress("configure", "rendered-navigation", "started");
-        tapUiControl("Settings", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+        tapUiControl("More options", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+        tapUiControl("About", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         waitForUiControl("Back", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         tapUiControl("Back", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
@@ -1040,7 +1044,7 @@ public final class NativeUiHostedProfileTest {
             long startedAt,
             UiLookupCounters counters,
             String lastBounds) {
-        String safeLabel = "Settings".equals(label)
+        String safeLabel = "About".equals(label)
                 || "Back".equals(label)
                 || "Connection configuration".equals(label)
                 || CONNECTION_ACTION_LABEL.equals(label)
@@ -1467,7 +1471,7 @@ public final class NativeUiHostedProfileTest {
         for (String resource : new String[]{
                 "android:id/button1",
                 "com.android.vpndialogs:id/button1",
-                "com.android.settings:id/button1",
+                "com.android.about:id/button1",
                 "com.android.systemui:id/button1"}) {
             androidx.test.uiautomator.UiObject2 button = device.findObject(By.res(resource));
             if (button != null && button.isEnabled()) {

@@ -8,6 +8,8 @@ using Windows.ApplicationModel.DataTransfer;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.Windows.Storage.Pickers;
 
 namespace DobbyVPN.Windows;
 
@@ -27,6 +29,13 @@ public sealed partial class MainWindow : Window
     private string? _acceptedInThisWindow;
     private string? _renderedSource;
     private bool _sourceInitialized;
+    private bool _configurationText;
+    private bool _followingLogs = true;
+    private bool _updatingLogs;
+    private ScrollViewer? _logScroll;
+    private readonly string _version;
+    private readonly string _commit;
+    private readonly List<string> _diagnosticErrors = new();
 
     public MainWindow()
     {
@@ -34,10 +43,10 @@ public sealed partial class MainWindow : Window
         SetConnectionAction("Connect");
         ConnectionButton.IsEnabled = false;
         var assembly = Assembly.GetExecutingAssembly();
-        VersionText.Text = $"Version: {assembly.GetName().Version?.ToString(3) ?? "Unknown"}";
+        _version = assembly.GetName().Version?.ToString(3) ?? "Unknown";
         var commit = assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
             .FirstOrDefault(item => item.Key == "DobbySourceCommit")?.Value;
-        CommitText.Text = $"Source commit: {commit ?? "N/A"}";
+        _commit = commit ?? "N/A";
         SourceEditor.TextChanged += (_, _) =>
         {
             if (!_updatingSource)
@@ -61,7 +70,10 @@ public sealed partial class MainWindow : Window
         try
         {
             while (await _pollTimer.WaitForNextTickAsync(cancellationToken))
+            {
                 await RefreshSnapshotAsync();
+                await RefreshLogsAsync();
+            }
         }
         catch (OperationCanceledException) { }
     }
@@ -87,17 +99,21 @@ public sealed partial class MainWindow : Window
             SetConnectionAction(result.PrimaryAction switch
             {
                 "START" => "Connect",
-                "STOP" => result.State == "CONNECTED" ? "Disconnect" : "Stop",
+                "STOP" => result.State == "CONNECTED" ? "Disconnect" : "Cancel",
                 _ => result.State == "STOPPING" ? "Stopping…" : "Waiting…"
             });
             ConnectionButton.IsEnabled = !_busy && (result.PrimaryAction is "START" or "STOP");
             SourceEditor.IsEnabled = !_busy;
+            var progressing = _busy || result.State is "PROBING" or "PREPARING" or "STOPPING";
+            ConnectionProgress.IsActive = progressing;
+            ConnectionProgress.Visibility = progressing ? Visibility.Visible : Visibility.Collapsed;
             ProfileText.Text = result.ActiveProfile is null
                 ? ""
                 : string.Join(" · ", new[] { result.ActiveProfile.Protocol, result.ActiveProfile.Description }.Where(value => !string.IsNullOrWhiteSpace(value)));
             FailureText.Text = result.LastFailure is null
                 ? ""
-                : $"{result.LastFailure.Message} ({result.LastFailure.Code})";
+                : "Connection failed. See logs for details.";
+            if (result.LastFailure is not null) RecordError($"{result.LastFailure.Message} ({result.LastFailure.Code})");
             if (!_sourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
                 (!_sourceInitialized || string.Equals(NormalizeSource(SourceEditor.Text), _renderedSource, StringComparison.Ordinal)))
             {
@@ -115,13 +131,13 @@ public sealed partial class MainWindow : Window
                 _renderedSource = sourceToDisplay;
                 _sourceInitialized = true;
             }
-            if (!string.IsNullOrEmpty(result.SourceError)) ErrorText.Text = result.SourceError;
+            if (!string.IsNullOrEmpty(result.SourceError)) ShowError(result.SourceError, "Check the subscription URL or configuration. See logs for details.");
             else if (recoveringFromSnapshotError) ErrorText.Text = string.Empty;
         }
         catch (Exception error)
         {
             _snapshot = null;
-            ErrorText.Text = error.Message;
+            ShowError(error.ToString(), _snapshot is null ? "VPN service is unavailable. See logs for details." : "Could not complete the request. Check your configuration and logs.");
             StatusText.Text = "Error";
             AutomationProperties.SetAutomationId(StatusText, StatusText.Text);
             SetConnectionAction("Connect");
@@ -183,7 +199,7 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error)
         {
-            ErrorText.Text = error.Message;
+            ShowError(error.ToString(), _snapshot is null ? "VPN service is unavailable. See logs for details." : "Could not complete the request. Check your configuration and logs.");
         }
         finally
         {
@@ -223,7 +239,11 @@ public sealed partial class MainWindow : Window
     private void SetSourceText(string value)
     {
         _updatingSource = true;
-        try { SourceEditor.Text = value; }
+        try
+        {
+            if (value.Contains('\n') || value.TrimStart().StartsWith('[')) SetSourceMode(true);
+            SourceEditor.Text = value;
+        }
         finally { _updatingSource = false; }
     }
 
@@ -244,31 +264,133 @@ public sealed partial class MainWindow : Window
     private static string NormalizeSource(string value) =>
         value.Replace("\r\n", "\n").Replace("\r", "\n");
 
-    private async void Pages_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    private void SetSourceMode(bool configurationText)
     {
-        if (Pages.SelectedIndex == 1) await RefreshLogsAsync();
+        _configurationText = configurationText;
+        SourceEditor.Header = configurationText ? "Configuration text" : "Subscription URL";
+        SourceEditor.AcceptsReturn = configurationText;
+        SourceEditor.TextWrapping = configurationText ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        SourceEditor.Height = configurationText ? 140 : double.NaN;
+        SourceModeButton.Content = configurationText ? "Use subscription URL" : "Use configuration text…";
+        AutomationProperties.SetName(SourceEditor, configurationText ? "Configuration text" : "Subscription URL");
     }
 
-    private async void RefreshLogs_Click(object sender, RoutedEventArgs e) => await RefreshLogsAsync();
+    private void SourceMode_Click(object sender, RoutedEventArgs e) => SetSourceMode(!_configurationText);
+
+    private async void About_Click(object sender, RoutedEventArgs e)
+    {
+        var details = new StackPanel { Spacing = 12 };
+        details.Children.Add(new TextBlock { Text = $"Version: {_version}", IsTextSelectionEnabled = true });
+        details.Children.Add(new TextBlock { Text = $"Source commit: {_commit}", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
+        if (_commit.Length == 40)
+            details.Children.Add(new HyperlinkButton { Content = "Source code", NavigateUri = new Uri($"https://github.com/DobbyVPN/DobbyVPN/tree/{_commit}") });
+        await new ContentDialog { Title = "About DobbyVPN", Content = details, CloseButtonText = "Done", XamlRoot = Root.XamlRoot }.ShowAsync();
+    }
+
+    private void RecordError(string message)
+    {
+        if (_diagnosticErrors.LastOrDefault() != message) _diagnosticErrors.Add(message);
+    }
+
+    private void ShowError(string details, string message)
+    {
+        RecordError(details);
+        ErrorText.Text = message;
+    }
+
+    private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match) return match;
+            if (FindChild<T>(child) is T nested) return nested;
+        }
+        return null;
+    }
+
+    private void LogsText_Loaded(object sender, RoutedEventArgs e)
+    {
+        _logScroll = FindChild<ScrollViewer>(LogsText);
+        if (_logScroll is not null)
+            _logScroll.ViewChanged += (_, _) =>
+            {
+                if (!_updatingLogs) _followingLogs = _logScroll.VerticalOffset >= _logScroll.ScrollableHeight - 4;
+            };
+        _ = RefreshLogsAsync();
+    }
+
+    private void JumpToLatest_Click(object sender, RoutedEventArgs e)
+    {
+        _followingLogs = true;
+        _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
+    }
+
+    private async Task<string> ReadDiagnosticsAsync()
+    {
+        // Allow the backend to append while a complete, fresh snapshot is read.
+        var text = "";
+        try
+        {
+            using var stream = new FileStream(_logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, true);
+            using var reader = new StreamReader(stream);
+            text = await reader.ReadToEndAsync();
+        }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
+        return text + (_diagnosticErrors.Count == 0 ? "" : "\nUI diagnostics\n" + string.Join("\n", _diagnosticErrors));
+    }
 
     private async Task RefreshLogsAsync()
     {
         try
         {
-            LogsText.Text = File.Exists(_logPath) ? await File.ReadAllTextAsync(_logPath) : "No logs are available.";
+            var text = await ReadDiagnosticsAsync();
+            if (text != LogsText.Text)
+            {
+                var offset = _logScroll?.VerticalOffset ?? 0;
+                var selection = LogsText.SelectionStart;
+                var length = LogsText.SelectionLength;
+                _updatingLogs = true;
+                LogsText.Text = text;
+                LogsText.Select(Math.Min(selection, text.Length), Math.Min(length, Math.Max(0, text.Length - selection)));
+                LogsText.UpdateLayout();
+                _logScroll?.ChangeView(null, _followingLogs ? _logScroll.ScrollableHeight : offset, null, true);
+                _updatingLogs = false;
+            }
             LogsErrorText.Text = "";
         }
         catch (Exception error)
         {
-            LogsErrorText.Text = $"{_logPath}: {error.Message}";
+            RecordError(error.ToString());
+            LogsErrorText.Text = "Diagnostic files could not be read. " + error.Message;
         }
     }
 
-    private void CopyLogs_Click(object sender, RoutedEventArgs e)
+    private async Task<string> ExportDiagnosticsAsync() =>
+        $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n" + await ReadDiagnosticsAsync();
+
+    private async void CopyLogs_Click(object sender, RoutedEventArgs e)
     {
-        var data = new DataPackage();
-        data.SetText(LogsText.Text);
-        Clipboard.SetContent(data);
+        try
+        {
+            var data = new DataPackage();
+            data.SetText(await ExportDiagnosticsAsync());
+            Clipboard.SetContent(data);
+        }
+        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+    }
+
+    private async void SaveLogs_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileSavePicker(AppWindow.Id) { SuggestedFileName = "DobbyVPN-logs" };
+            picker.FileTypeChoices.Add("Text file", new List<string> { ".txt" });
+            var file = await picker.PickSaveFileAsync();
+            if (file is not null) await File.WriteAllTextAsync(file.Path, await ExportDiagnosticsAsync());
+        }
+        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
     }
 
     private sealed class Snapshot

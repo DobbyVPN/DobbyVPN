@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct DobbyVPNMacApp: App {
+    @State private var showingAbout = false
     @StateObject private var model: DobbySessionViewModel
 
     init() {
@@ -12,6 +13,12 @@ struct DobbyVPNMacApp: App {
     var body: some Scene {
         WindowGroup {
             DobbyRootView(model: model)
+                .sheet(isPresented: $showingAbout) { DobbyAboutView(model: model) }
+        }
+        .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About DobbyVPN") { showingAbout = true }
+            }
         }
     }
 }

@@ -70,8 +70,8 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "disconnect_clean",
     "reconnect_native",
     "reconnect_completed",
-    "settings_version",
-    "settings_source_commit",
+    "about_version",
+    "about_source_commit",
     "close_window",
     "reopen_connected",
     "process_loss_verified",
@@ -389,12 +389,12 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         checks["reconnect_completed"] = True
         _record_native_observations(base, checks, args.timeout, prefix="reconnect")
 
-        settings = _native_ui_action(
-            ui, "settings", "settings-window", request_timeout,
-            ui.settings,
+        about = _native_ui_action(
+            ui, "about", "about-window", request_timeout,
+            ui.about,
         )
-        checks["settings_version"] = settings.get("settings_version") is True
-        checks["settings_source_commit"] = settings.get("settings_source_commit") is True
+        checks["about_version"] = about.get("about_version") is True
+        checks["about_source_commit"] = about.get("about_source_commit") is True
 
         _native_ui_action(
             ui, "close-window", "close-window", request_timeout,
