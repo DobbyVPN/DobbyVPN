@@ -15,9 +15,6 @@ namespace DobbyVPN.Windows;
 public sealed partial class MainWindow : Window
 {
     private const string PipeName = "DobbyVPN.Control";
-    private readonly string _logPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "DobbyVPN", "Logs", "backend.jsonl");
     private readonly PeriodicTimer _pollTimer = new(TimeSpan.FromMilliseconds(750));
     private readonly CancellationTokenSource _shutdown = new();
     private Snapshot? _snapshot;
@@ -34,15 +31,12 @@ public sealed partial class MainWindow : Window
     private ScrollViewer? _logScroll;
     private readonly string _version;
     private readonly string _commit;
-    private readonly NativeDiagnostics _diagnostics;
+    private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
     private bool _exportingLogs;
 
     public MainWindow()
     {
         InitializeComponent();
-        _diagnostics = new NativeDiagnostics(_logPath, Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DobbyVPN", "Logs", "ui_diagnostics.jsonl"));
         foreach (var details in new[] { ProfileText, FailureText, ErrorText, LogsErrorText })
         {
             details.Visibility = Visibility.Collapsed;
