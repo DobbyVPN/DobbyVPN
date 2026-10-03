@@ -193,7 +193,7 @@ public struct DobbyRootView: View {
                 .accessibilityLabel("Share logs")
             }
             if !model.logsError.isEmpty {
-                Text("Some diagnostics could not be read. \(model.logsError)")
+                Text("Some diagnostics could not be read or shared. Details are included in the logs.")
                     .font(.caption).foregroundStyle(.red)
             }
             Text("Recent logs. Shared diagnostics include the complete files.")

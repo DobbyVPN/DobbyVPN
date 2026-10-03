@@ -340,6 +340,7 @@ public sealed partial class MainWindow : Window
         }
         catch (FileNotFoundException) { }
         catch (DirectoryNotFoundException) { }
+        catch (Exception error) { RecordError(error.ToString()); }
         return text + (_diagnosticErrors.Count == 0 ? "" : "\nUI diagnostics\n" + string.Join("\n", _diagnosticErrors));
     }
 
@@ -367,7 +368,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             RecordError(error.ToString());
-            LogsErrorText.Text = "Diagnostic files could not be read. " + error.Message;
+            LogsErrorText.Text = "Diagnostics could not be displayed. Details are included in saved logs.";
         }
     }
 
@@ -382,7 +383,7 @@ public sealed partial class MainWindow : Window
             data.SetText(await ExportDiagnosticsAsync());
             Clipboard.SetContent(data);
         }
-        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be copied. Try Save logs."; }
     }
 
     private async void SaveLogs_Click(object sender, RoutedEventArgs e)
@@ -394,7 +395,7 @@ public sealed partial class MainWindow : Window
             var file = await picker.PickSaveFileAsync();
             if (file is not null) await File.WriteAllTextAsync(file.Path, await ExportDiagnosticsAsync());
         }
-        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be saved. Try another location."; }
     }
 
     private sealed class Snapshot

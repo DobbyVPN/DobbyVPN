@@ -502,7 +502,9 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
             TextButton(onClick = { jump++ }) { Text("Jump to latest") }
             TextButton(onClick = controller::exportLogs) { Text("Share logs") }
         }
-        if (state.logsError.isNotEmpty()) Text(state.logsError, color = MaterialTheme.colorScheme.error)
+        if (state.logsError.isNotEmpty()) {
+            Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
+        }
         Text("Recent logs. Shared diagnostics include the complete files.", style = MaterialTheme.typography.labelSmall)
         AndroidView(
             factory = { LiveLogView(it) },
