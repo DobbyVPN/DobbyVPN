@@ -35,7 +35,9 @@ func diagnosticPreview(paths: [URL]) -> (text: String, error: String) {
     var issues: [String] = []
     for url in paths {
         let file: FileHandle
-        do { file = try FileHandle(forReadingFrom: url) } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+        do { file = try FileHandle(forReadingFrom: url) } catch let error as CocoaError where
+            (error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile) &&
+            !FileManager.default.fileExists(atPath: url.path) {
             continue
         } catch { issues.append("\(url.path): \(String(reflecting: error))"); continue }
         do {
@@ -90,7 +92,9 @@ func exportDiagnostics(paths: [URL], to url: URL, header: String) throws -> Stri
 private func copyDiagnostic(_ path: URL, to output: FileHandle) throws -> [String] {
     var issues: [String] = []
     let input: FileHandle
-    do { input = try FileHandle(forReadingFrom: path) } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+    do { input = try FileHandle(forReadingFrom: path) } catch let error as CocoaError where
+        (error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile) &&
+        !FileManager.default.fileExists(atPath: path.path) {
         return []
     } catch { issues.append("\(path.path): \(String(reflecting: error))"); return issues }
     var copyError: Error?
