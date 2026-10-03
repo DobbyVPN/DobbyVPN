@@ -158,7 +158,7 @@ jobs:
           java-version: ${{ steps.pins.outputs.java_major }}
 
       - name: Set up Android SDK used by lint
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           packages: >
             platforms;android-${{ steps.pins.outputs.android_compile_sdk }}
@@ -265,7 +265,7 @@ jobs:
           java-version: ${{ steps.pins.outputs.java_major }}
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
         with:
           packages: >
             platforms;android-${{ steps.pins.outputs.android_compile_sdk }}
