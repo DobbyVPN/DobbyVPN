@@ -22,7 +22,7 @@ func TestMacOSRouteOwnershipAndRepair(t *testing.T) {
 			}
 			macOSReadRoutes = func() ([]macOSRoute, error) { return rows, nil }
 			creates, deletes := 0, 0
-			macOSChangeRoute = func(_ context.Context, operation int, r macOSRoute) error {
+			macOSChangeRoute = func(_ context.Context, operation int, r macOSRoute) (bool, error) {
 				if !r.same(want) {
 					t.Fatalf("changed route identity: %+v", r)
 				}
@@ -33,7 +33,7 @@ func TestMacOSRouteOwnershipAndRepair(t *testing.T) {
 					deletes++
 					rows = nil
 				}
-				return nil
+				return true, nil
 			}
 			plan := NewPlan("test")
 			if _, err := plan.acquireMacOSRoute(context.Background(), want); err != nil {
@@ -80,14 +80,14 @@ func TestMacOSPartialAcquisitionRetainsOriginalFailure(t *testing.T) {
 	want := macOSRoute{prefix: netip.MustParsePrefix("0.0.0.0/1"), index: 17, flags: unix.RTF_UP | unix.RTF_STATIC}
 	var rows []macOSRoute
 	macOSReadRoutes = func() ([]macOSRoute, error) { return rows, nil }
-	failure := errors.New("route acknowledgement unavailable")
-	macOSChangeRoute = func(_ context.Context, operation int, r macOSRoute) error {
+	failure := errors.New("route socket close failed")
+	macOSChangeRoute = func(_ context.Context, operation int, r macOSRoute) (bool, error) {
 		if operation == unix.RTM_ADD {
 			rows = []macOSRoute{r}
-			return failure
+			return true, failure
 		}
 		rows = nil
-		return nil
+		return true, nil
 	}
 	plan := NewPlan("test")
 	if _, err := plan.acquireMacOSRoute(context.Background(), want); !errors.Is(err, failure) {
@@ -98,5 +98,47 @@ func TestMacOSPartialAcquisitionRetainsOriginalFailure(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatal("partial setup route survived cleanup")
+	}
+}
+
+func TestMacOSRejectedAddDoesNotAdoptConcurrentForeignRoute(t *testing.T) {
+	oldRead, oldChange := macOSReadRoutes, macOSChangeRoute
+	t.Cleanup(func() { macOSReadRoutes, macOSChangeRoute = oldRead, oldChange })
+	want := macOSRoute{prefix: netip.MustParsePrefix("0.0.0.0/1"), index: 17, flags: unix.RTF_UP | unix.RTF_STATIC}
+	for _, repair := range []bool{false, true} {
+		t.Run(map[bool]string{false: "acquisition", true: "repair"}[repair], func(t *testing.T) {
+			var rows []macOSRoute
+			reject := !repair
+			macOSReadRoutes = func() ([]macOSRoute, error) { return rows, nil }
+			macOSChangeRoute = func(_ context.Context, operation int, r macOSRoute) (bool, error) {
+				if operation == unix.RTM_DELETE {
+					t.Fatal("deleted a foreign route after rejected add")
+				}
+				rows = []macOSRoute{r}
+				if reject {
+					return false, unix.EPERM
+				}
+				return true, nil
+			}
+			plan := NewPlan("test")
+			_, err := plan.acquireMacOSRoute(context.Background(), want)
+			if repair {
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows = nil
+				reject = true
+				_, err = plan.Repair()
+			}
+			if !errors.Is(err, unix.EPERM) {
+				t.Fatalf("lost rejection: %v", err)
+			}
+			if err := plan.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 {
+				t.Fatal("foreign route did not survive cleanup")
+			}
+		})
 	}
 }

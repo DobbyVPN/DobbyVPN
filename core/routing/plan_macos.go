@@ -85,7 +85,7 @@ func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*Lease, 
 		if err != nil || current != nil {
 			return false, err
 		}
-		err = macOSChangeRoute(ctx, unix.RTM_ADD, want)
+		owned, err = macOSChangeRoute(ctx, unix.RTM_ADD, want)
 		if errors.Is(err, unix.EEXIST) {
 			current, err = findMacOSRoute(want)
 			if err == nil && current == nil {
@@ -93,9 +93,8 @@ func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*Lease, 
 			}
 			return false, err
 		}
-		// An acknowledgement failure may follow a successful write. Keep this
-		// mutation owned until inspection confirms absence or exact removal.
-		owned = true
+		// A successful atomic write owns the mutation even if socket close or
+		// verification fails. A rejected write never adopts a foreign route.
 		if err != nil {
 			return false, err
 		}
@@ -116,7 +115,7 @@ func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*Lease, 
 		if err != nil || current == nil {
 			return err
 		}
-		deleteErr := macOSChangeRoute(cleanupCtx, unix.RTM_DELETE, *current)
+		_, deleteErr := macOSChangeRoute(cleanupCtx, unix.RTM_DELETE, *current)
 		remaining, err := findMacOSRoute(want)
 		if err != nil {
 			return errors.Join(deleteErr, err)

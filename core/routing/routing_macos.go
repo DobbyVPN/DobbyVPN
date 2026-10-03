@@ -9,15 +9,12 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"sync/atomic"
-	"time"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 )
 
 var ipv6DefaultSubnets = []string{ipv6LowerHalf, ipv6UpperHalf}
-var macOSRouteSequence atomic.Int32
 var macOSReadRoutes = readMacOSRoutes
 var macOSChangeRoute = changeMacOSRoute
 var macOSInterface = net.InterfaceByName
@@ -102,55 +99,35 @@ func (r macOSRoute) message(operation int) *route.RouteMessage {
 	mask, _ := netip.AddrFromSlice(net.CIDRMask(r.prefix.Bits(), r.prefix.Addr().BitLen()))
 	addresses[unix.RTAX_NETMASK] = routeAddress(mask)
 	addresses[unix.RTAX_IFP] = &route.LinkAddr{Index: r.index}
-	return &route.RouteMessage{Version: unix.RTM_VERSION, Type: operation, Flags: r.flags, Index: r.index, ID: uintptr(os.Getpid()), Seq: int(macOSRouteSequence.Add(1)), Addrs: addresses}
+	return &route.RouteMessage{Version: unix.RTM_VERSION, Type: operation, Flags: r.flags, Index: r.index, ID: uintptr(os.Getpid()), Seq: 1, Addrs: addresses}
 }
 
-func changeMacOSRoute(ctx context.Context, operation int, r macOSRoute) (resultErr error) {
-	message := r.message(operation)
-	data, err := message.Marshal()
+// Route sockets are atomic: XNU route_output returns the mutation error to
+// write(2), even when its notification is lost. A complete successful write
+// supplies acquisition evidence; table inspection verifies the exact identity.
+// https://github.com/apple-oss-distributions/xnu/blob/main/bsd/net/rtsock.c
+func changeMacOSRoute(ctx context.Context, operation int, r macOSRoute) (applied bool, resultErr error) {
+	data, err := r.message(operation).Marshal()
 	if err != nil {
-		return err
+		return false, err
 	}
 	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, unix.Close(fd)) }()
 	if err := unix.SetNonblock(fd, true); err != nil {
-		return err
+		return false, err
 	}
-	limit, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if _, err := unix.Write(fd, data); err != nil {
-		return fmt.Errorf("write route operation %d: %w", operation, err)
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	// Each operation has its own socket and sequence. Unrelated notifications
-	// cannot acknowledge this owner's mutation.
-	buffer := make([]byte, 64*1024)
-	for {
-		if err := limit.Err(); err != nil {
-			return fmt.Errorf("route operation %d acknowledgement: %w", operation, err)
-		}
-		n, err := unix.Read(fd, buffer)
-		if errors.Is(err, unix.EAGAIN) {
-			select {
-			case <-limit.Done():
-			case <-time.After(10 * time.Millisecond):
-			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		messages, err := route.ParseRIB(route.RIBTypeRoute, buffer[:n])
-		if err != nil {
-			return err
-		}
-		for _, value := range messages {
-			ack, ok := value.(*route.RouteMessage)
-			if ok && ack.ID == message.ID && ack.Seq == message.Seq {
-				return ack.Err
-			}
-		}
+	count, err := unix.Write(fd, data)
+	if err != nil {
+		return false, fmt.Errorf("write route operation %d: %w", operation, err)
 	}
+	if count != len(data) {
+		return false, fmt.Errorf("incomplete atomic route write: %d of %d bytes", count, len(data))
+	}
+	return true, nil
 }
