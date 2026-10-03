@@ -14,6 +14,8 @@ import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.dobby.ui.MainActivity
+import com.dobby.nativebridge.NativeVpnBridge
+import java.util.zip.GZIPInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
@@ -174,6 +176,41 @@ class NativeUiInstrumentedTest {
         waitForOneOf(arrayOf("Disconnected", "Error", "Failed"), 30_000)
         requireObject(connectionActionLabel)
         captureScreenshot("reopened")
+        verifyLiveLogsAndExport()
+    }
+
+    private fun verifyLiveLogsAndExport() {
+        val context = instrumentation.targetContext
+        val marker = "live-log-check-${System.nanoTime()}"
+        NativeVpnBridge.recordDiagnostic(context, "ui.test.live", marker)
+        waitForTextContaining(marker)
+        val existing = context.cacheDir.listFiles().orEmpty().map { it.name }.toSet()
+        val exportMarker = "fresh-export-${System.nanoTime()}"
+        NativeVpnBridge.recordDiagnostic(context, "ui.test.export", exportMarker)
+        val available = NativeVpnBridge.diagnosticPaths(context).lineSequence()
+            .filter(String::isNotBlank).map(::File).filter(File::exists).map { it.readText() }.toList()
+        tapStable("Share logs")
+        val deadline = System.currentTimeMillis() + 10_000
+        var archive: File? = null
+        while (archive == null && System.currentTimeMillis() < deadline) {
+            archive = context.cacheDir.listFiles().orEmpty().firstOrNull {
+                it.name.startsWith("DobbyVPN_logs_") && it.name.endsWith(".jsonl.gz") && it.name !in existing
+            }
+            if (archive == null) Thread.sleep(100)
+        }
+        val exported = checkNotNull(archive) { "ANDROID_LOG_EXPORT_NOT_CREATED" }
+        // The chooser appears only after compression has closed the file.
+        check(device.wait(androidx.test.uiautomator.Until.gone(By.pkg(packageName)), 10_000)) {
+            "ANDROID_LOG_SHARE_SHEET_NOT_OPENED"
+        }
+        val content = GZIPInputStream(exported.inputStream()).bufferedReader().use { it.readText() }
+        check(content.contains(exportMarker) && content.contains("app_version") && content.contains("platform")) {
+            "ANDROID_LOG_EXPORT_NOT_FRESH"
+        }
+        check(available.all(content::contains)) { "ANDROID_LOG_EXPORT_INCOMPLETE" }
+        device.pressBack()
+        check(exported.delete()) { "ANDROID_LOG_EXPORT_CLEANUP_FAILED" }
+        launch()
     }
 
     private fun launch() {
