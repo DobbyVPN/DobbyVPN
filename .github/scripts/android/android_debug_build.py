@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -39,8 +40,16 @@ def main() -> None:
         parser.error("the pinned Go executable is required")
     sdk = Path(os.environ.get("ANDROID_SDK_ROOT") or os.environ["ANDROID_HOME"])
     gradle = os.environ.get("GRADLE_BIN", str(ROOT / "ui/android/gradlew"))
-    run([gradle, "-p", "ui/android", ":app:assembleDebug", "--no-daemon", "--stacktrace",
-         f"-PdobbyGoBinary={args.go_binary}", f"-PprojectRepositoryCommit={args.source_sha}"])
+    build_output = run([gradle, "-p", "ui/android", ":app:assembleDebug", ":app:signingReport",
+                        "--no-daemon", "--console=plain", "--stacktrace",
+                        f"-PdobbyGoBinary={args.go_binary}", f"-PprojectRepositoryCommit={args.source_sha}"])
+    # Ask AGP for its selected store; its location can differ between hosts.
+    stores = re.findall(r"(?m)^Variant: debug\r?\nConfig: debug\r?\nStore: (.+)$", build_output)
+    if len(stores) != 1:
+        raise ValueError("Gradle did not report one Debug signing keystore")
+    debug_keystore = Path(stores[0].strip())
+    if not debug_keystore.is_file():
+        raise FileNotFoundError(debug_keystore)
     apk = ROOT / "ui/android/app/build/outputs/apk/debug/app-debug.apk"
     analyzer = shutil.which("apkanalyzer") or str(sdk / "cmdline-tools/latest/bin/apkanalyzer")
     if run([analyzer, "manifest", "debuggable", str(apk)]).strip() != "true":
@@ -66,9 +75,8 @@ def main() -> None:
     # signature that ZIP normalization invalidates.
     build_tools = sdk / "build-tools" / ANDROID_BUILD_TOOLS
     normalize_apk(args.output, build_tools / "zipalign")
-    android_user = Path(os.environ.get("ANDROID_USER_HOME", str(Path.home() / ".android")))
     signer = str(build_tools / "apksigner")
-    run([signer, "sign", "--ks", str(android_user / "debug.keystore"),
+    run([signer, "sign", "--ks", str(debug_keystore),
          "--ks-key-alias", "androiddebugkey", "--ks-pass", "pass:android",
          "--key-pass", "pass:android", "--v4-signing-enabled", "false", str(args.output.resolve())])
     run([signer, "verify", "--verbose", str(args.output.resolve())])
