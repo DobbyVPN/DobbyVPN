@@ -291,7 +291,6 @@ object NativeVpnBridge {
     @JvmStatic
     fun diagnosticPaths(context: Context): String {
         val directory = diagnosticsDirectory(context)
-        recordDiagnostic(context, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         return listOf(
             File(directory, UI_DIAGNOSTIC_FILE),
             File(directory, NATIVE_DIAGNOSTIC_FILE),

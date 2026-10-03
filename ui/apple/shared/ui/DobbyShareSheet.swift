@@ -73,6 +73,7 @@ struct DobbyLogView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
+        guard following || jump != coordinator.lastJump else { return }
         coordinator.updating = true
         let offset = view.contentOffset
         let selection = view.selectedRange
@@ -140,6 +141,7 @@ struct DobbyLogView: NSViewRepresentable {
         guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage else { return }
         let coordinator = context.coordinator
         coordinator.parent = self
+        guard following || jump != coordinator.lastJump else { return }
         coordinator.updating = true
         let origin = scroll.contentView.bounds.origin
         let selection = view.selectedRange()

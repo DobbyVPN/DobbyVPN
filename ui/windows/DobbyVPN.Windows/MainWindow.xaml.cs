@@ -324,15 +324,17 @@ public sealed partial class MainWindow : Window
     {
         _followingLogs = true;
         _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
+        _ = RefreshLogsAsync();
     }
 
-    private async Task<string> ReadDiagnosticsAsync()
+    private async Task<string> ReadDiagnosticsAsync(bool preview = false)
     {
         // Allow the backend to append while a complete, fresh snapshot is read.
         var text = "";
         try
         {
             using var stream = new FileStream(_logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, true);
+            if (preview && stream.Length > 262144) stream.Seek(-262144, SeekOrigin.End);
             using var reader = new StreamReader(stream);
             text = await reader.ReadToEndAsync();
         }
@@ -343,9 +345,11 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshLogsAsync()
     {
+        if (!_followingLogs) return;
         try
         {
-            var text = await ReadDiagnosticsAsync();
+            var text = await ReadDiagnosticsAsync(preview: true);
+            if (text.Length > 262144) text = text[^262144..];
             if (text != LogsText.Text)
             {
                 var offset = _logScroll?.VerticalOffset ?? 0;

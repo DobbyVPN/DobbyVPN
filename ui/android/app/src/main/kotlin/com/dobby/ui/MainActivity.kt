@@ -124,6 +124,7 @@ private class SessionController(private val activity: MainActivity) {
 
     init {
         worker.scheduleWithFixedDelay({ refreshSnapshot() }, 0, 500, TimeUnit.MILLISECONDS)
+        NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
     }
 
@@ -170,13 +171,19 @@ private class SessionController(private val activity: MainActivity) {
 
     fun setVisible(value: Boolean) { visible = value }
 
-    private fun readDiagnostics(): Pair<String, String> {
+    private fun readDiagnostics(preview: Boolean = false): Pair<String, String> {
         val contents = mutableListOf<String>()
         val errors = mutableListOf<String>()
         NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).forEach { path ->
             try {
                 val file = File(path)
-                if (file.exists()) contents.add(file.readText(Charsets.UTF_8))
+                if (file.exists()) {
+                    val text = file.inputStream().use { stream ->
+                        if (preview && stream.channel.size() > 262_144) stream.channel.position(stream.channel.size() - 262_144)
+                        stream.readBytes().toString(Charsets.UTF_8)
+                    }
+                    contents.add(text)
+                }
             } catch (failure: Exception) {
                 errors.add("$path: ${failure.stackTraceToString()}")
             }
@@ -184,11 +191,12 @@ private class SessionController(private val activity: MainActivity) {
         if (NativeVpnBridge.nativeDiagnosticsUnavailable()) {
             errors.add("Some native diagnostics could not be saved. Check Android system logs.")
         }
-        return contents.joinToString("\n") to errors.joinToString("\n")
+        val text = contents.joinToString("\n")
+        return text to errors.joinToString("\n")
     }
 
     private fun readLogs() {
-        val (text, error) = readDiagnostics()
+        val (text, error) = readDiagnostics(preview = true)
         main.post { state = state.copy(logs = text, logsError = error) }
     }
 
@@ -495,6 +503,7 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
             TextButton(onClick = controller::exportLogs) { Text("Share logs") }
         }
         if (state.logsError.isNotEmpty()) Text(state.logsError, color = MaterialTheme.colorScheme.error)
+        Text("Recent logs. Shared diagnostics include the complete files.", style = MaterialTheme.typography.labelSmall)
         AndroidView(
             factory = { LiveLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f),
@@ -535,6 +544,7 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     fun update(text: String, jump: Int, color: Int) {
         content.setTextColor(color)
         if (jump != lastJump) { following = true; lastJump = jump }
+        if (!following) return
         if (rendered != text) {
             val offset = scrollY
             if (text.startsWith(rendered)) content.append(text.substring(rendered.length)) else content.text = text

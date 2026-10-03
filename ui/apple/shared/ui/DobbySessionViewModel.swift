@@ -172,7 +172,7 @@ public final class DobbySessionViewModel: ObservableObject {
         let client = client
         let errors = diagnosticErrors
         logWorker.async { [weak self, client] in
-            let result = readDiagnostics(client: client, errors: errors)
+            let result = readDiagnostics(client: client, errors: errors, preview: true)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.logsInFlight = false
@@ -261,18 +261,35 @@ private func runPrimaryAction(
     return (outcome, snapshotAfterFailure)
 }
 
-private func readDiagnostics(client: DobbySessionClient, errors: [String]) -> (text: String, error: String) {
+private func readDiagnostics(client: DobbySessionClient, errors: [String], preview: Bool = false) -> (text: String, error: String) {
     var output: [String] = []
     var issues: [String] = []
     for url in client.diagnosticPaths {
         do {
-            output.append("--- \(url.lastPathComponent) ---\n" + (try String(contentsOf: url, encoding: .utf8)))
+            let text: String
+            if preview {
+                let file = try FileHandle(forReadingFrom: url)
+                do {
+                    let size = try file.seekToEnd()
+                    try file.seek(toOffset: size > 262_144 ? size - 262_144 : 0)
+                    let data = try file.readToEnd() ?? Data()
+                    text = String(decoding: data, as: UTF8.self)
+                    try file.close()
+                } catch {
+                    do { try file.close() } catch { issues.append("\(url.path): \(error.localizedDescription)") }
+                    throw error
+                }
+            } else { text = try String(contentsOf: url, encoding: .utf8) }
+            output.append("--- \(url.lastPathComponent) ---\n" + text)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             continue
         } catch {
             issues.append("\(url.path): \(error.localizedDescription)")
         }
     }
-    if !errors.isEmpty { output.append("UI diagnostics\n" + errors.joined(separator: "\n")) }
+    if !errors.isEmpty {
+        let details = errors.joined(separator: "\n")
+        output.append("UI diagnostics\n" + (preview ? String(details.suffix(262_144)) : details))
+    }
     return (output.joined(separator: "\n"), issues.joined(separator: "\n"))
 }

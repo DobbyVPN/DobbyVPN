@@ -196,6 +196,8 @@ public struct DobbyRootView: View {
                 Text("Some diagnostics could not be read. \(model.logsError)")
                     .font(.caption).foregroundStyle(.red)
             }
+            Text("Recent logs. Shared diagnostics include the complete files.")
+                .font(.caption).foregroundStyle(.secondary)
             DobbyLogView(text: model.logs, following: $followingLogs, jump: jumpToLatest)
                 .accessibilityIdentifier("Connection logs")
         }
