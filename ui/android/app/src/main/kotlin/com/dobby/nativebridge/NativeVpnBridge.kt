@@ -18,8 +18,6 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.zip.Deflater
-import java.util.zip.GZIPOutputStream
 import org.json.JSONObject
 
 /**
@@ -224,7 +222,7 @@ object NativeVpnBridge {
 
     /** Compress diagnostics and open Android's explicit share chooser. */
     @JvmStatic
-    fun exportLogs(context: Context, rawLogs: ByteArray): Boolean {
+    fun exportLogs(context: Context): Boolean {
         val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
         // Keep concurrent exports independent. A timestamp-only name can
         // collide when two UI callbacks run in the same second and would
@@ -237,9 +235,13 @@ object NativeVpnBridge {
                 context.cacheDir,
             )
             archive = outputArchive
-            object : GZIPOutputStream(outputArchive.outputStream()) {
-                init { def.setLevel(Deflater.BEST_COMPRESSION) }
-            }.use { it.write(rawLogs) }
+            val metadata = JSONObject().put("app_version", com.dobby.vpn.BuildConfig.VERSION_NAME)
+                .put("source_commit", com.dobby.vpn.BuildConfig.PROJECT_REPOSITORY_COMMIT)
+                .put("platform", "Android ${Build.VERSION.RELEASE}")
+                .put("captured_at", java.time.Instant.now().toString())
+                .put("native_diagnostics_unavailable", nativeDiagnosticsUnavailable())
+            val paths = diagnosticPaths(context).lineSequence().filter(String::isNotBlank).map(::File).toList()
+            outputArchive.outputStream().use { writeDiagnosticArchive(it, paths, metadata) }
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",

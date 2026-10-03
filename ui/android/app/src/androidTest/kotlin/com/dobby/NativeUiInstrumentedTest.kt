@@ -184,6 +184,7 @@ class NativeUiInstrumentedTest {
         requireObject(connectionActionLabel)
         captureScreenshot("reopened")
         verifyLiveLogsAndExport()
+        verifyStreamingDiagnostics(instrumentation.targetContext.cacheDir)
     }
 
     private fun verifyLiveLogsAndExport() {

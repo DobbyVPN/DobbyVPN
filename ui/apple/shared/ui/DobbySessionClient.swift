@@ -5,6 +5,7 @@ import Foundation
 public protocol DobbySessionClient: AnyObject, Sendable {
     func call(_ method: String, parameters: [String: Any]) -> String
     var diagnosticPaths: [URL] { get }
+    var uiDiagnosticPath: URL { get }
     var version: String { get }
     var sourceCommit: String { get }
 }

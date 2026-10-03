@@ -143,10 +143,15 @@ internal static class Program
     }
 
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
         try
         {
+            if (args.Length == 1 && args[0] == "--diagnostics-test")
+            {
+                NativeDiagnosticsTests.RunAsync().GetAwaiter().GetResult();
+                return 0;
+            }
             SetProcessDpiAwarenessContext(new IntPtr(-4));
             using var input = JsonDocument.Parse(Console.In.ReadToEnd());
             var request = input.RootElement;

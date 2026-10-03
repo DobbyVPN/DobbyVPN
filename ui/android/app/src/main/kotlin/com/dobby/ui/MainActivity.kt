@@ -111,6 +111,7 @@ private data class ScreenState(
     val screen: String = "connection",
     val logs: String = "",
     val logsError: String = "",
+    val exportingLogs: Boolean = false,
 )
 
 private class SessionController(private val activity: MainActivity) {
@@ -173,7 +174,7 @@ private class SessionController(private val activity: MainActivity) {
 
     fun setVisible(value: Boolean) { visible = value }
 
-    private fun readDiagnostics(preview: Boolean = false): Pair<String, String> {
+    private fun readDiagnostics(): Pair<String, String> {
         val contents = mutableListOf<String>()
         val errors = mutableListOf<String>()
         NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).forEach { path ->
@@ -181,8 +182,11 @@ private class SessionController(private val activity: MainActivity) {
                 val file = File(path)
                 if (file.exists()) {
                     val text = file.inputStream().use { stream ->
-                        if (preview && stream.channel.size() > 262_144) stream.channel.position(stream.channel.size() - 262_144)
-                        stream.readBytes().toString(Charsets.UTF_8)
+                        val size = stream.channel.size()
+                        val bytes = ByteArray(minOf(size, 262_144L).toInt())
+                        stream.channel.position(size - bytes.size)
+                        java.io.DataInputStream(stream).readFully(bytes)
+                        bytes.toString(Charsets.UTF_8)
                     }
                     contents.add(text)
                 }
@@ -198,22 +202,21 @@ private class SessionController(private val activity: MainActivity) {
     }
 
     private fun readLogs() {
-        val (text, error) = readDiagnostics(preview = true)
+        val (text, error) = readDiagnostics()
         main.post { state = state.copy(logs = text, logsError = error) }
     }
 
     fun exportLogs() {
+        if (state.exportingLogs) return
+        state = state.copy(exportingLogs = true)
         logWorker.execute {
-            val (text, error) = readDiagnostics()
-            val metadata = JSONObject().put("app_version", BuildConfig.VERSION_NAME)
-                .put("source_commit", BuildConfig.PROJECT_REPOSITORY_COMMIT)
-                .put("platform", "Android ${android.os.Build.VERSION.RELEASE}")
-                .put("captured_at", java.time.Instant.now().toString())
-                .put("collection_errors", error)
-            val content = "$metadata\n$text"
-            if (!NativeVpnBridge.exportLogs(activity, content.toByteArray(Charsets.UTF_8))) {
-                main.post { state = state.copy(logsError = "Android could not open the log share sheet") }
-            } else { main.post { state = state.copy(logsError = error) } }
+            val succeeded = NativeVpnBridge.exportLogs(activity)
+            main.post {
+                state = state.copy(
+                    exportingLogs = false,
+                    logsError = if (succeeded) "" else "Android could not export diagnostics. See logs for details.",
+                )
+            }
         }
     }
 
@@ -506,7 +509,7 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Logs", modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = { jump++ }) { Text("Jump to latest") }
-            TextButton(onClick = controller::exportLogs) { Text("Share logs") }
+            TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
         }
         if (state.logsError.isNotEmpty()) {
             Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)

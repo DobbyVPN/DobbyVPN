@@ -17,7 +17,12 @@ final class MacDesktopSessionClient: DobbySessionClient {
     }
 
     var diagnosticPaths: [URL] {
-        [URL(fileURLWithPath: "/Library/Logs/DobbyVPN/backend.jsonl")]
+        [URL(fileURLWithPath: "/Library/Logs/DobbyVPN/backend.jsonl"), uiDiagnosticPath]
+    }
+
+    var uiDiagnosticPath: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DobbyVPN/ui_diagnostics.jsonl")
     }
 
     var version: String {

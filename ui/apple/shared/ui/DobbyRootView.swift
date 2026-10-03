@@ -197,6 +197,7 @@ public struct DobbyRootView: View {
                 } label: { Label("Share logs", systemImage: "square.and.arrow.up") }
                 .labelStyle(.iconOnly)
                 .accessibilityLabel("Share logs")
+                .disabled(model.exportingLogs || showingExport)
             }
             if !model.logsError.isEmpty {
                 Text("Some diagnostics could not be read or shared. Details are included in the logs.")

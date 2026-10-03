@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F20000000000000000000040 /* DobbyDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000040 /* DobbyDiagnostics.swift */; };
+		F20000000000000000000041 /* DobbyDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000040 /* DobbyDiagnostics.swift */; };
 		8C7731F12E566DCD00B3782E /* DobbyVPNRuntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */; };
 		8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
@@ -69,6 +71,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		F10000000000000000000040 /* DobbyDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyDiagnostics.swift; sourceTree = "<group>"; };
 		058557BA273AAA24004C7B11 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		058557D8273AAEEB004C7B11 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		7555FF8C242A565B00829871 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -268,6 +271,7 @@
 			isa = PBXGroup;
 			children = (
 				F10000000000000000000004 /* DobbySessionClient.swift */,
+				F10000000000000000000040 /* DobbyDiagnostics.swift */,
 				F10000000000000000000005 /* DobbySessionViewModel.swift */,
 				F10000000000000000000006 /* DobbyRootView.swift */,
 				F10000000000000000000007 /* DobbyShareSheet.swift */,
@@ -530,6 +534,7 @@
 				F20000000000000000000005 /* NativeApp.swift in Sources */,
 				F20000000000000000000006 /* IOSSessionClient.swift in Sources */,
 				F20000000000000000000007 /* DobbySessionClient.swift in Sources */,
+				F20000000000000000000040 /* DobbyDiagnostics.swift in Sources */,
 				F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */,
 				F20000000000000000000009 /* DobbyRootView.swift in Sources */,
 				F2000000000000000000000A /* DobbyShareSheet.swift in Sources */,
@@ -543,6 +548,7 @@
 				F20000000000000000000014 /* NativeApp.swift in Sources */,
 				F20000000000000000000015 /* IOSSessionClient.swift in Sources */,
 				F20000000000000000000016 /* DobbySessionClient.swift in Sources */,
+				F20000000000000000000041 /* DobbyDiagnostics.swift in Sources */,
 				F20000000000000000000017 /* DobbySessionViewModel.swift in Sources */,
 				F20000000000000000000018 /* DobbyRootView.swift in Sources */,
 				F20000000000000000000019 /* DobbyShareSheet.swift in Sources */,

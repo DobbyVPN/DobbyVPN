@@ -35,11 +35,15 @@ public sealed partial class MainWindow : Window
     private ScrollViewer? _logScroll;
     private readonly string _version;
     private readonly string _commit;
-    private readonly List<string> _diagnosticErrors = new();
+    private readonly NativeDiagnostics _diagnostics;
+    private bool _exportingLogs;
 
     public MainWindow()
     {
         InitializeComponent();
+        _diagnostics = new NativeDiagnostics(_logPath, Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DobbyVPN", "Logs", "ui_diagnostics.jsonl"));
         foreach (var details in new[] { ProfileText, FailureText, ErrorText, LogsErrorText })
         {
             details.Visibility = Visibility.Collapsed;
@@ -122,7 +126,7 @@ public sealed partial class MainWindow : Window
             FailureText.Text = result.LastFailure is null
                 ? ""
                 : "Connection failed. See logs for details.";
-            if (result.LastFailure is not null) RecordError($"{result.LastFailure.Message} ({result.LastFailure.Code})");
+            _diagnostics.Record(result.LastFailure is null ? "" : $"{result.LastFailure.Message} ({result.LastFailure.Code})", "backend.failure");
             if (!_sourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
                 (!_sourceInitialized || string.Equals(NormalizeSource(SourceEditor.Text), _renderedSource, StringComparison.Ordinal)))
             {
@@ -140,8 +144,12 @@ public sealed partial class MainWindow : Window
                 _renderedSource = sourceToDisplay;
                 _sourceInitialized = true;
             }
-            if (!string.IsNullOrEmpty(result.SourceError)) ShowError(result.SourceError, "Check the subscription URL or configuration. See logs for details.");
-            else if (recoveringFromSnapshotError) ErrorText.Text = string.Empty;
+            if (!string.IsNullOrEmpty(result.SourceError)) ShowError(result.SourceError, "Check the subscription URL or configuration. See logs for details.", "source.failure");
+            else
+            {
+                _diagnostics.Record("", "source.failure");
+                if (recoveringFromSnapshotError) ErrorText.Text = string.Empty;
+            }
         }
         catch (Exception error)
         {
@@ -296,14 +304,11 @@ public sealed partial class MainWindow : Window
         await new ContentDialog { Title = "About DobbyVPN", Content = details, CloseButtonText = "Done", XamlRoot = Root.XamlRoot }.ShowAsync();
     }
 
-    private void RecordError(string message)
-    {
-        if (_diagnosticErrors.LastOrDefault() != message) _diagnosticErrors.Add(message);
-    }
+    private void RecordError(string message) => _diagnostics.Record(message, "ui.failure");
 
-    private void ShowError(string details, string message)
+    private void ShowError(string details, string message, string category = "ui.failure")
     {
-        RecordError(details);
+        _diagnostics.Record(details, category);
         ErrorText.Text = message;
     }
 
@@ -336,29 +341,12 @@ public sealed partial class MainWindow : Window
         _ = RefreshLogsAsync();
     }
 
-    private async Task<string> ReadDiagnosticsAsync(bool preview = false)
-    {
-        // Allow the backend to append while a complete, fresh snapshot is read.
-        var text = "";
-        try
-        {
-            using var stream = new FileStream(_logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, true);
-            if (preview && stream.Length > 262144) stream.Seek(-262144, SeekOrigin.End);
-            using var reader = new StreamReader(stream);
-            text = await reader.ReadToEndAsync();
-        }
-        catch (FileNotFoundException) { }
-        catch (DirectoryNotFoundException) { }
-        catch (Exception error) { RecordError(error.ToString()); }
-        return text + (_diagnosticErrors.Count == 0 ? "" : "\nUI diagnostics\n" + string.Join("\n", _diagnosticErrors));
-    }
-
     private async Task RefreshLogsAsync()
     {
         if (!_followingLogs) return;
         try
         {
-            var text = await ReadDiagnosticsAsync(preview: true);
+            var text = await _diagnostics.PreviewAsync();
             if (text.Length > 262144) text = text[^262144..];
             if (text != LogsText.Text)
             {
@@ -381,30 +369,44 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<string> ExportDiagnosticsAsync() =>
-        $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n" + await ReadDiagnosticsAsync();
+    private string ExportHeader =>
+        $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n";
 
     private async void CopyLogs_Click(object sender, RoutedEventArgs e)
     {
+        if (_exportingLogs) return;
+        _exportingLogs = true;
         try
         {
+            // Text clipboard APIs require a complete string. Save uses the streaming path.
+            using var content = new MemoryStream();
+            await _diagnostics.ExportAsync(content, ExportHeader);
+            content.Position = 0;
+            using var reader = new StreamReader(content);
             var data = new DataPackage();
-            data.SetText(await ExportDiagnosticsAsync());
+            data.SetText(await reader.ReadToEndAsync());
             Clipboard.SetContent(data);
         }
         catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be copied. Try Save logs."; }
+        finally { _exportingLogs = false; }
     }
 
     private async void SaveLogs_Click(object sender, RoutedEventArgs e)
     {
+        if (_exportingLogs) return;
+        _exportingLogs = true;
         try
         {
             var picker = new FileSavePicker(AppWindow.Id) { SuggestedFileName = "DobbyVPN-logs" };
             picker.FileTypeChoices.Add("Text file", new List<string> { ".txt" });
             var file = await picker.PickSaveFileAsync();
-            if (file is not null) await File.WriteAllTextAsync(file.Path, await ExportDiagnosticsAsync());
+            if (file is not null)
+            {
+                await _diagnostics.SaveAsync(file.Path, ExportHeader);
+            }
         }
         catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be saved. Try another location."; }
+        finally { _exportingLogs = false; }
     }
 
     private sealed class Snapshot

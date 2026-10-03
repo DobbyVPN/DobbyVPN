@@ -6,12 +6,11 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
     @Published public private(set) var busy = false
     @Published public private(set) var error = "" {
-        didSet { if !error.isEmpty && diagnosticErrors.last != error { diagnosticErrors.append(error) } }
+        didSet { if !error.isEmpty && error != oldValue { recordError(error) } }
     }
     @Published public private(set) var logs = ""
-    @Published public private(set) var logsError = "" {
-        didSet { if !logsError.isEmpty && diagnosticErrors.last != logsError { diagnosticErrors.append(logsError) } }
-    }
+    @Published public private(set) var logsError = ""
+    @Published public private(set) var exportingLogs = false
     @Published public var sourceText = "" {
         didSet {
             sourceIsDirty = sourceText != acceptedSource
@@ -26,7 +25,8 @@ public final class DobbySessionViewModel: ObservableObject {
     private var acceptedSource = ""
     private var logsVisible = false
     private var logsInFlight = false
-    private var diagnosticErrors: [String] = []
+    private var lastFailure = ""
+    private var diagnosticWriteError = ""
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
     public init(client: DobbySessionClient) {
@@ -75,6 +75,7 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public func reportLogsError(_ message: String) {
         logsError = message
+        if !message.isEmpty { recordError(message) }
     }
 
     public func refreshSnapshot() {
@@ -93,8 +94,10 @@ public final class DobbySessionViewModel: ObservableObject {
                     self.snapshot = value
                     if let failure = value.lastFailure {
                         let details = "\(failure.message) (\(failure.code))"
-                        if self.diagnosticErrors.last != details { self.diagnosticErrors.append(details) }
+                        if self.lastFailure != details { self.recordError(details) }
+                        self.lastFailure = details
                     }
+                    if value.lastFailure == nil { self.lastFailure = "" }
                     if !self.sourceIsDirty {
                         if !value.sourceURL.isEmpty {
                             self.acceptedSource = value.sourceURL
@@ -168,43 +171,64 @@ public final class DobbySessionViewModel: ObservableObject {
         if visible { refreshLogs() }
     }
 
+    private func recordError(_ message: String) {
+        let path = client.uiDiagnosticPath
+        logWorker.async { [weak self] in
+            do { try appendUIDiagnostic(message, to: path) } catch {
+                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
+                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
+                    failure += "\nStderr write failed: \(String(reflecting: error))"
+                }
+                Task { @MainActor [weak self] in
+                    self?.diagnosticWriteError = failure
+                    self?.logsError = failure
+                }
+            }
+        }
+    }
+
     public func refreshLogs() {
         guard !logsInFlight else { return }
         logsInFlight = true
-        let client = client
-        let errors = diagnosticErrors
-        logWorker.async { [weak self, client] in
-            let result = readDiagnostics(client: client, errors: errors, preview: true)
+        let paths = client.diagnosticPaths
+        logWorker.async { [weak self] in
+            let result = diagnosticPreview(paths: paths)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.logsInFlight = false
                 if self.logs != result.text { self.logs = result.text }
-                self.logsError = result.error
+                self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
             }
         }
     }
 
     public func prepareLogsExport(completion: @escaping @MainActor (URL) -> Void) {
+        guard !exportingLogs else { return }
+        exportingLogs = true
         let client = client
-        let errors = diagnosticErrors
+        let writeError = diagnosticWriteError
         logWorker.async { [weak self, client] in
-            let diagnostics = readDiagnostics(client: client, errors: errors)
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("DobbyVPN-logs-\(UUID().uuidString).txt")
             let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\n" +
                 "Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)\nCaptured: \(Date())\n\n"
             do {
-                try Data((header + diagnostics.text + diagnostics.error).utf8).write(to: url, options: .atomic)
+                let issues = try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header + writeError)
                 Task { @MainActor [weak self] in
-                    self?.logsError = diagnostics.error
+                    self?.exportingLogs = false
+                    self?.logsError = issues
                     completion(url)
                 }
             } catch {
-                let message = error.localizedDescription
-                Task { @MainActor [weak self] in self?.logsError = message }
+                let message = String(reflecting: error)
+                Task { @MainActor [weak self] in
+                    self?.exportingLogs = false
+                    self?.reportLogsError(message)
+                }
             }
         }
     }
+
 }
 
 private func readSnapshot(
@@ -261,37 +285,4 @@ private func runPrimaryAction(
         snapshotAfterFailure = nil
     }
     return (outcome, snapshotAfterFailure)
-}
-
-private func readDiagnostics(client: DobbySessionClient, errors: [String], preview: Bool = false) -> (text: String, error: String) {
-    var output: [String] = []
-    var issues: [String] = []
-    for url in client.diagnosticPaths {
-        do {
-            let text: String
-            if preview {
-                let file = try FileHandle(forReadingFrom: url)
-                do {
-                    let size = try file.seekToEnd()
-                    try file.seek(toOffset: size > 262_144 ? size - 262_144 : 0)
-                    let data = try file.readToEnd() ?? Data()
-                    text = String(decoding: data, as: UTF8.self)
-                    try file.close()
-                } catch {
-                    do { try file.close() } catch { issues.append("\(url.path): \(error.localizedDescription)") }
-                    throw error
-                }
-            } else { text = try String(contentsOf: url, encoding: .utf8) }
-            output.append("--- \(url.lastPathComponent) ---\n" + text)
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            continue
-        } catch {
-            issues.append("\(url.path): \(error.localizedDescription)")
-        }
-    }
-    if !errors.isEmpty {
-        let details = errors.joined(separator: "\n")
-        output.append("UI diagnostics\n" + (preview ? String(details.suffix(262_144)) : details))
-    }
-    return (output.joined(separator: "\n"), issues.joined(separator: "\n"))
 }
