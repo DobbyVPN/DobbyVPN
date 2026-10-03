@@ -37,6 +37,7 @@ public final class IOSSessionShell: NSObject {
                     configuration: Data(source.utf8)
                 )
             } catch {
+                logs.writeLog(level: "ERROR", log: "source mailbox encoding failed request_id=\(requestID):\n\(diagnosticErrorDescription(error))")
                 return failure("INTERNAL", message: "source mailbox could not be encoded")
             }
             guard secrets.set(mailbox.encoded(), for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {

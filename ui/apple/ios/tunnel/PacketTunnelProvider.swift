@@ -120,8 +120,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         guard failure.isEmpty else { throw sessionError(failure) }
         callbackBridge = bridge
     }
-    lazy var settingsOwner = TunnelSettingsOwner { [weak self] message in
-        self?.logs.writeLog(log: message)
+    lazy var settingsOwner = TunnelSettingsOwner { [weak self] level, message in
+        self?.logs.writeLog(level: level, log: message)
     }
 
     var pathMonitor: Network.NWPathMonitor?
@@ -154,7 +154,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             machine = fixedCString(&utsMachine)
         } else {
             let code = errno
-            logs.writeLog(
+            logs.writeLog(level: "WARN",
                 log: "[tunnel:\(tunnelId)] uname failed errno=\(code) error=\(String(cString: strerror(code)))"
             )
         }
@@ -172,7 +172,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrPtr) == 0 else {
             let code = errno
-            logs.writeLog(
+            logs.writeLog(level: "WARN",
                 log: "[Interfaces] getifaddrs failed errno=\(code) error=\(String(cString: strerror(code)))"
             )
             return
@@ -195,8 +195,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else {
             let code = errno
-            logs.writeLog(
-                log: "[DEBUG][Interfaces] getifaddrs failed errno=\(code) error=\(String(cString: strerror(code)))"
+            logs.writeLog(level: "WARN",
+                log: "[Interfaces] getifaddrs failed errno=\(code) error=\(String(cString: strerror(code)))"
             )
             logs.writeLog(log: "[Interfaces] ========== INTERFACES: END_\(label) ==========")
             return
@@ -318,7 +318,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         do {
             command = try IOSProviderCommand.decode(messageData)
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] provider command decode failed: \(String(reflecting: error))")
+            logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] provider command decode failed: \(String(reflecting: error))")
             return VpnManagerImpl.transportFailure("INTERNAL", message: String(reflecting: error))
         }
 
@@ -340,7 +340,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             do {
                 mailbox = try IOSConfigurationMailbox.decode(bytes)
             } catch {
-                logs.writeLog(
+                logs.writeLog(level: "ERROR",
                     log: "[tunnel:\(tunnelId)] configuration mailbox decode failed " +
                         "request_id=\(command.requestID):\n\(diagnosticErrorDescription(error))"
                 )
@@ -377,7 +377,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let envelope = try IOSProviderResponse(requestID: requestID, kind: kind, payload: goResponse)
             return try envelope.encoded()
         } catch {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] provider response encoding failed: \(String(reflecting: error))")
+            logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] provider response encoding failed: \(String(reflecting: error))")
             return VpnManagerImpl.transportFailure("PLATFORM_FAILED", message: String(reflecting: error))
         }
     }

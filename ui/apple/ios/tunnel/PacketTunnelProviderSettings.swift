@@ -18,7 +18,7 @@ extension PacketTunnelProvider {
         do {
             return String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self)
         } catch {
-            logs.writeLog(log: "encode tunnel result: \(String(reflecting: error))")
+            logs.writeLog(level: "ERROR", log: "encode tunnel result: \(String(reflecting: error))")
             return ""
         }
     }
@@ -92,10 +92,10 @@ extension PacketTunnelProvider {
                 }
                 self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] PATH_UPDATE \(signature)")
                 if expensive && constrained {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] WARNING: path is both expensive and constrained")
+                    self.logs.writeLog(level: "WARN", log: "[tunnel:\(self.tunnelId)] path is both expensive and constrained")
                 }
                 if status == .unsatisfied {
-                    self.logs.writeLog(log: "[tunnel:\(self.tunnelId)] WARNING: path is unsatisfied")
+                    self.logs.writeLog(level: "WARN", log: "[tunnel:\(self.tunnelId)] path is unsatisfied")
                 }
                 for iface in path.availableInterfaces {
                     self.logs.writeLog(
@@ -140,7 +140,7 @@ extension PacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_NETWORK: starting temporary NWPathMonitor timeoutMs=\(Int(timeout * 1000))")
         monitor.start(queue: startupPathQueue)
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_WARNING: timed out waiting for initial network path")
+            logs.writeLog(level: "WARN", log: "[tunnel:\(tunnelId)] timed out waiting for initial network path")
         } else {
             logs.writeLog(log: "[tunnel:\(tunnelId)] STARTUP_NETWORK: initial path captured")
         }
@@ -171,7 +171,7 @@ extension PacketTunnelProvider {
         if failure.isEmpty {
             callbackBridge = nil
         } else {
-            logs.writeLog(log: "[tunnel:\(tunnelId)] Go shutdown retains resources: \(failure)")
+            logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] Go shutdown retains resources: \(failure)")
         }
 
         pathMonitor?.cancel()

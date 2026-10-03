@@ -10,6 +10,7 @@ public final class TunnelSettingsOwner {
 
     private final class Operation {
         let id = UUID()
+        let started = ProcessInfo.processInfo.systemUptime
         let owner: Owner
         let clearing: Bool
         var completed = false
@@ -24,11 +25,11 @@ public final class TunnelSettingsOwner {
     private let serial = NSLock()
     private let completion = NSCondition()
     private let operationLimit: TimeInterval
-    private let diagnostic: (String) -> Void
+    private let diagnostic: (String, String) -> Void
     private var owner: Owner?
     private var pending: Operation?
 
-    public init(operationLimit: TimeInterval = 10, diagnostic: @escaping (String) -> Void) {
+    public init(operationLimit: TimeInterval = 10, diagnostic: @escaping (String, String) -> Void) {
         self.operationLimit = operationLimit
         self.diagnostic = diagnostic
     }
@@ -85,7 +86,7 @@ public final class TunnelSettingsOwner {
         completion.lock()
         pending = active
         completion.unlock()
-        diagnostic("settings begin session=\(owner.session) generation=\(owner.generation) operation=\(active.id) clear=\(clearing)")
+        diagnostic("INFO", "settings begin session=\(owner.session) generation=\(owner.generation) operation=\(active.id) clear=\(clearing)")
         operation { [self, active] error in
             completion.lock()
             // Identity fencing also protects against accidental duplicate OS
@@ -96,7 +97,10 @@ public final class TunnelSettingsOwner {
             if active.clearing && error == nil && self.owner == active.owner { self.owner = nil }
             completion.broadcast()
             completion.unlock()
-            diagnostic("settings completed session=\(owner.session) generation=\(owner.generation) operation=\(active.id) error=\(error.map { String(reflecting: $0) } ?? "none")")
+            let duration = Int((ProcessInfo.processInfo.systemUptime - active.started) * 1000)
+            diagnostic(error == nil ? "INFO" : "ERROR",
+                "settings completed session=\(owner.session) generation=\(owner.generation) operation=\(active.id) " +
+                "clear=\(clearing) duration_ms=\(duration) error=\(error.map { diagnosticErrorDescription($0) } ?? "none")")
         }
         completion.lock()
         defer { completion.unlock() }
@@ -114,6 +118,7 @@ public final class TunnelSettingsOwner {
     }
 
     private func failure(_ message: String) -> Error {
-        NSError(domain: "DobbyVPN.TunnelSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        diagnostic("ERROR", message)
+        return NSError(domain: "DobbyVPN.TunnelSettings", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }
