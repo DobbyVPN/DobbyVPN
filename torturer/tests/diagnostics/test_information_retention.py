@@ -445,6 +445,22 @@ class InformationRetentionTests(unittest.TestCase):
         self.assertIn("api=CloseHandle winerror=5", result.diagnostics)
         self.assertTrue(any("job-still-attached" in item for item in result.diagnostics))
 
+    def test_native_ui_log_collection_preserves_raw_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            controller = object.__new__(native_ui_smoke.NativeUIController)
+            controller.platform = "windows"
+            controller.logs = root / "collected"
+            controller.logs.mkdir()
+            source = root / "DobbyVPN/Logs/ui_diagnostics.jsonl"
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root)}):
+                controller.collect_diagnostics()
+                self.assertEqual(list(controller.logs.iterdir()), [])
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b"original \xff\x00 diagnostic\r\n")
+                controller.collect_diagnostics()
+                self.assertEqual((controller.logs / source.name).read_bytes(), source.read_bytes())
+
     def test_native_windows_helper_uses_existing_job_boundary(self) -> None:
         process = mock.Mock()
         completed = subprocess.CompletedProcess(

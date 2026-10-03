@@ -449,6 +449,10 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
                     ui.close_for_cleanup()
             except BaseException as error:
                 cleanup_errors.append(f"native-ui: {_exception_details(error)}")
+            try:
+                ui.collect_diagnostics()
+            except BaseException as error:
+                cleanup_errors.append(f"native-ui-diagnostics: {_exception_details(error)}")
         try:
             base.reset(timeout_seconds=min(args.timeout, 30.0))
         except BaseException as error:

@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -315,6 +316,19 @@ class NativeUIController:
     def reopen(self) -> dict:
         self.start()
         return self.wait_status("Connected")
+
+    def collect_diagnostics(self) -> None:
+        if self.platform == "macos":
+            path = Path.home() / "Library/Logs/DobbyVPN/ui_diagnostics.jsonl"
+        else:
+            path = Path(os.environ["LOCALAPPDATA"]) / "DobbyVPN/Logs/ui_diagnostics.jsonl"
+        try:
+            source = path.open("rb")
+        except FileNotFoundError:
+            # The UI creates this file only after an error.
+            return
+        with source, (self.logs / "ui_diagnostics.jsonl").open("wb") as destination:
+            shutil.copyfileobj(source, destination)
 
     def close_for_cleanup(self) -> None:
         if self.process is None:
