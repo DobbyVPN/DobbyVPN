@@ -40,9 +40,7 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
         let element = queue[index]
         index += 1
         let children = try attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-        for child in children where !queue.contains(where: { CFEqual($0, child) }) {
-            queue.append(child)
-        }
+        queue.append(contentsOf: children)
     }
     return queue
 }
@@ -80,6 +78,15 @@ func find(_ nodes: [AXUIElement], _ name: String, editor: Bool = false) throws -
     }
     let identified = try matches.filter { try label($0, kAXIdentifierAttribute) == name }
     if !identified.isEmpty { matches = identified }
+    if matches.count > 1 {
+        // SwiftUI's toolbar item and its inner button both expose AXButton with
+        // the same name. Select the inner control, retaining ambiguity for peers.
+        let candidates = matches
+        matches = try candidates.filter { parent in
+            let descendants = try elements(parent).dropFirst()
+            return !descendants.contains { child in candidates.contains { CFEqual(child, $0) } }
+        }
+    }
     if matches.count != 1 {
         let details = try matches.map { element in
             "\(element): role=\(try label(element, kAXRoleAttribute)) " +
