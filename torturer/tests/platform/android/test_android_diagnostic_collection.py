@@ -13,6 +13,46 @@ from torturer_contract.scenarios import select_scenarios
 
 
 class AndroidDiagnosticCollectionTests(unittest.TestCase):
+    def test_final_history_collected_before_uninstall_even_when_collection_fails(self) -> None:
+        for collection_error in (None, OSError("final log unavailable")):
+            with self.subTest(collection_error=collection_error), tempfile.TemporaryDirectory() as name:
+                root = Path(name)
+                actions = []
+
+                def adb_call(_adb, _serial, arguments, **_kwargs):
+                    actions.append(arguments)
+                    output = b"device\n" if arguments == ["get-state"] else b""
+                    if arguments[:4] == ["shell", "pm", "list", "packages"]:
+                        output = f"package:{arguments[-1]}\n".encode()
+                    return subprocess.CompletedProcess(("adb",), 0, output, b"")
+
+                def collect(_adb, _serial, *, logs, **_kwargs):
+                    self.assertEqual(actions[-1], ["shell", "am", "force-stop", local_vm_android.APP_PACKAGE])
+                    self.assertNotIn(["uninstall", local_vm_android.APP_PACKAGE], actions)
+                    self.assertEqual(logs, root / "logs" / "android-final")
+                    if collection_error:
+                        raise collection_error
+                    (logs / "android-go-app-logs.jsonl").write_bytes(b"final VPN history\n")
+                    return []
+
+                runtime = {"adb": "adb", "serial": "emulator-5554", "installed_packages": [
+                    local_vm_android.APP_PACKAGE, local_vm_android.COMPANION_PACKAGE,
+                ]}
+                with (
+                    mock.patch.dict(os.environ, {"ADB_SERVER_SOCKET": "tcp:localhost:5037"}),
+                    mock.patch.object(local_vm_android, "_adb_call", side_effect=adb_call),
+                    mock.patch.object(local_vm_android, "_collect_android_diagnostics", side_effect=collect) as collector,
+                ):
+                    if collection_error:
+                        with self.assertRaisesRegex(Exception, "final log unavailable"):
+                            local_vm_android.cleanup(root, runtime, root / "logs", 30)
+                    else:
+                        local_vm_android.cleanup(root, runtime, root / "logs", 30)
+                        self.assertEqual((root / "logs/android-final/android-go-app-logs.jsonl").read_bytes(), b"final VPN history\n")
+                collector.assert_called_once()
+                for package in runtime["installed_packages"]:
+                    self.assertIn(["uninstall", package], actions)
+
     def test_collects_complete_app_logs_and_unfiltered_logcat_bytes(self) -> None:
         native = b'{"event":"native-sentinel"}\n'
         go = b'{"source":"go","message":"xray sentinel"}\x00\xff\n'

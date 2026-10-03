@@ -744,6 +744,34 @@ jobs:
                  ;;
              esac'
 
+      - name: Collect final Android application diagnostics
+        if: always() && inputs.platform == 'android' && env.RUN_DIR != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=torturer python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from torturer_runner.local_vm import _run_logged
+          from torturer_runner.local_vm_android import _collect_android_diagnostics
+
+          run = Path(os.environ["RUN_DIR"])
+          logs = run / "android-final"
+          logs.mkdir(parents=True, exist_ok=True)
+          environment = os.environ.copy()
+          adb = environment.get("ADB", "adb")
+          serial = _run_logged(
+              [adb, "get-serialno"], cwd=run, logs=logs,
+              label="android-final-serial", timeout=30, environment=environment,
+          ).stdout.decode().strip()
+          errors = _collect_android_diagnostics(
+              adb, serial, run_dir=run, logs=logs, timeout=30,
+              environment=environment,
+          )
+          if errors:
+              raise RuntimeError("\n".join(errors))
+          PY
+
       - name: Make system-service log readable for diagnostics
         if: always() && env.RUN_DIR != ''
         shell: bash

@@ -605,6 +605,20 @@ def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) 
                       environment=environment)
         except Exception as error:
             errors.append(f"{package} force-stop: {type(error).__name__}: {error}")
+        if package == APP_PACKAGE:
+            # The UI prelude runs before the VPN matrix. Preserve the final
+            # retained history on success too, before uninstall deletes it.
+            final_logs = logs / "android-final"
+            try:
+                final_logs.mkdir(parents=True, exist_ok=True)
+                errors.extend(_collect_android_diagnostics(
+                    adb_value, serial, run_dir=run_dir, logs=final_logs,
+                    timeout=min(timeout, 30), environment=environment,
+                ))
+            except Exception as error:
+                errors.append(_render_collection_error(
+                    "ANDROID_FINAL_DIAGNOSTIC_COLLECTION_FAILED", error
+                ))
         try:
             _adb_call(adb_value, serial, ["uninstall", package], run_dir=run_dir, logs=logs,
                       label=f"android-cleanup-uninstall-{package_label}", timeout=timeout,
