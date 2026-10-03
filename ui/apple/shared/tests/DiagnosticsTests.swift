@@ -39,7 +39,7 @@ final class DiagnosticsTests: XCTestCase {
                 let output = try String(contentsOf: url, encoding: .utf8)
                 XCTAssertTrue(output.contains("DobbyVPN 1.5.3"))
                 XCTAssertTrue(output.contains("Platform:"))
-                XCTAssertTrue(output.hasSuffix(text))
+                XCTAssertTrue(output.hasSuffix(text), model.logsError)
                 try FileManager.default.removeItem(at: url)
             } catch { XCTFail(String(describing: error)) }
             completed.fulfill()
@@ -68,6 +68,15 @@ final class DiagnosticsTests: XCTestCase {
         }
         await fulfillment(of: [completed], timeout: 5)
     }
+    func testMissingDiagnosticsAreNotCollectionFailures() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let missing = directory.appendingPathComponent("missing.jsonl")
+        XCTAssertEqual(diagnosticPreview(paths: [missing]).error, "")
+        XCTAssertEqual(try exportDiagnostics(paths: [missing], to: directory.appendingPathComponent("export.txt"), header: ""), "")
+    }
+
     func testLargeExportPreservesEveryByteAndBoundsPreview() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
