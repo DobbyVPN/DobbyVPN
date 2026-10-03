@@ -40,6 +40,15 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        foreach (var details in new[] { ProfileText, FailureText, ErrorText, LogsErrorText })
+        {
+            details.Visibility = Visibility.Collapsed;
+            details.RegisterPropertyChangedCallback(TextBlock.TextProperty, (sender, _) =>
+            {
+                var text = (TextBlock)sender;
+                text.Visibility = string.IsNullOrEmpty(text.Text) ? Visibility.Collapsed : Visibility.Visible;
+            });
+        }
         SetConnectionAction("Connect");
         ConnectionButton.IsEnabled = false;
         var assembly = Assembly.GetExecutingAssembly();

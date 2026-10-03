@@ -3,7 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="DobbyVPN">
-  <Grid x:Name="Root" MinWidth="560" MinHeight="480" Margin="24" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="16">
+  <Grid x:Name="Root" MinWidth="560" Margin="24" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="16">
     <Grid ColumnDefinitions="*,Auto">
       <TextBlock Text="DobbyVPN" Style="{StaticResource TitleTextBlockStyle}" />
       <Button Grid.Column="1" Content="About" Click="About_Click" />
