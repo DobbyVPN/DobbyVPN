@@ -322,13 +322,15 @@ class NativeUIController:
             path = Path.home() / "Library/Logs/DobbyVPN/ui_diagnostics.jsonl"
         else:
             path = Path(os.environ["LOCALAPPDATA"]) / "DobbyVPN/Logs/ui_diagnostics.jsonl"
-        try:
-            source = path.open("rb")
-        except FileNotFoundError:
-            # The UI creates this file only after an error.
-            return
-        with source, (self.logs / "ui_diagnostics.jsonl").open("wb") as destination:
-            shutil.copyfileobj(source, destination)
+        for retained in (path, path.with_name(path.name + ".previous")):
+            try:
+                source = retained.open("rb")
+            except FileNotFoundError:
+                # Native diagnostics and their previous generation are created
+                # only when needed; do not manufacture empty placeholders.
+                continue
+            with source, (self.logs / retained.name).open("wb") as destination:
+                shutil.copyfileobj(source, destination)
 
     def close_for_cleanup(self) -> None:
         if self.process is None:

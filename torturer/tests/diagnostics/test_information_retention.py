@@ -452,14 +452,17 @@ class InformationRetentionTests(unittest.TestCase):
             (container / "tmp").mkdir(parents=True)
             (container / "tmp/app_logs.txt").write_bytes(b"native lifecycle\n")
             payload = b"UI diagnostic \xff\x00\r\n"
-            (container / "tmp/ui_diagnostics.jsonl").write_bytes(payload)
+            retained_names = ("ui_diagnostics.jsonl", "app_logs.txt.previous", "go_app_logs.jsonl.stderr", "go_app_logs.jsonl.stderr.previous")
+            for filename in retained_names:
+                (container / "tmp" / filename).write_bytes(payload)
             with mock.patch.object(ios_simulator_app, "_require_success", return_value=SimpleNamespace(stdout=str(container))):
                 ios_simulator_app._collect_ios_native_log(
                     mock.Mock(), SimpleNamespace(udid="11111111-1111-1111-1111-111111111111"),
                     SimpleNamespace(bundle_identifier="vpn.dobby.app"), root / "work", budget=mock.Mock(),
                 )
             ios_simulator_app.retain_ios_diagnostics(root / "work", root / "collected")
-            self.assertEqual((root / "collected/ui_diagnostics.jsonl").read_bytes(), payload)
+            for filename in retained_names:
+                self.assertEqual((root / "collected" / filename).read_bytes(), payload)
 
     def test_native_ui_log_collection_preserves_raw_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -474,8 +477,11 @@ class InformationRetentionTests(unittest.TestCase):
                 self.assertEqual(list(controller.logs.iterdir()), [])
                 source.parent.mkdir(parents=True)
                 source.write_bytes(b"original \xff\x00 diagnostic\r\n")
+                previous = source.with_name(source.name + ".previous")
+                previous.write_bytes(b"previous \xfe\x00 diagnostic\r\n")
                 controller.collect_diagnostics()
-                self.assertEqual((controller.logs / source.name).read_bytes(), source.read_bytes())
+                for retained in (source, previous):
+                    self.assertEqual((controller.logs / retained.name).read_bytes(), retained.read_bytes())
 
     def test_native_windows_helper_uses_existing_job_boundary(self) -> None:
         process = mock.Mock()

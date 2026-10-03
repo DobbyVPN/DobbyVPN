@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from typing import Any
 
+from .android_diagnostics import OPTIONAL_MISSING, retained_log_sources
 from .android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
@@ -344,6 +345,8 @@ def _collect_android_diagnostics(
             logs / "android-go-app-logs.jsonl",
             True,
         ),
+        *((code, label, command, logs / filename, nonempty)
+          for code, label, command, filename, nonempty in retained_log_sources()),
         (
             "ANDROID_LOGCAT_COLLECTION_FAILED",
             "android-logcat-diagnostics",
@@ -366,6 +369,10 @@ def _collect_android_diagnostics(
                 environment=environment,
                 check=False,
             )
+            if (code == "ANDROID_RETAINED_LOG_COLLECTION_FAILED"
+                    and result.returncode == OPTIONAL_MISSING
+                    and not result.stdout and not result.stderr):
+                continue
             if result.returncode != 0:
                 failure = _error(f"{code}: adb exited {result.returncode}")
                 failure.add_note(

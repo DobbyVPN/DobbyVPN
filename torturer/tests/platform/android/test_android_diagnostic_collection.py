@@ -30,6 +30,8 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
 
             def adb_call(_adb, _serial, arguments, **kwargs):
                 commands.append(arguments)
+                if arguments[:4] == ["shell", "-T", "sh", "-c"]:
+                    return subprocess.CompletedProcess(("adb",), 0, b"retained \xff\x00\n", b"")
                 return next(results)
 
             with mock.patch.object(
@@ -49,6 +51,9 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             self.assertEqual((root / "android-go-app-logs.jsonl").read_bytes(), go)
             self.assertEqual((root / "android-logcat.txt").read_bytes(), logcat)
             self.assertEqual(commands[-1], ["shell", "logcat", "-d", "-v", "raw"])
+            for _, _, command, filename, _ in local_vm_android.retained_log_sources():
+                self.assertIn(command, commands)
+                self.assertEqual((root / filename).read_bytes(), b"retained \xff\x00\n")
 
     def test_collection_failures_fail_without_replacing_instrumentation_result(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -61,7 +66,10 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
                 )
             )
             with mock.patch.object(
-                local_vm_android, "_adb_call", side_effect=lambda *args, **kwargs: next(results)
+                local_vm_android, "_adb_call", side_effect=lambda _adb, _serial, arguments, **kwargs: (
+                    subprocess.CompletedProcess(("adb",), 44, b"", b"")
+                    if arguments[:4] == ["shell", "-T", "sh", "-c"] else next(results)
+                )
             ):
                 errors = local_vm_android._collect_android_diagnostics(
                     "adb",
@@ -118,6 +126,8 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             calls: list[str] = []
             def adb_call(_adb, _serial, arguments, *, label, **_kwargs):
                 calls.append(label)
+                if arguments[:4] == ["shell", "-T", "sh", "-c"]:
+                    return subprocess.CompletedProcess(("adb",), 44, b"", b"")
                 if label == "android-native-ui":
                     raise primary
                 if label == "android-native-ui-app-start":
@@ -154,16 +164,19 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
             )
             self.assertIn("ANDROID_LOGCAT_COLLECTION_FAILED", caught.exception.__notes__[-1])
             self.assertEqual(
-                calls[-4:],
+                calls[-10:],
                 [
                     "android-native-ui",
                     "android-native-diagnostics",
                     "android-go-app-diagnostics",
+                    *(label for _, label, _, _, _ in local_vm_android.retained_log_sources()),
                     "android-logcat-diagnostics",
                 ],
             )
             self.assertEqual((logs / "android-native-logs.jsonl").read_bytes(), native)
             self.assertEqual((logs / "android-go-app-logs.jsonl").read_bytes(), go)
+            for _, _, _, filename, _ in local_vm_android.retained_log_sources():
+                self.assertFalse((logs / filename).exists())
 
 
 class DisabledFunctionalScenarioTests(unittest.TestCase):

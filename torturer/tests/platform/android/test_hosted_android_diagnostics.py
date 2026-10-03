@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from torturer_runner.android_diagnostics import retained_log_sources
+
 from contextlib import redirect_stderr
 from hashlib import sha256
 from io import BytesIO
@@ -291,6 +293,8 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
 
             def adb(arguments, *_args, **_kwargs):
                 commands.append(arguments)
+                if arguments[:4] == ("shell", "-T", "sh", "-c"):
+                    return CommandResult(("adb",), 0, b"retained \xff\x00\n", stderr)
                 return next(results)
 
             with mock.patch.object(
@@ -308,6 +312,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
                 [
                     ("shell", "-T", "cat", "/data/user/0/com.dobby.vpn/files/diagnostics/go_app_logs.jsonl"),
                     ("shell", "-T", "cat", "/data/user/0/com.dobby.vpn/files/diagnostics/native_logs.jsonl"),
+                    *(tuple(command) for _, _, command, _, _ in retained_log_sources()),
                     ("shell", "logcat", "-d", "-v", "raw"),
                 ],
             )
@@ -315,6 +320,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
                 "go_app_logs.jsonl": go_logs,
                 "native_logs.jsonl": native_logs,
                 "logcat.txt": logcat,
+                **{filename: b"retained \xff\x00\n" for _, _, _, filename, _ in retained_log_sources()},
             }
             for suffix, payload in expected.items():
                 matches = list(raw.glob(f"*{suffix}"))
@@ -344,7 +350,10 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
             adapter._diagnostic_collection_sequence = 0
             primary = ScenarioExecutionError("XHTTP_FAILURE")
             with mock.patch.object(
-                adapter, "_adb", side_effect=lambda *args, **kwargs: next(results)
+                adapter, "_adb", side_effect=lambda arguments, *args, **kwargs: (
+                    CommandResult(("adb",), 44, b"", b"")
+                    if arguments[:4] == ("shell", "-T", "sh", "-c") else next(results)
+                )
             ):
                 adapter._collect_functional_failure_diagnostics(
                     primary,

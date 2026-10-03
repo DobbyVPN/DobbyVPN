@@ -21,6 +21,7 @@ import tomllib
 from typing import Callable, Mapping
 import uuid
 
+from torturer_runner.android_diagnostics import OPTIONAL_MISSING, retained_log_sources
 from torturer_runner.android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
@@ -664,6 +665,8 @@ class AndroidAdapter:
                 "native_logs.jsonl",
                 True,
             ),
+            *((label, code, tuple(command), filename, nonempty)
+              for code, label, command, filename, nonempty in retained_log_sources()),
             (
                 "logcat",
                 "ANDROID_LOGCAT_COLLECTION_FAILED",
@@ -682,6 +685,10 @@ class AndroidAdapter:
                     failure_code,
                     allow_nonzero=True,
                 )
+                if (failure_code == "ANDROID_RETAINED_LOG_COLLECTION_FAILED"
+                        and result.returncode == OPTIONAL_MISSING
+                        and not result.stdout and not result.stderr):
+                    continue
                 output_path.write_bytes(result.stdout)
                 stderr_path.write_bytes(result.stderr)
                 if result.returncode != 0:

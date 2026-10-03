@@ -723,6 +723,16 @@ def _retain_xctest_screenshots(
     return destination
 
 
+_IOS_LOG_NAMES = (
+    "app_logs.txt", "ui_diagnostics.jsonl", "tunnel_native.jsonl",
+    "go_app_logs.jsonl", "go_app_logs.jsonl.stderr",
+    "go_tunnel_logs.jsonl", "go_tunnel_logs.jsonl.stderr",
+)
+_IOS_RETAINED_LOG_NAMES = {"app-native.log"} | {
+    name + suffix for name in _IOS_LOG_NAMES for suffix in ("", ".previous")
+}
+
+
 def _collect_ios_native_log(
     runner: CommandRunner,
     simulator: AvailableSimulator,
@@ -768,12 +778,15 @@ def _collect_ios_native_log(
             f"could not copy complete native app log: {native_log_copy}",
         ) from error
     native_log_copy.chmod(0o600)
-    ui_log = container / "tmp" / "ui_diagnostics.jsonl"
-    if ui_log.exists() or ui_log.is_symlink():
-        if ui_log.is_symlink() or not ui_log.is_file():
-            raise IOSSimulatorStageError("collect-ios-native-log", f"UI diagnostic is not a regular file: {ui_log}")
-        shutil.copy2(ui_log, destination_dir / ui_log.name)
-        (destination_dir / ui_log.name).chmod(0o600)
+    for name in _IOS_LOG_NAMES:
+        for suffix in ("", ".previous"):
+            source = container / "tmp" / (name + suffix)
+            if source == native_log or not (source.exists() or source.is_symlink()):
+                continue
+            if source.is_symlink() or not source.is_file():
+                raise IOSSimulatorStageError("collect-ios-native-log", f"Diagnostic is not a regular file: {source}")
+            shutil.copy2(source, destination_dir / source.name)
+            (destination_dir / source.name).chmod(0o600)
     return native_log_copy
 
 
@@ -798,7 +811,7 @@ def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path,
                 screenshot.chmod(0o600)
             destination.chmod(0o700)
             continue
-        if source.name in {"app-native.log", "ui_diagnostics.jsonl"}:
+        if source.name in _IOS_RETAINED_LOG_NAMES:
             if source.is_symlink() or not source.is_file():
                 raise IOSSimulatorAppContractError(
                     f"native app log is not a regular file: {source}"
