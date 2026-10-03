@@ -445,6 +445,22 @@ class InformationRetentionTests(unittest.TestCase):
         self.assertIn("api=CloseHandle winerror=5", result.diagnostics)
         self.assertTrue(any("job-still-attached" in item for item in result.diagnostics))
 
+    def test_ios_ui_log_collection_preserves_raw_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            container = root / "container"
+            (container / "tmp").mkdir(parents=True)
+            (container / "tmp/app_logs.txt").write_bytes(b"native lifecycle\n")
+            payload = b"UI diagnostic \xff\x00\r\n"
+            (container / "tmp/ui_diagnostics.jsonl").write_bytes(payload)
+            with mock.patch.object(ios_simulator_app, "_require_success", return_value=SimpleNamespace(stdout=str(container))):
+                ios_simulator_app._collect_ios_native_log(
+                    mock.Mock(), SimpleNamespace(udid="test"),
+                    SimpleNamespace(bundle_identifier="vpn.dobby.app"), root / "work", budget=mock.Mock(),
+                )
+            ios_simulator_app.retain_ios_diagnostics(root / "work", root / "collected")
+            self.assertEqual((root / "collected/ui_diagnostics.jsonl").read_bytes(), payload)
+
     def test_native_ui_log_collection_preserves_raw_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

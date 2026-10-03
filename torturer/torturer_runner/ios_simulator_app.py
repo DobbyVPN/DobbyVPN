@@ -768,6 +768,12 @@ def _collect_ios_native_log(
             f"could not copy complete native app log: {native_log_copy}",
         ) from error
     native_log_copy.chmod(0o600)
+    ui_log = container / "tmp" / "ui_diagnostics.jsonl"
+    if ui_log.exists() or ui_log.is_symlink():
+        if ui_log.is_symlink() or not ui_log.is_file():
+            raise IOSSimulatorStageError("collect-ios-native-log", f"UI diagnostic is not a regular file: {ui_log}")
+        shutil.copy2(ui_log, destination_dir / ui_log.name)
+        (destination_dir / ui_log.name).chmod(0o600)
     return native_log_copy
 
 
@@ -792,7 +798,7 @@ def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path,
                 screenshot.chmod(0o600)
             destination.chmod(0o700)
             continue
-        if source.name == "app-native.log":
+        if source.name in {"app-native.log", "ui_diagnostics.jsonl"}:
             if source.is_symlink() or not source.is_file():
                 raise IOSSimulatorAppContractError(
                     f"native app log is not a regular file: {source}"
