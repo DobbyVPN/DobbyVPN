@@ -35,7 +35,7 @@ func diagnosticPreview(paths: [URL]) -> (text: String, error: String) {
     var issues: [String] = []
     for url in paths {
         let file: FileHandle
-        do { file = try FileHandle(forReadingFrom: url) } catch let error as CocoaError where
+        do { file = try openDiagnostic(url) } catch let error as CocoaError where
             (error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile) &&
             !FileManager.default.fileExists(atPath: url.path) {
             continue
@@ -92,7 +92,7 @@ func exportDiagnostics(paths: [URL], to url: URL, header: String) throws -> Stri
 private func copyDiagnostic(_ path: URL, to output: FileHandle) throws -> [String] {
     var issues: [String] = []
     let input: FileHandle
-    do { input = try FileHandle(forReadingFrom: path) } catch let error as CocoaError where
+    do { input = try openDiagnostic(path) } catch let error as CocoaError where
         (error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile) &&
         !FileManager.default.fileExists(atPath: path.path) {
         return []
@@ -121,4 +121,12 @@ private func copyDiagnostic(_ path: URL, to output: FileHandle) throws -> [Strin
         throw DobbyClientError.diagnostics(issues.joined(separator: "\n"))
     }
     return issues
+}
+
+private func openDiagnostic(_ url: URL) throws -> FileHandle {
+    let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+    guard values.isRegularFile == true else {
+        throw DobbyClientError.diagnostics("Diagnostic input is not a regular file: \(url.path)")
+    }
+    return try FileHandle(forReadingFrom: url)
 }
