@@ -32,6 +32,8 @@ version=${VERSION_NAME:-$(tr -d '[:space:]' < "$script_root/VERSION")}
 build=${APP_BUILD:-$(python3 "$script_root/.github/scripts/release/version_metadata.py" --version "$version" --field android_version_code)}
 if [[ -n "${SOURCE_COMMIT:-}" ]]; then
   source_commit=$SOURCE_COMMIT
+elif [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+  source_commit=$GITHUB_SHA
 elif source_commit=$(git -C "$script_root" rev-parse HEAD); then
   :
 else

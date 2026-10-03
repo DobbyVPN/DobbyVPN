@@ -143,7 +143,11 @@ elif [[ "$local_build" == 1 ]]; then
     source_commit_link="https://github.com/$source_repository/tree/$source_commit"
     source_identity_mode='git_checkout'
   else
-    source_commit=local
+    source_commit=${GITHUB_SHA:-local}
+    [[ "$source_commit" == local || "$source_commit" =~ ^[0-9a-f]{40}(-dirty)?$ ]] || {
+      echo 'local build identity must be a commit SHA, optional -dirty suffix, or local' >&2
+      exit 2
+    }
     source_commit_link=''
     source_tree=''
     source_identity_mode='unverified_local_checkout'
