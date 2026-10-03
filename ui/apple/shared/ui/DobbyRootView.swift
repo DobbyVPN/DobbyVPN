@@ -40,7 +40,10 @@ public struct DobbyRootView: View {
 #else
         content
             .frame(minWidth: 560, minHeight: 460)
-            .toolbar { Button("About") { showingAbout = true } }
+            .toolbar {
+                Button("About") { showingAbout = true }
+                    .accessibilityIdentifier("About")
+            }
             .modifier(Lifecycle(view: self))
 #endif
     }
