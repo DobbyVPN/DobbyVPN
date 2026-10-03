@@ -9,7 +9,9 @@ public final class DobbySessionViewModel: ObservableObject {
         didSet { if !error.isEmpty && diagnosticErrors.last != error { diagnosticErrors.append(error) } }
     }
     @Published public private(set) var logs = ""
-    @Published public private(set) var logsError = ""
+    @Published public private(set) var logsError = "" {
+        didSet { if !logsError.isEmpty && diagnosticErrors.last != logsError { diagnosticErrors.append(logsError) } }
+    }
     @Published public var sourceText = "" {
         didSet {
             sourceIsDirty = sourceText != acceptedSource
