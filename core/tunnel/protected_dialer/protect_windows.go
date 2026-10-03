@@ -34,14 +34,14 @@ func (w *windowsProtector) Protect(fd uintptr, network string) error {
 		const IP_UNICAST_IF = 31
 		idx := htonl(uint32(defaultInterfaceIndex))
 		if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IP, IP_UNICAST_IF, int(idx)); err != nil {
-			log.Debugf(Category, "[Windows-Protect] IP_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Errorf(Category, "[Windows-Protect] IP_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 			return err
 		}
 
 	case "tcp6", "udp6":
 		const IPV6_UNICAST_IF = 31
 		if err := syscall.SetsockoptInt(syscall.Handle(fd), syscall.IPPROTO_IPV6, IPV6_UNICAST_IF, defaultInterfaceIndex); err != nil {
-			log.Debugf(Category, "[Windows-Protect] IPV6_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Errorf(Category, "[Windows-Protect] IPV6_UNICAST_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 			return err
 		}
 	}

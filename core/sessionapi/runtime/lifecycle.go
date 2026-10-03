@@ -197,13 +197,13 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		r.options.ReadinessAttemptTimeout,
 		r.options.ReadinessRetryInterval,
 	); err != nil {
-		log.Debugf(category, "initial readiness failed generation=%d; rolling back runtime lease", ref.Generation)
+		log.Warnf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", ref.Generation, err)
 		cleanupErr := lease.Stop(sessionapi.CleanupContext(ctx))
 		if cleanupErr == nil {
 			r.active = false
 		}
 		if cleanupErr != nil {
-			log.Debugf(category, "initial readiness rollback failed generation=%d", ref.Generation)
+			log.Errorf(category, "initial readiness rollback failed generation=%d: %v", ref.Generation, cleanupErr)
 		} else {
 			log.Debugf(category, "initial readiness rollback complete generation=%d", ref.Generation)
 		}

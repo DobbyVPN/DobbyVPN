@@ -51,7 +51,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	ifaceName, idx, err := protected_dialer.GetDefaultInterfaceNameDarwin(gatewayIP)
 	if err != nil {
-		log.Debugf(Category, "[Darwin-Protect] ERROR: failed to detect default interface for protected sockets: %v", err)
+		log.Errorf(Category, "[Darwin-Protect] failed to detect default interface for protected sockets: %v", err)
 	} else {
 		log.Debugf(Category, "[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
 		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)

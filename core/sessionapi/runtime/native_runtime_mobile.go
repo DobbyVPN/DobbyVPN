@@ -133,17 +133,17 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 		fd = int(f.Fd())
 		err := unix.SetNonblock(fd, true)
 		if err != nil {
-			log.Debugf(nativeLogCategory, "Set unix.SetNonblock error: %v", err)
+			log.Errorf(nativeLogCategory, "Set unix.SetNonblock error: %v", err)
 		}
 	} else {
-		log.Debugf(nativeLogCategory, "failed to get FD from tun: descriptor unavailable")
+		log.Errorf(nativeLogCategory, "failed to get FD from tun: descriptor unavailable")
 		return fail(fmt.Errorf("TUN device does not expose a descriptor"))
 	}
 
 	c.deviceOpened = true
 	err = c.device.Open(0, "")
 	if err != nil {
-		log.Debugf(nativeLogCategory, "failed to create protocol device: %v", err)
+		log.Errorf(nativeLogCategory, "failed to create protocol device: %v", err)
 		return fail(fmt.Errorf("failed to open protocol device: %w", err))
 	}
 	c.deviceOpened = true
@@ -167,7 +167,7 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 
 	if c.tun != nil {
 		if closeErr := c.closeTunLocked(); closeErr != nil {
-			log.Debugf(nativeLogCategory, "failed to close local tun fd wrapper after engine start: %v", closeErr)
+			log.Errorf(nativeLogCategory, "failed to close local tun fd wrapper after engine start: %v", closeErr)
 			return fail(fmt.Errorf("failed to close local TUN after engine start: %w", closeErr))
 		}
 		c.tunOwned = false

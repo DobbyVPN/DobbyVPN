@@ -43,13 +43,13 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 	gateway := net.ParseIP(gatewayIP).To4()
 	if gateway == nil {
 		err := fmt.Errorf("invalid IPv4 gateway %q", gatewayIP)
-		log.Debugf(Category, "[Routing][Detect][ERROR] %v", err)
+		log.Errorf(Category, "[Routing][Detect] %v", err)
 		return "", err
 	}
 
 	routes, err := linuxMainIPv4DefaultRoutes()
 	if err != nil {
-		log.Debugf(Category, "[Routing][Detect][ERROR] RouteList failed: %v", err)
+		log.Errorf(Category, "[Routing][Detect] RouteList failed: %v", err)
 		return "", fmt.Errorf("failed to list main-table routes: %w", err)
 	}
 	for _, route := range routes {
@@ -58,7 +58,7 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 		}
 		link, linkErr := linuxLinkByIndex(route.LinkIndex)
 		if linkErr != nil {
-			log.Debugf(Category, "[Routing][Detect][ERROR] LinkByIndex(%d) failed: %v", route.LinkIndex, linkErr)
+			log.Errorf(Category, "[Routing][Detect] LinkByIndex(%d) failed: %v", route.LinkIndex, linkErr)
 			return "", fmt.Errorf("failed to get link by index %d: %w", route.LinkIndex, linkErr)
 		}
 		iface := link.Attrs().Name
@@ -67,7 +67,7 @@ func GetDefaultInterfaceNameLinux(gatewayIP string) (string, error) {
 	}
 
 	err = fmt.Errorf("default interface for gateway %s not found", gatewayIP)
-	log.Debugf(Category, "[Routing][Detect][ERROR] %v", err)
+	log.Errorf(Category, "[Routing][Detect] %v", err)
 	return "", err
 }
 
@@ -173,7 +173,7 @@ func linuxRouteAlreadyGone(err error) bool {
 func linuxRouteOperation(action string, route *netlink.Route, operation func(*netlink.Route) error) error {
 	err := operation(route)
 	if err != nil {
-		log.Debugf(Category, "[Routing][Netlink][ERROR] route %s=%+v err=%v", action, *route, err)
+		log.Errorf(Category, "[Routing][Netlink] route %s=%+v err=%v", action, *route, err)
 		return fmt.Errorf("route %s %+v: %w", action, *route, err)
 	}
 	log.Debugf(Category, "[Routing][Netlink][OK] route %s=%+v", action, *route)
@@ -183,7 +183,7 @@ func linuxRouteOperation(action string, route *netlink.Route, operation func(*ne
 func linuxRuleOperation(action string, rule *netlink.Rule, operation func(*netlink.Rule) error) error {
 	err := operation(rule)
 	if err != nil {
-		log.Debugf(Category, "[Routing][Netlink][ERROR] rule %s=%+v err=%v", action, *rule, err)
+		log.Errorf(Category, "[Routing][Netlink] rule %s=%+v err=%v", action, *rule, err)
 		return fmt.Errorf("rule %s %+v: %w", action, *rule, err)
 	}
 	log.Debugf(Category, "[Routing][Netlink][OK] rule %s=%+v", action, *rule)

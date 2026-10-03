@@ -4,6 +4,7 @@ import (
 	"core/log"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 )
 
@@ -40,12 +41,13 @@ func runLockedWithPanicRecovery(
 	defer mu.Unlock()
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			log.Debugf(nativeLogCategory, "recovered from %s panic: %v", label, recovered)
+			cause := fmt.Errorf("%s panic: %v\n%s", label, recovered, debug.Stack())
+			log.Errorf(nativeLogCategory, "%v", cause)
 			var cleanupErr error
 			if cleanup != nil {
 				cleanupErr = cleanup()
 			}
-			err = errors.Join(fmt.Errorf("%s panic: %v", label, recovered), cleanupErr)
+			err = errors.Join(cause, cleanupErr)
 		}
 	}()
 	return operation()

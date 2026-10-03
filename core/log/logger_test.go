@@ -2,11 +2,13 @@ package log
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"core/diagnostics"
 	"encoding/json"
 	"errors"
 	"io"
+	stdlog "log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,6 +17,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	tunlog "github.com/xjasonlyu/tun2socks/v2/log"
+	"google.golang.org/grpc/grpclog"
+	netlog "gvisor.dev/gvisor/pkg/log"
 )
 
 func TestSetPathCreatesLogAndFlushesBufferedEntries(t *testing.T) {
@@ -278,6 +284,23 @@ func TestPolicyAndBuildContextSurviveRotation(t *testing.T) {
 	if err := SetPolicy("configuration-one", map[string]any{"exclude_ips": []string{"192.0.2.0/24", "edge.invalid"}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := SetPolicyDetail("resolved_bypass_cidrs", []string{"192.0.2.0/24", "203.0.113.9/32"}); err != nil {
+		t.Fatal(err)
+	}
+	before, statErr := os.Stat(path)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if err := SetPolicyDetail("resolved_bypass_cidrs", []string{"192.0.2.0/24", "203.0.113.9/32"}); err != nil {
+		t.Fatal(err)
+	}
+	after, statErr := os.Stat(path)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if before.Size() != after.Size() {
+		t.Fatal("identical resolved policy repeated full context")
+	}
 	// A sparse oversized generation exercises the production threshold without
 	// allocating a whole history or adding a production-only testing switch.
 	if err := os.Truncate(path, diagnostics.Threshold); err != nil {
@@ -293,12 +316,44 @@ func TestPolicyAndBuildContextSurviveRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	context, ok := event["policy_context"].(map[string]any)
-	if !ok || context["digest"] != "configuration-one" || !strings.Contains(string(data), "192.0.2.0/24") {
+	if !ok || context["digest"] != "configuration-one" || !strings.Contains(string(data), "192.0.2.0/24") || !strings.Contains(string(data), "203.0.113.9/32") {
 		t.Fatalf("retained policy unavailable: %s", data)
 	}
 	for _, key := range []string{"timestamp", "process_id", "run_id", "process_sequence", "build"} {
 		if event[key] == nil {
 			t.Fatalf("missing %s: %s", key, data)
 		}
+	}
+}
+
+func TestLibraryBridgesPreserveSeverity(t *testing.T) {
+	var output bytes.Buffer
+	initMu.Lock()
+	previous := lg
+	lg = &Logger{logger: slog.New(newJSONLineHandler(&output))}
+	initMu.Unlock()
+	defer func() { initMu.Lock(); lg = previous; initMu.Unlock() }()
+	stdlog.Print("stdlib record")
+	netlog.Warningf("netstack record %d", 7)
+	grpclog.Warningf("grpc record %d", 8)
+	tunlog.Warnf("tun2socks record %d", 9)
+	expected := map[string]string{"STDLIB": "INFO", "NETSTACK": "WARN", "GRPC": "WARN", "TUN2SOCKS": "WARN"}
+	scanner := bufio.NewScanner(&output)
+	for scanner.Scan() {
+		var event map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		category, _ := event["category"].(string)
+		if expected[category] != event["level"] {
+			t.Fatalf("incorrect producer level: %s", scanner.Bytes())
+		}
+		delete(expected, category)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("missing library records: %v", expected)
 	}
 }

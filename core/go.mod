@@ -21,6 +21,8 @@ require (
 	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
 	golang.zx2c4.com/wireguard/windows v1.0.1
+	google.golang.org/grpc v1.83.2
+	google.golang.org/protobuf v1.36.11
 	trusttunnel-go v0.0.0-00010101000000-000000000000
 )
 
@@ -79,8 +81,6 @@ require (
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
 	golang.org/x/mobile v0.0.0-20260520154334-0e4426e1883d // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
-	google.golang.org/grpc v1.83.2 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )
 
 tool golang.org/x/mobile/cmd/gobind

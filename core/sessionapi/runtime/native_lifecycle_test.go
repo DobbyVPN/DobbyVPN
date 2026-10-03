@@ -33,7 +33,7 @@ func TestRunLockedWithPanicRecoveryIsBoundedAndUsesLockHeldCleanup(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("locked panic recovery did not return")
 	}
-	if err == nil || !strings.Contains(err.Error(), "test connect panic") {
+	if err == nil || !strings.Contains(err.Error(), "test connect panic") || !strings.Contains(err.Error(), "native_lifecycle_test.go") {
 		t.Fatalf("panic recovery error = %v, want bounded panic error", err)
 	}
 	if cleanupCalls != 1 {

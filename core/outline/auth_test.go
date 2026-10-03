@@ -1,10 +1,17 @@
 package outline
 
 import (
+	"bufio"
 	"context"
+	"core/log"
+	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +107,50 @@ func verifySOCKSAuthentication(t *testing.T, endpoint *url.URL, password string,
 	}
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSOCKSLoggerDistinguishesRoutineMessagesFromFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outline.jsonl")
+	if err := log.SetPath(path); err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	boundary, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := socksLogger{device: &OutlineDevice{}}
+	logger.Errorf("client want to used addr %v, listen addr: %s", "0.0.0.0:0", "127.0.0.1:1234")
+	logger.Errorf("server: %v", net.ErrClosed)
+	logger.Errorf("server: %v", errors.New("connection failed"))
+	logger.Errorf("server: %v", errors.New("chacha20poly1305: message authentication failed"))
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.Seek(boundary.Size(), io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(file)
+	var levels []string
+	for scanner.Scan() {
+		var event map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		message, _ := event["message"].(string)
+		if !strings.Contains(message, "[SOCKS5 internal]") {
+			continue
+		}
+		level, _ := event["level"].(string)
+		levels = append(levels, level)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(levels, ","); got != "DEBUG,DEBUG,WARN,ERROR" {
+		t.Fatalf("levels=%s", got)
 	}
 }

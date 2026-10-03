@@ -164,6 +164,39 @@ func SetPolicy(digest string, policy any) error {
 	return nil
 }
 
+// SetPolicyDetail retains resolved attempt inputs with the accepted policy.
+// Identical resolution is referenced by configuration digest without repeating
+// the large context. Rotation always emits the latest complete context again.
+func SetPolicyDetail(key string, value any) error {
+	detail, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	initMu.Lock()
+	retained := make(map[string]json.RawMessage)
+	if len(policyContext) != 0 {
+		if decodeErr := json.Unmarshal(policyContext, &retained); decodeErr != nil {
+			initMu.Unlock()
+			return decodeErr
+		}
+	}
+	if bytes.Equal(retained[key], detail) {
+		initMu.Unlock()
+		return nil
+	}
+	retained[key] = detail
+	data, err := json.Marshal(retained)
+	if err == nil {
+		policyContext = data
+	}
+	initMu.Unlock()
+	if err != nil {
+		return err
+	}
+	Info("ROUTING_POLICY", "resolved routing policy updated", map[string]any{"policy_context": json.RawMessage(data)})
+	return nil
+}
+
 // Correlation follows the single Go session owner; producers with a specific
 // callback identity can override these fields in their event arguments.
 type Correlation struct {

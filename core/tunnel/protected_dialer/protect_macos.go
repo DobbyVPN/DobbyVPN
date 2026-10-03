@@ -101,12 +101,12 @@ func (m *macosProtector) Protect(fd uintptr, network string) error {
 	switch network {
 	case networkTCP4, networkUDP4:
 		if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, ipBoundIf, defaultInterfaceIndex); err != nil {
-			log.Debugf(Category, "[Darwin-Protect] IP_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Errorf(Category, "[Darwin-Protect] IP_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 			return err
 		}
 	case networkTCP6, networkUDP6:
 		if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, ipv6BoundIf, defaultInterfaceIndex); err != nil {
-			log.Debugf(Category, "[Darwin-Protect] IPV6_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
+			log.Errorf(Category, "[Darwin-Protect] IPV6_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
 			return err
 		}
 	}

@@ -36,7 +36,7 @@ func (l *linuxProtector) Protect(fdU uintptr, network string) error {
 		syscall.SO_MARK,
 		linuxSocketMark,
 	); err != nil {
-		log.Debugf(Category, "[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
+		log.Errorf(Category, "[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
 		return err
 	}
 	return nil

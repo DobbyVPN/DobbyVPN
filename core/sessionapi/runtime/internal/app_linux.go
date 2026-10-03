@@ -59,7 +59,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	gatewayIP, err := gateway.DiscoverGateway()
 	if err != nil {
 		err = fmt.Errorf("failed to discover gateway: %w", err)
-		log.Debugf(Category, "[Linux][Step 1][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 1] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -79,7 +79,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	uplinkIface, err := routing.GetDefaultInterfaceNameLinux(gatewayIP.String())
 	if err != nil {
 		err = fmt.Errorf("failed to detect uplink interface: %w", err)
-		log.Debugf(Category, "[Linux][Step 3][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 3] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -92,7 +92,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		app.RoutingConfig.TunDeviceName,
 	); err != nil {
 		err = fmt.Errorf("failed to recover interrupted Linux routing state: %w", err)
-		log.Debugf(Category, "[Linux][Recovery][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Recovery] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -128,7 +128,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		_, err = routePlan.AcquireLinuxProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface)
 		if err != nil {
 			err = fmt.Errorf("failed to add early route: %w", err)
-			log.Debugf(Category, "[Linux][Step 4][ERROR] %v", err)
+			log.Errorf(Category, "[Linux][Step 4] %v", err)
 			signalInit(initResult, err)
 			return err
 		}
@@ -152,7 +152,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		gatewayIP.String(),
 	); err != nil {
 		err = fmt.Errorf("failed to setup marked routing: %w", err)
-		log.Debugf(Category, "[Linux][Step 5][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 5] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -174,7 +174,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	tun, err = newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
 		err = fmt.Errorf("failed to create TUN device: %w", err)
-		log.Debugf(Category, "[Linux][Step 6][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 6] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -188,7 +188,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, uplinkIface)
 	if err != nil {
 		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
-		log.Debugf(Category, "[Linux][Step 7][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 7] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -198,14 +198,14 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	t, ok := tun.(interface{ GetFd() int })
 	if !ok {
 		err = fmt.Errorf("TUN has no fd")
-		log.Debugf(Category, "[Linux][Step 8][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 8] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
 	fd := t.GetFd()
 	if fd < 0 {
 		err = fmt.Errorf("invalid fd=%d", fd)
-		log.Debugf(Category, "[Linux][Step 8][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 8] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -219,7 +219,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		UplinkIface: "",
 	}, app.DNSCache, app.BypassPolicy)
 	if err != nil {
-		log.Debugf(Category, "Can't start tun2socks: %v", err)
+		log.Errorf(Category, "Can't start tun2socks: %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -242,7 +242,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	if err != nil {
 		err = fmt.Errorf("failed to configure routing: %w", err)
-		log.Debugf(Category, "[Linux][Step 10][ERROR] %v", err)
+		log.Errorf(Category, "[Linux][Step 10] %v", err)
 		signalInit(initResult, err)
 		return err
 	}
@@ -270,7 +270,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 				if reconcileErr := reconcileLinuxUplink(
 					serverIP.String(), app.RoutingConfig.RoutingTableID, app.RoutingConfig.RoutingTablePriority,
 				); reconcileErr != nil {
-					log.Debugf(Category, "[Linux][Routing][WARN] route reconciliation pending: %v", reconcileErr)
+					log.Warnf(Category, "[Linux][Routing] route reconciliation pending: %v", reconcileErr)
 				}
 			}
 		}

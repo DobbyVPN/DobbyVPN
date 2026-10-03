@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -53,6 +54,9 @@ func newNativeRuntime(device protocol.ProtocolDevice, dnsCache *dnscache.Cache, 
 		},
 		state: stateIdle,
 	}
+	if err := log.SetPolicyDetail("desktop_tunnel", c.app.RoutingConfig); err != nil {
+		log.Errorf(nativeLogCategory, "retain desktop tunnel policy: %v", err)
+	}
 	return c
 }
 
@@ -90,8 +94,8 @@ func (c *nativeRuntime) Connect(ctx context.Context) error {
 		var runErr error
 		defer func() {
 			if r := recover(); r != nil {
-				runErr = fmt.Errorf("native session runtime crashed: %v", r)
-				log.Debugf(nativeLogCategory, "native session runtime goroutine recovered from panic: %v", runErr)
+				runErr = fmt.Errorf("native session runtime crashed: %v\n%s", r, debug.Stack())
+				log.Errorf(nativeLogCategory, "native session runtime goroutine recovered from panic: %v", runErr)
 				select {
 				case initResult <- runErr:
 				default:
@@ -102,7 +106,7 @@ func (c *nativeRuntime) Connect(ctx context.Context) error {
 		}()
 		runErr = c.app.Run(ctx, initResult)
 		if runErr != nil {
-			log.Debugf(nativeLogCategory, "connect native session runtime failed: %v", runErr)
+			log.Errorf(nativeLogCategory, "connect native session runtime failed: %v", runErr)
 		}
 	}()
 
@@ -216,7 +220,7 @@ func (c *nativeRuntime) waitForShutdown(ctx context.Context, done <-chan struct{
 		log.Debugf(nativeLogCategory, "Desktop session runtime shutdown completed after %s", reason)
 		return nil
 	case <-ctx.Done():
-		log.Debugf(nativeLogCategory, "Desktop session runtime shutdown wait timed out after %s", reason)
+		log.Errorf(nativeLogCategory, "Desktop session runtime shutdown wait timed out after %s", reason)
 		return fmt.Errorf("waiting for native session runtime shutdown after %s: %w", reason, ctx.Err())
 	}
 }

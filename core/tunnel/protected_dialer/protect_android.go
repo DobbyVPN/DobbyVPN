@@ -18,7 +18,7 @@ func ProtectSocket(fd uintptr, network string) bool {
 		return false
 	}
 	if !MakeSocketProtected(fd) {
-		log.Debugf(Category, "[Android-Protect] failed fd=%d network=%s", fd, network)
+		log.Errorf(Category, "[Android-Protect] failed fd=%d network=%s", fd, network)
 		return false
 	}
 	log.Debugf(Category, "[Android-Protect] succeeded fd=%d network=%s", fd, network)

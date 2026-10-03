@@ -28,12 +28,12 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 
 	if name == "" {
 		err = errors.New("name is required for TUN/TAP device")
-		log.Debugf(Category, "[TUN][Init][ERROR] %v", err)
+		log.Errorf(Category, "[TUN][Init] %v", err)
 		return nil, err
 	}
 	if ip == "" {
 		err = errors.New("ip is required for TUN/TAP device")
-		log.Debugf(Category, "[TUN][Init][ERROR] %v", err)
+		log.Errorf(Category, "[TUN][Init] %v", err)
 		return nil, err
 	}
 
@@ -47,7 +47,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	})
 	if err != nil {
 		err = fmt.Errorf("failed to create TUN/TAP device: %w", err)
-		log.Debugf(Category, "[TUN][Create][ERROR] %v", err)
+		log.Errorf(Category, "[TUN][Create] %v", err)
 		return nil, err
 	}
 	log.Debugf(Category, "[TUN][Create][OK] Interface created: %s", tun.Name())
@@ -59,7 +59,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	tunLink, err := netlink.LinkByName(name)
 	if err != nil {
 		err = fmt.Errorf("newly created TUN/TAP device '%s' not found: %w", name, err)
-		log.Debugf(Category, "[TUN][Netlink][ERROR] %v", err)
+		log.Errorf(Category, "[TUN][Netlink] %v", err)
 		return d, err
 	}
 	log.Debugf(Category, "[TUN][Netlink][OK] Link found: index=%d mtu=%d",
@@ -72,7 +72,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	log.Debugf(Category, "[TUN][Config] Configuring IP/subnet...")
 	if err = tunDev.configureSubnet(ip); err != nil {
 		err = fmt.Errorf("failed to configure TUN/TAP device subnet: %w", err)
-		log.Debugf(Category, "[TUN][Config][ERROR] %v", err)
+		log.Errorf(Category, "[TUN][Config] %v", err)
 		return d, err
 	}
 	log.Debugf(Category, "[TUN][Config][OK] IP configured")
@@ -80,7 +80,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	log.Debugf(Category, "[TUN][Link] Bringing interface UP...")
 	if err = tunDev.bringUp(); err != nil {
 		err = fmt.Errorf("failed to bring up TUN/TAP device: %w", err)
-		log.Debugf(Category, "[TUN][Link][ERROR] %v", err)
+		log.Errorf(Category, "[TUN][Link] %v", err)
 		return d, err
 	}
 	log.Debugf(Category, "[TUN][Link][OK] Interface is UP")
@@ -126,18 +126,18 @@ func (d *tunDevice) GetFd() int {
 	log.Debugf(Category, "[TUN][FD] Extracting file descriptor...")
 
 	if d.Interface == nil {
-		log.Debugf(Category, "[TUN][FD][ERROR] Interface is nil")
+		log.Errorf(Category, "[TUN][FD] Interface is nil")
 		return -1
 	}
 	if d.ReadWriteCloser == nil {
-		log.Debugf(Category, "[TUN][FD][ERROR] ReadWriteCloser is nil")
+		log.Errorf(Category, "[TUN][FD] ReadWriteCloser is nil")
 		return -1
 	}
 
 	if f, ok := d.ReadWriteCloser.(*os.File); ok {
 		fd, err := protected_dialer.UintptrToInt(f.Fd())
 		if err != nil {
-			log.Debugf(Category, "[TUN][FD][ERROR] Failed to get FD: %v", err)
+			log.Errorf(Category, "[TUN][FD] Failed to get FD: %v", err)
 			return -1
 		}
 		log.Debugf(Category, "[TUN][FD][OK] Got fd via *os.File: %d", fd)
@@ -151,13 +151,13 @@ func (d *tunDevice) GetFd() int {
 	if f, ok := d.ReadWriteCloser.(fder); ok {
 		fd, err := protected_dialer.UintptrToInt(f.Fd())
 		if err != nil {
-			log.Debugf(Category, "[TUN][FD][ERROR] Failed to get FD: %v", err)
+			log.Errorf(Category, "[TUN][FD] Failed to get FD: %v", err)
 			return -1
 		}
 		log.Debugf(Category, "[TUN][FD][OK] Got fd via Fd(): %d", fd)
 		return fd
 	}
 
-	log.Debugf(Category, "[TUN][FD][ERROR] Unable to extract fd (unknown type: %T)", d.ReadWriteCloser)
+	log.Errorf(Category, "[TUN][FD] Unable to extract fd (unknown type: %T)", d.ReadWriteCloser)
 	return -1
 }

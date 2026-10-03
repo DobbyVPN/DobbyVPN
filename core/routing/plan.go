@@ -4,8 +4,14 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"core/log"
+)
+
+const (
+	durationKey = "duration_ms"
+	resourceKey = "resource"
 )
 
 // Plan owns the routing resources acquired for one VPN session.  Resources are
@@ -50,13 +56,15 @@ func (p *Plan) Acquire(name string, apply func() error, release func(context.Con
 	if p.closed {
 		return nil, fmt.Errorf("routing plan %q is already closed", p.sessionID)
 	}
+	started := time.Now()
 	if err := apply(); err != nil {
+		log.Error(Category, "routing resource acquisition failed", map[string]any{resourceKey: name, durationKey: time.Since(started).Milliseconds(), "cause": err.Error()})
 		return nil, fmt.Errorf("routing plan %q acquire %s: %w", p.sessionID, name, err)
 	}
 
 	lease := &Lease{name: name, release: release}
 	p.leases = append(p.leases, lease)
-	log.Debugf(Category, "[Plan] session_owned=true acquired=%s", name)
+	log.Info(Category, "routing resource acquired", map[string]any{resourceKey: name, durationKey: time.Since(started).Milliseconds()})
 	return lease, nil
 }
 
@@ -68,9 +76,12 @@ func (l *Lease) Close(ctx context.Context) error {
 	if l.closed {
 		return nil
 	}
+	started := time.Now()
 	if err := l.release(ctx); err != nil {
+		log.Error(Category, "routing resource release pending", map[string]any{resourceKey: l.name, durationKey: time.Since(started).Milliseconds(), "cause": err.Error()})
 		return err
 	}
+	log.Info(Category, "routing resource released", map[string]any{resourceKey: l.name, durationKey: time.Since(started).Milliseconds()})
 	l.closed = true
 	return nil
 }
@@ -87,7 +98,6 @@ func (p *Plan) Close(ctx context.Context) error {
 		if err := lease.Close(ctx); err != nil {
 			return fmt.Errorf("%s: %w", lease.name, err)
 		}
-		log.Debugf(Category, "[Plan] session_owned=true released=%s", lease.name)
 		p.leases = p.leases[:index]
 	}
 	return nil

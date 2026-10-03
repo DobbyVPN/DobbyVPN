@@ -296,7 +296,7 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 			return handle, true, err
 		}
 		activeEngine = nil
-		log.Debugf(Category, "[Engine] StartPlatformEngine failed: %v", err)
+		log.Errorf(Category, "[Engine] StartPlatformEngine failed: %v", err)
 		return nil, false, err
 	}
 	handle.ifaceName = platform_engine.InterfaceName()

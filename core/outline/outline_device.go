@@ -58,13 +58,13 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
-		log.Debugf(Category, "outline client: failed to create stream dialer websocket=%v tcpPath=%v err=%v", strings.Contains(transportConfig, "ws:"), strings.Contains(transportConfig, "tcp_path="), err)
+		log.Errorf(Category, "outline client: failed to create stream dialer websocket=%v tcpPath=%v err=%v", strings.Contains(transportConfig, "ws:"), strings.Contains(transportConfig, "tcp_path="), err)
 		return nil, err
 	}
 
 	pd, err := providers.NewPacketDialer(ctx, transportConfig)
 	if err != nil {
-		log.Debugf(Category, "outline client: failed to create packet dialer websocket=%v udpPath=%v err=%v", strings.Contains(transportConfig, "ws:"), strings.Contains(transportConfig, "udp_path="), err)
+		log.Errorf(Category, "outline client: failed to create packet dialer websocket=%v udpPath=%v err=%v", strings.Contains(transportConfig, "ws:"), strings.Contains(transportConfig, "udp_path="), err)
 		return nil, err
 	}
 
@@ -133,6 +133,18 @@ type socksLogger struct {
 }
 
 func (l socksLogger) Errorf(format string, args ...interface{}) {
+	// The upstream logger has only Errorf and also uses it for normal UDP
+	// association creation. Classify at this adapter, retaining the exact text.
+	if format == "client want to used addr %v, listen addr: %s" {
+		log.Debugf(Category, "[SOCKS5 internal] "+format, args...)
+		return
+	}
+	for _, arg := range args {
+		if err, ok := arg.(error); ok && errors.Is(err, net.ErrClosed) {
+			log.Debugf(Category, "[SOCKS5 internal] "+format, args...)
+			return
+		}
+	}
 	msg := fmt.Sprintf(format, args...)
 	if strings.Contains(msg, "chacha20poly1305: message authentication failed") && l.device != nil {
 		log.Errorf(Category,
@@ -145,7 +157,7 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 		)
 		return
 	}
-	log.Errorf(Category, "[SOCKS5 internal] %s", msg)
+	log.Warnf(Category, "[SOCKS5 internal] %s", msg)
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {

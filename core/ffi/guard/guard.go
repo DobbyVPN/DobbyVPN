@@ -35,7 +35,7 @@ func recoveredMessage(fnName string, recovered any) string {
 func report(category, fnName string, recovered any) string {
 	message := recoveredMessage(fnName, recovered)
 	if category != "" {
-		log.Debugf(category, "%s\n%s", message, string(debug.Stack()))
+		log.Errorf(category, "%s\n%s", message, string(debug.Stack()))
 	}
 	return message
 }

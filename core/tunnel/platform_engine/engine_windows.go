@@ -156,7 +156,7 @@ func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 	removalErr := waitForWindowsAdapterRemoval(ctx, adapterName)
 	err := errors.Join(configurationErr, removalErr)
 	if err != nil {
-		log.Debugf(Category, "[Engine][Windows][ERROR] platform cleanup: %v", err)
+		log.Errorf(Category, "[Engine][Windows] platform cleanup: %v", err)
 	}
 	// DNS, DAD, and the tunnel address belong to this uniquely named adapter.
 	// Once Windows removes it, failed per-adapter restoration no longer needs a retry.

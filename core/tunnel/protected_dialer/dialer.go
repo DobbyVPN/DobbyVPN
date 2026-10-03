@@ -134,7 +134,7 @@ func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network,
 		Control: func(network, address string, c syscall.RawConn) error {
 			protectErr := protectRawConn(realNet, address, c)
 			if protectErr != nil {
-				log.Debugf(Category, "[Protect] TCP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
+				log.Errorf(Category, "[Protect] TCP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
 			}
 			return protectErr
 		},
@@ -228,7 +228,7 @@ func DialUDPWithProtect(ctx context.Context, cache *dnscache.Cache, network, add
 		Control: func(network, address string, c syscall.RawConn) error {
 			protectErr := protectRawConn(realNet, address, c)
 			if protectErr != nil {
-				log.Debugf(Category, "[Protect] UDP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
+				log.Errorf(Category, "[Protect] UDP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
 			}
 			return protectErr
 		},

@@ -113,7 +113,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		UplinkIface: netInterface.Name,
 	}, app.DNSCache, app.BypassPolicy)
 	if err != nil {
-		log.Debugf(Category, "Can't start tun2socks: %v", err)
+		log.Errorf(Category, "Can't start tun2socks: %v", err)
 		signalInit(initResult, err)
 		return err
 	}

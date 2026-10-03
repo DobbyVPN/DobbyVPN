@@ -48,6 +48,9 @@ func ResolveBypassPolicy(ctx context.Context, entries []string) (*BypassPolicy, 
 	if err != nil {
 		return nil, err
 	}
+	if err := log.SetPolicyDetail("resolved_bypass_cidrs", summarizeCIDRs(cidrs)); err != nil {
+		log.Errorf(Category, "retain resolved bypass policy: %v", err)
+	}
 	log.Debug(Category, "attempt bypass policy resolved", map[string]any{"entry_count": len(entries), "resolved_cidr_count": len(cidrs)})
 	return &BypassPolicy{cidrs: cidrs}, nil
 }

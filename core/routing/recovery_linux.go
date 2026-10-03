@@ -40,7 +40,7 @@ func linuxOwnedTunnelRoute(route netlink.Route, tunName string) bool {
 	}
 	link, err := linuxLinkByIndex(route.LinkIndex)
 	if err != nil {
-		log.Debugf(Category, "[Linux][Recovery][WARN] cannot identify route link index=%d: %v", route.LinkIndex, err)
+		log.Warnf(Category, "[Linux][Recovery] cannot identify route link index=%d: %v", route.LinkIndex, err)
 		return false
 	}
 	return link.Attrs().Name == tunName

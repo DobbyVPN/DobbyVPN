@@ -107,7 +107,7 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 
 	loglevel, err := internal.ExtractLogLevel(d.config)
 	if err != nil {
-		log.Debugf(common.Category, "failed to parse xray log level, using default=%s err=%v", internal.XrayLogLevelName(internal.DefaultXrayLogLevel()), err)
+		log.Warnf(common.Category, "failed to parse xray log level, using default=%s err=%v", internal.XrayLogLevelName(internal.DefaultXrayLogLevel()), err)
 		loglevel = internal.DefaultXrayLogLevel()
 	} else if loglevel == internal.NoXrayLogLevel() {
 		log.Debugf(common.Category, "xray log level disabled in config, using default=%s for runtime diagnostics", internal.XrayLogLevelName(internal.DefaultXrayLogLevel()))
