@@ -661,8 +661,6 @@ def _install(args: argparse.Namespace) -> int:
             [
                 "sudo", "-n", "env",
                 f"DOBBYVPN_CONTROL_PEER_UID={uid}",
-                f"DOBBY_LOG_PATH={run_dir / 'service.log'}",
-                f"DOBBY_LOG_ROOT={run_dir}",
                 "installer", "-pkg", str(package_path), "-target", "/",
             ],
         )

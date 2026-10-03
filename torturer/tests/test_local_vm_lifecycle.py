@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from torturer_runner import local_vm
+from torturer_runner import diagnostics, local_vm
 
 
 class LocalVMLifecycleTests(unittest.TestCase):
@@ -44,13 +44,13 @@ class LocalVMLifecycleTests(unittest.TestCase):
             for name, payload in payloads.items():
                 (source / name).write_bytes(payload)
             errors: list[str] = []
-            local_vm._collect_installed_backend_logs(source, logs, errors)
+            diagnostics.collect_installed_backend_logs(source, logs, errors)
             self.assertEqual(errors, [])
             self.assertEqual(
                 {path.name: path.read_bytes() for path in (logs / "installed-backend").iterdir()},
                 payloads,
             )
-            copy = local_vm.shutil.copyfileobj
+            copy = diagnostics.shutil.copyfileobj
 
             def fail_stderr(source_file, destination_file, **kwargs):
                 if Path(source_file.name).name == "backend.jsonl.stderr":
@@ -60,10 +60,10 @@ class LocalVMLifecycleTests(unittest.TestCase):
             copy_errors: list[str] = []
             diagnostic = io.StringIO()
             with (
-                mock.patch.object(local_vm.shutil, "copyfileobj", side_effect=fail_stderr),
+                mock.patch.object(diagnostics.shutil, "copyfileobj", side_effect=fail_stderr),
                 redirect_stderr(diagnostic),
             ):
-                local_vm._collect_installed_backend_logs(source, root / "copy-failure", copy_errors)
+                diagnostics.collect_installed_backend_logs(source, root / "copy-failure", copy_errors)
             self.assertEqual(len(copy_errors), 1)
             self.assertIn("original copy failure", diagnostic.getvalue())
             self.assertEqual(
@@ -71,7 +71,7 @@ class LocalVMLifecycleTests(unittest.TestCase):
                 payloads["backend.jsonl.stdout"],
             )
             (source / "backend.jsonl").unlink()
-            local_vm._collect_installed_backend_logs(source, root / "missing", errors)
+            diagnostics.collect_installed_backend_logs(source, root / "missing", errors)
             self.assertEqual(len(errors), 1)
             self.assertIn("backend.jsonl", errors[0])
             self.assertTrue((root / "missing/installed-backend/backend.jsonl.previous").is_file())
@@ -99,7 +99,7 @@ class LocalVMLifecycleTests(unittest.TestCase):
             diagnostic = io.StringIO()
             with (
                 mock.patch.object(local_vm, "_cleanup_logged", side_effect=command),
-                mock.patch.object(local_vm, "_collect_installed_backend_logs", side_effect=collection),
+                mock.patch.object(local_vm, "collect_installed_backend_logs", side_effect=collection),
                 redirect_stderr(diagnostic),
             ):
                 self.assertEqual(local_vm.cleanup(args), 1)

@@ -37,7 +37,7 @@ import time
 import traceback
 from typing import Any
 
-from .diagnostics import output_text
+from .diagnostics import collect_installed_backend_logs, output_text
 
 PLATFORMS = ("linux", "windows", "macos", "android", "ios-simulator")
 SUITES = ("mini", "full")
@@ -2435,32 +2435,6 @@ def _windows_release_package(run_dir: Path, release: dict[str, Any]) -> Path:
     return resolved
 
 
-def _collect_installed_backend_logs(directory: Path, logs: Path, errors: list[str]) -> None:
-    """Retain the installed service's files after its uninstaller stops it."""
-    for name in ("backend.jsonl", "backend.jsonl.stderr", "backend.jsonl.stdout"):
-        for suffix in ("", ".previous"):
-            path = directory / (name + suffix)
-            try:
-                source = path.open("rb")
-            except FileNotFoundError as error:
-                if name == "backend.jsonl" and not suffix:
-                    errors.append(f"collect-installed-backend: {error}")
-                continue
-            except OSError as error:
-                traceback.print_exception(error)
-                errors.append(f"collect-installed-backend: {error}")
-                continue
-            try:
-                with source:
-                    destination = logs / "installed-backend" / path.name
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    with destination.open("wb") as output:
-                        shutil.copyfileobj(source, output, length=64 * 1024)
-            except OSError as error:
-                traceback.print_exception(error)
-                errors.append(f"collect-installed-backend {path}: {error}")
-
-
 def cleanup(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     state = _read_state(run_dir)
@@ -2587,7 +2561,7 @@ def cleanup(args: argparse.Namespace) -> int:
                 Path("/Library/Logs/DobbyVPN") if args.platform == "macos"
                 else Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "DobbyVPN" / "Logs"
             )
-            _collect_installed_backend_logs(directory, logs, errors)
+            collect_installed_backend_logs(directory, logs, errors)
     if state.get("source_checks_attempted") is True:
         source = run_dir / "source"
         _cleanup_logged(

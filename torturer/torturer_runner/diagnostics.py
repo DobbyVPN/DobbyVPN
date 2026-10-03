@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import shutil
 import sys
+import traceback
 from typing import TextIO
 
 from .process_capture import merge_output_fragments as merge_output, output_text
@@ -68,10 +71,37 @@ def add_exception_notes(
             add_stream_notes(error, label, secondary_stdout, secondary_stderr)
 
 
+def collect_installed_backend_logs(directory: Path, logs: Path, errors: list[str]) -> None:
+    """Retain the installed service's files after its uninstaller stops it."""
+    for name in ("backend.jsonl", "backend.jsonl.stderr", "backend.jsonl.stdout"):
+        for suffix in ("", ".previous"):
+            path = directory / (name + suffix)
+            try:
+                source = path.open("rb")
+            except FileNotFoundError as error:
+                if name == "backend.jsonl" and not suffix:
+                    errors.append(f"collect-installed-backend: {error}")
+                continue
+            except OSError as error:
+                traceback.print_exception(error)
+                errors.append(f"collect-installed-backend: {error}")
+                continue
+            try:
+                with source:
+                    destination = logs / "installed-backend" / path.name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with destination.open("wb") as output:
+                        shutil.copyfileobj(source, output, length=64 * 1024)
+            except OSError as error:
+                traceback.print_exception(error)
+                errors.append(f"collect-installed-backend {path}: {error}")
+
+
 __all__ = [
     "add_exception_notes",
     "add_stream_notes",
     "emit_streams",
+    "collect_installed_backend_logs",
     "merge_output",
     "output_text",
 ]

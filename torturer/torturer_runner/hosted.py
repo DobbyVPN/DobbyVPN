@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
+import platform as host_platform
 import time
 
 from torturer_contract.engine import FunctionalEngine
@@ -37,7 +38,6 @@ _SHA40 = set("0123456789abcdef")
 _HOSTED_ARCHITECTURE_BY_PLATFORM = {
     "linux": "amd64",
     "windows": "amd64",
-    "macos": "arm64",
     "android": "x86_64",
 }
 
@@ -122,7 +122,10 @@ def main(argv: list[str] | None = None) -> int:
         raw_dir = args.raw_log_dir or args.output.parent / "hosted-scratch"
         _ensure_directory(raw_dir)
         runner = SubprocessRunner(raw_dir)
-        architecture = _HOSTED_ARCHITECTURE_BY_PLATFORM[args.platform]
+        architecture = (
+            {"x86_64": "amd64", "arm64": "arm64"}[host_platform.machine().lower()]
+            if args.platform == "macos" else _HOSTED_ARCHITECTURE_BY_PLATFORM[args.platform]
+        )
         provenance = RunProvenance(
             platform=args.platform,
             platform_version=args.platform_version,

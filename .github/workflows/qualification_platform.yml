@@ -635,8 +635,6 @@ jobs:
             fi
             if [ "$PLATFORM" = macos ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
-              export DOBBY_LOG_PATH="$RUN_DIR/service.log"
-              export DOBBY_LOG_ROOT="$RUN_DIR"
             fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 "$GITHUB_WORKSPACE/.github/scripts/desktop/desktop_package.py" "${release_args[@]}"
           fi
@@ -698,6 +696,32 @@ jobs:
           fi
           python3 .github/scripts/desktop/desktop_package.py uninstall \
             --installed-descriptor "$INSTALLED_DESCRIPTOR" --run-dir "$RUN_DIR"
+
+      - name: Retain installed desktop backend diagnostics
+        if: always() && (inputs.platform == 'macos' || inputs.platform == 'windows') && env.RUN_DIR != ''
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/torturer
+        run: |
+          set -euo pipefail
+          if [ ! -s "$INSTALLED_DESCRIPTOR" ]; then
+            printf 'No installed package descriptor exists; installed backend logs are unavailable.\n' >&2
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from torturer_runner.diagnostics import collect_installed_backend_logs
+
+          directory = (
+              Path("/Library/Logs/DobbyVPN") if os.environ["PLATFORM"] == "macos"
+              else Path(os.environ["PROGRAMDATA"]) / "DobbyVPN" / "Logs"
+          )
+          errors = []
+          collect_installed_backend_logs(directory, Path(os.environ["RUN_DIR"]) / "logs", errors)
+          if errors:
+              raise RuntimeError("\n".join(errors))
+          PY
 
       - name: Remove Android standalone probe staging
         if: always() && inputs.platform == 'android'
