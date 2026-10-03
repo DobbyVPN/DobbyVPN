@@ -70,7 +70,7 @@ jobs:
               printf "%s\n" "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/dobby-jdk17.list
               apt-get update
               apt-get install -y sudo
-              apt-get install -y -t trixie-backports golang-go
+              apt-get install -y -t trixie-backports golang-1.25-go
               apt-get install -y -t bookworm openjdk-17-jdk-headless
               test -x /usr/lib/jvm/java-17-openjdk-amd64/bin/java
               sdkmanager "cmdline-tools;latest"
