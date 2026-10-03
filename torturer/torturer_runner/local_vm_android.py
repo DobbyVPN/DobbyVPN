@@ -226,7 +226,8 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
             run_dir=run_dir,
             logs=logs,
             label="android-native-ui",
-            timeout=min(timeout, 300),
+            # Match the hosted budget for 20 lifecycle cycles plus log export.
+            timeout=min(timeout, 420),
             environment=environment,
             check=False,
         )

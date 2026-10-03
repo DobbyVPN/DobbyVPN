@@ -395,7 +395,9 @@ jobs:
           ui_stderr="$RUN_DIR/android-native-ui.stderr.log"
           ui_status=0
           ui_timed_out=false
-          timeout --foreground 300s "$ADB" shell am instrument -w -r \
+          # The 20 lifecycle cycles reached final reopen at the former 300s
+          # limit on hosted API 35; leave time for live-log/export assertions.
+          timeout --foreground 420s "$ADB" shell am instrument -w -r \
             -e class com.dobby.NativeUiInstrumentedTest \
             com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
             >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
