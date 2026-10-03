@@ -455,7 +455,7 @@ class InformationRetentionTests(unittest.TestCase):
             (container / "tmp/ui_diagnostics.jsonl").write_bytes(payload)
             with mock.patch.object(ios_simulator_app, "_require_success", return_value=SimpleNamespace(stdout=str(container))):
                 ios_simulator_app._collect_ios_native_log(
-                    mock.Mock(), SimpleNamespace(udid="test"),
+                    mock.Mock(), SimpleNamespace(udid="11111111-1111-1111-1111-111111111111"),
                     SimpleNamespace(bundle_identifier="vpn.dobby.app"), root / "work", budget=mock.Mock(),
                 )
             ios_simulator_app.retain_ios_diagnostics(root / "work", root / "collected")
