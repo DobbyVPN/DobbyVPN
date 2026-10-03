@@ -678,7 +678,7 @@ public final class NativeUiHostedProfileTest {
         if (findUiObject("Use configuration text…") != null) {
             tapUiControl("Use configuration text…", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         }
-        tapUiControl("Connection configuration",
+        tapUiControl("Configuration text",
                 remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         UiObject2 input = waitForFocusedNativeInput(
                 remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
@@ -827,7 +827,7 @@ public final class NativeUiHostedProfileTest {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
             UiObject2 input = findNativeInput();
-            UiObject2 label = findUiObject("Connection configuration");
+            UiObject2 label = findUiObject("Configuration text");
             String visibleText = input == null ? null : input.getText();
             if (input != null
                     && label != null
@@ -1046,7 +1046,7 @@ public final class NativeUiHostedProfileTest {
             String lastBounds) {
         String safeLabel = "About".equals(label)
                 || "Back".equals(label)
-                || "Connection configuration".equals(label)
+                || "Configuration text".equals(label)
                 || CONNECTION_ACTION_LABEL.equals(label)
                 ? label
                 : "other";

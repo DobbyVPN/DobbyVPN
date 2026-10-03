@@ -243,7 +243,9 @@ val backendTasks = abis.map { (androidAbi, pair) ->
                 // The bridge arrives as a static archive, so Go does not
                 // infer a C++ external linker from source files. Select the
                 // NDK C++ driver explicitly so -static-libstdc++ takes effect.
-                "-ldflags=-buildid= -s -w -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
+                // Xray's anet dependency updates Go's IPv6 interface cache on
+                // Android and requires this linker option on Go 1.23+.
+                "-ldflags=-buildid= -s -w -checklinkname=0 -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
                 "-o", output.absolutePath, "./cmd/dobbyandroid"
             )
             workingDir(goModule)

@@ -110,7 +110,7 @@ class NativeUiInstrumentedTest {
         waitForTextContaining("startup.diagnostic_store_ready")
         waitForOneOf(arrayOf("Disconnected"), 10_000)
 
-        tapStable("Connection configuration")
+        tapStable("Subscription URL")
         val nativeInput = waitForFocusedNativeInput(10_000)
         nativeInput.setText("invalidprofile")
         device.waitForIdle()
@@ -135,7 +135,7 @@ class NativeUiInstrumentedTest {
             val expectedSource = "invalidprofile-round-trip-$suffix"
             var phase = "open-configuration"
             try {
-                tapStable("Connection configuration")
+                tapStable("Subscription URL")
                 phase = "enter-source"
                 waitForFocusedNativeInput(10_000).setText(expectedSource)
                 device.waitForIdle()
