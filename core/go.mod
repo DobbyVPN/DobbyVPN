@@ -19,7 +19,7 @@ require (
 	golang.getoutline.org/sdk v0.0.21
 	golang.getoutline.org/sdk/x v0.1.0
 	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 	golang.zx2c4.com/wireguard/windows v1.0.1
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
