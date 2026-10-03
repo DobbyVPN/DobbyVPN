@@ -1,7 +1,9 @@
 import Combine
+import DobbyDiagnosticFiles
 @testable import DobbyNativeUI
 import Foundation
 import XCTest
+import zlib
 
 private final class DiagnosticClient: DobbySessionClient, @unchecked Sendable {
     let diagnosticPaths: [URL]
@@ -36,7 +38,7 @@ final class DiagnosticsTests: XCTestCase {
         let completed = expectation(description: "fresh export")
         model.prepareLogsExport { url in
             do {
-                let output = try String(contentsOf: url, encoding: .utf8)
+                let output = String(decoding: try readGzip(url), as: UTF8.self)
                 XCTAssertTrue(output.contains("DobbyVPN 1.5.3"))
                 XCTAssertTrue(output.contains("Platform:"))
                 XCTAssertTrue(output.hasSuffix(text), model.logsError)
@@ -58,7 +60,7 @@ final class DiagnosticsTests: XCTestCase {
         let completed = expectation(description: "partial export reports error")
         model.prepareLogsExport { url in
             do {
-                let output = try String(contentsOf: url, encoding: .utf8)
+                let output = String(decoding: try readGzip(url), as: UTF8.self)
                 XCTAssertTrue(output.contains("available diagnostic"))
                 XCTAssertTrue(output.contains(directory.path))
                 XCTAssertFalse(model.logsError.isEmpty)
@@ -74,7 +76,7 @@ final class DiagnosticsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let missing = directory.appendingPathComponent("missing.jsonl")
         XCTAssertEqual(diagnosticPreview(paths: [missing]).error, "")
-        XCTAssertEqual(try exportDiagnostics(paths: [missing], to: directory.appendingPathComponent("export.txt"), header: ""), "")
+        XCTAssertEqual(try exportDiagnostics(paths: [missing], to: directory.appendingPathComponent("export.gz"), header: ""), "")
     }
 
     func testLargeExportPreservesEveryByteAndBoundsPreview() throws {
@@ -82,7 +84,7 @@ final class DiagnosticsTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let source = directory.appendingPathComponent("large.jsonl")
-        let destination = directory.appendingPathComponent("export.txt")
+        let destination = directory.appendingPathComponent("export.gz")
         // Invalid UTF-8 at chunk boundaries must survive export unchanged.
         let block = Data((0..<65_536).map { UInt8(truncatingIfNeeded: $0) })
         XCTAssertTrue(FileManager.default.createFile(atPath: source.path, contents: nil))
@@ -94,12 +96,49 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertLessThan(preview.text.count, 263_000)
         let header = "test metadata\n"
         XCTAssertEqual(try exportDiagnostics(paths: [source], to: destination, header: header), "")
-        let reader = try FileHandle(forReadingFrom: destination)
+        guard let reader = gzopen(destination.path, "rb") else { return XCTFail("open gzip") }
+        defer { XCTAssertEqual(gzclose(reader), Z_OK) }
         let prefix = Data((header + "\n--- large.jsonl ---\n").utf8)
-        XCTAssertEqual(try reader.read(upToCount: prefix.count), prefix)
-        for _ in 0..<1024 { XCTAssertEqual(try reader.read(upToCount: block.count), block) }
-        XCTAssertEqual(try reader.read(upToCount: 1)?.count ?? 0, 0)
-        try reader.close()
+        XCTAssertEqual(try readGzipChunk(reader, count: prefix.count), prefix)
+        for _ in 0..<1024 { XCTAssertEqual(try readGzipChunk(reader, count: block.count), block) }
+        XCTAssertTrue(try readGzipChunk(reader, count: 1).isEmpty)
+    }
+
+    func testRotationMigrationAndBothRetainedGenerations() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("native.jsonl")
+        XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: nil))
+        let writer = try FileHandle(forWritingTo: file)
+        try writer.truncate(atOffset: DiagnosticFiles.threshold - 1)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data("\nlegacy-tail\n".utf8))
+        try writer.close()
+        // A legacy oversized file is streamed into complete-record generations.
+        try DiagnosticFiles.append("first", event: "test", level: "INFO", source: "test", to: file)
+        let previous = URL(fileURLWithPath: file.path + ".previous")
+        let retained = try FileHandle(forReadingFrom: previous)
+        XCTAssertEqual(try retained.seekToEnd(), DiagnosticFiles.threshold)
+        try retained.close()
+        XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).hasPrefix("legacy-tail\n"))
+        let next = try FileHandle(forWritingTo: file)
+        try next.truncate(atOffset: DiagnosticFiles.threshold)
+        try next.close()
+        try DiagnosticFiles.append("second", event: "test", level: "INFO", source: "test", to: file)
+        let old = try FileHandle(forReadingFrom: previous)
+        XCTAssertEqual(try old.read(upToCount: 12), Data("legacy-tail\n".utf8))
+        try old.close()
+        XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).contains("second"))
+        // Keep this export small; the separate 64 MiB test checks streaming.
+        try Data("retained prior\n".utf8).write(to: previous)
+        let destination = directory.appendingPathComponent("both.gz")
+        XCTAssertEqual(try exportDiagnostics(paths: [file], to: destination, header: ""), "")
+        let exported = String(decoding: try readGzip(destination), as: UTF8.self)
+        XCTAssertTrue(exported.contains("retained prior"))
+        XCTAssertTrue(exported.contains("second"))
+        XCTAssertThrowsError(try exportDiagnostics(paths: [file], to: destination, header: "overwrite"))
+        XCTAssertEqual(String(decoding: try readGzip(destination), as: UTF8.self), exported)
     }
 
     @MainActor
@@ -123,7 +162,7 @@ final class DiagnosticsTests: XCTestCase {
         let completed = expectation(description: "persisted history")
         replacement.prepareLogsExport { url in
             do {
-                let text = try String(contentsOf: url, encoding: .utf8)
+                let text = String(decoding: try readGzip(url), as: UTF8.self)
                 XCTAssertTrue(text.contains("error-0:"))
                 XCTAssertTrue(text.contains("error-99:"))
                 XCTAssertTrue(text.contains("diagnostic λ"))
@@ -137,4 +176,22 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertTrue(preview.text.contains("error-99:"))
     }
 
+}
+
+private func readGzipChunk(_ reader: gzFile, count: Int) throws -> Data {
+    var buffer = [UInt8](repeating: 0, count: count)
+    let size = gzread(reader, &buffer, UInt32(count))
+    guard size >= 0 else { throw NSError(domain: "GzipTest", code: Int(size)) }
+    return Data(buffer.prefix(Int(size)))
+}
+
+private func readGzip(_ path: URL) throws -> Data {
+    guard let reader = gzopen(path.path, "rb") else { throw NSError(domain: "GzipTest", code: 1) }
+    defer { XCTAssertEqual(gzclose(reader), Z_OK) }
+    var data = Data()
+    while true {
+        let next = try readGzipChunk(reader, count: 65_536)
+        if next.isEmpty { return data }
+        data.append(next)
+    }
 }

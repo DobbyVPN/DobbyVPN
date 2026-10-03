@@ -7,10 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        F20000000000000000000042 /* DiagnosticFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000042 /* DiagnosticFiles.swift */; };
 		F20000000000000000000040 /* DobbyDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000040 /* DobbyDiagnostics.swift */; };
 		F20000000000000000000041 /* DobbyDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000040 /* DobbyDiagnostics.swift */; };
 		8C7731F12E566DCD00B3782E /* DobbyVPNRuntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */; };
-		8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
 		A15F0FEA2D874D38007FA45D /* IOSIntegration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; settings = {ATTRIBUTES = (Required, ); }; };
 		D7A8C9B0E1F2435A0061FABD /* libresolv.9.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = D7A8C9B0E1F2435A0061FABC /* libresolv.9.tbd */; };
@@ -71,6 +71,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        F10000000000000000000042 /* DiagnosticFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../shared/diagnostics/DiagnosticFiles.swift; sourceTree = SOURCE_ROOT; };
 		F10000000000000000000040 /* DobbyDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyDiagnostics.swift; sourceTree = "<group>"; };
 		058557BA273AAA24004C7B11 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		058557D8273AAEEB004C7B11 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -164,7 +165,6 @@
 				A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */,
 				8C7731F12E566DCD00B3782E /* DobbyVPNRuntime.xcframework in Frameworks */,
 				D7A8C9B0E1F2435A0061FABD /* libresolv.9.tbd in Frameworks */,
-				8CF4C25F2E61E1C400A1B0E4 /* (null) in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -272,6 +272,7 @@
 			children = (
 				F10000000000000000000004 /* DobbySessionClient.swift */,
 				F10000000000000000000040 /* DobbyDiagnostics.swift */,
+                F10000000000000000000042 /* DiagnosticFiles.swift */,
 				F10000000000000000000005 /* DobbySessionViewModel.swift */,
 				F10000000000000000000006 /* DobbyRootView.swift */,
 				F10000000000000000000007 /* DobbyShareSheet.swift */,
@@ -516,6 +517,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                F20000000000000000000042 /* DiagnosticFiles.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

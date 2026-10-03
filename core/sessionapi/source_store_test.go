@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -31,7 +32,9 @@ func TestFileSourceStoreSavesAndClearsURL(t *testing.T) {
 		t.Fatalf("Load() = %q, %v", got, err)
 	}
 	info, err := os.Stat(current)
-	if err != nil || info.Mode().Perm() != 0600 {
+	// Windows reports synthesized Unix mode bits; access there is governed by
+	// the ACL inherited from the backend's restricted configuration directory.
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0600) {
 		t.Fatalf("saved URL mode = %v, %v", info, err)
 	}
 	if err := store.Clear(context.Background()); err != nil {

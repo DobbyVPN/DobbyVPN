@@ -29,7 +29,7 @@ public final class SharedKeychainSecretStore {
             return nil
         }
         guard let data = result as? Data else {
-            IOSAppCompositionRoot.logsRepository.writeLog(
+            IOSAppCompositionRoot.logsRepository.writeLog(level: "ERROR",
                 log: "[ERROR] DobbyVPN Keychain read returned an unexpected value type key=\(key)"
             )
             return nil
@@ -53,10 +53,15 @@ public final class SharedKeychainSecretStore {
         create[kSecValueData as String] = value
         create[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let createStatus = SecItemAdd(create as CFDictionary, nil)
-        // Two processes can initialize the shared per-install key at the same
-        // time. The loser must reuse the key created by the winner rather than
-        // treating the expected duplicate-item race as a storage failure.
-        if createStatus == errSecSuccess || data(for: key) != nil { return true }
+        if createStatus == errSecSuccess { return true }
+        if createStatus == errSecDuplicateItem {
+            // The concurrent writer may have stored a different configuration.
+            // Success means this requested value was written, not just found.
+            let retryStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+            if retryStatus == errSecSuccess { return true }
+            reportFailure("update-after-add-collision", key, retryStatus)
+            return false
+        }
         reportFailure("create", key, createStatus)
         return false
     }
@@ -117,7 +122,7 @@ public final class SharedKeychainSecretStore {
     }
 
     private func reportFailure(_ operation: String, _ key: String, _ status: OSStatus) {
-        IOSAppCompositionRoot.logsRepository.writeLog(
+        IOSAppCompositionRoot.logsRepository.writeLog(level: "ERROR",
             log: "[ERROR] DobbyVPN Keychain operation failed operation=\(operation) key=\(key) osstatus=\(status)"
         )
     }

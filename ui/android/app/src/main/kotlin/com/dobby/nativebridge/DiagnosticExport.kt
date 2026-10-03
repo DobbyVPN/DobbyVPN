@@ -1,56 +1,60 @@
 package com.dobby.nativebridge
 
 import java.io.File
-import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.OutputStream
-import java.util.zip.Deflater
 import java.util.zip.GZIPOutputStream
 import org.json.JSONObject
 
-/** Export exact file bytes with bounded memory, preserving collection errors. */
+/** Export exact retained bytes with bounded memory and explicit collection errors. */
 internal fun writeDiagnosticArchive(destination: OutputStream, paths: List<File>, metadata: JSONObject) {
-    object : GZIPOutputStream(destination) {
-        init { def.setLevel(Deflater.BEST_COMPRESSION) }
-    }.use { output ->
-        output.write("$metadata\n".toByteArray(Charsets.UTF_8))
-        val buffer = ByteArray(65_536)
-        val errors = mutableListOf<String>()
+    val inputs = mutableListOf<DiagnosticFiles.Input>()
+    val errors = mutableListOf<String>()
+    var original: Throwable? = null
+    try {
         for (file in paths) {
-            val input = try {
-                if (file.exists() && !file.isFile) throw IOException("Diagnostic input is not a regular file: ${file.path}")
-                file.inputStream()
-            } catch (failure: FileNotFoundException) {
-                if (file.exists()) errors.add("${file.path}: ${failure.stackTraceToString()}")
-                continue
-            } catch (failure: IOException) {
-                errors.add("${file.path}: ${failure.stackTraceToString()}")
-                continue
-            }
-            input.use {
-                var remaining = try {
-                    input.channel.size()
-                } catch (failure: IOException) {
-                    errors.add("${file.path}: ${failure.stackTraceToString()}")
-                    0L
-                }
+            try { inputs.addAll(DiagnosticFiles.capture(file)) }
+            catch (failure: Exception) { errors.add("${file.path}: ${failure.stackTraceToString()}") }
+        }
+        GZIPOutputStream(destination, 65_536).use { output ->
+            output.write("$metadata\n".toByteArray(Charsets.UTF_8))
+            val buffer = ByteArray(65_536)
+            for ((file, input, length) in inputs) {
+                output.write("${JSONObject().put("diagnostic_file", file.name)}\n".toByteArray(Charsets.UTF_8))
+                var remaining = length
                 while (remaining > 0) {
                     val count = try {
                         input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt()).also {
-                            if (it < 0) throw IOException("Log shortened during export")
+                            if (it < 0) throw IOException("Log shortened during export: ${file.path}")
                         }
                     } catch (failure: IOException) {
                         errors.add("${file.path}: ${failure.stackTraceToString()}")
                         break
                     }
-                    // A destination failure propagates; never report a partial archive as successful.
                     output.write(buffer, 0, count)
                     remaining -= count
                 }
+                output.write('\n'.code)
             }
-            output.write('\n'.code)
+            for ((file, input) in inputs) {
+                try { input.close() } catch (failure: Exception) { errors.add("${file.path}: ${failure.stackTraceToString()}") }
+            }
+            inputs.clear()
+            val issues = JSONObject().put("collection_errors", errors.joinToString("\n"))
+            output.write("$issues\n".toByteArray(Charsets.UTF_8))
         }
-        val issues = JSONObject().put("collection_errors", errors.joinToString("\n"))
-        output.write("$issues\n".toByteArray(Charsets.UTF_8))
+    } catch (failure: Throwable) {
+        original = failure
+        throw failure
+    } finally {
+        var cleanupFailure: Throwable? = null
+        for ((_, input) in inputs) {
+            try { input.close() } catch (cleanup: Exception) {
+                if (cleanupFailure == null) cleanupFailure = cleanup else cleanupFailure.addSuppressed(cleanup)
+            }
+        }
+        if (cleanupFailure != null) {
+            if (original != null) original.addSuppressed(cleanupFailure) else throw cleanupFailure
+        }
     }
 }

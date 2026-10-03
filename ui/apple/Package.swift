@@ -16,13 +16,15 @@ let package = Package(
         .executable(name: "DobbyVPNMacApp", targets: ["DobbyVPNMacApp"]),
     ],
     targets: [
+        .target(name: "DobbyDiagnosticFiles", path: "shared/diagnostics", linkerSettings: [.linkedLibrary("z")]),
         .target(
             name: "DobbyNativeUI",
+            dependencies: ["DobbyDiagnosticFiles"],
             path: "shared/ui"
         ),
         .testTarget(
             name: "DobbyNativeUITests",
-            dependencies: ["DobbyNativeUI"],
+            dependencies: ["DobbyNativeUI", "DobbyDiagnosticFiles"],
             path: "shared/tests"
         ),
         .executableTarget(

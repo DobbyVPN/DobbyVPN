@@ -209,9 +209,9 @@ public final class DobbySessionViewModel: ObservableObject {
         let writeError = diagnosticWriteError
         logWorker.async { [weak self, client] in
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("DobbyVPN-logs-\(UUID().uuidString).txt")
+                .appendingPathComponent("DobbyVPN-logs-\(UUID().uuidString).gz")
             let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\n" +
-                "Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)\nCaptured: \(Date())\n\n"
+                "Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n"
             do {
                 let issues = try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header + writeError)
                 Task { @MainActor [weak self] in

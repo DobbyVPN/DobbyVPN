@@ -254,20 +254,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
-        // The provider first starts in control mode. No routes, DNS settings,
-        // or Go session are installed here, so configure cannot black-hole
-        // traffic and NetworkExtension status cannot become product state.
-        try registerPlatform()
-        logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for session command")
-
-        startPathLogging()
-        logInitialNetworkPath(timeout: 1.0)
         let path = IOSAppCompositionRoot.goLogFilePath().path
         logs.writeLog(log: "Starting Go tunnel logger using local storage")
         guard DobbyvpnInitLogger(path) else {
-            logs.writeLog(log: "[ERROR] service_logger_init result=failed failure_code=LOCAL_LOGGER_REJECTED")
+            logs.writeLog(level: "ERROR", log: "service_logger_init result=failed failure_code=LOCAL_LOGGER_REJECTED")
             throw sessionError("LOGGER_INITIALIZATION_FAILED")
         }
+        // Initialize diagnostics before retaining OS callbacks. A failed
+        // logger must not leave a callback cycle owning a rejected provider.
+        try registerPlatform()
+        logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for session command")
+        startPathLogging()
+        logInitialNetworkPath(timeout: 1.0)
         logs.writeLog(log: "service_logger_init result=success state=ready")
         logs.writeLog(log: "[tunnel:\(tunnelId)] control-mode logger ready")
     }

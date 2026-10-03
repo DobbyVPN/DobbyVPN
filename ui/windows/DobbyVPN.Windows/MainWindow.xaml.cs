@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO.Pipes;
-using Windows.ApplicationModel.DataTransfer;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -372,25 +371,6 @@ public sealed partial class MainWindow : Window
     private string ExportHeader =>
         $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n";
 
-    private async void CopyLogs_Click(object sender, RoutedEventArgs e)
-    {
-        if (_exportingLogs) return;
-        _exportingLogs = true;
-        try
-        {
-            // Text clipboard APIs require a complete string. Save uses the streaming path.
-            using var content = new MemoryStream();
-            await _diagnostics.ExportAsync(content, ExportHeader);
-            content.Position = 0;
-            using var reader = new StreamReader(content);
-            var data = new DataPackage();
-            data.SetText(await reader.ReadToEndAsync());
-            Clipboard.SetContent(data);
-        }
-        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be copied. Try Save logs."; }
-        finally { _exportingLogs = false; }
-    }
-
     private async void SaveLogs_Click(object sender, RoutedEventArgs e)
     {
         if (_exportingLogs) return;
@@ -398,7 +378,7 @@ public sealed partial class MainWindow : Window
         try
         {
             var picker = new FileSavePicker(AppWindow.Id) { SuggestedFileName = "DobbyVPN-logs" };
-            picker.FileTypeChoices.Add("Text file", new List<string> { ".txt" });
+            picker.FileTypeChoices.Add("Compressed diagnostics", new List<string> { ".gz" });
             var file = await picker.PickSaveFileAsync();
             if (file is not null)
             {

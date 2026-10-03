@@ -48,7 +48,7 @@ public final class VpnManagerImpl: NSObject {
     /// Sends one command to the provider. The inner Go payload is never rewritten.
     public func sendProviderMessage(_ messageData: Data) -> Data {
         guard !messageData.isEmpty else {
-            logs.writeLog(log: "[provider-message] rejected empty command")
+            logs.writeLog(level: "ERROR", log: "[provider-message] rejected empty command")
             return Self.transportFailure("INTERNAL", message: "provider command is empty")
         }
         let deadline = monotonicNow() + IOSProviderTiming.appMessageTimeout
@@ -69,7 +69,7 @@ public final class VpnManagerImpl: NSObject {
         do {
             return try sendOnce(messageData, timeout: timeout)
         } catch {
-            logs.writeLog(log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
+            logs.writeLog(level: "ERROR", log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
@@ -86,7 +86,7 @@ public final class VpnManagerImpl: NSObject {
         do {
             return try JSONSerialization.data(withJSONObject: value)
         } catch {
-            IOSAppCompositionRoot.logsRepository.writeLog(
+            IOSAppCompositionRoot.logsRepository.writeLog(level: "ERROR",
                 log: "[provider] transport failure encoding failed:\n\(diagnosticErrorDescription(error))"
             )
             // No valid response can be encoded. Return no decodable bytes so
@@ -105,7 +105,7 @@ public final class VpnManagerImpl: NSObject {
             )
             return try envelope.encoded()
         } catch {
-            logs.writeLog(log: "[provider] transport failure response encoding failed:\n\(diagnosticErrorDescription(error))")
+            logs.writeLog(level: "ERROR", log: "[provider] transport failure response encoding failed:\n\(diagnosticErrorDescription(error))")
             return Self.transportFailure("INTERNAL", message: "provider request failed")
         }
     }
@@ -155,7 +155,7 @@ public final class VpnManagerImpl: NSObject {
         if Thread.isMainThread {
             // Provider readiness waits must never freeze the UI thread. Refuse
             // a main-thread call if a caller violates that boundary.
-            logs.writeLog(log: "[provider] readiness check rejected on the main thread")
+            logs.writeLog(level: "ERROR", log: "[provider] readiness check rejected on the main thread")
             return "readiness check rejected on the main thread"
         }
         // Once the saved-and-reloaded manager is connected, use that exact
@@ -181,7 +181,7 @@ public final class VpnManagerImpl: NSObject {
         }
         guard let loadRemaining = remaining(until: deadline),
               loaded.wait(timeout: .now() + loadRemaining) == .success else {
-            logs.writeLog(log: "[provider] timed out loading NetworkExtension preferences")
+            logs.writeLog(level: "ERROR", log: "[provider] timed out loading NetworkExtension preferences")
             return "timed out loading NetworkExtension preferences"
         }
         condition.lock()
@@ -195,11 +195,11 @@ public final class VpnManagerImpl: NSObject {
         let status = current?.connection.status ?? .invalid
         condition.unlock()
         if let loadError {
-            logs.writeLog(log: "[provider] NetworkExtension preference save/load failed:\n\(diagnosticErrorDescription(loadError))")
+            logs.writeLog(level: "ERROR", log: "[provider] NetworkExtension preference save/load failed:\n\(diagnosticErrorDescription(loadError))")
             return String(reflecting: loadError)
         }
         guard let current else {
-            logs.writeLog(log: "[provider] NetworkExtension manager is unavailable without an error")
+            logs.writeLog(level: "ERROR", log: "[provider] NetworkExtension manager is unavailable without an error")
             return "NetworkExtension manager is unavailable without an error"
         }
         var observedStatus = status
@@ -207,7 +207,7 @@ public final class VpnManagerImpl: NSObject {
             if observedStatus == .connected { return nil }
             if observedStatus == .disconnecting {
                 guard let settled = waitForDisconnectToSettle(until: deadline) else {
-                    logs.writeLog(log: "[provider] disconnect did not settle before the readiness deadline")
+                    logs.writeLog(level: "ERROR", log: "[provider] disconnect did not settle before the readiness deadline")
                     return "disconnect did not settle before the readiness deadline"
                 }
                 observedStatus = settled
@@ -221,13 +221,13 @@ public final class VpnManagerImpl: NSObject {
             do {
                 try current.connection.startVPNTunnel(options: nil)
             } catch {
-                logs.writeLog(log: "[provider] control-mode start failed:\n\(diagnosticErrorDescription(error))")
+                logs.writeLog(level: "ERROR", log: "[provider] control-mode start failed:\n\(diagnosticErrorDescription(error))")
                 return String(reflecting: error)
             }
             if waitForReady(until: deadline) { return nil }
             observedStatus = current.connection.status
         }
-        logs.writeLog(log: "[provider] control-mode provider did not reach connected state")
+        logs.writeLog(level: "ERROR", log: "[provider] control-mode provider did not reach connected state")
         return "control-mode provider did not reach connected state before the readiness deadline"
     }
 

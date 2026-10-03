@@ -13,8 +13,6 @@ import androidx.core.content.FileProvider
 import com.dobby.ui.MainActivity
 import java.io.File
 import java.io.IOException
-import java.io.OutputStreamWriter
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,6 +37,8 @@ object NativeVpnBridge {
     private const val GO_DIAGNOSTIC_FILE = "go_app_logs.jsonl"
     private const val LOGCAT_FALLBACK_CHUNK_BYTES = 1024
     private val diagnosticLock = Any()
+    private val diagnosticRun = java.util.UUID.randomUUID().toString()
+    private val diagnosticSequence = java.util.concurrent.atomic.AtomicLong()
 
     @Volatile
     private var nativeDiagnosticWriteFailed = false
@@ -298,6 +298,7 @@ object NativeVpnBridge {
             File(directory, UI_DIAGNOSTIC_FILE),
             File(directory, NATIVE_DIAGNOSTIC_FILE),
             File(directory, GO_DIAGNOSTIC_FILE),
+            File(directory, GO_DIAGNOSTIC_FILE + ".stderr"),
         ).joinToString("\n") { it.absolutePath }
     }
 
@@ -320,18 +321,24 @@ object NativeVpnBridge {
     }
 
     internal fun recordDiagnostic(context: Context, event: String, message: String, failure: Throwable?) {
-        val record = JSONObject()
-            .put("schema", "dobby.log/v1")
-            .put("timestamp", isoTimestamp())
-            .put("level", if (failure == null) "INFO" else "ERROR")
-            .put("source", "android-native")
-            .put("event", event)
-            .put("message", message)
-            .apply {
-                if (failure != null) put("error_detail", stackTrace(failure))
-            }
-            .toString()
         synchronized(diagnosticLock) {
+            val record = JSONObject()
+                .put("schema", "dobby.log/v1")
+                .put("timestamp", isoTimestamp())
+                .put("level", if (failure == null) "INFO" else "ERROR")
+                .put("source", "android-native")
+                .put("process_id", android.os.Process.myPid())
+                .put("run_id", diagnosticRun)
+                .put("process_sequence", diagnosticSequence.incrementAndGet())
+                .put("app_version", com.dobby.vpn.BuildConfig.VERSION_NAME)
+                .put("source_commit", com.dobby.vpn.BuildConfig.PROJECT_REPOSITORY_COMMIT)
+                .put("build_configuration", com.dobby.vpn.BuildConfig.BUILD_TYPE)
+                .put("event", event)
+                .put("message", message)
+                .apply {
+                    if (failure != null) put("error_detail", stackTrace(failure))
+                }
+                .toString()
             storeNativeDiagnostic(
                 { File(diagnosticsDirectory(context), NATIVE_DIAGNOSTIC_FILE) },
                 record,
@@ -346,9 +353,7 @@ object NativeVpnBridge {
         onFailure: (String, Exception) -> Unit,
     ) {
         try {
-            OutputStreamWriter(FileOutputStream(destination(), true), Charsets.UTF_8).use { writer ->
-                writer.append(record).append('\n')
-            }
+            DiagnosticFiles.append(destination(), (record + "\n").toByteArray(Charsets.UTF_8))
         } catch (error: Exception) {
             onFailure(record, error)
         }

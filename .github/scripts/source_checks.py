@@ -301,8 +301,13 @@ def prepare_go_source_checks() -> Path:
 def prepare_native_runtime_check() -> Path:
     import desktop_build
 
+    if host_os() == "linux" and desktop_build.go_arch_from_machine() == "amd64":
+        return prepare_linux_go_test_dependencies()
     go = desktop_build.prepare_toolchain(host_os(), skip_deps=False)
     desktop_build.go_mod_download(go, run_tidy=False)
+    if host_os() == "windows":
+        desktop_build.install_windows_bridge(skip_deps=False)
+        desktop_build.install_wintun(skip_deps=False)
     return go
 
 
@@ -363,8 +368,21 @@ def go_race() -> None:
 
 
 def go_native_runtime() -> None:
+    import desktop_build
+
     go = prepare_native_runtime_check()
-    run([str(go), "test", "-v", "-race", *NATIVE_GO_PACKAGES], cwd=GO_MODULE, env=go_environment(go))
+    environment = go_environment(go)
+    packages = NATIVE_GO_PACKAGES.copy()
+    flags = []
+    if host_os() == "darwin":
+        desktop_build.configure_macos_deployment_target("macos", environment)
+        flags.append("-ldflags=-linkmode=external -extldflags=-lc++")
+    elif host_os() == "windows":
+        environment["PATH"] = str(GO_MODULE) + os.pathsep + environment.get("PATH", "")
+    elif host_os() == "linux" and desktop_build.go_arch_from_machine() != "amd64":
+        packages.remove("./clientserver/executor")
+        log("Executor coverage unavailable on Linux ARM64: the pinned TrustTunnel bridge supports Linux AMD64 only")
+    run([str(go), "test", "-v", "-race", *flags, *packages], cwd=GO_MODULE, env=environment)
 
 
 def go_tests(args: argparse.Namespace) -> None:

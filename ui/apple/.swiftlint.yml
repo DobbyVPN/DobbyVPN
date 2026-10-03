@@ -5,6 +5,7 @@ included:
   - ios/tunnel
   - macos/app
   - shared/ui
+  - shared/diagnostics
 
 disabled_rules:
   - trailing_comma

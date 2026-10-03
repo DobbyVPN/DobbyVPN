@@ -1,10 +1,12 @@
 package com.dobby
 
+import com.dobby.nativebridge.DiagnosticFiles
 import com.dobby.nativebridge.writeDiagnosticArchive
 import java.io.DataInputStream
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.util.zip.GZIPInputStream
 import org.json.JSONObject
 
@@ -19,7 +21,7 @@ internal fun verifyStreamingDiagnostics(cache: File) {
         val metadata = JSONObject().put("test", "exact bytes")
         archive.outputStream().use { writeDiagnosticArchive(it, listOf(source, directory), metadata) }
         DataInputStream(GZIPInputStream(archive.inputStream())).use { input ->
-            val prefix = "$metadata\n".toByteArray()
+            val prefix = "$metadata\n${JSONObject().put("diagnostic_file", source.name)}\n".toByteArray()
             val actualPrefix = ByteArray(prefix.size)
             input.readFully(actualPrefix)
             check(actualPrefix.contentEquals(prefix)) { "Diagnostic metadata changed" }
@@ -33,6 +35,31 @@ internal fun verifyStreamingDiagnostics(cache: File) {
                 "Diagnostic collection failure missing: $footer"
             }
         }
+        val native = File(directory, "native.jsonl")
+        RandomAccessFile(native, "rw").use {
+            it.setLength(DiagnosticFiles.THRESHOLD - 1)
+            it.seek(DiagnosticFiles.THRESHOLD - 1)
+            it.write("\nlegacy-tail\n".toByteArray())
+        }
+        DiagnosticFiles.append(native, "first\n".toByteArray())
+        val previous = File(native.path + ".previous")
+        check(previous.length() == DiagnosticFiles.THRESHOLD)
+        check(native.readText() == "legacy-tail\nfirst\n")
+        val captured = DiagnosticFiles.capture(native)
+        try {
+            RandomAccessFile(native, "rw").use { it.setLength(DiagnosticFiles.THRESHOLD) }
+            DiagnosticFiles.append(native, "second\n".toByteArray())
+            RandomAccessFile(native, "rw").use { it.setLength(DiagnosticFiles.THRESHOLD) }
+            DiagnosticFiles.append(native, "third\n".toByteArray())
+            val old = captured.last()
+            val retained = ByteArray(old.length.toInt())
+            DataInputStream(old.stream).readFully(retained)
+            check(String(retained) == "legacy-tail\nfirst\n") { "Rotation lost captured bytes" }
+        } finally { captured.forEach { it.stream.close() } }
+        previous.writeText("retained prior\n")
+        archive.outputStream().use { writeDiagnosticArchive(it, listOf(native), metadata) }
+        val both = GZIPInputStream(archive.inputStream()).bufferedReader().use { it.readText() }
+        check(both.contains("retained prior") && both.contains("third"))
         val destinationFailure = IOException("synthetic destination failure")
         try {
             writeDiagnosticArchive(object : OutputStream() {

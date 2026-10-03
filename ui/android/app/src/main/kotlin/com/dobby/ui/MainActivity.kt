@@ -177,13 +177,13 @@ private class SessionController(private val activity: MainActivity) {
     private fun readDiagnostics(): Pair<String, String> {
         val contents = mutableListOf<String>()
         val errors = mutableListOf<String>()
-        NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).forEach { path ->
+        NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).flatMap { sequenceOf(it + ".previous", it) }.forEach { path ->
             try {
                 val file = File(path)
                 if (file.exists()) {
                     val text = file.inputStream().use { stream ->
                         val size = stream.channel.size()
-                        val bytes = ByteArray(minOf(size, 262_144L).toInt())
+                        val bytes = ByteArray(minOf(size, 131_072L).toInt())
                         stream.channel.position(size - bytes.size)
                         java.io.DataInputStream(stream).readFully(bytes)
                         bytes.toString(Charsets.UTF_8)

@@ -6,7 +6,7 @@ extension VpnManagerImpl {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { completion(nil, error); return }
             if let error {
-                self.logs.writeLog(log: "[provider] preference load failed:\n\(diagnosticErrorDescription(error))")
+                self.logs.writeLog(level: "ERROR", log: "[provider] preference load failed:\n\(diagnosticErrorDescription(error))")
                 completion(nil, error)
                 return
             }
@@ -37,7 +37,7 @@ extension VpnManagerImpl {
                 self.reloadSavedManager(completion: completion)
                 return
             }
-            self.logs.writeLog(log: "[provider] preference save failed:\n\(diagnosticErrorDescription(saveError))")
+            self.logs.writeLog(level: "ERROR", log: "[provider] preference save failed:\n\(diagnosticErrorDescription(saveError))")
             completion(nil, saveError)
         }
     }
@@ -48,7 +48,7 @@ extension VpnManagerImpl {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
             guard let self else { completion(nil, loadError); return }
             if let loadError {
-                self.logs.writeLog(log: "[provider] preference reload failed:\n\(diagnosticErrorDescription(loadError))")
+                self.logs.writeLog(level: "ERROR", log: "[provider] preference reload failed:\n\(diagnosticErrorDescription(loadError))")
                 completion(nil, loadError)
                 return
             }
@@ -58,7 +58,7 @@ extension VpnManagerImpl {
                     code: -8,
                     userInfo: [NSLocalizedDescriptionKey: "saved DobbyVPN NetworkExtension manager was not returned by reload"]
                 )
-                self.logs.writeLog(log: "[provider] preference reload did not return the saved DobbyVPN manager")
+                self.logs.writeLog(level: "ERROR", log: "[provider] preference reload did not return the saved DobbyVPN manager")
                 completion(nil, missing)
                 return
             }

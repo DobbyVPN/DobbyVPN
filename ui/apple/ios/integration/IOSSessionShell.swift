@@ -40,7 +40,7 @@ public final class IOSSessionShell: NSObject {
                 return failure("INTERNAL", message: "source mailbox could not be encoded")
             }
             guard secrets.set(mailbox.encoded(), for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) else {
-                logs.writeLog(log: "iOS session source mailbox write returned failure request_id=\(requestID)")
+                logs.writeLog(level: "ERROR", log: "iOS session source mailbox write returned failure request_id=\(requestID)")
                 return failure("PLATFORM_FAILED", message: "source mailbox write returned failure")
             }
             hasConfigurationMailbox = true
@@ -54,7 +54,7 @@ public final class IOSSessionShell: NSObject {
                 options: [.sortedKeys, .withoutEscapingSlashes]
             )
         } catch {
-            logs.writeLog(
+            logs.writeLog(level: "ERROR",
                 log: "iOS session command encoding failed method=\(providerMethod):\n\(diagnosticErrorDescription(error))"
             )
             return failure("INVALID_ARGUMENT", message: "command parameters are invalid")
@@ -91,7 +91,7 @@ public final class IOSSessionShell: NSObject {
             do {
                 response = try IOSProviderPayload.decode(providerResponse.payload)
             } catch let error as IOSProviderPayloadError {
-                logs.writeLog(
+                logs.writeLog(level: "ERROR",
                     log: "iOS session provider payload decoding failed; " +
                         "reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n" +
                         diagnosticErrorDescription(error)
@@ -100,7 +100,7 @@ public final class IOSSessionShell: NSObject {
             }
             return (response, providerResponse.kind == .go)
         } catch {
-            logs.writeLog(
+            logs.writeLog(level: "ERROR",
                 log: "iOS session bridge failed method=\(method):\n\(diagnosticErrorDescription(error))"
             )
             return (failure("INTERNAL", message: "iOS session provider request failed"), false)
@@ -116,7 +116,7 @@ public final class IOSSessionShell: NSObject {
         guard let bytes = secrets.data(for: key),
               let mailbox = try? IOSConfigurationMailbox.decode(bytes),
               mailbox.requestID == requestID else {
-            logs.writeLog(log: "iOS session configuration mailbox identity did not match request_id=\(requestID)")
+            logs.writeLog(level: "ERROR", log: "iOS session configuration mailbox identity did not match request_id=\(requestID)")
             return
         }
         secrets.remove(key)

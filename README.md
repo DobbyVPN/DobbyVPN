@@ -35,14 +35,14 @@ The main screen keeps your subscription URL, connection button, and live logs
 together. Use “Use configuration text…” for inline TOML, and About for version
 and source information. Logs follow new entries until you scroll back;
 “Jump to latest” resumes following. Share logs (Save logs on Windows) exports
-fresh, complete diagnostics with version and platform information.
+both retained log generations as a gzip file with version and platform information.
 
 On Linux and other desktop platforms, use `dobby-cli logs` to view diagnostics,
 `dobby-cli logs --follow` to follow new entries, or
 `dobby-cli logs export diagnostics.gz` to save a compressed snapshot to a new file.
 `dobby-cli logs clear` hides earlier entries in the CLI view without removing
 retained diagnostics from exports. `DOBBY_CLI_LOG_PATH` selects the CLI log
-and its saved view boundary. Each backend log keeps a current and previous
+and its saved view boundary. Each independently owned log keeps a current and previous
 generation, rotating after 150 MB while preserving complete records. Product
 logs and exports remain unsanitized.
 
