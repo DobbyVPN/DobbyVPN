@@ -166,9 +166,16 @@ func capture(_ pid: pid_t, path: String) throws {
     func windowInfo() throws -> (CGWindowID, CGRect) {
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]],
-              let index = windows.firstIndex(where: {
-                  ($0[kCGWindowOwnerPID as String] as? Int) == Int(pid) &&
-                  ($0[kCGWindowLayer as String] as? Int) == 0
+              let index = windows.indices.filter({
+                  (windows[$0][kCGWindowOwnerPID as String] as? Int) == Int(pid) &&
+                  (windows[$0][kCGWindowLayer as String] as? Int) == 0
+              }).max(by: { left, right in
+                  func area(_ index: Int) -> CGFloat {
+                      guard let raw = windows[index][kCGWindowBounds as String] as? NSDictionary,
+                            let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary) else { return 0 }
+                      return bounds.width * bounds.height
+                  }
+                  return area(left) < area(right)
               }),
               let number = windows[index][kCGWindowNumber as String] as? UInt32,
               let raw = windows[index][kCGWindowBounds as String] as? NSDictionary,
@@ -188,6 +195,8 @@ func capture(_ pid: pid_t, path: String) throws {
             guard (obstruction[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let raw = obstruction[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), rect.intersects(bounds) else { continue }
+            // An attached native sheet belongs in the main-window capture.
+            if (obstruction[kCGWindowOwnerPID as String] as? Int) == Int(pid), bounds.contains(rect) { continue }
             let owner = obstruction[kCGWindowOwnerName as String] as? String
             let layer = obstruction[kCGWindowLayer as String] as? Int
             let systemSurface = (owner == "Dock" && layer == 20) ||
@@ -205,7 +214,9 @@ func capture(_ pid: pid_t, path: String) throws {
     let (id, bounds) = try windowInfo()
     let task = Process()
     task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-    task.arguments = ["-x", "-t", "png", "-l", String(id), path]
+    // Capture visible pixels, including sheets layered above the main window.
+    let region = [bounds.minX, bounds.minY, bounds.width, bounds.height].map { String(Int($0)) }.joined(separator: ",")
+    task.arguments = ["-x", "-t", "png", "-R", region, path]
     // screencapture normally writes no stdout; both original streams remain visible.
     task.standardOutput = FileHandle.standardError
     task.standardError = FileHandle.standardError
