@@ -73,7 +73,10 @@ public struct DobbyRootView: View {
     private var content: some View {
 #if os(macOS)
         VSplitView {
-            connection.padding(20).frame(minHeight: 160)
+            ScrollView {
+                connection.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: configurationText ? 260 : 160)
             logs.padding(20).frame(minHeight: 140)
         }
 #else
