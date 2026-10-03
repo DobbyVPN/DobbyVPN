@@ -5,6 +5,7 @@ package internal
 
 import (
 	"context"
+	"core/sessionapi"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
 	"errors"
@@ -12,13 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"core/common"
 	"core/routing"
 	"core/tunnel"
 
 	"core/log"
-
-	"github.com/jackpal/gateway"
 )
 
 var windowsRunSequence atomic.Uint64
@@ -39,7 +37,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 
-	cfg := common.GetNetworkConfig()
 	var ownedEngine *tunnel.Engine
 	protocolOpened := false
 	defer func() {
@@ -49,7 +46,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		log.Debugf(Category, "[Tunnel] Stopping tun2socks engine")
 		var engineErr error
 		if ownedEngine != nil {
-			engineErr = ownedEngine.Stop()
+			engineErr = ownedEngine.Stop(sessionapi.CleanupContext(ctx))
 		}
 		var deviceErr error
 		if protocolOpened {
@@ -65,32 +62,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}()
 
 	stepStartedAt := time.Now()
-	gatewayIP, err := gateway.DiscoverGateway()
+	gatewayIP, netInterface, err := routing.DiscoverWindowsDefaultRoute()
 	if err != nil {
-		err = fmt.Errorf("failed to discover gateway: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(Category, "[Windows] DiscoverGateway ready=true elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
-
-	stepStartedAt = time.Now()
-	interfaceName, err := routing.FindInterfaceIPByGateway(gatewayIP.String())
-	if err != nil {
-		err = fmt.Errorf("failed to find interface IP by gateway %s: %w", gatewayIP.String(), err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Debugf(Category, "[Windows] FindInterfaceIPByGateway ip=%s elapsed=%s total=%s", interfaceName, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
-
-	stepStartedAt = time.Now()
-	netInterface, err := routing.GetNetworkInterfaceByIP(interfaceName)
-	if err != nil {
-		err = fmt.Errorf("failed to get network interface by IP %s: %w", interfaceName, err)
-		log.Debugf(Category, "%v", err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Debugf(Category, "[Windows] GetNetworkInterfaceByIP iface=%s elapsed=%s total=%s", netInterface.Name, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
+	log.Debugf(Category, "[Windows] default route gateway=%s interface=%s index=%d elapsed=%s", gatewayIP, netInterface.Name, netInterface.Index, time.Since(stepStartedAt))
 
 	stepStartedAt = time.Now()
 	serverIP := app.ProtocolDevice.GetServerIP()
@@ -152,21 +129,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	log.Debugf(Category, "[Windows] tunnel.StartOwnedEngine OK elapsed=%s total=%s", time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	stepStartedAt = time.Now()
-	tunInterface, err := routing.WaitForInterfaceByIP(cfg.TunDevice, 5*time.Second)
+	tunInterface, err := routing.WaitForInterfaceName(ownedEngine.InterfaceName(), 5*time.Second)
 	if err != nil {
 		signalInit(initResult, err)
 		return err
 	}
-	expectedInterface := ownedEngine.InterfaceName()
-	if expectedInterface == "" || tunInterface.Name != expectedInterface {
-		err = fmt.Errorf(
-			"interface with TUN address is %q, expected owned adapter %q",
-			tunInterface.Name,
-			expectedInterface,
-		)
-		signalInit(initResult, err)
-		return err
-	}
+
 	log.Debugf(Category, "[Windows] WaitForOwnedInterfaceByIP OK iface=%s elapsed=%s total=%s", tunInterface.Name, time.Since(stepStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	// routing

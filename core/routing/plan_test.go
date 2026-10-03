@@ -110,7 +110,11 @@ func TestPlanConcurrentCloseWaitsAndReturnsCleanupFailure(t *testing.T) {
 	release := make(chan struct{})
 	want := errors.New("route cleanup failed")
 	if _, err := plan.Acquire("route", func() error { return nil }, func() error {
-		close(entered)
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
 		<-release
 		return want
 	}); err != nil {

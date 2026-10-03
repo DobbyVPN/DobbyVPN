@@ -3,21 +3,19 @@
 package routing
 
 import (
-	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"net"
-	"os/exec"
+	"net/netip"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 
 	"core/log"
 
 	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 var ipv4Subnets = []string{
@@ -47,9 +45,12 @@ var ipv4ReservedSubnets = []string{
 }
 
 var (
-	windowsNetshCommand      = executeNetshCommand
-	windowsRouteExists       = routeExistsInWindowsTable
-	windowsPowerShellCommand = executeWindowsPowerShell
+	windowsRouteRead      = readWindowsRoute
+	windowsRouteCreate    = (*winipcfg.MibIPforwardRow2).Create
+	windowsRouteDelete    = (*winipcfg.MibIPforwardRow2).Delete
+	windowsRouteIdentity  = resolveWindowsRoute
+	windowsFirewallAdd    = addWindowsIPv6Rule
+	windowsFirewallRemove = removeWindowsIPv6Rules
 
 	interfaceChangeCallback = windows.NewCallback(onInterfaceChange)
 	interfaceWaitersMu      sync.Mutex
@@ -57,78 +58,57 @@ var (
 	interfaceWaiters        = map[uintptr]chan struct{}{}
 )
 
-func ExecuteCommand(command string) (string, error) {
-	startedAt := time.Now()
-	cmd := exec.Command("cmd", "/C", command)
-
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
-
-	output, err := cmd.CombinedOutput()
-	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
-	if err != nil {
-		return string(output), fmt.Errorf("command execution failed after %s: %w, output: %s", elapsed, err, output)
-	}
-	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, command, output)
-	return string(output), nil
-}
-
-func executeNetshCommand(args ...string) (string, error) {
-	commandForLog := formatCommandForLog("netsh", args...)
-	log.Debugf(Category, "Outline/routing: Executing command: %s", commandForLog)
-
-	startedAt := time.Now()
-	cmd := exec.Command("netsh", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
-
-	output, err := cmd.CombinedOutput()
-	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
-	if err != nil {
-		return string(output), fmt.Errorf("command execution failed after %s: %w, output: %s", elapsed, err, output)
-	}
-	log.Debugf(Category, "Outline/routing: Command executed elapsed=%s: %s, output: %s", elapsed, commandForLog, output)
-	return string(output), nil
-}
-
-func formatCommandForLog(name string, args ...string) string {
-	parts := make([]string, 0, len(args)+1)
-	parts = append(parts, name)
-	for _, arg := range args {
-		if strings.ContainsAny(arg, " \t\"") {
-			parts = append(parts, fmt.Sprintf("%q", arg))
-		} else {
-			parts = append(parts, arg)
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
-// windowsRoute is the exact identity used for both the route-table lookup and
-// its netsh lease.  A route owned by another process is intentionally not
-// changed or deleted.
+// A captured LUID and index prevent a reused adapter name from acquiring an
+// old session's routes. Prefix and gateway are exact IP Helper identities.
 type windowsRoute struct {
 	prefix        string
 	nextHop       string
 	interfaceName string
 }
 
-func windowsRouteArgs(action string, route windowsRoute) []string {
-	args := []string{
-		"interface", "ipv4", action, "route", route.prefix,
-		"nexthop=" + route.nextHop,
-		"interface=" + route.interfaceName,
+func resolveWindowsRoute(route windowsRoute) (*winipcfg.MibIPforwardRow2, error) {
+	iface, err := net.InterfaceByName(route.interfaceName)
+	if err != nil {
+		return nil, err
 	}
-	// Windows can normalize the requested metric when it installs an
-	// off-link/gateway route. Supplying metric=0 during deletion then exits
-	// successfully without matching that exact route. Prefix, next hop and
-	// interface are the session-owned identity; omit metric only on delete.
-	if action == "add" {
-		args = append(args, "metric=0")
+	luid, err := winipcfg.LUIDFromIndex(uint32(iface.Index))
+	if err != nil {
+		return nil, err
 	}
-	return append(args, "store=active")
+	prefix, err := netip.ParsePrefix(route.prefix)
+	if err != nil {
+		return nil, err
+	}
+	nextHop, err := netip.ParseAddr(route.nextHop)
+	if err != nil {
+		return nil, err
+	}
+	row := &winipcfg.MibIPforwardRow2{}
+	row.Init()
+	row.InterfaceLUID, row.InterfaceIndex = luid, uint32(iface.Index)
+	if err := row.DestinationPrefix.SetPrefix(prefix.Masked()); err != nil {
+		return nil, err
+	}
+	if err := row.NextHop.SetAddr(nextHop); err != nil {
+		return nil, err
+	}
+	row.Metric = 0
+	return row, nil
+}
+
+func readWindowsRoute(key *winipcfg.MibIPforwardRow2) (*winipcfg.MibIPforwardRow2, error) {
+	row, err := key.InterfaceLUID.Route(key.DestinationPrefix.Prefix(), key.NextHop.Addr())
+	if errors.Is(err, windows.ERROR_NOT_FOUND) {
+		return nil, nil
+	}
+	return row, err
+}
+
+func sameWindowsRoute(a, b *winipcfg.MibIPforwardRow2) bool {
+	return a.InterfaceLUID == b.InterfaceLUID && a.InterfaceIndex == b.InterfaceIndex &&
+		a.DestinationPrefix.Prefix() == b.DestinationPrefix.Prefix() && a.NextHop.Addr() == b.NextHop.Addr() &&
+		a.Metric == b.Metric && a.Protocol == b.Protocol && a.Origin == b.Origin &&
+		a.Loopback == b.Loopback && a.Publish == b.Publish && a.Immortal == b.Immortal
 }
 
 // AcquireProxyRoute adds the exact VPN-server bypass route only when it is
@@ -147,162 +127,73 @@ func isLoopbackIP(ip string) bool {
 }
 
 func acquireWindowsRoute(plan *Plan, name string, route windowsRoute) (bool, error) {
-	exists, err := windowsRouteExists(route)
+	key, err := windowsRouteIdentity(route)
 	if err != nil {
-		return false, fmt.Errorf("query exact %s: %w", name, err)
+		return false, fmt.Errorf("resolve %s: %w", name, err)
 	}
-	if exists {
-		log.Debugf(Category, "Outline/routing: preserving pre-existing %s prefix=%s nexthop=%s interface=%s", name, route.prefix, route.nextHop, route.interfaceName)
+	existing, err := windowsRouteRead(key)
+	if err != nil {
+		return false, fmt.Errorf("query %s: %w", name, err)
+	}
+	if existing != nil {
+		log.Debugf(Category, "preserving foreign route prefix=%s gateway=%s luid=%d index=%d", route.prefix, route.nextHop, key.InterfaceLUID, key.InterfaceIndex)
 		return false, nil
 	}
-	if _, err := plan.Acquire(name,
-		func() error {
-			_, err := windowsNetshCommand(windowsRouteArgs("add", route)...)
-			return err
-		},
-		func() error {
-			return releaseWindowsRoute(route, 2*time.Second)
-		},
-	); err != nil {
+	// CreateIpForwardEntry2 is atomic. Capture its installed attributes before
+	// returning; the lease remains recorded even if the verification fails.
+	var installed *winipcfg.MibIPforwardRow2
+	_, err = plan.Acquire(name, func() error { return windowsRouteCreate(key) }, func() error {
+		if installed == nil {
+			return errors.New("created route ownership could not be confirmed")
+		}
+		return releaseWindowsRoute(installed)
+	})
+	if err != nil {
 		return false, err
+	}
+	installed, err = windowsRouteRead(key)
+	if err != nil {
+		return true, fmt.Errorf("capture created %s: %w", name, err)
+	}
+	if installed == nil {
+		return true, fmt.Errorf("created %s is absent", name)
 	}
 	return true, nil
 }
 
-func releaseWindowsRoute(route windowsRoute, timeout time.Duration) error {
-	if _, err := windowsNetshCommand(windowsRouteArgs("delete", route)...); err != nil {
-		exists, verifyErr := windowsRouteExists(route)
-		if verifyErr == nil && !exists {
-			return nil
-		}
-		if verifyErr != nil {
-			return fmt.Errorf("delete session-owned Windows route: %w; verify deletion: %v", err, verifyErr)
-		}
+func releaseWindowsRoute(owned *winipcfg.MibIPforwardRow2) error {
+	current, err := windowsRouteRead(owned)
+	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(timeout)
-	for {
-		exists, err := windowsRouteExists(route)
-		if err == nil && !exists {
-			return nil
-		}
-		if !time.Now().Before(deadline) {
-			if err != nil {
-				return fmt.Errorf("verify session-owned Windows route deletion: %w", err)
-			}
-			return errors.New("session-owned Windows route remained after deletion")
-		}
-		time.Sleep(50 * time.Millisecond)
+	if current == nil {
+		return nil
 	}
+	if !sameWindowsRoute(owned, current) {
+		return errors.New("session route was replaced; preserving foreign route")
+	}
+	deleteErr := windowsRouteDelete(current)
+	remaining, err := windowsRouteRead(owned)
+	if err != nil {
+		return errors.Join(deleteErr, fmt.Errorf("verify route removal: %w", err))
+	}
+	if remaining == nil {
+		return nil
+	}
+	return errors.Join(deleteErr, errors.New("session-owned Windows route remained after deletion"))
 }
 
-const cleanupStaleWindowsIPv6RulesScript = `$ErrorActionPreference = 'Stop'
-$pattern = '^DobbyVPN Block IPv6 windows-[0-9]+-[0-9]+$'
-$displayName = 'DobbyVPN Block IPv6 windows-*'
-$rules = @(Get-NetFirewallRule -DisplayName $displayName -PolicyStore PersistentStore -ErrorAction Stop | Where-Object { $_.DisplayName -cmatch $pattern })
-foreach ($rule in $rules) { [Console]::Out.WriteLine($rule.DisplayName); Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop }
-$remaining = @(Get-NetFirewallRule -DisplayName $displayName -PolicyStore PersistentStore -ErrorAction Stop | Where-Object { $_.DisplayName -cmatch $pattern })
-if ($remaining.Count -gt 0) { throw 'DobbyVPN-owned IPv6 firewall rules remained after cleanup.' }`
-
-// CleanupStaleWindowsIPv6FirewallRules deletes only rules whose local
-// persistent-store display name uses the exact generated Windows session form.
+// Startup recovery recognizes only the reserved session names and expected
+// outbound IPv6 block policy, using the same COM enumeration as normal cleanup.
 func CleanupStaleWindowsIPv6FirewallRules() error {
-	stdout, stderr, err := windowsPowerShellCommand(cleanupStaleWindowsIPv6RulesScript, 30*time.Second)
-	if err != nil {
-		return fmt.Errorf("remove stale owned IPv6 firewall rules: %w, stdout: %s, stderr: %s", err, stdout, stderr)
-	}
-	names := strings.FieldsFunc(stdout, func(char rune) bool { return char == '\r' || char == '\n' })
-	for _, name := range names {
-		if !IsOwnedWindowsIPv6RuleName(name) {
-			return fmt.Errorf("stale IPv6 firewall cleanup returned an unowned rule name %q, stdout: %s, stderr: %s", name, stdout, stderr)
-		}
-	}
-	log.Debugf(Category, "Outline/routing: stale IPv6 firewall recovery removed=%d stdout=%s stderr=%s", len(names), stdout, stderr)
-	return nil
-}
-
-func executeWindowsPowerShell(script string, timeout time.Duration) (string, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		if ctx.Err() != nil {
-			err = ctx.Err()
-		}
-		return stdout.String(), stderr.String(), fmt.Errorf("PowerShell command failed: %w", err)
-	}
-	return stdout.String(), stderr.String(), nil
-}
-
-func routeExistsInWindowsTable(route windowsRoute) (bool, error) {
-	iface, err := net.InterfaceByName(route.interfaceName)
-	if err != nil {
-		return false, fmt.Errorf("resolve interface %q: %w", route.interfaceName, err)
-	}
-	prefixIP, prefix, err := net.ParseCIDR(route.prefix)
-	if err != nil || prefixIP.To4() == nil {
-		return false, fmt.Errorf("parse IPv4 prefix %q", route.prefix)
-	}
-	nextHop := net.ParseIP(route.nextHop).To4()
-	if nextHop == nil {
-		return false, fmt.Errorf("parse IPv4 next hop %q", route.nextHop)
-	}
-
-	var table *windows.MibIpForwardTable2
-	if err := windows.GetIpForwardTable2(windows.AF_INET, &table); err != nil {
-		return false, err
-	}
-	defer windows.FreeMibTable(unsafe.Pointer(table))
-	for _, row := range table.Rows() {
-		if row.InterfaceIndex != uint32(iface.Index) || row.DestinationPrefix.PrefixLength != uint8(prefixMaskSize(prefix)) {
-			continue
-		}
-		if routeRowIPv4(row.DestinationPrefix.Prefix) == prefixIP.To4().String() && routeRowIPv4(row.NextHop) == nextHop.String() {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func prefixMaskSize(prefix *net.IPNet) int {
-	ones, _ := prefix.Mask.Size()
-	return ones
-}
-
-func routeRowIPv4(raw windows.RawSockaddrInet) string {
-	if raw.Family != windows.AF_INET {
-		return ""
-	}
-	addr := (*windows.RawSockaddrInet4)(unsafe.Pointer(&raw))
-	return net.IP(addr.Addr[:]).String()
+	return windowsFirewallRemove(IsOwnedWindowsIPv6RuleName)
 }
 
 func acquireIPv6Block(plan *Plan) error {
 	ruleName := "DobbyVPN Block IPv6 " + plan.SessionID()
-	remoteRanges := []string{
-		"0000:0000:0000:0000:0000:0000:0000:0000-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
-		"0::/0",
-		"::/0",
-	}
-	_, err := plan.Acquire("IPv6 firewall rule "+ruleName, func() error {
-		var errs []string
-		for _, remoteIP := range remoteRanges {
-			if _, err := windowsNetshCommand("advfirewall", "firewall", "add", "rule", "name="+ruleName, "dir=out", "action=block", "enable=yes", "remoteip="+remoteIP); err == nil {
-				return nil
-			} else {
-				errs = append(errs, err.Error())
-			}
-		}
-		return fmt.Errorf("install IPv6 block rule %q: %s", ruleName, strings.Join(errs, "; "))
-	}, func() error {
-		_, err := windowsNetshCommand("advfirewall", "firewall", "delete", "rule", "name="+ruleName)
-		return err
-	})
+	_, err := plan.Acquire("IPv6 firewall rule "+ruleName,
+		func() error { return windowsFirewallAdd(ruleName) },
+		func() error { return windowsFirewallRemove(func(name string) bool { return name == ruleName }) })
 	return err
 }
 
@@ -338,43 +229,40 @@ func ConfigureWindowsRouting(plan *Plan, proxyIP, gatewayIP, tunDeviceName, inte
 	return nil
 }
 
-func FindInterfaceIPByGateway(gatewayIP string) (string, error) {
-	cmd := exec.Command("route", "print")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-	}
-	output, err := cmd.CombinedOutput()
+// DiscoverWindowsDefaultRoute selects the live IPv4 default route by the
+// combined route/interface metric. No command output or gateway dependency is used.
+func DiscoverWindowsDefaultRoute() (net.IP, *net.Interface, error) {
+	rows, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
 	if err != nil {
-		return "", fmt.Errorf("execute route print: %w: %s", err, output)
+		return nil, nil, err
 	}
-
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	var foundGateway bool
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, gatewayIP) {
-			foundGateway = true
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				interfaceIP := parts[3]
-				iface, err := GetNetworkInterfaceByIP(interfaceIP)
-				if err == nil && IsTunnelInterfaceName(iface.Name) {
-					log.Debugf(Category, "Outline/routing: Skipping tunnel interface %s for gateway %s", iface.Name, gatewayIP)
-					continue
-				}
-				return interfaceIP, nil
-			}
+	var selected *net.Interface
+	var gateway net.IP
+	best := uint64(^uint32(0)) * 2
+	for _, row := range rows {
+		if row.DestinationPrefix.Prefix() != netip.MustParsePrefix("0.0.0.0/0") || row.NextHop.Addr().IsUnspecified() {
+			continue
+		}
+		iface, err := net.InterfaceByIndex(int(row.InterfaceIndex))
+		if err != nil {
+			return nil, nil, err
+		}
+		if iface.Flags&net.FlagUp == 0 || IsTunnelInterfaceName(iface.Name) {
+			continue
+		}
+		settings, err := row.InterfaceLUID.IPInterface(windows.AF_INET)
+		if err != nil {
+			return nil, nil, err
+		}
+		metric := uint64(row.Metric) + uint64(settings.Metric)
+		if metric < best {
+			best, selected, gateway = metric, iface, net.IP(row.NextHop.Addr().AsSlice())
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("read route print output: %w: %s", err, output)
+	if selected == nil {
+		return nil, nil, errors.New("no active IPv4 uplink default route")
 	}
-
-	if !foundGateway {
-		return "", fmt.Errorf("gateway %s is not found in the table: %s", gatewayIP, output)
-	}
-
-	return "", fmt.Errorf("no interface %s: %s", gatewayIP, output)
+	return gateway, selected, nil
 }
 
 func IsTunnelInterfaceName(name string) bool {
@@ -526,7 +414,8 @@ func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
 		}
 
 		for _, addr := range addrs {
-			if strings.Contains(addr.String(), currentIP) {
+			ip, _, parseErr := net.ParseCIDR(addr.String())
+			if parseErr == nil && ip.Equal(net.ParseIP(currentIP)) {
 				return &interf, nil
 			}
 		}

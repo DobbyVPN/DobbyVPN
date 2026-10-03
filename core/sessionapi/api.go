@@ -509,6 +509,10 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	return result, nil
 }
 
+func retryableCleanup(s *session) bool {
+	return s.state == StateFailed && s.cleanupFailed && s.ledger != nil && len(s.ledger.closers) > 0
+}
+
 func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (result StopResult, err error) {
 	s, err := m.get(sessionID)
 	if err != nil {
@@ -531,7 +535,7 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 		}
 		generation = s.generation
 	}
-	if s.state == StateFailed && s.cleanupFailed && s.ledger != nil && len(s.ledger.closers) > 0 {
+	if retryableCleanup(s) {
 		// Only a completed failed cleanup may be retried. The previous worker
 		// has returned; the retained ledger serializes the same owner's retry.
 		s.cleanupBudget = &cleanupBudget{}
@@ -811,14 +815,14 @@ func (m *Manager) selectProfileCandidate(ctx context.Context, s *session, genera
 	if invalidRuntimeLease {
 		startErr = failure(FailureRuntime, "runtime returned an empty lease")
 	}
+	if runtimeLease != nil && CodeOf(startErr) == FailureCleanup {
+		s.mu.Lock()
+		s.ledger.push(platformLease.Release)
+		s.ledger.push(runtimeLease.Stop)
+		s.mu.Unlock()
+		return profileSelection{}, false, wrapFailure(FailureCleanup, startErr)
+	}
 	if startErr != nil {
-		if runtimeLease != nil && CodeOf(startErr) == FailureCleanup {
-			s.mu.Lock()
-			s.ledger.push(platformLease.Release)
-			s.ledger.push(runtimeLease.Stop)
-			s.mu.Unlock()
-			return profileSelection{}, false, wrapFailure(FailureCleanup, startErr)
-		}
 		cleanupErr := m.releaseSelection(s, profileSelection{platformLease: platformLease, runtimeLease: runtimeLease})
 		if cleanupErr != nil {
 			return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(errors.Join(previousErrors...), startErr, cleanupErr))
@@ -900,15 +904,13 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error) {
 	}
 	// Stop may arrive while the ledger is releasing outside the lock.
 	wasStopping = wasStopping || s.state == StateStopping
-	s.cleanupDone, s.cleanupFailed, s.cancel = cleanupErr == nil && CodeOf(cause) != FailureCleanup, cleanupErr != nil, nil
+	s.cleanupFailed = cleanupErr != nil || CodeOf(cause) == FailureCleanup
+	s.cleanupDone, s.cancel = !s.cleanupFailed, nil
 	if s.cleanupDone {
 		s.ledger = nil
-		if s.cleanupBudget != nil && s.cleanupBudget.cancel != nil {
-			s.cleanupBudget.cancel()
-		}
+		s.cleanupBudget.finish()
 	}
-	if cleanupErr != nil || CodeOf(cause) == FailureCleanup {
-		s.cleanupFailed = true
+	if s.cleanupFailed {
 		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
 		s.failureMessageAfterCleanup = ""
 		s.recovering, s.recoveryOriginGeneration = false, 0

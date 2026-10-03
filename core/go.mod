@@ -7,6 +7,8 @@ replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.202609271000
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/go-ole/go-ole v1.3.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/jackpal/gateway v1.1.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
@@ -23,20 +25,13 @@ require (
 )
 
 require (
-	github.com/ajg/form v1.5.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/cloudflare/circl v1.6.4 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
-	github.com/go-chi/chi/v5 v5.2.4 // indirect
-	github.com/go-chi/cors v1.2.2 // indirect
-	github.com/go-chi/render v1.0.3 // indirect
 	github.com/go-gost/relay v0.5.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/schema v1.4.1 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
@@ -63,7 +58,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20260831225305-3eeb02c3689d // indirect
+	gvisor.dev/gvisor v0.0.0-20260831225305-3eeb02c3689d
 	lukechampine.com/blake3 v1.4.1 // indirect
 )
 

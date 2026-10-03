@@ -5,9 +5,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -46,32 +43,6 @@ func TestRunLockedWithPanicRecoveryIsBoundedAndUsesLockHeldCleanup(t *testing.T)
 		t.Fatal("panic recovery did not release lifecycle mutex")
 	}
 	mu.Unlock()
-}
-
-func TestMobileConnectRecoveryContractUsesLockedCleanup(t *testing.T) {
-	_, filename, _, ok := goruntime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	source, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "native_runtime_mobile.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(source)
-	for _, required := range []string{
-		`runLockedWithPanicRecovery("mobile session connect", &c.mu, c.connectLocked, c.disconnectLocked)`,
-		"c.state = stateFailed",
-	} {
-		if !strings.Contains(text, required) {
-			t.Fatalf("mobile recovery contract is missing %q", required)
-		}
-	}
-	if strings.Contains(text, "err = errors.Join(fmt.Errorf(\"mobile session connect panic") {
-		t.Fatal("mobile Connect contains an inline panic recovery path")
-	}
-	if strings.Contains(text, "c.Disconnect(context.Background())") {
-		t.Fatal("mobile Connect recovery must not call lock-taking Disconnect")
-	}
 }
 
 func TestFinishRunIgnoresStaleGenerationCompletion(t *testing.T) {

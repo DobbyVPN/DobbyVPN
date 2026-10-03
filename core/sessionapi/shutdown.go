@@ -25,6 +25,12 @@ func (b *cleanupBudget) begin() context.Context {
 	return b.ctx
 }
 
+func (b *cleanupBudget) finish() {
+	if b != nil && b.cancel != nil {
+		b.cancel()
+	}
+}
+
 // CleanupContext ignores acquisition cancellation but preserves its owner's
 // cleanup deadline. A direct runtime caller also gets a bounded rollback.
 func CleanupContext(ctx context.Context) context.Context {

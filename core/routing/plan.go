@@ -15,11 +15,9 @@ import (
 type Plan struct {
 	sessionID string
 
-	mu        sync.Mutex
-	closed    bool
-	leases    []*Lease
-	closeOnce sync.Once
-	closeErr  error
+	mu     sync.Mutex
+	closed bool
+	leases []*Lease
 }
 
 // Lease represents one exact route, rule, or firewall resource installed by a
@@ -27,9 +25,10 @@ type Plan struct {
 type Lease struct {
 	name string
 
-	once    sync.Once
+	mu      sync.Mutex
+	closed  bool
 	release func() error
-	err     error
+	repair  func() (bool, error)
 }
 
 func NewPlan(sessionID string) *Plan {
@@ -64,32 +63,56 @@ func (p *Plan) Acquire(name string, apply, release func() error) (*Lease, error)
 func (l *Lease) Name() string { return l.name }
 
 func (l *Lease) Close() error {
-	l.once.Do(func() {
-		l.err = l.release()
-	})
-	return l.err
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil
+	}
+	if err := l.release(); err != nil {
+		return err
+	}
+	l.closed = true
+	return nil
 }
 
-// Close releases only this Plan's leases in LIFO order. It is safe to invoke
-// from both startup rollback and normal shutdown; the underlying releases run
-// once even if those paths race.
+// Close serializes LIFO release. Failed leases stay owned and can be retried;
+// successful releases are never repeated.
 func (p *Plan) Close() error {
-	p.closeOnce.Do(func() {
-		p.mu.Lock()
-		p.closed = true
-		leases := append([]*Lease(nil), p.leases...)
-		p.mu.Unlock()
-
-		var errs []error
-		for index := len(leases) - 1; index >= 0; index-- {
-			lease := leases[index]
-			if err := lease.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("%s: %w", lease.name, err))
-				continue
-			}
-			log.Debugf(Category, "[Plan] session_owned=true released=%s", lease.name)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	var errs []error
+	for index := len(p.leases) - 1; index >= 0; index-- {
+		lease := p.leases[index]
+		if err := lease.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", lease.name, err))
+			continue
 		}
-		p.closeErr = errors.Join(errs...)
-	})
-	return p.closeErr
+		log.Debugf(Category, "[Plan] session_owned=true released=%s", lease.name)
+		p.leases = append(p.leases[:index], p.leases[index+1:]...)
+	}
+	return errors.Join(errs...)
+}
+
+// Repair verifies retained route identities before restoring only absent routes.
+func (p *Plan) Repair() (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false, nil
+	}
+	repaired := false
+	for _, lease := range p.leases {
+		lease.mu.Lock()
+		changed, err := false, error(nil)
+		if lease.repair != nil {
+			changed, err = lease.repair()
+		}
+		lease.mu.Unlock()
+		if err != nil {
+			return repaired, err
+		}
+		repaired = repaired || changed
+	}
+	return repaired, nil
 }

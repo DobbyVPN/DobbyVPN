@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"core/log"
+	"core/sessionapi"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
 	"errors"
@@ -72,7 +73,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			routeErr := routePlan.Close()
 			var engineErr error
 			if ownedEngine != nil {
-				engineErr = ownedEngine.Stop()
+				engineErr = ownedEngine.Stop(sessionapi.CleanupContext(ctx))
 			}
 			var deviceErr error
 			if protocolOpened {
@@ -96,7 +97,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(Category, "[Darwin][Routing] acquiring direct VPN bypass route")
-		_, err = routePlan.AcquireMacOSProxyRoute(serverIP.String(), gatewayIP.String())
+		_, err = routePlan.AcquireMacOSProxyRoute(ctx, serverIP.String(), gatewayIP.String(), ifaceName)
 		if err != nil {
 			err = fmt.Errorf("failed to acquire server bypass route: %w", err)
 			signalInit(initResult, err)
@@ -137,9 +138,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	log.Debugf(Category, "[Darwin][Tunnel] tun2socks engine ready interface=%s", tunName)
 
-	err = routePlan.AcquireMacOSIPv4Default(tunName)
+	err = routePlan.AcquireMacOSIPv4Default(ctx, tunName)
 	if err == nil {
-		err = routePlan.AcquireMacOSIPv6Block(tunName)
+		err = routePlan.AcquireMacOSIPv6Block(ctx, tunName)
 	}
 	if err != nil {
 		err = fmt.Errorf("failed to acquire generation-owned routing: %w", err)
@@ -160,9 +161,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			log.Debugf(Category, "[Darwin][Lifecycle] context cancelled — stopping generation")
 			return nil
 		case <-routeRepair.C:
-			repaired, repairErr := routing.RepairMacOSSessionRoutes(
-				serverIP.String(), gatewayIP.String(), tunName, ifaceName,
-			)
+			repaired, repairErr := routePlan.Repair()
 			if repairErr != nil {
 				return fmt.Errorf("repair macOS session routing: %w", repairErr)
 			}

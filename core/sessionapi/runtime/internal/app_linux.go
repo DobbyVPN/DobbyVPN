@@ -5,6 +5,7 @@ package internal
 
 import (
 	"context"
+	"core/sessionapi"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
 	"errors"
@@ -178,7 +179,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 			var engineErr error
 			if ownedEngine != nil {
-				engineErr = ownedEngine.Stop()
+				engineErr = ownedEngine.Stop(sessionapi.CleanupContext(ctx))
 			}
 			var deviceErr error
 			if protocolOpened {
@@ -251,6 +252,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	if _, err = routePlan.AcquireLinuxTunnelDefault(app.RoutingConfig.TunDeviceName); err == nil {
 		_, err = routePlan.AcquireLinuxResolvedDNS(
+			ctx,
 			app.RoutingConfig.TunDeviceName,
 			app.RoutingConfig.DNSServerIP,
 		)

@@ -3,6 +3,7 @@
 package routing
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -115,58 +116,82 @@ func TestLinuxTunnelDefaultRestoresCapturedBaseline(t *testing.T) {
 }
 
 func TestLinuxResolvedDNSLeaseConfiguresAndRevertsOnlyTunnelLink(t *testing.T) {
-	original := linuxRunResolvedCommand
-	t.Cleanup(func() { linuxRunResolvedCommand = original })
-	var commands [][]string
-	linuxRunResolvedCommand = func(args ...string) error {
-		commands = append(commands, append([]string(nil), args...))
+	fake := installLinuxNetlinkFake(t)
+	fake.links["dobby0"] = linuxTestLink("dobby0", 7)
+	original := linuxResolvedCall
+	t.Cleanup(func() { linuxResolvedCall = original })
+	var methods []string
+	linuxResolvedCall = func(_ context.Context, method string, args ...any) error {
+		methods = append(methods, method)
+		if args[0] != int32(7) {
+			t.Fatalf("wrong interface: %v", args)
+		}
+		if method == "SetLinkDNS" && !reflect.DeepEqual(args[1], []resolvedAddress{{Family: unix.AF_INET, Address: []byte{9, 9, 9, 9}}}) {
+			t.Fatalf("DNS payload=%v", args[1])
+		}
+		if method == "SetLinkDomains" && !reflect.DeepEqual(args[1], []resolvedDomain{{Domain: ".", RoutingOnly: true}}) {
+			t.Fatalf("domain payload=%v", args[1])
+		}
 		return nil
 	}
-
 	plan := NewPlan("generation-dns")
-	if _, err := plan.AcquireLinuxResolvedDNS("dobby0", "9.9.9.9"); err != nil {
+	if _, err := plan.AcquireLinuxResolvedDNS(context.Background(), "dobby0", "9.9.9.9"); err != nil {
 		t.Fatal(err)
 	}
 	if err := plan.Close(); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{
-		{"dns", "dobby0", "9.9.9.9"},
-		{"domain", "dobby0", "~."},
-		{"default-route", "dobby0", "yes"},
-		{"revert", "dobby0"},
-	}
-	if !reflect.DeepEqual(commands, want) {
-		t.Fatalf("commands = %v, want %v", commands, want)
+	want := []string{"SetLinkDNS", "SetLinkDomains", "SetLinkDefaultRoute", "RevertLink"}
+	if !reflect.DeepEqual(methods, want) {
+		t.Fatalf("methods=%v, want %v", methods, want)
 	}
 }
 
 func TestLinuxResolvedDNSFailureRevertsPartialConfiguration(t *testing.T) {
-	original := linuxRunResolvedCommand
-	t.Cleanup(func() { linuxRunResolvedCommand = original })
-	var commands [][]string
-	linuxRunResolvedCommand = func(args ...string) error {
-		commands = append(commands, append([]string(nil), args...))
-		if args[0] == "domain" {
-			return errors.New("permission denied")
+	fake := installLinuxNetlinkFake(t)
+	fake.links["dobby0"] = linuxTestLink("dobby0", 7)
+	original := linuxResolvedCall
+	t.Cleanup(func() { linuxResolvedCall = original })
+	var methods []string
+	sentinel := errors.New("D-Bus permission denied")
+	linuxResolvedCall = func(_ context.Context, method string, _ ...any) error {
+		methods = append(methods, method)
+		if method == "SetLinkDomains" {
+			return sentinel
 		}
 		return nil
 	}
-
 	plan := NewPlan("generation-dns-failure")
-	if _, err := plan.AcquireLinuxResolvedDNS("dobby0", "9.9.9.9"); err == nil {
-		t.Fatal("AcquireLinuxResolvedDNS succeeded")
+	if _, err := plan.AcquireLinuxResolvedDNS(context.Background(), "dobby0", "9.9.9.9"); !errors.Is(err, sentinel) {
+		t.Fatalf("acquire=%v", err)
 	}
 	if err := plan.Close(); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{
-		{"dns", "dobby0", "9.9.9.9"},
-		{"domain", "dobby0", "~."},
-		{"revert", "dobby0"},
+	want := []string{"SetLinkDNS", "SetLinkDomains", "RevertLink"}
+	if !reflect.DeepEqual(methods, want) {
+		t.Fatalf("methods=%v, want %v", methods, want)
 	}
-	if !reflect.DeepEqual(commands, want) {
-		t.Fatalf("commands = %v, want %v", commands, want)
+}
+
+func TestLinuxResolvedDNSDoesNotRevertReusedInterfaceName(t *testing.T) {
+	fake := installLinuxNetlinkFake(t)
+	fake.links["dobby0"] = linuxTestLink("dobby0", 7)
+	original := linuxResolvedCall
+	t.Cleanup(func() { linuxResolvedCall = original })
+	linuxResolvedCall = func(_ context.Context, method string, _ ...any) error {
+		if method == "RevertLink" {
+			t.Fatal("reverted replacement interface")
+		}
+		return nil
+	}
+	plan := NewPlan("generation-dns-replaced")
+	if _, err := plan.AcquireLinuxResolvedDNS(context.Background(), "dobby0", "9.9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	fake.links["dobby0"] = linuxTestLink("dobby0", 8)
+	if err := plan.Close(); err == nil {
+		t.Fatal("replacement identity was ignored")
 	}
 }
 

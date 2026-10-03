@@ -12,6 +12,7 @@ import (
 	"core/dnscache"
 	"core/log"
 	"core/protocol"
+	"core/sessionapi"
 	"core/tunnel"
 	"core/tunnel/platform_engine"
 
@@ -61,7 +62,7 @@ func (c *nativeRuntime) Connect(ctx context.Context) error {
 	if c == nil {
 		return errors.New("mobile session runtime is not initialized")
 	}
-	return runLockedWithPanicRecovery("mobile session connect", &c.mu, c.connectLocked, c.disconnectLocked)
+	return runLockedWithPanicRecovery("mobile session connect", &c.mu, func() error { return c.connectLocked(ctx) }, func() error { return c.disconnectLocked(sessionapi.CleanupContext(ctx)) })
 }
 
 // CancelConnect requests cancellation without taking c.mu.  Connect owns the
@@ -99,8 +100,8 @@ func (c *nativeRuntime) connectWasCanceled() bool {
 	}
 }
 
-func (c *nativeRuntime) connectLocked() (err error) {
-	if c.state != stateIdle && c.state != stateFailed {
+func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
+	if c.state != stateIdle {
 		return lifecycleBusyError(c.state)
 	}
 	c.state = statePreparing
@@ -111,9 +112,8 @@ func (c *nativeRuntime) connectLocked() (err error) {
 	c.tunCloseErr = nil
 	fail := func(cause error) error {
 		c.state = stateFailed
-		cleanupErr := c.cleanupResourcesLocked()
+		cleanupErr := c.cleanupResourcesLocked(sessionapi.CleanupContext(ctx))
 		c.cleanupErr = cleanupErr
-		c.device, c.tun, c.engine = nil, nil, nil
 		return errors.Join(cause, cleanupErr)
 	}
 	if c.connectWasCanceled() {
@@ -140,6 +140,7 @@ func (c *nativeRuntime) connectLocked() (err error) {
 		return fail(fmt.Errorf("TUN device does not expose a descriptor"))
 	}
 
+	c.deviceOpened = true
 	err = c.device.Open(0, "")
 	if err != nil {
 		log.Debugf(nativeLogCategory, "failed to create protocol device: %v", err)
@@ -190,27 +191,27 @@ func (c *nativeRuntime) closeTunLocked() error {
 	return c.tunCloseErr
 }
 
-func (c *nativeRuntime) cleanupResourcesLocked() error {
-	var errs []error
+func (c *nativeRuntime) cleanupResourcesLocked(ctx context.Context) error {
 	if c.engine != nil {
-		engine := c.engine
-		c.engine = nil
-		errs = append(errs, engine.Stop())
-	}
-	if c.deviceOpened {
-		device := c.device
-		c.deviceOpened = false
-		if device != nil {
-			errs = append(errs, device.Close())
+		if err := c.engine.Stop(ctx); err != nil {
+			return err
 		}
+		c.engine = nil
+	}
+	if c.deviceOpened && c.device != nil {
+		if err := c.device.Close(); err != nil {
+			return err
+		}
+		c.deviceOpened = false
 	}
 	if c.tunOwned && c.tun != nil {
-		tunErr := c.closeTunLocked()
+		if err := c.closeTunLocked(); err != nil {
+			return err
+		}
 		c.tunOwned = false
 		c.tun = nil
-		errs = append(errs, tunErr)
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 func (c *nativeRuntime) Disconnect(ctx context.Context) error {
@@ -219,30 +220,25 @@ func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.disconnectLocked()
+	return c.disconnectLocked(ctx)
 }
 
 // disconnectLocked performs cleanup while c.mu is held. Connect's panic
 // recovery must use this form because its deferred recovery runs before
 // Connect's deferred unlock.
-func (c *nativeRuntime) disconnectLocked() error {
+func (c *nativeRuntime) disconnectLocked(ctx context.Context) error {
 	if c.state == stateIdle {
 		return nil
 	}
-	if c.state == stateFailed && c.cleanupErr != nil {
-		return fmt.Errorf("native session runtime cleanup failed: %w", c.cleanupErr)
-	}
 	c.state = stateStopping
 
-	err := c.cleanupResourcesLocked()
+	err := c.cleanupResourcesLocked(sessionapi.CleanupContext(ctx))
 	c.cleanupErr = err
-	c.engine = nil
-	c.tun = nil
-	c.device = nil
 	if err != nil {
 		c.state = stateFailed
 	} else {
 		c.state = stateIdle
+		c.engine, c.tun, c.device = nil, nil, nil
 	}
 
 	log.Debugf(nativeLogCategory, "native session runtime disconnected")

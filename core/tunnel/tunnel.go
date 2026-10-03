@@ -44,7 +44,7 @@ type Engine struct {
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
 	// real TUN device. Production handles use platform_engine.EngineStop.
-	stopPlatform func() error
+	stopPlatform func(context.Context) error
 }
 
 const udpAssociationIdleTimeout = 10 * time.Second
@@ -291,7 +291,10 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 	activeEngine = handle
 
 	log.Debugf(Category, "[Engine] StartOwnedEngine config proxy=%s fd=%d uplinkIface=%s", cfg.ProxyAddr, cfg.FD, cfg.UplinkIface)
-	if err := platform_engine.StartPlatformEngine(cfg); err != nil {
+	if accepted, err := platform_engine.StartPlatformEngine(cfg); err != nil {
+		if accepted {
+			return handle, true, err
+		}
 		activeEngine = nil
 		log.Debugf(Category, "[Engine] StartPlatformEngine failed: %v", err)
 		return nil, false, err
@@ -300,16 +303,12 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 
 	t := tunnel.T()
 	if t == nil {
-		cleanupErr := handle.stopPlatform()
-		activeEngine = nil
-		return nil, true, errors.Join(fmt.Errorf("tunnel not initialized after engine start"), cleanupErr)
+		return handle, true, fmt.Errorf("tunnel not initialized after engine start")
 	}
 
 	vpnOutbound, ok := t.Dialer().(proxy.Proxy)
 	if !ok {
-		cleanupErr := handle.stopPlatform()
-		activeEngine = nil
-		return nil, true, errors.Join(fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer()), cleanupErr)
+		return handle, true, fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer())
 	}
 	wrapper := &DobbyProxy{
 		vpn:    vpnOutbound,
@@ -324,7 +323,7 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 
 // Stop releases this handle's resources in reverse start order. A stale handle
 // cannot stop a newer owner.
-func (e *Engine) Stop() error {
+func (e *Engine) Stop(ctx context.Context) error {
 	if e == nil {
 		return nil
 	}
@@ -334,7 +333,6 @@ func (e *Engine) Stop() error {
 	if e.stopped {
 		return e.stopErr
 	}
-	e.stopped = true
 	stopPlatform := e.stopPlatform
 
 	engineMu.Lock()
@@ -344,8 +342,12 @@ func (e *Engine) Stop() error {
 	}
 	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
 	if stopPlatform != nil {
-		e.stopErr = stopPlatform()
+		e.stopErr = stopPlatform(ctx)
 	}
+	if e.stopErr != nil {
+		return e.stopErr
+	}
+	e.stopped = true
 	activeEngine = nil
 	log.Debugf(Category, "[Engine] owned tun2socks engine stopped")
 	return e.stopErr

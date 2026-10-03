@@ -6,10 +6,10 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os/exec"
 	"time"
 
-	"github.com/xjasonlyu/tun2socks/v2/engine"
+	"github.com/xjasonlyu/tun2socks/v2/core/device"
+	"github.com/xjasonlyu/tun2socks/v2/core/device/tun"
 
 	"core/log"
 )
@@ -17,90 +17,37 @@ import (
 var lastIface string
 
 const (
-	macOSTunReleaseTimeout = 5 * time.Second
-	macOSTunReleasePoll    = 50 * time.Millisecond
+	macOSTunReleasePoll = 50 * time.Millisecond
 )
 
-func startPlatformEngine(cfg interface{}) error {
-	c := cfg.(EngineConfig)
-	proxyAddr := c.ProxyAddr
-
-	deviceName := "utun233"
-	lastIface = deviceName
-
-	log.Debugf(Category, "[Engine][Darwin] proxy_ready=true device=%s", deviceName)
-
-	key := &engine.Key{
-		Proxy:    fmt.Sprintf("socks5://%s", proxyAddr),
-		Device:   deviceName,
-		LogLevel: "info",
-		MTU:      1200,
+func startPlatformEngine(c EngineConfig) (bool, error) {
+	accepted, err := startStack(c.ProxyAddr, func() (device.Device, error) { return tun.Open("utun", 1200) })
+	if !accepted {
+		return false, err
 	}
-
-	engine.Insert(key)
-	engine.Start()
-
-	time.Sleep(500 * time.Millisecond)
-
-	ifaces, _ := net.Interfaces()
-	found := false
-	for _, ifc := range ifaces {
-		if ifc.Name == deviceName {
-			found = true
-			break
-		}
+	if ownedDevice != nil {
+		lastIface = ownedDevice.Name()
 	}
-	if !found {
-		engine.Stop()
-		return fmt.Errorf("utun interface not found: %s", deviceName)
-	}
-
-	// Setting IP
-	cmd := exec.CommandContext(
-		context.Background(),
-		"ifconfig",
-		deviceName,
-		"inet",
-		"198.18.0.1",
-		"198.18.0.2",
-		"netmask",
-		"255.255.0.0",
-		"up",
-	)
-	out, err := cmd.CombinedOutput()
 	if err != nil {
-		engine.Stop()
-		return fmt.Errorf("ifconfig failed: %w (%s)", err, out)
+		return true, err
 	}
-
-	cmd = exec.CommandContext(
-		context.Background(),
-		"ifconfig",
-		deviceName,
-		"inet6",
-		"fd00:dbb::2",
-		"fd00:dbb::1",
-		"prefixlen",
-		"128",
-		"up",
-	)
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		engine.Stop()
-		return fmt.Errorf("ifconfig inet6 failed: %w (%s)", err, out)
+	if lastIface == "" {
+		return true, fmt.Errorf("new utun has no interface name")
 	}
-
-	return nil
+	log.Debugf(Category, "[Engine][Darwin] acquired interface=%s", lastIface)
+	if err := configureMacOSInterface(lastIface); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
-func stopPlatformEngine(stopDevice func()) error {
+func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 	deviceName := lastIface
 	stopDevice()
 	if deviceName == "" {
 		return nil
 	}
 
-	deadline := time.Now().Add(macOSTunReleaseTimeout)
 	for {
 		interfaces, err := net.Interfaces()
 		if err != nil {
@@ -117,10 +64,13 @@ func stopPlatformEngine(stopDevice func()) error {
 			lastIface = ""
 			return nil
 		}
-		if time.Now().After(deadline) {
+		if ctx.Err() != nil {
 			return fmt.Errorf("macOS TUN %s remained after tun2socks stopped", deviceName)
 		}
-		time.Sleep(macOSTunReleasePoll)
+		select {
+		case <-ctx.Done():
+		case <-time.After(macOSTunReleasePoll):
+		}
 	}
 }
 

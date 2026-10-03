@@ -6,30 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
-	"os/exec"
 	"strings"
-	"time"
+
+	"core/sessionapi"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
-
-const linuxResolvedCommandTimeout = 5 * time.Second
-
-var linuxRunResolvedCommand = executeLinuxResolvedCommand
-
-func executeLinuxResolvedCommand(args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), linuxResolvedCommandTimeout)
-	defer cancel()
-	command := exec.CommandContext(ctx, "/usr/bin/resolvectl")
-	command.Args = append(command.Args, args...)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("resolvectl %s: %w: %s", args[0], err, strings.TrimSpace(string(output)))
-	}
-	return nil
-}
 
 // AcquireLinuxProxyRoute installs a host bypass only when this session added
 // it. Existing routes are left untouched and therefore are never removed by
@@ -187,33 +172,55 @@ func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 // session's TUN. The TUN is newly created for the session, so reverting its
 // per-link state restores the exact baseline (no state) without touching the
 // uplink resolver configuration.
-func (p *Plan) AcquireLinuxResolvedDNS(tunName, dnsIP string) (*Lease, error) {
-	if tunName == "" || strings.HasPrefix(tunName, "-") || strings.ContainsAny(tunName, " \t\r\n") {
+func (p *Plan) AcquireLinuxResolvedDNS(ctx context.Context, tunName, dnsIP string) (*Lease, error) {
+	if tunName == "" || strings.ContainsAny(tunName, " \t\r\n") {
 		return nil, fmt.Errorf("invalid Linux DNS interface %q", tunName)
 	}
-	if parsed := net.ParseIP(dnsIP); parsed == nil || parsed.To4() == nil {
+	address := net.ParseIP(dnsIP).To4()
+	if address == nil {
 		return nil, fmt.Errorf("invalid Linux IPv4 DNS server %q", dnsIP)
 	}
-
-	configured := false
-	return p.Acquire("resolved-dns "+tunName, func() error {
-		for _, args := range [][]string{
-			{"dns", tunName, dnsIP},
-			{"domain", tunName, "~."},
-			{"default-route", tunName, "yes"},
-		} {
-			if err := linuxRunResolvedCommand(args...); err != nil {
-				if !configured {
-					return err
-				}
-				return errors.Join(err, linuxRunResolvedCommand("revert", tunName))
-			}
-			configured = true
+	index, lookupErr := linuxLinkIndex(tunName)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if index <= 0 || index > math.MaxInt32 {
+		return nil, fmt.Errorf("invalid resolved interface index %d", index)
+	}
+	linkIndex := int32(index)
+	revert := func() error {
+		current, err := linuxLinkIndex(tunName)
+		if err != nil {
+			return fmt.Errorf("verify resolved link ownership: %w", err)
 		}
-		return nil
-	}, func() error {
-		return linuxRunResolvedCommand("revert", tunName)
-	})
+		if current != index {
+			return fmt.Errorf("resolved interface %s changed index from %d to %d", tunName, index, current)
+		}
+		return linuxResolvedCall(sessionapi.CleanupContext(ctx), "RevertLink", linkIndex)
+	}
+
+	// Record ownership before the first call: even a failed D-Bus exchange can
+	// have changed the OS state before its reply was lost.
+	lease, err := p.Acquire("resolved-dns "+tunName, func() error { return nil }, revert)
+	if err != nil {
+		return nil, err
+	}
+	for _, call := range []struct {
+		method string
+		args   []any
+	}{
+		{"SetLinkDNS", []any{linkIndex, []resolvedAddress{{Family: unix.AF_INET, Address: []byte(address)}}}},
+		{"SetLinkDomains", []any{linkIndex, []resolvedDomain{{Domain: ".", RoutingOnly: true}}}},
+		{"SetLinkDefaultRoute", []any{linkIndex, true}},
+	} {
+		if err := linuxResolvedCall(ctx, call.method, call.args...); err != nil {
+			if cleanupErr := lease.Close(); cleanupErr != nil {
+				return lease, &sessionapi.CleanupFailure{Err: errors.Join(err, cleanupErr)}
+			}
+			return nil, err
+		}
+	}
+	return lease, nil
 }
 
 // AcquireLinuxIPv6Block uses add, not replace, so pre-existing block routes

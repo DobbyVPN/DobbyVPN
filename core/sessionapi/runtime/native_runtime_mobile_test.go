@@ -138,7 +138,7 @@ func TestMobileConnectPanicRecoveryDoesNotDeadlockOrFenceNextAttempt(t *testing.
 	}
 }
 
-func TestMobileConnectPanicRecoveryDoesNotFenceLaterGenerationWhenCleanupFails(t *testing.T) {
+func TestMobileConnectPanicRecoveryRetainsFailedCleanupOwner(t *testing.T) {
 	wantCleanupErr := errors.New("test TUN cleanup failed")
 	firstTun := newMobileTestTun(t, wantCleanupErr)
 	c := newNativeRuntime(&panicMobileDevice{}, firstTun, dnscache.New(), emptyBypassPolicy(t))
@@ -153,18 +153,19 @@ func TestMobileConnectPanicRecoveryDoesNotFenceLaterGenerationWhenCleanupFails(t
 		t.Fatalf("TUN close calls after failed panic cleanup = %d, want 1", firstTun.closeCalls)
 	}
 
-	secondTun := newMobileTestTun(t, nil)
-	c.device = &panicMobileDevice{}
-	c.tun = secondTun
-	if err := connectMobileBounded(t, c); err == nil || errors.Is(err, wantCleanupErr) {
-		t.Fatalf("later-generation error = %v, want fresh panic failure", err)
+	if err := connectMobileBounded(t, c); err == nil {
+		t.Fatal("new start accepted while cleanup remained owned")
 	}
-	if got := c.stateValue(); got != stateIdle {
-		t.Fatalf("state after the next clean rollback = %s, want %s", got, stateIdle)
+	if c.tun != firstTun || c.stateValue() != stateFailed {
+		t.Fatal("failed owner was replaced")
 	}
-	if secondTun.closeCalls != 1 {
-		t.Fatalf("second TUN close calls = %d, want 1", secondTun.closeCalls)
+	if err := c.Disconnect(context.Background()); !errors.Is(err, wantCleanupErr) {
+		t.Fatalf("cleanup retry lost original error: %v", err)
 	}
+	if firstTun.closeCalls != 1 {
+		t.Fatal("closed descriptor was retried and could target a reused descriptor")
+	}
+
 }
 
 func TestMobileConnectCancellationDoesNotMutateBlockedStartupConcurrently(t *testing.T) {

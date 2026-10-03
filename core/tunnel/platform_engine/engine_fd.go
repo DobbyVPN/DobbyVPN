@@ -3,35 +3,23 @@
 package platform_engine
 
 import (
-	"fmt"
+	"context"
+	"runtime"
+	"strconv"
 
-	"github.com/xjasonlyu/tun2socks/v2/engine"
-
-	"core/log"
+	"github.com/xjasonlyu/tun2socks/v2/core/device"
+	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 )
 
-func startPlatformEngine(cfg interface{}) error {
-	c := cfg.(EngineConfig)
-
-	key := &engine.Key{
-		Proxy:    fmt.Sprintf("socks5://%s", c.ProxyAddr),
-		Device:   fmt.Sprintf("fd://%d", c.FD),
-		LogLevel: "info",
-		MTU:      1200,
+func startPlatformEngine(cfg EngineConfig) (bool, error) {
+	offset := 0
+	if runtime.GOOS == "ios" {
+		offset = 4
 	}
-
-	log.Debugf(Category, "[Engine][FD] Insert key proxy_ready=true device_kind=fd fd=%d mtu=%d", c.FD, key.MTU)
-	engine.Insert(key)
-	log.Debugf(Category, "[Engine][FD] Start begin")
-	engine.Start()
-	log.Debugf(Category, "[Engine][FD] Start returned")
-	return nil
+	return startStack(cfg.ProxyAddr, func() (device.Device, error) {
+		return fdbased.Open(strconv.Itoa(cfg.FD), 1200, offset)
+	})
 }
 
-func stopPlatformEngine(stopDevice func()) error {
-	log.Debugf(Category, "[Engine][FD] platform stop hook")
-	stopDevice()
-	return nil
-}
-
-func platformInterfaceName() string { return "" }
+func stopPlatformEngine(_ context.Context, stopDevice func()) error { stopDevice(); return nil }
+func platformInterfaceName() string                                 { return "" }

@@ -5,279 +5,119 @@ package routing
 import (
 	"errors"
 	"net"
-	"reflect"
-	"strings"
+	"net/netip"
 	"testing"
-	"time"
+
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
-func TestWindowsRouteLeaseUsesExactAddAndDeleteArguments(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
+func routeFixture(t *testing.T) (*winipcfg.MibIPforwardRow2, **winipcfg.MibIPforwardRow2, *int) {
+	t.Helper()
+	oldIdentity, oldRead, oldCreate, oldDelete := windowsRouteIdentity, windowsRouteRead, windowsRouteCreate, windowsRouteDelete
 	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
+		windowsRouteIdentity, windowsRouteRead, windowsRouteCreate, windowsRouteDelete = oldIdentity, oldRead, oldCreate, oldDelete
 	})
-	windowsRouteExists = func(windowsRoute) (bool, error) { return false, nil }
-	var commands [][]string
-	windowsNetshCommand = func(args ...string) (string, error) {
-		commands = append(commands, append([]string(nil), args...))
-		return "", nil
+	key := &winipcfg.MibIPforwardRow2{InterfaceLUID: 71, InterfaceIndex: 9}
+	if err := key.DestinationPrefix.SetPrefix(netip.MustParsePrefix("198.51.100.7/32")); err != nil {
+		t.Fatal(err)
 	}
-
-	plan := NewPlan("lease-test")
-	route := windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet 2"}
-	changed, err := acquireWindowsRoute(plan, "proxy route", route)
-	if err != nil || !changed {
-		t.Fatalf("acquire route changed=%v err=%v", changed, err)
+	if err := key.NextHop.SetAddr(netip.MustParseAddr("192.0.2.1")); err != nil {
+		t.Fatal(err)
 	}
-	if err := plan.Close(); err != nil {
-		t.Fatalf("close plan: %v", err)
-	}
-
-	want := [][]string{
-		windowsRouteArgs("add", route),
-		windowsRouteArgs("delete", route),
-	}
-	if !reflect.DeepEqual(commands, want) {
-		t.Fatalf("netsh argv mismatch:\n got: %#v\nwant: %#v", commands, want)
-	}
-	for _, command := range commands {
-		if strings.Contains(strings.Join(command, " "), " set ") || strings.HasPrefix(strings.Join(command, " "), "route delete") {
-			t.Fatalf("unexpected route mutation command: %#v", command)
+	var current *winipcfg.MibIPforwardRow2
+	deletes := 0
+	windowsRouteIdentity = func(windowsRoute) (*winipcfg.MibIPforwardRow2, error) { return key, nil }
+	windowsRouteRead = func(got *winipcfg.MibIPforwardRow2) (*winipcfg.MibIPforwardRow2, error) {
+		if got.InterfaceLUID != 71 || got.InterfaceIndex != 9 {
+			t.Fatalf("lost adapter identity: %+v", got)
 		}
-	}
-	if !strings.Contains(strings.Join(commands[0], " "), "metric=0") {
-		t.Fatal("route acquisition must request the deterministic metric")
-	}
-	if strings.Contains(strings.Join(commands[1], " "), "metric=") {
-		t.Fatal("route deletion must match by prefix, next hop, and interface after Windows normalizes metrics")
-	}
-}
-
-func TestWindowsRouteLeaseFailsWhenDeletedRouteRemains(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	windowsNetshCommand = func(...string) (string, error) { return "", nil }
-	windowsRouteExists = func(windowsRoute) (bool, error) { return true, nil }
-
-	err := releaseWindowsRoute(
-		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
-		5*time.Millisecond,
-	)
-	if err == nil || !strings.Contains(err.Error(), "remained after deletion") {
-		t.Fatalf("release error=%v", err)
-	}
-}
-
-func TestWindowsRouteLeaseAcceptsVerifiedDeletion(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	windowsNetshCommand = func(...string) (string, error) { return "", nil }
-	windowsRouteExists = func(windowsRoute) (bool, error) { return false, nil }
-
-	if err := releaseWindowsRoute(
-		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
-		5*time.Millisecond,
-	); err != nil {
-		t.Fatalf("release route: %v", err)
-	}
-}
-
-func TestWindowsRouteLeaseAcceptsAlreadyAbsentRouteAfterDeleteError(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	windowsNetshCommand = func(...string) (string, error) {
-		return "Element not found.", errors.New("exit status 1")
-	}
-	windowsRouteExists = func(windowsRoute) (bool, error) { return false, nil }
-
-	if err := releaseWindowsRoute(
-		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
-		5*time.Millisecond,
-	); err != nil {
-		t.Fatalf("release route already absent after adapter reset: %v", err)
-	}
-}
-
-func TestWindowsRouteLeaseRejectsDeleteErrorWhenRouteRemains(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	windowsNetshCommand = func(...string) (string, error) {
-		return "Access denied.", errors.New("exit status 1")
-	}
-	windowsRouteExists = func(windowsRoute) (bool, error) { return true, nil }
-
-	err := releaseWindowsRoute(
-		windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"},
-		5*time.Millisecond,
-	)
-	if err == nil || !strings.Contains(err.Error(), "exit status 1") {
-		t.Fatalf("release error=%v", err)
-	}
-}
-
-func TestWindowsRouteLeasePreservesPreExistingExactRoute(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	windowsRouteExists = func(windowsRoute) (bool, error) { return true, nil }
-	called := false
-	windowsNetshCommand = func(args ...string) (string, error) {
-		called = true
-		return "", nil
-	}
-
-	plan := NewPlan("existing-route")
-	changed, err := AcquireProxyRoute(plan, "198.51.100.7", "192.0.2.1", "Ethernet")
-	if err != nil || changed {
-		t.Fatalf("pre-existing route changed=%v err=%v", changed, err)
-	}
-	if err := plan.Close(); err != nil {
-		t.Fatalf("close plan: %v", err)
-	}
-	if called {
-		t.Fatal("pre-existing exact route must not be modified or deleted")
-	}
-}
-
-func TestConfigureWindowsRoutingRollsBackLeasesLIFO(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	windowsRouteExists = func(windowsRoute) (bool, error) { return false, nil }
-	var commands [][]string
-	windowsNetshCommand = func(args ...string) (string, error) {
-		commands = append(commands, append([]string(nil), args...))
-		if args[2] == "add" && args[4] == "10.0.0.0/8" {
-			return "", errors.New("injected add failure")
+		if current == nil {
+			return nil, nil
 		}
-		return "", nil
+		copy := *current
+		return &copy, nil
 	}
-
-	err := ConfigureWindowsRouting(NewPlan("rollback-test"), "198.51.100.7", "192.0.2.1", "dobbyvpn-wintun", "Ethernet")
-	if err == nil {
-		t.Fatal("expected configured add failure")
-	}
-
-	want := [][]string{
-		windowsRouteArgs("add", windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"}),
-		windowsRouteArgs("add", windowsRoute{prefix: "0.0.0.0/8", nextHop: "192.0.2.1", interfaceName: "Ethernet"}),
-		windowsRouteArgs("add", windowsRoute{prefix: "10.0.0.0/8", nextHop: "192.0.2.1", interfaceName: "Ethernet"}),
-		windowsRouteArgs("delete", windowsRoute{prefix: "0.0.0.0/8", nextHop: "192.0.2.1", interfaceName: "Ethernet"}),
-		windowsRouteArgs("delete", windowsRoute{prefix: "198.51.100.7/32", nextHop: "192.0.2.1", interfaceName: "Ethernet"}),
-	}
-	if !reflect.DeepEqual(commands, want) {
-		t.Fatalf("rollback argv mismatch:\n got: %#v\nwant: %#v", commands, want)
-	}
+	windowsRouteCreate = func(row *winipcfg.MibIPforwardRow2) error { copy := *row; current = &copy; return nil }
+	windowsRouteDelete = func(row *winipcfg.MibIPforwardRow2) error { deletes++; current = nil; return nil }
+	return key, &current, &deletes
 }
 
-func TestConfigureWindowsRoutingSendsSplitDefaultRoutesOnLink(t *testing.T) {
-	originalExists := windowsRouteExists
-	originalCommand := windowsNetshCommand
-	t.Cleanup(func() {
-		windowsRouteExists = originalExists
-		windowsNetshCommand = originalCommand
-	})
-	windowsRouteExists = func(windowsRoute) (bool, error) { return false, nil }
-	var commands [][]string
-	windowsNetshCommand = func(args ...string) (string, error) {
-		commands = append(commands, append([]string(nil), args...))
-		return "", nil
-	}
-
-	plan := NewPlan("tun-on-link-test")
-	if err := ConfigureWindowsRouting(plan, "198.51.100.7", "192.0.2.1", "dobbyvpn-wintun", "Ethernet"); err != nil {
-		t.Fatalf("configure routing: %v", err)
-	}
-	if err := plan.Close(); err != nil {
-		t.Fatalf("close plan: %v", err)
-	}
-
-	for _, prefix := range ipv4Subnets {
-		want := windowsRouteArgs("add", windowsRoute{prefix: prefix, nextHop: windowsOnLinkNextHop, interfaceName: "dobbyvpn-wintun"})
-		found := false
-		for _, command := range commands {
-			if reflect.DeepEqual(command, want) {
-				found = true
-				break
+func TestWindowsRoutePreservesForeignAndDeletesOnlyItsOwn(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		t.Run(map[bool]string{false: "owned", true: "foreign"}[foreign], func(t *testing.T) {
+			key, current, deletes := routeFixture(t)
+			if foreign {
+				*current = key
 			}
-		}
-		if !found {
-			t.Fatalf("missing on-link split default route for %s; commands=%#v", prefix, commands)
-		}
+			plan := NewPlan("test")
+			changed, err := AcquireProxyRoute(plan, "198.51.100.7", "192.0.2.1", "Ethernet")
+			if err != nil || changed == foreign {
+				t.Fatalf("changed=%v error=%v", changed, err)
+			}
+			if err := plan.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if (*deletes == 0) != foreign {
+				t.Fatalf("deletions=%d foreign=%v", *deletes, foreign)
+			}
+		})
+	}
+}
+
+func TestWindowsRouteRetainsReplacementAndOriginalErrors(t *testing.T) {
+	_, current, deletes := routeFixture(t)
+	plan := NewPlan("test")
+	if _, err := AcquireProxyRoute(plan, "198.51.100.7", "192.0.2.1", "Ethernet"); err != nil {
+		t.Fatal(err)
+	}
+	(*current).Metric++
+	if err := plan.Close(); err == nil {
+		t.Fatal("replacement was accepted as owned")
+	}
+	if *deletes != 0 {
+		t.Fatal("foreign replacement deleted")
+	}
+	(*current).Metric--
+	want := errors.New("IP Helper access denied")
+	windowsRouteDelete = func(*winipcfg.MibIPforwardRow2) error { return want }
+	if err := plan.Close(); !errors.Is(err, want) {
+		t.Fatalf("lost original error: %v", err)
+	}
+	windowsRouteDelete = func(*winipcfg.MibIPforwardRow2) error { *current = nil; return nil }
+	if err := plan.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWindowsRouteRejectsUnconfirmedDeletion(t *testing.T) {
+	key, current, _ := routeFixture(t)
+	*current = key
+	windowsRouteDelete = func(*winipcfg.MibIPforwardRow2) error { return nil }
+	if err := releaseWindowsRoute(key); err == nil {
+		t.Fatal("reported cleanup with remaining route")
 	}
 }
 
 func TestSelectExactInterfaceNeverUsesSubstringMatch(t *testing.T) {
-	interfaces := []net.Interface{{Name: "other-wintun"}, {Name: "dobbyvpn-wintun"}}
-	iface, err := selectExactInterface("dobbyvpn-wintun", interfaces)
-	if err != nil || iface.Name != "dobbyvpn-wintun" {
-		t.Fatalf("exact selection iface=%v err=%v", iface, err)
+	interfaces := []net.Interface{{Name: "other-wintun"}, {Name: "DobbyVPN-owned"}}
+	iface, err := selectExactInterface("DobbyVPN-owned", interfaces)
+	if err != nil || iface.Name != "DobbyVPN-owned" {
+		t.Fatalf("iface=%v err=%v", iface, err)
 	}
-	if _, err := selectExactInterface("missing-wintun", interfaces); err == nil {
-		t.Fatal("substring-compatible but non-exact adapter must not be selected")
+	if _, err := selectExactInterface("wintun", interfaces); err == nil {
+		t.Fatal("substring selected foreign interface")
 	}
 }
 
-func TestCleanupStaleWindowsIPv6FirewallRulesUsesExactPersistentRuleNames(t *testing.T) {
-	original := windowsPowerShellCommand
-	t.Cleanup(func() { windowsPowerShellCommand = original })
-	var script string
-	var timeout time.Duration
-	windowsPowerShellCommand = func(gotScript string, gotTimeout time.Duration) (string, string, error) {
-		script = gotScript
-		timeout = gotTimeout
-		return "DobbyVPN Block IPv6 windows-1790525851930782900-2\r\n", "", nil
-	}
-	if err := CleanupStaleWindowsIPv6FirewallRules(); err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{
-		"-DisplayName $displayName -PolicyStore PersistentStore",
-		"^DobbyVPN Block IPv6 windows-[0-9]+-[0-9]+$",
-		"Remove-NetFirewallRule -InputObject $rule -ErrorAction Stop",
-		"$remaining.Count -gt 0",
-	} {
-		if !strings.Contains(script, required) {
-			t.Errorf("cleanup script does not contain %q: %s", required, script)
+func TestWindowsFirewallRangeDoesNotMatchIPv4OrPartialIPv6(t *testing.T) {
+	for _, value := range []string{windowsIPv6Range, "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "::/0"} {
+		if !isWindowsIPv6Range(value) {
+			t.Errorf("IPv6 range not recognized: %s", value)
 		}
 	}
-	if timeout != 30*time.Second {
-		t.Errorf("PowerShell timeout=%s, want 30s", timeout)
-	}
-}
-
-func TestCleanupStaleWindowsIPv6FirewallRulesPreservesCommandOutputOnError(t *testing.T) {
-	original := windowsPowerShellCommand
-	t.Cleanup(func() { windowsPowerShellCommand = original })
-	windowsPowerShellCommand = func(string, time.Duration) (string, string, error) {
-		return "stdout diagnostic", "stderr diagnostic", errors.New("command failed")
-	}
-	err := CleanupStaleWindowsIPv6FirewallRules()
-	if err == nil || !strings.Contains(err.Error(), "stdout: stdout diagnostic") || !strings.Contains(err.Error(), "stderr: stderr diagnostic") {
-		t.Fatalf("cleanup error=%v, want complete stdout/stderr diagnostics", err)
+	for _, value := range []string{"*", "0.0.0.0/0", "::/1", "::/0,0.0.0.0/0", "LocalSubnet"} {
+		if isWindowsIPv6Range(value) {
+			t.Errorf("foreign policy recognized as owned: %s", value)
+		}
 	}
 }

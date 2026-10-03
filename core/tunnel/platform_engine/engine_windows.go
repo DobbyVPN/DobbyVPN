@@ -3,11 +3,12 @@
 package platform_engine
 
 import (
+	"context"
+	"core/common"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"core/common"
 	"net"
 	"net/netip"
 	"strings"
@@ -17,14 +18,15 @@ import (
 	"core/log"
 	"core/routing"
 
+	"github.com/xjasonlyu/tun2socks/v2/core/device"
+	"github.com/xjasonlyu/tun2socks/v2/core/device/tun"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
-	"github.com/xjasonlyu/tun2socks/v2/engine"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
-var (
+type windowsAdapterState struct {
 	ownedAdapterName string
 	lastIface        string
 	lastLUID         winipcfg.LUID
@@ -37,143 +39,108 @@ var (
 	dadMutated       bool
 	tunnelIPv4       netip.Prefix
 	ipv4Mutated      bool
-)
-
-const (
-	windowsTunMTU                = 1200
-	windowsAdapterPrefix         = "DobbyVPN-"
-	windowsAdapterRandomBytes    = 16
-	windowsAdapterRemovalTimeout = 60 * time.Second
-)
-
-func execAndLog(cmd string, context string) error {
-	startedAt := time.Now()
-	out, err := routing.ExecuteCommand(cmd)
-	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
-	if err != nil {
-		log.Debugf(Category, "[Engine][Windows][ERROR] %s elapsed=%s: %v | output=%s",
-			context, elapsed, err, out,
-		)
-		return err
-	}
-
-	log.Debugf(Category, "[Engine][Windows][OK] %s elapsed=%s: %s", context, elapsed, out)
-	return nil
 }
 
-func startPlatformEngine(cfg interface{}) error {
+var adapter windowsAdapterState
+
+const (
+	windowsTunMTU             = 1200
+	windowsAdapterPrefix      = "DobbyVPN-"
+	windowsAdapterRandomBytes = 16
+)
+
+func startPlatformEngine(c EngineConfig) (bool, error) {
 	startedAt := time.Now()
-	c := cfg.(EngineConfig)
 	uplinkIface := c.UplinkIface
 	if err := prepareWindowsStateForStart(); err != nil {
-		return fmt.Errorf("restore prior Windows session state: %w", err)
+		return false, fmt.Errorf("restore prior Windows session state: %w", err)
 	}
 	log.Debugf(Category, "[Engine][Windows] proxy_ready=true uplink_iface=%s", uplinkIface)
 	if routing.IsTunnelInterfaceName(uplinkIface) {
-		return fmt.Errorf("refusing to use tunnel interface %q as Windows uplink", uplinkIface)
+		return false, fmt.Errorf("refusing to use tunnel interface %q as Windows uplink", uplinkIface)
 	}
 	adapterName, err := newWindowsAdapterName()
 	if err != nil {
-		return fmt.Errorf("create owned Wintun identity: %w", err)
+		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
-	ownedAdapterName = adapterName
+	adapter.ownedAdapterName = adapterName
 
 	resetTun2SocksInterfaceBinding()
-	key := windowsEngineKey(c, adapterName)
-
-	engine.Insert(key)
-	engineStartAt := time.Now()
-	engine.Start()
-	log.Debugf(Category, "[Engine][Windows] engine.Start returned elapsed=%s total=%s", time.Since(engineStartAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
+	accepted, err := startStack(c.ProxyAddr, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
+	if err != nil {
+		return accepted, err
+	}
 
 	waitStartedAt := time.Now()
 	ifName, err := waitForWintun(adapterName, 5*time.Second)
 	if err != nil {
-		return failWindowsStart(err)
+		return true, err
 	}
 	log.Debugf(Category, "[Engine][Windows] waitForWintun OK iface=%s elapsed=%s total=%s", ifName, time.Since(waitStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
-	lastIface = ifName
+	adapter.lastIface = ifName
 	iface, err := net.InterfaceByName(ifName)
 	if err != nil {
-		return failWindowsStart(fmt.Errorf("resolve interface %q: %w", ifName, err))
+		return true, (fmt.Errorf("resolve interface %q: %w", ifName, err))
 	}
-	lastLUID, err = winipcfg.LUIDFromIndex(uint32(iface.Index))
+	adapter.lastLUID, err = winipcfg.LUIDFromIndex(uint32(iface.Index))
 	if err != nil {
-		return failWindowsStart(fmt.Errorf("resolve interface %q LUID: %w", ifName, err))
+		return true, (fmt.Errorf("resolve interface %q LUID: %w", ifName, err))
 	}
-	luidKnown = true
+	adapter.luidKnown = true
 
 	// This is an application-owned adapter, but it can survive a crash. Never
 	// overwrite a pre-existing address or try to reconstruct it from an
 	// incomplete snapshot: the next start must fail loudly instead.
 	existingIPv4, err := getInterfaceIPv4Prefixes(uint32(iface.Index))
 	if err != nil {
-		return failWindowsStart(err)
+		return true, err
 	}
 	if len(existingIPv4) != 0 {
-		return failWindowsStart(fmt.Errorf("owned Wintun adapter %q already has %d IPv4 address(es); refusing to overwrite existing state", ifName, len(existingIPv4)))
+		return true, (fmt.Errorf("owned Wintun adapter %q already has %d IPv4 address(es); refusing to overwrite existing state", ifName, len(existingIPv4)))
 	}
 
-	previousDAD, err := getInterfaceDADTransmits(ifName)
+	previousDAD, err := getInterfaceDADTransmits(adapter.lastLUID)
 	if err != nil {
-		return failWindowsStart(err)
+		return true, err
 	}
-	prevDAD = previousDAD
+	adapter.prevDAD = previousDAD
 	if previousDAD != 0 {
-		dadMutated = true // Restore conservatively even if netsh reports a partial failure.
-		if err := setInterfaceDADTransmits(ifName, 0); err != nil {
-			return failWindowsStart(err)
+		adapter.dadMutated = true // Restore conservatively if IP Helper reports a partial failure.
+		if err := setInterfaceDADTransmits(adapter.lastLUID, 0); err != nil {
+			return true, err
 		}
 	}
 
 	dnsReadStartedAt := time.Now()
-	prevDNS, prevDNSStatic, err = getCurrentDNS(lastLUID)
+	adapter.prevDNS, adapter.prevDNSStatic, err = getCurrentDNS(adapter.lastLUID)
 	if err != nil {
-		return failWindowsStart(err)
+		return true, err
 	}
-	dnsKnown = true
+	adapter.dnsKnown = true
 	log.Debugf(Category, "[Engine][Windows] getCurrentDNS elapsed=%s total=%s", time.Since(dnsReadStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
 	tunCfg := common.GetNetworkConfig()
 
-	tunnelIPv4, err = windowsTunnelIPv4Prefix(tunCfg.TunDevice)
+	adapter.tunnelIPv4, err = windowsTunnelIPv4Prefix(tunCfg.TunDevice)
 	if err != nil {
-		return failWindowsStart(err)
+		return true, err
 	}
-	if err := lastLUID.AddIPAddress(tunnelIPv4); err != nil {
-		return failWindowsStart(fmt.Errorf("add owned Wintun IPv4 address: %w", err))
+	if err := adapter.lastLUID.AddIPAddress(adapter.tunnelIPv4); err != nil {
+		return true, (fmt.Errorf("add owned Wintun IPv4 address: %w", err))
 	}
-	ipv4Mutated = true
+	adapter.ipv4Mutated = true
 	if err := waitForPreferredIPv4(ifName, tunCfg.TunDevice, 5*time.Second); err != nil {
-		return failWindowsStart(err)
+		return true, err
 	}
-	dnsMutated = true // SetDNS may have changed state before returning an error.
-	if err := setDNS(ifName, "1.1.1.1"); err != nil {
-		return failWindowsStart(err)
+	adapter.dnsMutated = true // SetDNS may have changed state before returning an error.
+	if err := routing.SetWindowsDNS(adapter.lastLUID, true, []netip.Addr{netip.MustParseAddr("1.1.1.1")}); err != nil {
+		return true, err
 	}
 
 	log.Debugf(Category, "[Engine][Windows] platform engine ready iface=%s elapsed=%s", ifName, time.Since(startedAt).Truncate(time.Millisecond))
-	return nil
+	return true, nil
 }
-
-func failWindowsStart(cause error) error {
-	return errors.Join(cause, stopPlatformEngine(engine.Stop))
-}
-
-func windowsEngineKey(c EngineConfig, adapterName string) *engine.Key {
-	// The proxy is loopback. Binding tun2socks' process-global dialer to the
-	// physical uplink also binds its address-less UDP relay socket on Windows;
-	// that socket then cannot send SOCKS5 UDP-associate datagrams to loopback.
-	// Real protocol sockets are protected independently by protected_dialer.
-	return &engine.Key{
-		Proxy:    fmt.Sprintf("socks5://%s", c.ProxyAddr),
-		Device:   adapterName,
-		LogLevel: "info",
-		MTU:      windowsTunMTU,
-	}
-}
-
 func resetTun2SocksInterfaceBinding() {
 	// engine.Stop does not clear these process-global values, and Insert only
 	// writes them for a non-empty Interface. Explicitly clear a binding left by
@@ -182,11 +149,11 @@ func resetTun2SocksInterfaceBinding() {
 	dialer.DefaultDialer.InterfaceIndex.Store(0)
 }
 
-func stopPlatformEngine(stopDevice func()) error {
-	adapterName := ownedAdapterName
+func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
+	adapterName := adapter.ownedAdapterName
 	configurationErr := cleanupWindowsState()
 	stopDevice()
-	removalErr := waitForWindowsAdapterRemoval(adapterName, windowsAdapterRemovalTimeout)
+	removalErr := waitForWindowsAdapterRemoval(ctx, adapterName)
 	err := errors.Join(configurationErr, removalErr)
 	if err != nil {
 		log.Debugf(Category, "[Engine][Windows][ERROR] platform cleanup: %v", err)
@@ -200,103 +167,65 @@ func stopPlatformEngine(stopDevice func()) error {
 }
 
 func prepareWindowsStateForStart() error {
-	if ownedAdapterName != "" {
-		present, err := windowsAdapterPresent(ownedAdapterName)
-		if err != nil {
-			return fmt.Errorf("check prior owned Windows adapter: %w", err)
-		}
-		if !present {
-			resetWindowsState()
-			return nil
-		}
+	if adapter.ownedAdapterName != "" {
+		return errors.New("previous Windows adapter cleanup is pending")
 	}
-	if err := cleanupWindowsState(); err != nil {
-		return err
-	}
-	if ownedAdapterName != "" {
-		if err := waitForWindowsAdapterRemoval(ownedAdapterName, windowsAdapterRemovalTimeout); err != nil {
-			return fmt.Errorf("remove prior owned Windows adapter: %w", err)
-		}
-	}
-	resetWindowsState()
 	return nil
 }
 
 // RecoverStaleWindowsIPv6FirewallRules runs at backend startup, before it
 // accepts desktop control requests.
 func RecoverStaleWindowsIPv6FirewallRules() error {
-	if ownedAdapterName != "" || lastIface != "" {
-		return fmt.Errorf("cannot run Windows startup recovery while adapter %q is active", ownedAdapterName)
+	if adapter.ownedAdapterName != "" || adapter.lastIface != "" {
+		return fmt.Errorf("cannot run Windows startup recovery while adapter %q is active", adapter.ownedAdapterName)
 	}
 	return routing.CleanupStaleWindowsIPv6FirewallRules()
 }
 
 func cleanupWindowsState() error {
-	if lastIface == "" {
+	if adapter.lastIface == "" {
 		return nil
 	}
 
 	var errs []error
 
-	log.Debugf(Category, "[Engine][Windows] Restoring DNS. static=%v DNS=%v", prevDNSStatic, prevDNS)
+	log.Debugf(Category, "[Engine][Windows] Restoring DNS. static=%v DNS=%v", adapter.prevDNSStatic, adapter.prevDNS)
 
-	if dnsMutated {
-		if !dnsKnown {
+	if adapter.dnsMutated {
+		if !adapter.dnsKnown {
 			errs = append(errs, errors.New("cannot restore DNS because its previous state was not captured"))
 		} else {
-			var err error
-			if !prevDNSStatic {
-				cmd := fmt.Sprintf(
-					"netsh interface ipv4 set dnsservers name=\"%s\" dhcp",
-					lastIface,
-				)
-				err = execAndLog(cmd, "restore DNS (DHCP)")
-			} else {
-				err = restoreStaticDNS(lastIface, prevDNS)
-			}
+			err := routing.SetWindowsDNS(adapter.lastLUID, adapter.prevDNSStatic, adapter.prevDNS)
 			if err != nil {
 				errs = append(errs, err)
 			} else {
-				dnsMutated = false
-				dnsKnown = false
-				prevDNS = nil
-				prevDNSStatic = false
+				adapter.dnsMutated = false
+				adapter.dnsKnown = false
+				adapter.prevDNS = nil
+				adapter.prevDNSStatic = false
 			}
 		}
 	}
-	if ipv4Mutated && luidKnown {
-		if err := lastLUID.DeleteIPAddress(tunnelIPv4); err != nil {
+	if adapter.ipv4Mutated && adapter.luidKnown {
+		if err := adapter.lastLUID.DeleteIPAddress(adapter.tunnelIPv4); err != nil {
 			errs = append(errs, fmt.Errorf("remove owned Wintun IPv4 address: %w", err))
 		} else {
-			ipv4Mutated = false
+			adapter.ipv4Mutated = false
 		}
 	}
-	if dadMutated {
-		log.Debugf(Category, "[Engine][Windows] restoring DAD transmits iface=%s count=%d", lastIface, prevDAD)
-		if err := setInterfaceDADTransmits(lastIface, prevDAD); err != nil {
+	if adapter.dadMutated {
+		log.Debugf(Category, "[Engine][Windows] restoring DAD transmits iface=%s count=%d", adapter.lastIface, adapter.prevDAD)
+		if err := setInterfaceDADTransmits(adapter.lastLUID, adapter.prevDAD); err != nil {
 			errs = append(errs, fmt.Errorf("restore DAD transmits: %w", err))
 		} else {
-			dadMutated = false
-			prevDAD = 0
+			adapter.dadMutated = false
+			adapter.prevDAD = 0
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func resetWindowsState() {
-	ownedAdapterName = ""
-	lastIface = ""
-	lastLUID = 0
-	luidKnown = false
-	prevDNS = nil
-	prevDNSStatic = false
-	dnsKnown = false
-	dnsMutated = false
-	prevDAD = 0
-	dadMutated = false
-	tunnelIPv4 = netip.Prefix{}
-	ipv4Mutated = false
-}
+func resetWindowsState() { adapter = windowsAdapterState{} }
 
 func newWindowsAdapterName() (string, error) {
 	random := make([]byte, windowsAdapterRandomBytes)
@@ -329,12 +258,11 @@ func windowsAdapterPresent(name string) (bool, error) {
 	return false, nil
 }
 
-func waitForWindowsAdapterRemoval(name string, timeout time.Duration) error {
+func waitForWindowsAdapterRemoval(ctx context.Context, name string) error {
 	if name == "" {
 		return nil
 	}
 	startedAt := time.Now()
-	deadline := startedAt.Add(timeout)
 	for {
 		present, err := windowsAdapterPresent(name)
 		if err == nil {
@@ -343,43 +271,36 @@ func waitForWindowsAdapterRemoval(name string, timeout time.Duration) error {
 				return nil
 			}
 		}
-		if !time.Now().Before(deadline) {
+		if ctx.Err() != nil {
 			if err != nil {
 				return fmt.Errorf("verify owned Wintun adapter removal: %w", err)
 			}
-			return fmt.Errorf("owned Wintun adapter was not removed within %s", timeout)
+			return fmt.Errorf("owned Wintun adapter removal: %w", ctx.Err())
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 }
 
-func platformInterfaceName() string { return lastIface }
+func platformInterfaceName() string { return adapter.lastIface }
 
-func windowsSetDADCommand(name string, transmits uint32) string {
-	return fmt.Sprintf(
-		"netsh interface ipv4 set interface interface=\"%s\" dadtransmits=%d store=active",
-		name,
-		transmits,
-	)
-}
-
-func getInterfaceDADTransmits(name string) (uint32, error) {
-	iface, err := net.InterfaceByName(name)
+func getInterfaceDADTransmits(luid winipcfg.LUID) (uint32, error) {
+	row, err := luid.IPInterface(windows.AF_INET)
 	if err != nil {
-		return 0, fmt.Errorf("resolve interface %q for DAD snapshot: %w", name, err)
-	}
-	row := windows.MibIpInterfaceRow{
-		Family:         windows.AF_INET,
-		InterfaceIndex: uint32(iface.Index),
-	}
-	if err := windows.GetIpInterfaceEntry(&row); err != nil {
-		return 0, fmt.Errorf("read interface %q DAD settings: %w", name, err)
+		return 0, fmt.Errorf("read DAD settings: %w", err)
 	}
 	return row.DadTransmits, nil
 }
 
-func setInterfaceDADTransmits(name string, transmits uint32) error {
-	return execAndLog(windowsSetDADCommand(name, transmits), "setInterfaceDADTransmits")
+func setInterfaceDADTransmits(luid winipcfg.LUID, transmits uint32) error {
+	row, err := luid.IPInterface(windows.AF_INET)
+	if err != nil {
+		return err
+	}
+	row.DadTransmits = transmits
+	return row.Set()
 }
 
 func waitForPreferredIPv4(name, expectedAddress string, timeout time.Duration) error {
@@ -467,42 +388,6 @@ func windowsTunnelIPv4Prefix(address string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, 24), nil
 }
 
-func setDNS(name, dns string) error {
-	addr, err := netip.ParseAddr(dns)
-	if err != nil || !addr.Is4() {
-		return fmt.Errorf("parse IPv4 DNS server %q", dns)
-	}
-	cmd := windowsSetDNSCommand(name, addr)
-	return execAndLog(cmd, "set DNS server")
-}
-
-func windowsSetDNSCommand(name string, server netip.Addr) string {
-	return fmt.Sprintf("netsh interface ipv4 set dnsservers name=\"%s\" static %s primary", name, server)
-}
-
-func windowsClearDNSCommand(name string) string {
-	return fmt.Sprintf("netsh interface ipv4 delete dnsservers name=\"%s\" all", name)
-}
-
-func windowsAddDNSCommand(name string, server netip.Addr, index int) string {
-	return fmt.Sprintf("netsh interface ipv4 add dnsservers name=\"%s\" %s index=%d", name, server, index)
-}
-
-func restoreStaticDNS(name string, servers []netip.Addr) error {
-	if len(servers) == 0 {
-		return execAndLog(windowsClearDNSCommand(name), "restore empty DNS server list")
-	}
-	if err := execAndLog(windowsSetDNSCommand(name, servers[0]), "restore primary DNS server"); err != nil {
-		return fmt.Errorf("restore primary DNS server: %w", err)
-	}
-	for index, server := range servers[1:] {
-		if err := execAndLog(windowsAddDNSCommand(name, server, index+2), fmt.Sprintf("restore DNS server index=%d", index+2)); err != nil {
-			return fmt.Errorf("restore DNS server index=%d: %w", index+2, err)
-		}
-	}
-	return nil
-}
-
 func getCurrentDNS(luid winipcfg.LUID) ([]netip.Addr, bool, error) {
 	dns, err := luid.DNS()
 	if err != nil {
@@ -512,14 +397,8 @@ func getCurrentDNS(luid winipcfg.LUID) ([]netip.Addr, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	ipv4DNS := make([]netip.Addr, 0, len(dns))
-	for _, address := range dns {
-		if address.Is4() {
-			ipv4DNS = append(ipv4DNS, address)
-		}
-	}
-	log.Debugf(Category, "[Engine][Windows] Current DNS: static=%v IPv4_DNS=%v", static, ipv4DNS)
-	return ipv4DNS, static, nil
+	log.Debugf(Category, "[Engine][Windows] captured DNS static=%v servers=%v", static, dns)
+	return dns, static, nil
 }
 
 func getInterfaceDNSStatic(luid winipcfg.LUID) (bool, error) {

@@ -179,13 +179,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 			// Keep r.active asserted until the transferred lease is stopped;
 			// the manager will retain it in the generation ledger even though
 			// Start returns the cancellation to its caller now.
-			lease.setOnDone(func(cleanupErr error) {
-				r.mu.Lock()
-				if cleanupErr == nil {
-					r.active = false
-				}
-				r.mu.Unlock()
-			})
+			lease.setOnDone(r.releaseActive)
 			return lease, err
 		}
 		var cleanupFailure *sessionapi.CleanupFailure
@@ -215,26 +209,22 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		}
 		cause := errors.Join(fmt.Errorf("wait for initial tunnel readiness: %w", err), markCleanupFailure(cleanupErr))
 		if cleanupErr != nil {
-			lease.setOnDone(func(err error) {
-				r.mu.Lock()
-				defer r.mu.Unlock()
-				if err == nil {
-					r.active = false
-				}
-			})
+			lease.setOnDone(r.releaseActive)
 			return lease, cause
 		}
 		return nil, cause
 	}
-	lease.setOnDone(func(cleanupErr error) {
-		r.mu.Lock()
-		if cleanupErr == nil {
-			r.active = false
-		}
-		r.mu.Unlock()
-	})
+	lease.setOnDone(r.releaseActive)
 	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, r.options.HealthInterval, r.options.HealthFailureThreshold)
 	return lease, nil
+}
+
+func (r *runtime) releaseActive(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err == nil {
+		r.active = false
+	}
 }
 
 func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (*lease, error) {
