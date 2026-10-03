@@ -50,9 +50,9 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           output="$RUNNER_TEMP/dobbyvpn-desktop-package"
-          debug_args=()
-          if [[ "$DEBUG" == true ]]; then debug_args=(--debug); fi
-          python3 .github/scripts/desktop/desktop_package.py build "${debug_args[@]}" \
+          package_args=(build)
+          if [[ "$DEBUG" == true ]]; then package_args+=(--debug); fi
+          python3 .github/scripts/desktop/desktop_package.py "${package_args[@]}" \
             --platform "$PLATFORM" --arch "$ARCHITECTURE" \
             --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
             --output-dir "$output"
