@@ -17,6 +17,9 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- Match the shared Go owner's total cleanup budget. -->
+    <key>ExitTimeOut</key>
+    <integer>30</integer>
 
     <key>WorkingDirectory</key>
     <string>/Applications/Dobby VPN.app/Contents/Resources/</string>

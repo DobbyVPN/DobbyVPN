@@ -11,14 +11,18 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+	"unsafe"
 
 	"core/clientserver/controljson"
 	"core/clientserver/controlplane"
+	"core/sessionapi"
 	"core/tunnel/platform_engine"
 
 	"core/diagnostics"
 	"core/log"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
 
@@ -125,7 +129,7 @@ func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeReq
 		return true, 1
 	}
 	stopControl, serveDone := serveDesktopControl(listener)
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown}
 	var serveErr error
 running:
 	for {
@@ -133,7 +137,7 @@ running:
 		case serveErr = <-serveDone:
 			break running
 		case request, ok := <-requests:
-			if !ok || request.Cmd == svc.Stop || request.Cmd == svc.Shutdown {
+			if !ok || request.Cmd == svc.Stop || request.Cmd == svc.Shutdown || request.Cmd == svc.PreShutdown {
 				break running
 			}
 			if request.Cmd == svc.Interrogate {
@@ -141,7 +145,7 @@ running:
 			}
 		}
 	}
-	changes <- svc.Status{State: svc.StopPending, WaitHint: 30000}
+	changes <- svc.Status{State: svc.StopPending, WaitHint: uint32(sessionapi.CleanupTimeout / time.Millisecond)}
 	if err := shutdownDesktop(stopControl, serveErr); err != nil {
 		log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
 		return true, 1
@@ -150,7 +154,35 @@ running:
 }
 
 func runService() error {
+	if err := configureServiceShutdownBudget(); err != nil {
+		return err
+	}
 	return svc.Run("DobbyVPN Go backend", &managerService{})
+}
+
+// Ordinary shutdown notification can force termination before the Go owner's
+// cleanup deadline. Request the same bounded interval in SCM's preshutdown phase.
+func configureServiceShutdownBudget() (resultErr error) {
+	manager, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return fmt.Errorf("open service manager for shutdown budget: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, windows.CloseServiceHandle(manager)) }()
+	name, err := windows.UTF16PtrFromString("DobbyVPN Go backend")
+	if err != nil {
+		return err
+	}
+	service, err := windows.OpenService(manager, name, windows.SERVICE_CHANGE_CONFIG)
+	if err != nil {
+		return fmt.Errorf("open backend service for shutdown budget: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, windows.CloseServiceHandle(service)) }()
+	// SERVICE_PRESHUTDOWN_INFO contains one DWORD timeout in milliseconds.
+	budget := uint32(sessionapi.CleanupTimeout / time.Millisecond)
+	if err := windows.ChangeServiceConfig2(service, windows.SERVICE_CONFIG_PRESHUTDOWN_INFO, (*byte)(unsafe.Pointer(&budget))); err != nil {
+		return fmt.Errorf("configure backend preshutdown budget: %w", err)
+	}
+	return nil
 }
 
 func run() {
