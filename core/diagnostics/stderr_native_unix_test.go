@@ -3,9 +3,10 @@
 package diagnostics
 
 import (
-	"golang.org/x/sys/unix"
 	"os/exec"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func checkStderrOwnership(*testing.T) {}
