@@ -84,12 +84,16 @@ func firstXrayServerAddress(config map[string]interface{}) (string, bool) {
 	return address, ok
 }
 
-// ExtractLogLevel reads the accepted configuration.
-// In error case returns xrayLog.Severity_Unknown
+// ExtractLogLevel reads the optional setting from the accepted configuration.
+// An omitted setting uses the app default without reporting a parse failure.
 func ExtractLogLevel(config map[string]any) (xrayLog.Severity, error) {
-
-	// Assuming standard Xray config structure where log[0] is the log settings
-	if log, ok := config["log"].(map[string]interface{}); ok && len(log) > 0 {
+	if config["log"] == nil {
+		return DefaultXrayLogLevel(), nil
+	}
+	if log, ok := config["log"].(map[string]interface{}); ok {
+		if log["loglevel"] == nil {
+			return DefaultXrayLogLevel(), nil
+		}
 		if loglevel, ok := log["loglevel"].(string); ok {
 			switch strings.ToLower(loglevel) {
 			case defaultXrayLogLevelName:
