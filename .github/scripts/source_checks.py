@@ -81,6 +81,15 @@ TOOL_ASSETS = {
 }
 
 NATIVE_GO_PACKAGES = [
+    "./diagnostics",
+    "./log",
+    "./cmd/dobbyvpn",
+    "./clientserver/executor",
+    "./routing",
+    "./sessionapi",
+    "./sessionapi/mobilebinding",
+    "./sessionapi/runtime/internal",
+    "./tunnel/platform_engine",
     "./probe",
     "./sessionapi/runtime",
     "./tunnel/protected_dialer",
