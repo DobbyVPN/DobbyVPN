@@ -114,6 +114,13 @@ class NativeUiInstrumentedTest {
         val nativeInput = waitForFocusedNativeInput(10_000)
         nativeInput.setText("invalidprofile")
         device.waitForIdle()
+        val typingMarker = "log-update-while-typing-${System.nanoTime()}"
+        NativeVpnBridge.recordDiagnostic(instrumentation.targetContext, "ui.test.typing", typingMarker)
+        waitForTextContaining(typingMarker)
+        device.waitForIdle()
+        check(device.findObject(By.clazz("android.widget.EditText").pkg(packageName))?.isFocused == true) {
+            "ANDROID_LOG_UPDATE_STOLE_INPUT_FOCUS"
+        }
         // The backend rejects this deliberately invalid source. The visible
         // Error state proves the Compose input reached the production binding.
         dismissNativeInputAfterTextEntry()

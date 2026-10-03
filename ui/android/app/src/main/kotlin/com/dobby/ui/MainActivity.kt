@@ -559,7 +559,9 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
             val offset = scrollY
             if (text.startsWith(rendered)) content.append(text.substring(rendered.length)) else content.text = text
             rendered = text
-            post { if (following) fullScroll(FOCUS_DOWN) else scrollTo(0, offset) }
-        } else if (following) { post { fullScroll(FOCUS_DOWN) } }
+            // fullScroll also moves keyboard focus; log refresh must not take
+            // focus from the configuration field or dismiss its keyboard.
+            post { if (following) scrollTo(0, content.bottom) else scrollTo(0, offset) }
+        } else if (following) { post { scrollTo(0, content.bottom) } }
     }
 }
