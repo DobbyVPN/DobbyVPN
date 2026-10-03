@@ -319,7 +319,11 @@ class NativeUIController:
 
     def collect_diagnostics(self) -> None:
         if self.platform == "macos":
-            path = Path.home() / "Library/Logs/DobbyVPN/ui_diagnostics.jsonl"
+            import pwd
+
+            # LaunchServices uses the account's real home even when the test
+            # driver has a disposable HOME for Go's configuration store.
+            path = Path(pwd.getpwuid(os.getuid()).pw_dir) / "Library/Logs/DobbyVPN/ui_diagnostics.jsonl"
         else:
             path = Path(os.environ["LOCALAPPDATA"]) / "DobbyVPN/Logs/ui_diagnostics.jsonl"
         for retained in (path, path.with_name(path.name + ".previous")):

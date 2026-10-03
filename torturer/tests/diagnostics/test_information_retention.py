@@ -483,6 +483,25 @@ class InformationRetentionTests(unittest.TestCase):
                 for retained in (source, previous):
                     self.assertEqual((controller.logs / retained.name).read_bytes(), retained.read_bytes())
 
+    @unittest.skipIf(os.name == "nt", "macOS account home uses POSIX pwd")
+    def test_macos_native_collection_uses_account_home_with_disposable_home(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            account_home = root / "account"
+            source = account_home / "Library/Logs/DobbyVPN/ui_diagnostics.jsonl"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"native original cause\xff\r\n")
+            controller = object.__new__(native_ui_smoke.NativeUIController)
+            controller.platform = "macos"
+            controller.logs = root / "collected"
+            controller.logs.mkdir()
+            with (
+                mock.patch.dict(os.environ, {"HOME": str(root / "disposable")}),
+                mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir=str(account_home))),
+            ):
+                controller.collect_diagnostics()
+            self.assertEqual((controller.logs / source.name).read_bytes(), source.read_bytes())
+
     def test_native_windows_helper_uses_existing_job_boundary(self) -> None:
         process = mock.Mock()
         completed = subprocess.CompletedProcess(

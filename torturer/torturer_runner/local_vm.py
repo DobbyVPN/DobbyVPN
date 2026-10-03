@@ -1509,7 +1509,7 @@ def _install_macos_release(
 def _prepare_release_candidate(
     run_dir: Path, platform: str, manifest_path: Path, logs: Path, timeout: float,
 ) -> dict[str, Any]:
-    _required_input(run_dir, "source", directory=True)
+    source = _required_input(run_dir, "source", directory=True)
     manifest, artifacts = _validate_release_inputs(
         run_dir,
         source,
@@ -2435,6 +2435,32 @@ def _windows_release_package(run_dir: Path, release: dict[str, Any]) -> Path:
     return resolved
 
 
+def _collect_installed_backend_logs(directory: Path, logs: Path, errors: list[str]) -> None:
+    """Retain the installed service's files after its uninstaller stops it."""
+    for name in ("backend.jsonl", "backend.jsonl.stderr", "backend.jsonl.stdout"):
+        for suffix in ("", ".previous"):
+            path = directory / (name + suffix)
+            try:
+                source = path.open("rb")
+            except FileNotFoundError as error:
+                if name == "backend.jsonl" and not suffix:
+                    errors.append(f"collect-installed-backend: {error}")
+                continue
+            except OSError as error:
+                traceback.print_exception(error)
+                errors.append(f"collect-installed-backend: {error}")
+                continue
+            try:
+                with source:
+                    destination = logs / "installed-backend" / path.name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with destination.open("wb") as output:
+                        shutil.copyfileobj(source, output, length=64 * 1024)
+            except OSError as error:
+                traceback.print_exception(error)
+                errors.append(f"collect-installed-backend {path}: {error}")
+
+
 def cleanup(args: argparse.Namespace) -> int:
     run_dir = _run_dir(args.run_dir)
     state = _read_state(run_dir)
@@ -2554,6 +2580,14 @@ def cleanup(args: argparse.Namespace) -> int:
             cwd=source, logs=logs, label="cleanup-installed-package",
             timeout=args.timeout, errors=errors,
         )
+        # Installed packages use the OS's fixed log directory. The private
+        # service used by focused checks already writes inside this run.
+        if args.platform in {"macos", "windows"}:
+            directory = (
+                Path("/Library/Logs/DobbyVPN") if args.platform == "macos"
+                else Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "DobbyVPN" / "Logs"
+            )
+            _collect_installed_backend_logs(directory, logs, errors)
     if state.get("source_checks_attempted") is True:
         source = run_dir / "source"
         _cleanup_logged(
