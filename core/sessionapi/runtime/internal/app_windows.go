@@ -5,10 +5,8 @@ package internal
 
 import (
 	"context"
-	"core/sessionapi"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
-	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -22,6 +20,7 @@ import (
 var windowsRunSequence atomic.Uint64
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
+	defer app.finishCleanup(ctx, &runErr)
 	startedAt := time.Now()
 	defer protected_dialer.ResetDefaultRoute()
 	routePlan := routing.NewPlan(fmt.Sprintf("windows-%d-%d", startedAt.UnixNano(), windowsRunSequence.Add(1)))
@@ -39,27 +38,19 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	var ownedEngine *tunnel.Engine
 	protocolOpened := false
-	defer func() {
-		log.Debugf(Category, "Closing Windows routing plan before stopping tun2socks")
-		routeErr := routePlan.Close()
-
-		log.Debugf(Category, "[Tunnel] Stopping tun2socks engine")
-		var engineErr error
-		if ownedEngine != nil {
-			engineErr = ownedEngine.Stop(sessionapi.CleanupContext(ctx))
-		}
-		var deviceErr error
-		if protocolOpened {
-			deviceErr = app.ProtocolDevice.Close()
-		}
-		cleanupErr := errors.Join(routeErr, engineErr, deviceErr)
-		if cleanupErr != nil {
-			log.Debugf(Category, "[Windows][Cleanup][ERROR] %v", cleanupErr)
-			runErr = errors.Join(runErr, fmt.Errorf("Windows session cleanup: %w", cleanupErr))
-		} else {
-			log.Debugf(Category, "[Windows][Cleanup] complete=true")
-		}
-	}()
+	app.setCleanup(routePlan.Close,
+		func(ctx context.Context) error {
+			if ownedEngine != nil {
+				return ownedEngine.Stop(ctx)
+			}
+			return nil
+		},
+		func(context.Context) error {
+			if protocolOpened {
+				return app.ProtocolDevice.Close()
+			}
+			return nil
+		})
 
 	stepStartedAt := time.Now()
 	gatewayIP, netInterface, err := routing.DiscoverWindowsDefaultRoute()

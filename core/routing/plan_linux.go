@@ -37,7 +37,7 @@ func (p *Plan) AcquireLinuxProxyRoute(proxyIP, gatewayIP, iface string) (*Lease,
 		}
 		created = true
 		return nil
-	}, func() error {
+	}, func(_ context.Context) error {
 		if !created {
 			return nil
 		}
@@ -73,7 +73,7 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 	}
 	routeLease, err := p.Acquire(fmt.Sprintf("mark-route table=%d", tableID), func() error {
 		return linuxRouteOperation("add", &mainRoute, linuxRouteAdd)
-	}, func() error {
+	}, func(_ context.Context) error {
 		cleanupErr := linuxRouteOperation("delete", &mainRoute, linuxRouteDel)
 		if linuxRouteAlreadyGone(cleanupErr) {
 			return nil
@@ -97,7 +97,7 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 	}
 	terminalLease, err := p.Acquire(fmt.Sprintf("mark-unreachable table=%d", tableID), func() error {
 		return linuxRouteOperation("add", &terminalRoute, linuxRouteAdd)
-	}, func() error {
+	}, func(_ context.Context) error {
 		routeErr := linuxRouteOperation("delete", &terminalRoute, linuxRouteDel)
 		if linuxRouteAlreadyGone(routeErr) {
 			return nil
@@ -105,17 +105,17 @@ func (p *Plan) AcquireLinuxMarkedRouting(tableID, priority int, iface, gatewayIP
 		return routeErr
 	})
 	if err != nil {
-		return errors.Join(err, routeLease.Close())
+		return errors.Join(err, routeLease.Close(context.Background()))
 	}
 
 	if _, err := p.Acquire(fmt.Sprintf("mark-rule table=%d priority=%d", tableID, priority), func() error {
 		rule := linuxSessionRule(tableID, priority)
 		return linuxRuleOperation("add", rule, linuxRuleAdd)
-	}, func() error {
+	}, func(_ context.Context) error {
 		rule := linuxSessionRule(tableID, priority)
 		return linuxRuleOperation("delete", rule, linuxRuleDel)
 	}); err != nil {
-		return errors.Join(err, terminalLease.Close(), routeLease.Close())
+		return errors.Join(err, terminalLease.Close(context.Background()), routeLease.Close(context.Background()))
 	}
 	return nil
 }
@@ -155,7 +155,7 @@ func (p *Plan) AcquireLinuxTunnelDefault(tunName string) (*Lease, error) {
 			return fmt.Errorf("install TUN default route: %w", err)
 		}
 		return nil
-	}, func() error {
+	}, func(_ context.Context) error {
 		// Delete the route owned by this session first. A failed delete must not
 		// restore a baseline over a route changed by another actor.
 		if err := linuxRouteOperation("delete", &tunRoute, linuxRouteDel); err != nil {
@@ -188,7 +188,7 @@ func (p *Plan) AcquireLinuxResolvedDNS(ctx context.Context, tunName, dnsIP strin
 		return nil, fmt.Errorf("invalid resolved interface index %d", index)
 	}
 	linkIndex := int32(index)
-	revert := func() error {
+	revert := func(cleanupCtx context.Context) error {
 		current, err := linuxLinkIndex(tunName)
 		if err != nil {
 			return fmt.Errorf("verify resolved link ownership: %w", err)
@@ -196,7 +196,7 @@ func (p *Plan) AcquireLinuxResolvedDNS(ctx context.Context, tunName, dnsIP strin
 		if current != index {
 			return fmt.Errorf("resolved interface %s changed index from %d to %d", tunName, index, current)
 		}
-		return linuxResolvedCall(sessionapi.CleanupContext(ctx), "RevertLink", linkIndex)
+		return linuxResolvedCall(cleanupCtx, "RevertLink", linkIndex)
 	}
 
 	// Record ownership before the first call: even a failed D-Bus exchange can
@@ -214,7 +214,7 @@ func (p *Plan) AcquireLinuxResolvedDNS(ctx context.Context, tunName, dnsIP strin
 		{"SetLinkDefaultRoute", []any{linkIndex, true}},
 	} {
 		if err := linuxResolvedCall(ctx, call.method, call.args...); err != nil {
-			if cleanupErr := lease.Close(); cleanupErr != nil {
+			if cleanupErr := lease.Close(sessionapi.CleanupContext(ctx)); cleanupErr != nil {
 				return lease, &sessionapi.CleanupFailure{Err: errors.Join(err, cleanupErr)}
 			}
 			return nil, err
@@ -250,7 +250,7 @@ func (p *Plan) AcquireLinuxIPv6Block() error {
 			}
 			created = true
 			return nil
-		}, func() error {
+		}, func(_ context.Context) error {
 			if !created {
 				return nil
 			}

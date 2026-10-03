@@ -5,12 +5,10 @@ package internal
 
 import (
 	"context"
-	"core/sessionapi"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
-	"errors"
 	"fmt"
-	"sync"
+	"golang.getoutline.org/sdk/network"
 	"time"
 
 	"github.com/jackpal/gateway"
@@ -50,6 +48,7 @@ func (app *App) validateRunInputs() error {
 //
 //nolint:gocyclo // Splitting this transaction would obscure its cleanup ownership.
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
+	defer app.finishCleanup(ctx, &runErr)
 	log.Debugf(Category, "[Linux][Init] ===== VPN initialization started =====")
 	if err := app.validateRunInputs(); err != nil {
 		signalInit(initResult, err)
@@ -100,12 +99,28 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	log.Debugf(Category, "[Linux][Recovery][OK] Tagged routing state is clean")
 	routePlan := routing.NewPlan(fmt.Sprintf("%s:%s", app.RoutingConfig.TunDeviceName, serverIP.String()))
-	defer func() {
-		if cleanupErr := routePlan.Close(); cleanupErr != nil {
-			log.Debugf(Category, "[Linux][RoutingPlan][WARN] %v", cleanupErr)
-			runErr = errors.Join(runErr, fmt.Errorf("linux routing cleanup: %w", cleanupErr))
-		}
-	}()
+	var ownedEngine *tunnel.Engine
+	var tun network.IPDevice
+	protocolOpened := false
+	app.setCleanup(routePlan.Close,
+		func(ctx context.Context) error {
+			if ownedEngine != nil {
+				return ownedEngine.Stop(ctx)
+			}
+			return nil
+		},
+		func(context.Context) error {
+			if protocolOpened {
+				return app.ProtocolDevice.Close()
+			}
+			return nil
+		},
+		func(context.Context) error {
+			if tun != nil {
+				return tun.Close()
+			}
+			return nil
+		})
 
 	// 4. early route
 	if serverIP.String() != "127.0.0.1" {
@@ -157,7 +172,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		app.RoutingConfig.TunDeviceIP,
 	)
 
-	tun, err := newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
+	tun, err = newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
 	if err != nil {
 		err = fmt.Errorf("failed to create TUN device: %w", err)
 		log.Debugf(Category, "[Linux][Step 6][ERROR] %v", err)
@@ -166,40 +181,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 
 	log.Debugf(Category, "[Linux][Step 6][OK] TUN created: %s", app.RoutingConfig.TunDeviceName)
-
-	var ownedEngine *tunnel.Engine
-	protocolOpened := false
-	var cleanupErr error
-	var closeOnce sync.Once
-	closeAll := func() error {
-		closeOnce.Do(func() {
-			log.Debugf(Category, "[Linux][Lifecycle] Shutting down...")
-
-			routeErr := routePlan.Close()
-
-			var engineErr error
-			if ownedEngine != nil {
-				engineErr = ownedEngine.Stop(sessionapi.CleanupContext(ctx))
-			}
-			var deviceErr error
-			if protocolOpened {
-				deviceErr = app.ProtocolDevice.Close()
-			}
-			tunErr := tun.Close()
-			cleanupErr = errors.Join(routeErr, engineErr, deviceErr, tunErr)
-			if cleanupErr != nil {
-				log.Debugf(Category, "[Linux][Cleanup][ERROR] %v", cleanupErr)
-			} else {
-				log.Debugf(Category, "[Linux][Lifecycle] Shutdown complete")
-			}
-		})
-		return cleanupErr
-	}
-	defer func() {
-		if closeErr := closeAll(); closeErr != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("linux session cleanup: %w", closeErr))
-		}
-	}()
 
 	// 7. Protocol
 	log.Debugf(Category, "[Linux][Step 7] Creating Protocol SOCKS bridge...")

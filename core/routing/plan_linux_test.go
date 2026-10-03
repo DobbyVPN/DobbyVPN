@@ -26,7 +26,7 @@ func TestLinuxProxyRouteLeasePreservesExistingRoute(t *testing.T) {
 	if lease == nil {
 		t.Fatal("expected lease")
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.routeAdds) != 1 || len(fake.routeDeletes) != 0 {
@@ -46,7 +46,7 @@ func TestLinuxProxyRouteCleanupToleratesLinkRemovedRoute(t *testing.T) {
 	if _, err := plan.AcquireLinuxProxyRoute("198.51.100.8", "192.0.2.1", "eth0"); err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatalf("cleanup should be idempotent after link removal: %v", err)
 	}
 }
@@ -60,7 +60,7 @@ func TestLinuxMarkedRoutingCleanupToleratesLinkRemovedRoutes(t *testing.T) {
 	if err := plan.AcquireLinuxMarkedRouting(233, 23333, "eth0", "192.0.2.1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatalf("cleanup should be idempotent after link removal: %v", err)
 	}
 }
@@ -100,7 +100,7 @@ func TestLinuxTunnelDefaultRestoresCapturedBaseline(t *testing.T) {
 	if _, err := plan.AcquireLinuxTunnelDefault("dobby0"); err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.routeReplaces) != 2 || len(fake.routeDeletes) != 1 {
@@ -138,7 +138,7 @@ func TestLinuxResolvedDNSLeaseConfiguresAndRevertsOnlyTunnelLink(t *testing.T) {
 	if _, err := plan.AcquireLinuxResolvedDNS(context.Background(), "dobby0", "9.9.9.9"); err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"SetLinkDNS", "SetLinkDomains", "SetLinkDefaultRoute", "RevertLink"}
@@ -165,7 +165,7 @@ func TestLinuxResolvedDNSFailureRevertsPartialConfiguration(t *testing.T) {
 	if _, err := plan.AcquireLinuxResolvedDNS(context.Background(), "dobby0", "9.9.9.9"); !errors.Is(err, sentinel) {
 		t.Fatalf("acquire=%v", err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"SetLinkDNS", "SetLinkDomains", "RevertLink"}
@@ -190,7 +190,7 @@ func TestLinuxResolvedDNSDoesNotRevertReusedInterfaceName(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.links["dobby0"] = linuxTestLink("dobby0", 8)
-	if err := plan.Close(); err == nil {
+	if err := plan.Close(context.Background()); err == nil {
 		t.Fatal("replacement identity was ignored")
 	}
 }
@@ -204,7 +204,7 @@ func TestLinuxMarkedRoutingFailureRollsBackOnlyRoutesCreatedByPlan(t *testing.T)
 	if err := plan.AcquireLinuxMarkedRouting(233, 23333, "eth0", "192.0.2.1"); err == nil {
 		t.Fatal("AcquireLinuxMarkedRouting succeeded")
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.routeAdds) != 2 || len(fake.ruleAdds) != 1 || len(fake.routeDeletes) != 2 {
@@ -240,7 +240,7 @@ func TestLinuxTunnelDefaultDoesNotRestoreBaselineWhenOwnedRouteIsGone(t *testing
 	if _, err := plan.AcquireLinuxTunnelDefault("dobby0"); err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Close(); err == nil {
+	if err := plan.Close(context.Background()); err == nil {
 		t.Fatal("Close succeeded after session-owned route was already gone")
 	}
 	if len(fake.routeReplaces) != 1 {
@@ -256,7 +256,7 @@ func TestLinuxIPv6BlockPreservesExistingRoutes(t *testing.T) {
 	if err := plan.AcquireLinuxIPv6Block(); err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.routeAdds) != 2 || len(fake.routeDeletes) != 0 {

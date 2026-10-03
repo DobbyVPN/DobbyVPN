@@ -40,7 +40,7 @@ func TestMacOSRouteOwnershipAndRepair(t *testing.T) {
 				t.Fatal(err)
 			}
 			if foreign {
-				if err := plan.Close(); err != nil {
+				if err := plan.Close(context.Background()); err != nil {
 					t.Fatal(err)
 				}
 				if creates != 0 || deletes != 0 {
@@ -57,14 +57,14 @@ func TestMacOSRouteOwnershipAndRepair(t *testing.T) {
 			if _, err := plan.Repair(); err == nil {
 				t.Fatal("repair accepted foreign replacement")
 			}
-			if err := plan.Close(); err == nil {
+			if err := plan.Close(context.Background()); err == nil {
 				t.Fatal("cleanup accepted foreign replacement")
 			}
 			if deletes != 0 {
 				t.Fatal("foreign replacement deleted")
 			}
 			rows[0].index = 7
-			if err := plan.Close(); err != nil {
+			if err := plan.Close(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			if deletes != 1 {
@@ -93,7 +93,7 @@ func TestMacOSPartialAcquisitionRetainsOriginalFailure(t *testing.T) {
 	if _, err := plan.acquireMacOSRoute(context.Background(), want); !errors.Is(err, failure) {
 		t.Fatalf("error=%v", err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != 0 {

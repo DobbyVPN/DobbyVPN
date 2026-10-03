@@ -3,6 +3,7 @@
 package routing
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -142,7 +143,7 @@ func acquireWindowsRoute(plan *Plan, name string, route windowsRoute) (bool, err
 	// CreateIpForwardEntry2 is atomic. Capture its installed attributes before
 	// returning; the lease remains recorded even if the verification fails.
 	var installed *winipcfg.MibIPforwardRow2
-	_, err = plan.Acquire(name, func() error { return windowsRouteCreate(key) }, func() error {
+	_, err = plan.Acquire(name, func() error { return windowsRouteCreate(key) }, func(_ context.Context) error {
 		if installed == nil {
 			return errors.New("created route ownership could not be confirmed")
 		}
@@ -193,7 +194,9 @@ func acquireIPv6Block(plan *Plan) error {
 	ruleName := "DobbyVPN Block IPv6 " + plan.SessionID()
 	_, err := plan.Acquire("IPv6 firewall rule "+ruleName,
 		func() error { return windowsFirewallAdd(ruleName) },
-		func() error { return windowsFirewallRemove(func(name string) bool { return name == ruleName }) })
+		func(_ context.Context) error {
+			return windowsFirewallRemove(func(name string) bool { return name == ruleName })
+		})
 	return err
 }
 
@@ -201,18 +204,12 @@ func acquireIPv6Block(plan *Plan) error {
 // Any failure closes the plan, rolling back in LIFO order and leaving routes
 // that existed before this session untouched.
 func ConfigureWindowsRouting(plan *Plan, proxyIP, gatewayIP, tunDeviceName, interfaceName string) error {
-	fail := func(err error) error {
-		if rollbackErr := plan.Close(); rollbackErr != nil {
-			return fmt.Errorf("%w; routing rollback: %v", err, rollbackErr)
-		}
-		return err
-	}
 	if _, err := AcquireProxyRoute(plan, proxyIP, gatewayIP, interfaceName); err != nil {
-		return fail(err)
+		return err
 	}
 	for _, subnet := range ipv4ReservedSubnets {
 		if _, err := acquireWindowsRoute(plan, "reserved bypass "+subnet, windowsRoute{prefix: subnet, nextHop: gatewayIP, interfaceName: interfaceName}); err != nil {
-			return fail(err)
+			return err
 		}
 	}
 	for _, subnet := range ipv4Subnets {
@@ -220,11 +217,11 @@ func ConfigureWindowsRouting(plan *Plan, proxyIP, gatewayIP, tunDeviceName, inte
 		// explicit on-link route instead of inventing a gateway which Windows
 		// can mark unreachable even though the route remains in ActiveStore.
 		if _, err := acquireWindowsRoute(plan, "TUN redirect "+subnet, windowsRoute{prefix: subnet, nextHop: windowsOnLinkNextHop, interfaceName: tunDeviceName}); err != nil {
-			return fail(err)
+			return err
 		}
 	}
 	if err := acquireIPv6Block(plan); err != nil {
-		return fail(err)
+		return err
 	}
 	return nil
 }

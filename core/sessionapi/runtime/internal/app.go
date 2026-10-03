@@ -17,12 +17,23 @@
 package internal
 
 import (
+	"context"
 	"core/dnscache"
+	"core/log"
 	"core/protocol"
+	"core/sessionapi"
 	"core/tunnel"
+	"errors"
+	"fmt"
+	"runtime/debug"
+	"sync"
 )
 
 type App struct {
+	cleanupMu  sync.Mutex
+	cleanup    []func(context.Context) error
+	cleanupErr error
+
 	ProtocolDevice protocol.ProtocolDevice
 	DNSCache       *dnscache.Cache
 	BypassPolicy   *tunnel.BypassPolicy
@@ -37,4 +48,47 @@ type RoutingConfig struct {
 	RoutingTableID       int
 	RoutingTablePriority int
 	DNSServerIP          string
+}
+
+// The run goroutine registers one ordered cleanup transaction before acquiring
+// resources. After it returns, Disconnect may retry only its remaining entries.
+func (app *App) setCleanup(releases ...func(context.Context) error) {
+	app.cleanupMu.Lock()
+	defer app.cleanupMu.Unlock()
+	app.cleanup = releases
+}
+
+func (app *App) Close(ctx context.Context) (resultErr error) {
+	app.cleanupMu.Lock()
+	defer app.cleanupMu.Unlock()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			app.cleanupErr = fmt.Errorf("native cleanup panic: %v\n%s", recovered, debug.Stack())
+			resultErr = &sessionapi.CleanupFailure{Err: app.cleanupErr}
+		}
+	}()
+	for len(app.cleanup) > 0 {
+		if err := app.cleanup[0](ctx); err != nil {
+			app.cleanupErr = err
+			return &sessionapi.CleanupFailure{Err: err}
+		}
+		app.cleanup = app.cleanup[1:]
+	}
+	app.cleanupErr = nil
+	return nil
+}
+
+func (app *App) CleanupError() error {
+	app.cleanupMu.Lock()
+	defer app.cleanupMu.Unlock()
+	return app.cleanupErr
+}
+
+func (app *App) finishCleanup(ctx context.Context, runErr *error) {
+	if err := app.Close(sessionapi.CleanupContext(ctx)); err != nil {
+		*runErr = errors.Join(*runErr, err)
+		log.Errorf(Category, "native cleanup pending: %v", err)
+	} else {
+		log.Infof(Category, "native cleanup_complete=true")
+	}
 }

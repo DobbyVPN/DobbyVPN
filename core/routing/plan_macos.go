@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/netip"
 
-	"core/sessionapi"
 	"golang.org/x/sys/unix"
 )
 
@@ -109,7 +108,7 @@ func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*Lease, 
 		}
 		return true, nil
 	}
-	lease, err := p.Acquire("route "+want.prefix.String(), func() error { return nil }, func() error {
+	lease, err := p.Acquire("route "+want.prefix.String(), func() error { return nil }, func(cleanupCtx context.Context) error {
 		if !owned {
 			return nil
 		}
@@ -117,7 +116,7 @@ func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*Lease, 
 		if err != nil || current == nil {
 			return err
 		}
-		deleteErr := macOSChangeRoute(sessionapi.CleanupContext(ctx), unix.RTM_DELETE, *current)
+		deleteErr := macOSChangeRoute(cleanupCtx, unix.RTM_DELETE, *current)
 		remaining, err := findMacOSRoute(want)
 		if err != nil {
 			return errors.Join(deleteErr, err)

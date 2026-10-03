@@ -3,6 +3,7 @@
 package routing
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/netip"
@@ -54,7 +55,7 @@ func TestWindowsRoutePreservesForeignAndDeletesOnlyItsOwn(t *testing.T) {
 			if err != nil || changed == foreign {
 				t.Fatalf("changed=%v error=%v", changed, err)
 			}
-			if err := plan.Close(); err != nil {
+			if err := plan.Close(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			if (*deletes == 0) != foreign {
@@ -71,7 +72,7 @@ func TestWindowsRouteRetainsReplacementAndOriginalErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	(*current).Metric++
-	if err := plan.Close(); err == nil {
+	if err := plan.Close(context.Background()); err == nil {
 		t.Fatal("replacement was accepted as owned")
 	}
 	if *deletes != 0 {
@@ -80,11 +81,11 @@ func TestWindowsRouteRetainsReplacementAndOriginalErrors(t *testing.T) {
 	(*current).Metric--
 	want := errors.New("IP Helper access denied")
 	windowsRouteDelete = func(*winipcfg.MibIPforwardRow2) error { return want }
-	if err := plan.Close(); !errors.Is(err, want) {
+	if err := plan.Close(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("lost original error: %v", err)
 	}
 	windowsRouteDelete = func(*winipcfg.MibIPforwardRow2) error { *current = nil; return nil }
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }

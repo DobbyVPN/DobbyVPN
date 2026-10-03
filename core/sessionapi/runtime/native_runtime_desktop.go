@@ -156,13 +156,19 @@ func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 		return lifecycleBusyError(stateStopping)
 	}
 	if c.state == stateFailed && c.done == nil {
+		if c.app != nil {
+			err := c.app.Close(ctx)
+			if err == nil {
+				c.state = stateIdle
+			}
+			c.mu.Unlock()
+			return err
+		}
 		runErr := c.runErr
 		c.mu.Unlock()
-		if runErr != nil {
-			return fmt.Errorf("native session runtime cleanup failed: %w", runErr)
-		}
-		return nil
+		return runErr
 	}
+
 	c.state = stateStopping
 	cancel := c.cancel
 	done := c.done
@@ -173,9 +179,17 @@ func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 	if err := c.waitForShutdown(ctx, done, "disconnect"); err != nil {
 		return err
 	}
-	if err := c.terminalRunError(c.generationValue()); err != nil {
+	if c.app != nil {
+		if err := c.app.CleanupError(); err != nil {
+			return &sessionapi.CleanupFailure{Err: err}
+		}
+		c.mu.Lock()
+		c.state = stateIdle
+		c.mu.Unlock()
+	} else if err := c.terminalRunError(c.generationValue()); err != nil {
 		return fmt.Errorf("native session runtime cleanup failed: %w", err)
 	}
+
 	return nil
 }
 

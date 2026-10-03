@@ -1,7 +1,7 @@
 package routing
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"sync"
 
@@ -27,7 +27,7 @@ type Lease struct {
 
 	mu      sync.Mutex
 	closed  bool
-	release func() error
+	release func(context.Context) error
 	repair  func() (bool, error)
 }
 
@@ -40,7 +40,7 @@ func (p *Plan) SessionID() string { return p.sessionID }
 // Acquire runs apply while the plan is serialized, then immediately records
 // release. This closes the gap where a successfully-created route could be
 // lost before cleanup knows it exists.
-func (p *Plan) Acquire(name string, apply, release func() error) (*Lease, error) {
+func (p *Plan) Acquire(name string, apply func() error, release func(context.Context) error) (*Lease, error) {
 	if apply == nil || release == nil {
 		return nil, fmt.Errorf("routing plan %q: %s requires apply and release", p.sessionID, name)
 	}
@@ -62,13 +62,13 @@ func (p *Plan) Acquire(name string, apply, release func() error) (*Lease, error)
 
 func (l *Lease) Name() string { return l.name }
 
-func (l *Lease) Close() error {
+func (l *Lease) Close(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
 		return nil
 	}
-	if err := l.release(); err != nil {
+	if err := l.release(ctx); err != nil {
 		return err
 	}
 	l.closed = true
@@ -77,21 +77,20 @@ func (l *Lease) Close() error {
 
 // Close serializes LIFO release. Failed leases stay owned and can be retried;
 // successful releases are never repeated.
-func (p *Plan) Close() error {
+func (p *Plan) Close(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
-	var errs []error
-	for index := len(p.leases) - 1; index >= 0; index-- {
+	for len(p.leases) > 0 {
+		index := len(p.leases) - 1
 		lease := p.leases[index]
-		if err := lease.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", lease.name, err))
-			continue
+		if err := lease.Close(ctx); err != nil {
+			return fmt.Errorf("%s: %w", lease.name, err)
 		}
 		log.Debugf(Category, "[Plan] session_owned=true released=%s", lease.name)
-		p.leases = append(p.leases[:index], p.leases[index+1:]...)
+		p.leases = p.leases[:index]
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 // Repair verifies retained route identities before restoring only absent routes.

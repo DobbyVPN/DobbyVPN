@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sync"
@@ -13,7 +14,7 @@ func TestPlanClosesLeasesInReverseOrderAndOnlyOnce(t *testing.T) {
 	var released []string
 	for _, name := range []string{"engine-bypass", "mark-rule", "tun-default"} {
 		name := name
-		if _, err := plan.Acquire(name, func() error { return nil }, func() error {
+		if _, err := plan.Acquire(name, func() error { return nil }, func(_ context.Context) error {
 			released = append(released, name)
 			return nil
 		}); err != nil {
@@ -21,10 +22,10 @@ func TestPlanClosesLeasesInReverseOrderAndOnlyOnce(t *testing.T) {
 		}
 	}
 
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
 	if want := []string{"tun-default", "mark-rule", "engine-bypass"}; !reflect.DeepEqual(released, want) {
@@ -35,13 +36,13 @@ func TestPlanClosesLeasesInReverseOrderAndOnlyOnce(t *testing.T) {
 func TestPlanDoesNotCreateLeaseWhenAcquisitionFails(t *testing.T) {
 	plan := NewPlan("generation-18")
 	released := false
-	if _, err := plan.Acquire("route", func() error { return errors.New("add denied") }, func() error {
+	if _, err := plan.Acquire("route", func() error { return errors.New("add denied") }, func(_ context.Context) error {
 		released = true
 		return nil
 	}); err == nil {
 		t.Fatal("Acquire succeeded")
 	}
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if released {
@@ -51,14 +52,14 @@ func TestPlanDoesNotCreateLeaseWhenAcquisitionFails(t *testing.T) {
 
 func TestPlanRejectsAcquisitionAfterCloseWithoutApplying(t *testing.T) {
 	plan := NewPlan("generation-21")
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	applied := false
 	if _, err := plan.Acquire("late-route", func() error {
 		applied = true
 		return nil
-	}, func() error { return nil }); err == nil {
+	}, func(_ context.Context) error { return nil }); err == nil {
 		t.Fatal("Acquire succeeded after Close")
 	}
 	if applied {
@@ -70,7 +71,7 @@ func TestLeaseCloseIsSafeForConcurrentRollbackAndNormalShutdown(t *testing.T) {
 	plan := NewPlan("generation-22")
 	var mu sync.Mutex
 	releases := 0
-	lease, err := plan.Acquire("session-route", func() error { return nil }, func() error {
+	lease, err := plan.Acquire("session-route", func() error { return nil }, func(_ context.Context) error {
 		mu.Lock()
 		releases++
 		mu.Unlock()
@@ -87,14 +88,14 @@ func TestLeaseCloseIsSafeForConcurrentRollbackAndNormalShutdown(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			if err := lease.Close(); err != nil {
+			if err := lease.Close(context.Background()); err != nil {
 				t.Errorf("Lease.Close() error = %v", err)
 			}
 		}()
 	}
 	close(start)
 	wait.Wait()
-	if err := plan.Close(); err != nil {
+	if err := plan.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
@@ -109,7 +110,7 @@ func TestPlanConcurrentCloseWaitsAndReturnsCleanupFailure(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	want := errors.New("route cleanup failed")
-	if _, err := plan.Acquire("route", func() error { return nil }, func() error {
+	if _, err := plan.Acquire("route", func() error { return nil }, func(_ context.Context) error {
 		select {
 		case <-entered:
 		default:
@@ -121,17 +122,17 @@ func TestPlanConcurrentCloseWaitsAndReturnsCleanupFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := make(chan error, 1)
-	go func() { first <- plan.Close() }()
+	go func() { first <- plan.Close(context.Background()) }()
 	<-entered
 	second := make(chan error, 1)
-	go func() { second <- plan.Close() }()
+	go func() { second <- plan.Close(context.Background()) }()
 	select {
 	case err := <-second:
 		t.Fatalf("second Close returned before cleanup completed: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 	close(release)
-	for _, result := range []error{<-first, <-second, plan.Close()} {
+	for _, result := range []error{<-first, <-second, plan.Close(context.Background())} {
 		if !errors.Is(result, want) {
 			t.Fatalf("Close error = %v, want cleanup failure", result)
 		}

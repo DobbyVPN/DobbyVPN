@@ -6,12 +6,9 @@ package internal
 import (
 	"context"
 	"core/log"
-	"core/sessionapi"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
-	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"core/routing"
@@ -21,6 +18,7 @@ import (
 )
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
+	defer app.finishCleanup(ctx, &runErr)
 	log.Debugf(Category, "[Darwin][Init] VPN initialization started")
 	defer protected_dialer.ResetDefaultRoute()
 	if app.ProtocolDevice == nil {
@@ -61,39 +59,21 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	routePlan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
 	var ownedEngine *tunnel.Engine
-	var closeOnce sync.Once
-	var cleanupErr error
 	tunName := ""
 	protocolOpened := false
-	closeAll := func() error {
-		closeOnce.Do(func() {
-			log.Debugf(Category, "[Darwin][Lifecycle] stopping generation-owned resources")
-			// Remove the session routes while the owned utun still exists, then
-			// stop the engine and protocol device.
-			routeErr := routePlan.Close()
-			var engineErr error
+	app.setCleanup(routePlan.Close,
+		func(ctx context.Context) error {
 			if ownedEngine != nil {
-				engineErr = ownedEngine.Stop(sessionapi.CleanupContext(ctx))
+				return ownedEngine.Stop(ctx)
 			}
-			var deviceErr error
+			return nil
+		},
+		func(context.Context) error {
 			if protocolOpened {
-				deviceErr = app.ProtocolDevice.Close()
+				return app.ProtocolDevice.Close()
 			}
-			cleanupErr = errors.Join(routeErr, engineErr, deviceErr)
-			if cleanupErr != nil {
-				log.Debugf(Category, "[Darwin][Cleanup][ERROR] %v", cleanupErr)
-			} else {
-				log.Debugf(Category, "[Darwin][Lifecycle] generation cleanup complete")
-			}
+			return nil
 		})
-		return cleanupErr
-	}
-
-	defer func() {
-		if err := closeAll(); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("macOS session cleanup: %w", err))
-		}
-	}()
 
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(Category, "[Darwin][Routing] acquiring direct VPN bypass route")

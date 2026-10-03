@@ -52,32 +52,28 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	}
 	log.Debugf(Category, "[TUN][Create][OK] Interface created: %s", tun.Name())
 
-	defer func() {
-		if err != nil {
-			log.Debugf(Category, "[TUN][Cleanup] Closing TUN due to error")
-			_ = tun.Close()
-		}
-	}()
+	tunDev := &tunDevice{Interface: tun}
+	d = tunDev // Transfer partial acquisition to the one App cleanup owner.
 
 	log.Debugf(Category, "[TUN][Netlink] Resolving link by name: %s", name)
 	tunLink, err := netlink.LinkByName(name)
 	if err != nil {
 		err = fmt.Errorf("newly created TUN/TAP device '%s' not found: %w", name, err)
 		log.Debugf(Category, "[TUN][Netlink][ERROR] %v", err)
-		return nil, err
+		return d, err
 	}
 	log.Debugf(Category, "[TUN][Netlink][OK] Link found: index=%d mtu=%d",
 		tunLink.Attrs().Index,
 		tunLink.Attrs().MTU,
 	)
 
-	tunDev := &tunDevice{tun, tunLink}
+	tunDev.link = tunLink
 
 	log.Debugf(Category, "[TUN][Config] Configuring IP/subnet...")
 	if err = tunDev.configureSubnet(ip); err != nil {
 		err = fmt.Errorf("failed to configure TUN/TAP device subnet: %w", err)
 		log.Debugf(Category, "[TUN][Config][ERROR] %v", err)
-		return nil, err
+		return d, err
 	}
 	log.Debugf(Category, "[TUN][Config][OK] IP configured")
 
@@ -85,7 +81,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	if err = tunDev.bringUp(); err != nil {
 		err = fmt.Errorf("failed to bring up TUN/TAP device: %w", err)
 		log.Debugf(Category, "[TUN][Link][ERROR] %v", err)
-		return nil, err
+		return d, err
 	}
 	log.Debugf(Category, "[TUN][Link][OK] Interface is UP")
 
