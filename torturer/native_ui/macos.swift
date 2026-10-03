@@ -268,7 +268,9 @@ func run() throws -> [String: Any] {
     case "click":
         guard let target = request["target"] as? String else { throw HelperError("Missing control name") }
         try activate()
-        try press(find(nodes, target))
+        // SwiftUI toolbar containers can inherit the button's label and identifier.
+        let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
+        try press(find(buttons, target))
     case "type":
         guard let source = request["source"] as? String else { throw HelperError("Missing source path") }
         try activate()
