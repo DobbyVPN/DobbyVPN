@@ -422,6 +422,13 @@ def swift_unit(args: argparse.Namespace) -> None:
     xcrun = require_command("xcrun", "Swift lifecycle coverage export")
     output, temporary = coverage_dir(args, "swift")
     try:
+        # Compile the unmodified store against test-local Security functions to
+        # force the add/update race without signing or touching a user's Keychain.
+        with tempfile.TemporaryDirectory(prefix="dobby-keychain-test-") as directory:
+            executable = Path(directory) / "keychain-collision-test"
+            run([xcrun, "swiftc", str(ROOT / "ui/apple/ios/integration/SharedKeychainSecretStore.swift"),
+                 str(SCRIPT_DIR / "ios/keychain_collision_test.swift"), "-o", str(executable)])
+            run([str(executable)])
         run([swift, "test", "-v", "--enable-code-coverage", "--package-path", str(ROOT / "ui" / "apple")])
         bin_path = capture([swift, "build", "--show-bin-path", "--package-path", str(ROOT / "ui" / "apple")]).strip()
         build_path = Path(bin_path)
