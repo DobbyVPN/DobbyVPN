@@ -3,6 +3,9 @@ name: Build iOS VPN Libraries
 on:
   workflow_call:
     inputs:
+      debug:
+        type: boolean
+        default: false
       source_sha:
         description: Lowercase full source commit SHA to build.
         type: string
@@ -10,6 +13,7 @@ on:
 
 env:
   GOTOOLCHAIN: local
+  DOBBY_BUILD_CONFIGURATION: ${{ inputs.debug && 'Debug' || 'Release' }}
 
 jobs:
   build_ios_lib:
@@ -87,7 +91,7 @@ jobs:
       - name: Upload iOS runtime XCFramework
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: DobbyVPNRuntime.xcframework
+          name: DobbyVPNRuntime${{ inputs.debug && '-debug' || '' }}.xcframework
           path: core/DobbyVPNRuntime.xcframework
           if-no-files-found: error
-          retention-days: 7
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}

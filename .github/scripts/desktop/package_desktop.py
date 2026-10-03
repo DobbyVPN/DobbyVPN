@@ -108,7 +108,7 @@ def package_windows(version: str, output: Path, source: Path) -> None:
         write_zip(root, output / f"dobby-vpn-{version}-windows-amd64.zip")
 
 
-def package_macos(version: str, output: Path, *, arch: str, source: Path) -> None:
+def package_macos(version: str, output: Path, *, arch: str, source: Path, debug: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix=f"dobbyvpn-desktop-macos-{arch}-") as temporary:
         root = Path(temporary)
         bundle = root / "Dobby VPN.app"
@@ -119,6 +119,8 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path) -> Non
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
         copy_license_documents(resources / "licenses")
+        if debug:
+            copy_directory(source / "DebugSymbols", resources / "DebugSymbols")
         info = {
             "CFBundleDisplayName": "Dobby VPN",
             "CFBundleExecutable": "DobbyVPNMacApp",
@@ -187,6 +189,7 @@ def package_linux(version: str, output: Path, source: Path) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Package native DobbyVPN desktop payloads.")
     parser.add_argument("--version", required=True, help="Marketing version x.y.z")
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--output", type=Path, default=ROOT / "output")
     parser.add_argument("--staging-root", type=Path, default=SERVICES)
     parser.add_argument(
@@ -213,8 +216,8 @@ def main() -> None:
         if args.arch is not None:
             fail("--arch is valid only with --platform=macos")
         package_windows(args.version, output, staging / "windows-amd64")
-        package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64")
-        package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64")
+        package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64", debug=args.debug)
+        package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64", debug=args.debug)
         package_linux(args.version, output, staging / "linux-amd64")
     elif args.platform == "linux":
         if args.arch not in (None, "amd64"):
@@ -228,9 +231,9 @@ def main() -> None:
         if args.arch is None:
             fail("--arch is required with --platform=macos")
         if args.arch in {"arm64", "aarch64"}:
-            package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64")
+            package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64", debug=args.debug)
         else:
-            package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64")
+            package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64", debug=args.debug)
     print(f"[+] Wrote desktop packages to {output}")
 
 

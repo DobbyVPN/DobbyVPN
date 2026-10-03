@@ -909,7 +909,15 @@ def stage_windows_runtime(target: Path) -> None:
         log(f"Staged {name} beside Windows backend: {destination}")
 
 
-def build_cli(target_platform: str, go_executable: Path, arch: str | None = None) -> Path:
+def verify_go_debug(go: Path, binary: Path) -> None:
+    metadata = run_capture([str(go), "version", "-m", str(binary)])
+    if not metadata or '-gcflags="all=-N -l"' not in metadata:
+        fail(f"Go debugging compiler flags missing from {binary}")
+
+
+def build_cli(
+    target_platform: str, go_executable: Path, arch: str | None = None, *, debug: bool = False,
+) -> Path:
     """Build the native operator CLI without invoking the JVM launcher."""
     target_arch = arch or default_service_arch(target_platform)
     output = GO_MODULE_DIR / CLI_NAMES[target_platform]
@@ -918,10 +926,12 @@ def build_cli(target_platform: str, go_executable: Path, arch: str | None = None
     configure_macos_deployment_target(target_platform, env)
     ldflags = f"-buildid= -X main.appVersion={read_version()}"
     run(
-        [str(go_executable), "build", "-trimpath", f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
+        [str(go_executable), "build", "-trimpath", *(["-gcflags=all=-N -l"] if debug else []), f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
         cwd=GO_MODULE_DIR,
         env=env,
     )
+    if debug:
+        verify_go_debug(go_executable, output)
     verify_macos_deployment_target(target_platform, output)
     target = service_target_path_for_arch(target_platform, target_arch).with_name(CLI_NAMES[target_platform])
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -949,6 +959,7 @@ def build_service(
     *,
     go_executable: Path | None = None,
     build_tags: tuple[str, ...] = (),
+    debug: bool = False,
     output_path: Path | None = None,
     runtime_dir: Path | None = None,
 ) -> Path:
@@ -987,6 +998,9 @@ def build_service(
             }
         )
         configure_macos_deployment_target(target_platform, env)
+        if debug:
+            env["CGO_CFLAGS"] = "-O0 -g"
+            env["CGO_CXXFLAGS"] = "-O0 -g"
         ldflags = "-buildid="
         if target_platform == "macos":
             # Keep the package's declared macOS 12 floor valid for both
@@ -1023,6 +1037,8 @@ def build_service(
                 "-framework", "SystemConfiguration",
             )
         command = [str(go), "build", "-trimpath"]
+        if debug:
+            command.append("-gcflags=all=-N -l")
         if build_tags:
             command.append(f"-tags={','.join(build_tags)}")
         command.extend(
@@ -1039,6 +1055,8 @@ def build_service(
             env=env,
         )
 
+    if debug:
+        verify_go_debug(go, output)
     verify_macos_deployment_target(target_platform, output)
 
     if output_path is not None:
@@ -1145,7 +1163,9 @@ def require_native_ui() -> None:
             path.chmod(path.stat().st_mode | 0o111)
 
 
-def build_native_ui(target_platform: str, arch: str | None, output: Path) -> Path:
+def build_native_ui(
+    target_platform: str, arch: str | None, output: Path, *, debug: bool = False,
+) -> Path:
     if target_platform not in {"windows", "macos"}:
         fail("native desktop UI builds are supported only on Windows and macOS")
     if target_platform != host_platform():
@@ -1157,7 +1177,7 @@ def build_native_ui(target_platform: str, arch: str | None, output: Path) -> Pat
     if target_platform == "windows":
         project = ROOT_DIR / "ui" / "windows" / "DobbyVPN.Windows" / "DobbyVPN.Windows.csproj"
         run([
-            "dotnet", "publish", str(project), "--configuration", "Release",
+            "dotnet", "publish", str(project), "--configuration", "Debug" if debug else "Release",
             "--runtime", "win-x64", "--self-contained", "true",
             "-p:Platform=x64", f"-p:Version={version}", f"-p:SourceCommit={commit}",
             "--output", str(output),
@@ -1165,12 +1185,14 @@ def build_native_ui(target_platform: str, arch: str | None, output: Path) -> Pat
         executable = output / "DobbyVPN.exe"
         if not executable.is_file():
             fail(f"WinUI publish did not produce {executable}")
+        if debug and not (output / "DobbyVPN.pdb").is_file():
+            fail("Windows Debug publish did not retain DobbyVPN.pdb")
         return executable
 
     environment = os.environ.copy()
     environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
-    run(["swift", "build", "--package-path", str(ROOT_DIR / "ui" / "apple"), "--configuration", "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
-    binary = ROOT_DIR / "ui" / "apple" / ".build" / "release" / "DobbyVPNMacApp"
+    run(["swift", "build", "--package-path", str(ROOT_DIR / "ui" / "apple"), "--configuration", "debug" if debug else "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
+    binary = ROOT_DIR / "ui" / "apple" / ".build" / ("debug" if debug else "release") / "DobbyVPNMacApp"
     if not binary.is_file():
         fail(f"Swift build did not produce {binary}")
     if output.suffix == ".app":
@@ -1214,10 +1236,7 @@ def build_app(args: argparse.Namespace) -> None:
             build_cli(target_platform, go_executable, args.arch)
             if target_platform in {"windows", "macos"}:
                 staged_ui = native_ui_target_path(target_platform, args.arch)
-                if target_platform == "windows":
-                    build_native_ui(target_platform, args.arch, staged_ui)
-                else:
-                    build_native_ui(target_platform, args.arch, staged_ui)
+                build_native_ui(target_platform, args.arch, staged_ui)
 
     if args.require_all_services:
         require_services(True, args.platform)
@@ -1269,6 +1288,7 @@ def parse_args() -> argparse.Namespace:
 
     libs = subparsers.add_parser("libs", help="Build the shared Go backend and operator CLI.")
     add_common_options(libs)
+    libs.add_argument("--debug", action="store_true", help="Keep Go symbols and disable optimization/inlining.")
     libs.add_argument("--platform", default="current", help="current, linux, macos, windows, ubuntu, or all.")
     libs.add_argument("--arch", help="Override GOARCH for the service build.")
     libs.add_argument(
@@ -1300,6 +1320,7 @@ def parse_args() -> argparse.Namespace:
 
     native_ui = subparsers.add_parser("native-ui", help="Build the native Windows or macOS frontend on its target host.")
     native_ui.add_argument("--platform", default="current", help="Current native platform only.")
+    native_ui.add_argument("--debug", action="store_true", help="Build the native Debug configuration.")
     native_ui.add_argument("--arch", help="Target architecture for the native frontend.")
     native_ui.add_argument("--output", type=Path, required=True, help="Output directory on Windows or .app bundle path on macOS.")
 
@@ -1333,16 +1354,17 @@ def main() -> None:
                 args.skip_build,
                 args.go_mod_tidy,
                 go_executable=go_executable,
+                debug=args.debug,
             )
             if args.with_cli:
-                build_cli(target_platform, go_executable, args.arch)
+                build_cli(target_platform, go_executable, args.arch, debug=args.debug)
     elif args.command == "prepare-go-test-deps":
         prepare_go_test_dependencies(args.skip_deps, args.go_mod_tidy)
     elif args.command == "app":
         build_app(args)
     elif args.command == "native-ui":
         platform = host_platform() if args.platform == "current" else normalize_platform(args.platform)
-        build_native_ui(platform, args.arch, args.output)
+        build_native_ui(platform, args.arch, args.output, debug=args.debug)
     elif args.command == "test-seams-service":
         build_test_seams_service(args)
     else:

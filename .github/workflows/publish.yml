@@ -89,6 +89,12 @@ jobs:
             "$CAPTURED_GH_STDOUT" | sort -u)"
           for name in \
             DobbyVPN.xcarchive.tar.gz \
+            dobbyVPN-linux-debug.deb \
+            dobbyVPN-windows-amd64-debug.msi \
+            dobbyVPN-macos-aarch64-debug.pkg \
+            dobbyVPN-macos-amd64-debug.pkg \
+            DobbyVPN.xcarchive-debug.tar.gz \
+            dobbyvpn-android-debug.apk \
             dobbyVPN-linux.deb \
             dobbyVPN-windows-amd64.msi \
             dobbyVPN-macos-aarch64.pkg \
@@ -400,6 +406,12 @@ jobs:
         shell: bash
         run: |
           for artifact in \
+            dobbyVPN-linux-debug.deb \
+            dobbyVPN-windows-amd64-debug.msi \
+            dobbyVPN-macos-aarch64-debug.pkg \
+            dobbyVPN-macos-amd64-debug.pkg \
+            DobbyVPN.xcarchive-debug.tar.gz \
+            dobbyvpn-android-debug.apk \
             dobbyVPN-linux.deb \
             dobbyVPN-windows-amd64.msi \
             dobbyVPN-macos-aarch64.pkg \
@@ -492,7 +504,10 @@ jobs:
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
             --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
-            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
+            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
+            --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
+            --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
+            --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
       - name: Create tag and GitHub Release
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
@@ -517,7 +532,10 @@ jobs:
               --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
               --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
               --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
-              --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
+              --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
+              --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
+              --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
+              --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
             exit 0
           fi
           set +e
@@ -550,7 +568,10 @@ jobs:
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
             --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
-            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi
+            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
+            --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
+            --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
+            --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
 
   fdroid:
     name: Publish F-Droid catalog

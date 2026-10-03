@@ -5,6 +5,12 @@ set -euo pipefail
 target=${1:-}
 output=${2:-}
 architecture=${4:-}
+configuration=${DOBBY_BUILD_CONFIGURATION:-Release}
+case "$configuration" in
+  Release) ;;
+  Debug) [[ "$target" == iosarchive ]] || { echo "Debug supports unsigned iosarchive only" >&2; exit 2; } ;;
+  *) echo "Unknown build configuration: $configuration" >&2; exit 2 ;;
+esac
 if [[ -z "$target" || -z "$output" ]]; then
   echo "usage: $0 ios|iosarchive|iosanalyze|iossimulator|iosexport OUTPUT [runtime-xcframework|archive.tar.gz] [simulator-architecture]" >&2
   exit 2
@@ -142,12 +148,15 @@ fi
 xcode_args=(
   -project "$swift_root/ios/iosApp.xcodeproj"
   -scheme "$scheme"
-  -configuration Release
+  -configuration "$configuration"
   -sdk "$sdk"
   MARKETING_VERSION="$version"
   CURRENT_PROJECT_VERSION="$build"
   DOBBY_SOURCE_COMMIT="$source_commit"
 )
+if [[ "$configuration" == Debug ]]; then
+  xcode_args+=(GCC_OPTIMIZATION_LEVEL=0 SWIFT_OPTIMIZATION_LEVEL=-Onone DEBUG_INFORMATION_FORMAT=dwarf-with-dsym STRIP_INSTALLED_PRODUCT=NO COPY_PHASE_STRIP=NO)
+fi
 if [[ "$target" == iossimulator ]]; then
   derived_data=${output%/Build/Products/Release-iphonesimulator/Dobby-Vpn-Simulator.app}
   [[ "$derived_data" != "$output" ]] || { echo "Simulator output path must be the Xcode app product path" >&2; exit 2; }
@@ -174,6 +183,11 @@ elif [[ "$target" == iosarchive ]]; then
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     archive
+  if [[ "$configuration" == Debug ]]; then
+    test -d "$archive/dSYMs"
+    find "$archive/dSYMs" -type f -print
+    test -n "$(find "$archive/dSYMs" -type f -path '*/DWARF/*' -print)"
+  fi
   python3 "$script_root/.github/scripts/ios/ios_archive.py" pack \
     --archive-dir "$archive" --output "$output" \
     --source-sha "$source_commit" --version "$version" \

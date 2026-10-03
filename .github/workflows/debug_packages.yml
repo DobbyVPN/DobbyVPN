@@ -1,0 +1,66 @@
+name: Debug packages
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      version_name:
+        type: string
+        required: true
+      major:
+        type: string
+        required: true
+      minor:
+        type: string
+        required: true
+      maintenance:
+        type: string
+        required: true
+      build_number:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            architecture: amd64
+          - platform: windows
+            architecture: amd64
+          - platform: macos
+            architecture: arm64
+          - platform: macos
+            architecture: amd64
+    uses: ./.github/workflows/desktop_package.yml
+    with:
+      debug: true
+      platform: ${{ matrix.platform }}
+      architecture: ${{ matrix.architecture }}
+      source_sha: ${{ inputs.source_sha }}
+      version_name: ${{ inputs.version_name }}
+
+  ios_runtime:
+    uses: ./.github/workflows/ios_runtime_framework.yml
+    with:
+      debug: true
+      source_sha: ${{ inputs.source_sha }}
+
+  ios_archive:
+    needs: ios_runtime
+    uses: ./.github/workflows/ios_build.yml
+    with:
+      debug: true
+      source_sha: ${{ inputs.source_sha }}
+      app_major_version: ${{ inputs.major }}
+      app_minor_version: ${{ inputs.minor }}
+      app_maintenance_version: ${{ inputs.maintenance }}
+      android_version_code: ${{ inputs.build_number }}

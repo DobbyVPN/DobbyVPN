@@ -16,6 +16,9 @@ on:
         description: Stable build number shared with the product version metadata.
         type: string
         required: true
+      debug:
+        type: boolean
+        default: false
       source_sha:
         description: Lowercase full source commit SHA to build.
         type: string
@@ -28,6 +31,8 @@ jobs:
     env:
       VERSION_NAME: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
       APP_BUILD: ${{ inputs.android_version_code }}
+      DOBBY_BUILD_CONFIGURATION: ${{ inputs.debug && 'Debug' || 'Release' }}
+      DEBUG_SUFFIX: ${{ inputs.debug && '-debug' || '' }}
       SOURCE_COMMIT: ${{ inputs.source_sha }}
 
     steps:
@@ -52,9 +57,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 .github/scripts/release/download_artifact.py \
-            "$GITHUB_RUN_ID" DobbyVPNRuntime.xcframework ui/apple/DobbyVPNRuntime.xcframework
+            "$GITHUB_RUN_ID" "DobbyVPNRuntime$DEBUG_SUFFIX.xcframework" ui/apple/DobbyVPNRuntime.xcframework
 
-      - name: Analyze production iOS app and tunnel without signing
+      - if: ${{ !inputs.debug }}
+        name: Analyze production iOS app and tunnel without signing
         run: |
           set -euo pipefail
           bash core/scripts/package_ios_app.sh \
@@ -66,13 +72,13 @@ jobs:
           set -euo pipefail
           mkdir -p ui/apple/build/release
           bash core/scripts/package_ios_app.sh \
-            iosarchive ui/apple/build/release/DobbyVPN.xcarchive.tar.gz \
+            iosarchive "ui/apple/build/release/DobbyVPN.xcarchive$DEBUG_SUFFIX.tar.gz" \
             ui/apple/DobbyVPNRuntime.xcframework
 
       - name: Upload unsigned iOS archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: DobbyVPN.xcarchive.tar.gz
-          path: ui/apple/build/release/DobbyVPN.xcarchive.tar.gz
+          name: DobbyVPN.xcarchive${{ env.DEBUG_SUFFIX }}.tar.gz
+          path: ui/apple/build/release/DobbyVPN.xcarchive${{ env.DEBUG_SUFFIX }}.tar.gz
           if-no-files-found: error
-          retention-days: 7
+          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}

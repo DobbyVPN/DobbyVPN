@@ -12,6 +12,9 @@ on:
       version_name:
         required: true
         type: string
+      debug:
+        type: boolean
+        default: false
       source_sha:
         required: true
         type: string
@@ -42,11 +45,14 @@ jobs:
           ARCHITECTURE: ${{ inputs.architecture }}
           VERSION_NAME: ${{ inputs.version_name }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          DEBUG: ${{ inputs.debug }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           output="$RUNNER_TEMP/dobbyvpn-desktop-package"
-          python3 .github/scripts/desktop/desktop_package.py build \
+          debug_args=()
+          if [[ "$DEBUG" == true ]]; then debug_args=(--debug); fi
+          python3 .github/scripts/desktop/desktop_package.py build "${debug_args[@]}" \
             --platform "$PLATFORM" --arch "$ARCHITECTURE" \
             --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
             --output-dir "$output"
@@ -57,6 +63,7 @@ jobs:
             macos:amd64) package=dobbyVPN-macos-amd64.pkg ;;
             *) exit 1 ;;
           esac
+          if [[ "$DEBUG" == true ]]; then package="${package%.*}-debug.${package##*.}"; fi
           test -s "$output/$package"
           printf 'package=%s\n' "$output/$package" >> "$GITHUB_OUTPUT"
           printf 'artifact=%s\n' "$package" >> "$GITHUB_OUTPUT"

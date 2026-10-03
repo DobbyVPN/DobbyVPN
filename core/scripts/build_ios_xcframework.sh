@@ -6,6 +6,14 @@
 # invocation selects one native architecture and skips the physical build.
 set -euo pipefail
 
+configuration=${DOBBY_BUILD_CONFIGURATION:-Release}
+go_debug_flags=(-trimpath)
+case "$configuration" in
+  Release) ;;
+  Debug) go_debug_flags+=(-gcflags="all=-N -l"); export CGO_CFLAGS="-O0 -g"; export CGO_CXXFLAGS="-O0 -g" ;;
+  *) echo "Unknown build configuration: $configuration" >&2; exit 2 ;;
+esac
+
 readonly output="DobbyVPNRuntime.xcframework"
 readonly mobile_version="v0.0.0-20260520154334-0e4426e1883d"
 
@@ -60,8 +68,7 @@ simulator_output="$workdir/simulator/DobbyVPNRuntime.xcframework"
 if [[ -z "$simulator_architecture" ]]; then
   GO111MODULE=on gomobile bind \
     -tags=static \
-    -trimpath \
-    -ldflags="-buildid=" \
+    -ldflags="-buildid=" "${go_debug_flags[@]}" \
     -iosversion=15.6 \
     -target=ios/arm64 \
     -o "$device_output" \
@@ -74,8 +81,7 @@ if [[ -n "$simulator_architecture" ]]; then
 fi
 GO111MODULE=on gomobile bind \
   -tags='static simulator' \
-  -trimpath \
-  -ldflags="-buildid=" \
+  -ldflags="-buildid=" "${go_debug_flags[@]}" \
   -iosversion=15.6 \
   -target="$simulator_target" \
   -o "$simulator_output" \

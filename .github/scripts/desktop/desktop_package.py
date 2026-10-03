@@ -210,6 +210,7 @@ def _build(args: argparse.Namespace) -> int:
             "--platform", platform,
             "--arch", architecture,
             "--with-cli",
+            *(["--debug"] if args.debug else []),
             *( ["--skip-deps"] if args.skip_deps else [] ),
         ],
         env=environment,
@@ -225,9 +226,16 @@ def _build(args: argparse.Namespace) -> int:
                 "--platform", platform,
                 "--arch", architecture,
                 "--output", str(ui_output),
+                *(["--debug"] if args.debug else []),
             ],
             env=environment,
         )
+
+    if args.debug and platform == "macos":
+        symbols = service_directory / "DebugSymbols"
+        symbols.mkdir(exist_ok=True)
+        for name in ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli"):
+            _run("macOS debug symbols", ["dsymutil", str(service_directory / name), "-o", str(symbols / f"{name}.dSYM")], env=environment)
 
     with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-") as temporary:
         work = Path(temporary)
@@ -245,6 +253,7 @@ def _build(args: argparse.Namespace) -> int:
             "--staging-root", str(SERVICES),
             "--output", str(archives),
             "--platform", platform,
+            *(["--debug"] if args.debug else []),
         ]
         if platform == "macos":
             package_command.extend(("--arch", architecture))
@@ -265,6 +274,8 @@ def _build(args: argparse.Namespace) -> int:
             target = output / f"dobbyVPN-macos-{archive_arch}.pkg"
         if not produced.is_file():
             _fail(f"package build did not produce {produced}")
+        if args.debug:
+            target = target.with_stem(target.stem + "-debug")
         shutil.copyfile(produced, target)
 
     package_record = {
@@ -275,6 +286,7 @@ def _build(args: argparse.Namespace) -> int:
     descriptor = {
         "schema": 1,
         "mode": "desktop-package",
+        "configuration": "Debug" if args.debug else "Release",
         "platform": platform,
         "architecture": architecture,
         "version": version,
@@ -734,6 +746,7 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--version")
     build.add_argument("--source-sha")
     build.add_argument("--output-dir", type=Path, required=True)
+    build.add_argument("--debug", action="store_true")
     build.add_argument("--skip-deps", action="store_true")
     describe = commands.add_parser("describe", help="validate and record a downloaded Release package")
     describe.add_argument("--platform", choices=PLATFORMS, required=True)

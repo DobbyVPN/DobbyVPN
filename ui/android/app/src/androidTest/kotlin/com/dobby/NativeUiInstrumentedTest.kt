@@ -426,9 +426,9 @@ class NativeUiInstrumentedTest {
         }
     }
 
-    /** Send Back only when the Compose keyboard is visible. */
+    /** Finish URL input without a Back event that could close the Activity. */
     private fun dismissNativeInputIfVisible() {
-        if (isImeVisible()) device.pressBack()
+        if (isImeVisible()) dismissNativeInputAfterTextEntry()
         device.waitForIdle()
     }
 
@@ -437,11 +437,14 @@ class NativeUiInstrumentedTest {
         check(waitForImeVisibility(expectedVisible = true, timeoutMillis = 5_000)) {
             "ANDROID_UI_IME_SHOW_TIMEOUT"
         }
-        device.pressBack()
+        check(device.pressEnter()) { "ANDROID_UI_IME_DONE_INJECTION_FAILED" }
         check(waitForImeVisibility(expectedVisible = false, timeoutMillis = 5_000)) {
             "ANDROID_UI_IME_DISMISS_TIMEOUT"
         }
         device.waitForIdle()
+        check(device.currentPackageName == packageName) {
+            "ANDROID_UI_IME_DISMISS_LEFT_ACTIVITY:${device.currentPackageName}"
+        }
     }
 
     private fun waitForImeVisibility(expectedVisible: Boolean, timeoutMillis: Long): Boolean {

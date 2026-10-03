@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -26,6 +27,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dobby.nativebridge.NativeGoSession
@@ -439,7 +441,11 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     minLines = if (configurationText) 3 else 1,
                     maxLines = if (configurationText) 5 else 1,
                     enabled = !state.busy,
-                    keyboardOptions = KeyboardOptions(keyboardType = if (configurationText) KeyboardType.Text else KeyboardType.Uri),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (configurationText) KeyboardType.Text else KeyboardType.Uri,
+                        imeAction = if (configurationText) ImeAction.Default else ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                 )
                 TextButton(onClick = { configurationText = !configurationText }) {
                     Text(if (configurationText) "Use subscription URL" else "Use configuration text…")

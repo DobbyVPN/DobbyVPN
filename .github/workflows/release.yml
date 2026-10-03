@@ -142,6 +142,17 @@ jobs:
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
+  debug_packages:
+    needs: [verification, prepare_version]
+    uses: ./.github/workflows/debug_packages.yml
+    with:
+      source_sha: ${{ github.sha }}
+      version_name: ${{ needs.prepare_version.outputs.version_name }}
+      major: ${{ needs.prepare_version.outputs.major }}
+      minor: ${{ needs.prepare_version.outputs.minor }}
+      maintenance: ${{ needs.prepare_version.outputs.maintenance }}
+      build_number: ${{ needs.prepare_version.outputs.android_version_code }}
+
   migrate_windows:
     needs: [prepare_version, build_windows]
     uses: ./.github/workflows/installer_migration.yml
@@ -229,7 +240,7 @@ jobs:
   qualification_result:
     name: Require hosted mini and Render cleanup
     if: always()
-    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_build, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight]
+    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_build, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight, debug_packages]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -242,6 +253,7 @@ jobs:
           ANDROID_RESULT: ${{ needs.qualify_android.result }}
           RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
           IOS_BUILD_RESULT: ${{ needs.ios_build.result }}
+          DEBUG_RESULT: ${{ needs.debug_packages.result }}
           FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
           WINDOWS_MIGRATION_RESULT: ${{ needs.migrate_windows.result }}
           MACOS_ARM_MIGRATION_RESULT: ${{ needs.migrate_macos_arm.result }}
@@ -260,6 +272,7 @@ jobs:
           test "$RENDER_CLEANUP_RESULT" = success
           test "$IOS_BUILD_RESULT" = success
           test "$FDROID_RESULT" = success
+          test "$DEBUG_RESULT" = success
           test "$WINDOWS_MIGRATION_RESULT" = success
           test "$MACOS_ARM_MIGRATION_RESULT" = success
           test "$MACOS_INTEL_MIGRATION_RESULT" = success
