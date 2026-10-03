@@ -99,33 +99,6 @@ func TestExplicitLogPathMustRemainUnderTemporaryRoot(t *testing.T) {
 	}
 }
 
-func TestPrecreatedLogHandleAppendsWithoutTruncating(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "service.log")
-	const seed = "seed\n"
-	const appended = "appended\n"
-	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	file, err := openPrecreatedAppendLog(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.WriteString(appended); err != nil {
-		_ = file.Close()
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(contents) != seed+appended {
-		t.Fatalf("precreated log = %q, want %q", contents, seed+appended)
-	}
-}
-
 func TestPrecreatedLogInitializationPreservesSeed(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "session")
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -145,7 +118,9 @@ func TestPrecreatedLogInitializationPreservesSeed(t *testing.T) {
 		}
 	})
 
-	if err := initExplicitLocalLog(); err != nil {
+	if prepared, err := prepareLocalLogPath(); err != nil {
+		t.Fatal(err)
+	} else if err := log.SetPath(prepared); err != nil {
 		t.Fatal(err)
 	}
 	log.Debugf("TEST", "precreated append marker")

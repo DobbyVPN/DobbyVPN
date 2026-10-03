@@ -15,7 +15,7 @@ func unlockFile(file *os.File) error { return unix.Flock(int(file.Fd()), unix.LO
 func openLocalFile(path string, flags int) (*os.File, error) {
 	fd, err := unix.Open(path, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }

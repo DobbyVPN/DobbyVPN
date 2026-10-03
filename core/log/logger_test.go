@@ -66,7 +66,7 @@ func TestSetPathCreatesLogAndFlushesBufferedEntries(t *testing.T) {
 	}
 }
 
-func TestSetOpenedFilePreservesSupervisorPermissions(t *testing.T) {
+func TestSetPathPreservesSupervisorPermissions(t *testing.T) {
 	initMu.Lock()
 	previous := lg
 	lg = &Logger{}
@@ -84,12 +84,8 @@ func TestSetOpenedFilePreservesSupervisorPermissions(t *testing.T) {
 	if err := os.WriteFile(path, []byte("prefix\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
+	if err := SetPath(path); err != nil {
 		t.Fatal(err)
-	}
-	if setErr := SetOpenedFile(file); setErr != nil {
-		t.Fatal(setErr)
 	}
 	Info("MANAGED", "retained", nil)
 	if syncErr := lg.file.Sync(); syncErr != nil {

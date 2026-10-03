@@ -121,19 +121,6 @@ func SetPath(path string) error {
 	return nil
 }
 
-// SetOpenedFile installs an already-opened append-only log supplied by an
-// external supervisor. The logger takes ownership of file.
-func SetOpenedFile(file *os.File) error {
-	if file == nil {
-		return fmt.Errorf("managed log file is unavailable")
-	}
-	path := file.Name()
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return SetPath(path)
-}
-
 var processOrder atomic.Uint64
 var processRun = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 var policyContext []byte // Protected by initMu, like all production writes.
@@ -320,14 +307,4 @@ func newJSONLineHandler(writer io.Writer) slog.Handler {
 			return attribute
 		},
 	})
-}
-
-// CaptureStderr is explicit so CLI commands keep their operator-facing stderr.
-func CaptureStderr() error {
-	initMu.Lock()
-	defer initMu.Unlock()
-	if lg.file == nil {
-		return fmt.Errorf("backend log path is unavailable")
-	}
-	return diagnostics.CaptureStderr(lg.file.Path()+".stderr", lg.file.Path())
 }

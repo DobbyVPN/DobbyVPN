@@ -84,63 +84,44 @@ func secureExplicitLogPath(root, requested string) (string, error) {
 	return requested, nil
 }
 
-func openPrecreatedAppendLog(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-	if err != nil {
-		return nil, err
-	}
-	return file, nil
-}
-
-func initExplicitLocalLog() error {
+func prepareLocalLogPath() (string, error) {
 	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
 	if requested == "" {
 		programData := strings.TrimSpace(os.Getenv("ProgramData"))
 		if programData == "" {
-			return fmt.Errorf("ProgramData is unavailable for Go backend logs")
+			return "", fmt.Errorf("ProgramData is unavailable for Go backend logs")
 		}
-		path := filepath.Join(programData, "DobbyVPN", "Logs", "backend.jsonl")
-		return log.SetPath(path)
-	}
-	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
-	if root == "" {
-		root = os.TempDir()
-	}
-	path, err := secureExplicitLogPath(root, requested)
-	if err != nil {
-		return err
-	}
-	parent := filepath.Dir(path)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return err
-	}
-	if strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1" {
-		if info, statErr := os.Lstat(path); statErr != nil {
-			return statErr
-		} else if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("explicit log target must be a regular file")
+		requested = filepath.Join(programData, "DobbyVPN", "Logs", "backend.jsonl")
+	} else {
+		root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
+		if root == "" {
+			root = os.TempDir()
 		}
-		file, openErr := openPrecreatedAppendLog(path)
-		if openErr != nil {
-			return openErr
+		var err error
+		requested, err = secureExplicitLogPath(root, requested)
+		if err != nil {
+			return "", err
 		}
-		return log.SetOpenedFile(file)
 	}
-	if info, statErr := os.Lstat(path); statErr == nil {
+	if err := os.MkdirAll(filepath.Dir(requested), 0o700); err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(requested)
+	if err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("explicit log target must be a regular file")
+			return "", fmt.Errorf("explicit log target must be a regular file")
 		}
-	} else if !os.IsNotExist(statErr) {
-		return statErr
+	} else if !os.IsNotExist(err) || strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1" {
+		return "", err
 	}
-	return log.SetPath(path)
+	return requested, nil
 }
 
 func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	changes <- svc.Status{State: svc.StartPending}
 	listener, err := prepareDesktopControl()
 	if err != nil {
-		log.Debugf(desktopLogCategory, "[ERROR] failed to prepare desktop control: %v", err)
+		log.Errorf(desktopLogCategory, "failed to prepare desktop control: %v", err)
 		return true, 1
 	}
 	stopControl, serveDone := serveDesktopControl(listener)
@@ -197,10 +178,6 @@ func (c *Executor) Execute(mode string) {
 		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to initialize local logging: %v\n", err)
 		return
 	}
-	if err := log.CaptureStderr(); err != nil {
-		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to capture backend stderr: %v\n", err)
-		return
-	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
 	switch mode {
@@ -208,9 +185,9 @@ func (c *Executor) Execute(mode string) {
 		run()
 	case "service":
 		if err := runService(); err != nil {
-			log.Debugf(desktopLogCategory, "[ERROR] Go backend service failed: %v", err)
+			log.Errorf(desktopLogCategory, "Go backend service failed: %v", err)
 		}
 	default:
-		log.Debugf(desktopLogCategory, "[ERROR] Invalid run mode")
+		log.Errorf(desktopLogCategory, "Invalid run mode")
 	}
 }

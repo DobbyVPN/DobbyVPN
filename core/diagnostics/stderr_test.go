@@ -18,13 +18,16 @@ func TestStderrRetainsOvershootRotationAndPanic(t *testing.T) {
 			panic(err)
 		}
 		stderrCapture.mu.Lock()
-		stderrCapture.limit = 128
+		stderrCapture.limit = 1024
 		stderrCapture.mu.Unlock()
 		fmt.Fprintln(Stderr, strings.Repeat("before-rotation", 100))
 		if err := stderrCapture.rotate(); err != nil {
 			panic(err)
 		}
 		fmt.Fprintln(Stderr, "after-rotation")
+		if err := writeNativeStderr([]byte("native descriptor after rotation\n")); err != nil {
+			panic(err)
+		}
 		panic("original panic cause")
 	}
 	path := filepath.Join(t.TempDir(), "raw.stderr")
@@ -56,7 +59,7 @@ func TestStderrRetainsOvershootRotationAndPanic(t *testing.T) {
 	if !bytes.Contains(previous, []byte(strings.Repeat("before-rotation", 100)+"\n")) {
 		t.Fatalf("incomplete oversized write: %s", previous)
 	}
-	for _, want := range []string{"after-rotation", "panic: original panic cause", "stderr_test.go"} {
+	for _, want := range []string{`"capture_generation":2`, `"run_id":`, "native descriptor after rotation", "after-rotation", "panic: original panic cause", "stderr_test.go"} {
 		if !bytes.Contains(current, []byte(want)) {
 			t.Fatalf("raw current lost %q: %s", want, current)
 		}

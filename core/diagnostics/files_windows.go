@@ -23,7 +23,7 @@ func openShared(path string, access, disposition uint32) (*os.File, error) {
 	}
 	handle, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, disposition, windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 	file := os.NewFile(uintptr(handle), path)
 	var info windows.ByHandleFileInformation

@@ -20,7 +20,9 @@ func TestExplicitLocalLogUsesOwnerTemporaryPath(t *testing.T) {
 		}
 	})
 
-	if err := initExplicitLocalLog(); err != nil {
+	if prepared, err := prepareLocalLogPath(); err != nil {
+		t.Fatal(err)
+	} else if err := log.SetPath(prepared); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Stat(path); err != nil {
@@ -32,7 +34,7 @@ func TestExplicitLocalLogUsesOwnerTemporaryPath(t *testing.T) {
 
 func TestExplicitLocalLogRejectsPathOutsideTemporaryRoot(t *testing.T) {
 	t.Setenv("DOBBY_LOG_PATH", filepath.Join(os.TempDir(), "..", "var", "tmp", "dobbyvpn-outside.log"))
-	if err := initExplicitLocalLog(); err == nil {
+	if _, err := prepareLocalLogPath(); err == nil {
 		t.Fatal("outside explicit log path was accepted")
 	}
 }
@@ -56,7 +58,9 @@ func TestExplicitLocalLogUsesPrecreatedSupervisorFile(t *testing.T) {
 		}
 	})
 
-	if err := initExplicitLocalLog(); err != nil {
+	if prepared, err := prepareLocalLogPath(); err != nil {
+		t.Fatal(err)
+	} else if err := log.SetPath(prepared); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Stat(path); err != nil {
@@ -71,7 +75,7 @@ func TestManagedExplicitLogRequiresExistingFileInsideRoot(t *testing.T) {
 	t.Setenv("DOBBY_LOG_ROOT", root)
 	t.Setenv("DOBBY_LOG_PRECREATED", "1")
 	t.Setenv("DOBBY_LOG_PATH", filepath.Join(root, "missing.log"))
-	if err := initExplicitLocalLog(); err == nil {
+	if _, err := prepareLocalLogPath(); err == nil {
 		t.Fatal("missing managed log was accepted")
 	}
 
@@ -80,7 +84,7 @@ func TestManagedExplicitLogRequiresExistingFileInsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("DOBBY_LOG_PATH", outside)
-	if err := initExplicitLocalLog(); err == nil {
+	if _, err := prepareLocalLogPath(); err == nil {
 		t.Fatal("managed log outside its root was accepted")
 	}
 }

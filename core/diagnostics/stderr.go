@@ -15,10 +15,12 @@ var stderrMu sync.Mutex
 var stderrCapture *rawCapture
 
 type rawCapture struct {
-	mu    sync.Mutex
-	path  string
-	file  *os.File
-	limit int64
+	mu         sync.Mutex
+	path       string
+	file       *os.File
+	limit      int64
+	run        string
+	generation uint64
 }
 
 // CaptureStderr redirects the OS descriptor to a regular append-only file.
@@ -46,20 +48,30 @@ func CaptureStderr(path, permissionsFrom string) error {
 			return errors.Join(modeErr, file.Close())
 		}
 	}
-	metadata, err := json.Marshal(map[string]any{"event": "stderr.capture", "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "process_id": os.Getpid(), "build": buildinfo.Fields()})
-	if err != nil {
-		return errors.Join(err, file.Close())
-	}
-	if _, err := file.Write(append(metadata, '\n')); err != nil {
+	capture := &rawCapture{path: path, file: file, limit: Threshold, run: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())}
+	if err := capture.writeHeader(file); err != nil {
 		return errors.Join(err, file.Close())
 	}
 	if err := redirectStderr(file); err != nil {
 		return errors.Join(err, file.Close())
 	}
-	capture := &rawCapture{path: path, file: file, limit: Threshold}
 	stderrCapture = capture
 	go capture.monitor()
 	return nil
+}
+
+func (capture *rawCapture) writeHeader(file *os.File) error {
+	capture.generation++
+	metadata, err := json.Marshal(map[string]any{
+		"event": "stderr.capture", "timestamp": time.Now().UTC().Format(time.RFC3339Nano),
+		"process_id": os.Getpid(), "run_id": capture.run, "capture_generation": capture.generation,
+		"build": buildinfo.Fields(),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(append(metadata, '\n'))
+	return err
 }
 
 func (capture *rawCapture) monitor() {
@@ -93,6 +105,9 @@ func (capture *rawCapture) rotate() error {
 			return err
 		}
 		if err := preservePermissions(next, info); err != nil {
+			return errors.Join(err, next.Close())
+		}
+		if err := capture.writeHeader(next); err != nil {
 			return errors.Join(err, next.Close())
 		}
 		if err := redirectStderr(next); err != nil {

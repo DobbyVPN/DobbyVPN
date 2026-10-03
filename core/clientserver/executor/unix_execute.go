@@ -18,7 +18,6 @@ import (
 	"core/log"
 
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 func explicitLogRoot() (string, error) {
@@ -29,28 +28,17 @@ func explicitLogRoot() (string, error) {
 	return filepath.Abs(root)
 }
 
-func openManagedLocalLog(path string) (*os.File, error) {
-	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_APPEND|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, err
-	}
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, fmt.Errorf("managed log descriptor is unavailable")
-	}
-	return file, nil
-}
-
-func initExplicitLocalLog() error {
+func prepareLocalLogPath() (string, error) {
 	root, path, err := explicitLocalLogPaths()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if strings.TrimSpace(os.Getenv("DOBBY_LOG_PRECREATED")) == "1" {
-		return initManagedLocalLog(root, path)
+		err = validateManagedLocalLog(root, path)
+	} else {
+		err = prepareUnmanagedLocalLog(root, path)
 	}
-	return initUnmanagedLocalLog(root, path)
+	return path, err
 }
 
 func explicitLocalLogPaths() (logRoot, logPath string, resultErr error) {
@@ -91,17 +79,6 @@ func requireLocalLogPath(root, path, message string) error {
 	return nil
 }
 
-func initManagedLocalLog(root, path string) error {
-	if err := validateManagedLocalLog(root, path); err != nil {
-		return err
-	}
-	file, err := openManagedLocalLog(path)
-	if err != nil {
-		return err
-	}
-	return log.SetOpenedFile(file)
-}
-
 func validateManagedLocalLog(root, path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -121,7 +98,7 @@ func validateManagedLocalLog(root, path string) error {
 	return requireLocalLogPath(resolvedRoot, resolvedParent, "managed explicit log path traverses outside its root")
 }
 
-func initUnmanagedLocalLog(root, path string) error {
+func prepareUnmanagedLocalLog(root, path string) error {
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
@@ -149,7 +126,7 @@ func initUnmanagedLocalLog(root, path string) error {
 	case !os.IsNotExist(statErr):
 		return statErr
 	}
-	return log.SetPath(path)
+	return nil
 }
 
 func defaultDesktopLogPath() (root, path string, err error) {
@@ -172,9 +149,6 @@ func defaultDesktopLogPath() (root, path string, err error) {
 func run() {
 	if err := initExplicitLocalLog(); err != nil {
 		panic(fmt.Sprintf("failed to initialize local logging: %v", err))
-	}
-	if err := log.CaptureStderr(); err != nil {
-		panic(fmt.Sprintf("failed to capture backend stderr: %v", err))
 	}
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
 	// instead of crashing the entire desktop control process.
@@ -211,6 +185,6 @@ func (c *Executor) Execute(mode string) {
 	case "normal":
 		run()
 	default:
-		log.Debugf(desktopLogCategory, "[ERROR] Invalid run mode")
+		log.Errorf(desktopLogCategory, "Invalid run mode")
 	}
 }
