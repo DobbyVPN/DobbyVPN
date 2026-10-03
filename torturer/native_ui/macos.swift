@@ -40,7 +40,9 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
         let element = queue[index]
         index += 1
         let children = try attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-        queue.append(contentsOf: children)
+        for child in children where !queue.contains(where: { CFEqual($0, child) }) {
+            queue.append(child)
+        }
     }
     return queue
 }
@@ -78,7 +80,14 @@ func find(_ nodes: [AXUIElement], _ name: String, editor: Bool = false) throws -
     }
     let identified = try matches.filter { try label($0, kAXIdentifierAttribute) == name }
     if !identified.isEmpty { matches = identified }
-    try require(matches.count == 1, "Expected one visible \(name), found \(matches.count)")
+    if matches.count != 1 {
+        let details = try matches.map { element in
+            "\(element): role=\(try label(element, kAXRoleAttribute)) " +
+                "names=\(try names(element)) position=\(String(describing: try attribute(element, kAXPositionAttribute))) " +
+                "size=\(String(describing: try attribute(element, kAXSizeAttribute)))"
+        }
+        throw HelperError("Expected one visible \(name), found \(matches.count): \(details)")
+    }
     let element = matches[0]
     try require((try attribute(element, kAXEnabledAttribute) as? Bool) != false, "Control disabled: \(name)")
     return element
