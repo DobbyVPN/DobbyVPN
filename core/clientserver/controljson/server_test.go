@@ -13,7 +13,7 @@ import (
 
 func TestSnapshotUsesSharedMobileJSONShape(t *testing.T) {
 	client, server := net.Pipe()
-	handler := Handler{Binding: mobilebinding.NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))}
+	handler := Handler{Binding: mobilebinding.NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))}
 	done := make(chan error, 1)
 	go func() { done <- handler.ServeConn(server) }()
 
@@ -38,7 +38,7 @@ func TestSnapshotUsesSharedMobileJSONShape(t *testing.T) {
 	if err := json.Unmarshal(response.Result, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"session_id", "sequence", "generation", "state", "source_kind", "profiles", "recovering"} {
+	for _, key := range []string{"session_id", "sequence", "generation", "state", "source_kind", "profiles", "recovering", "primary_action"} {
 		if _, ok := snapshot[key]; !ok {
 			t.Fatalf("shared snapshot is missing %q: %s", key, response.Result)
 		}
@@ -54,7 +54,7 @@ func TestSnapshotUsesSharedMobileJSONShape(t *testing.T) {
 
 func TestUnknownMethodReturnsTypedFailure(t *testing.T) {
 	client, server := net.Pipe()
-	handler := Handler{Binding: mobilebinding.NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))}
+	handler := Handler{Binding: mobilebinding.NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))}
 	done := make(chan error, 1)
 	go func() { done <- handler.ServeConn(server) }()
 
@@ -91,7 +91,7 @@ func TestMalformedRequestReportsJSONCause(t *testing.T) {
 		t.Fatal("fixture is valid JSON")
 	}
 	client, server := net.Pipe()
-	handler := Handler{Binding: mobilebinding.NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))}
+	handler := Handler{Binding: mobilebinding.NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))}
 	done := make(chan error, 1)
 	go func() { done <- handler.ServeConn(server) }()
 	if _, err := client.Write(append(request, '\n')); err != nil {

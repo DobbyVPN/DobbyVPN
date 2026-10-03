@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"core/sessionapi/wire"
+
 	"core/clientserver/controljson"
 	applicationlog "core/log"
 	"core/sessionapi"
@@ -28,39 +30,6 @@ const (
 	exitConflict             = 8
 	sessionIDRequiredMessage = "--session-id requires one value"
 )
-
-type controlFailure struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-type controlSnapshot struct {
-	SessionID       string           `json:"session_id"`
-	Sequence        uint64           `json:"sequence"`
-	Generation      uint64           `json:"generation"`
-	State           string           `json:"state"`
-	Configured      bool             `json:"configured"`
-	Digest          string           `json:"digest"`
-	SourceKind      string           `json:"source_kind"`
-	SourceURL       string           `json:"source_url"`
-	SourceError     string           `json:"source_error"`
-	Profiles        []controlProfile `json:"profiles"`
-	ActiveProfile   *controlProfile  `json:"active_profile"`
-	LastFailure     *controlFailure  `json:"last_failure"`
-	CleanupComplete bool             `json:"cleanup_complete"`
-	Recovering      bool             `json:"recovering"`
-}
-
-type controlProfile struct {
-	Index       int32  `json:"index"`
-	Protocol    string `json:"protocol"`
-	Description string `json:"description"`
-}
-
-type controlResult struct {
-	Sequence   uint64 `json:"sequence"`
-	Generation uint64 `json:"generation"`
-}
 
 func main() { os.Exit(run(os.Args[1:])) }
 
@@ -122,14 +91,8 @@ func runServiceCommand(ctx context.Context, client controljson.Client, args []st
 	}
 }
 
-type jsonResponse struct {
-	OK     bool            `json:"ok"`
-	Result any             `json:"result,omitempty"`
-	Error  *controlFailure `json:"error,omitempty"`
-}
-
 func writeJSONResult(result any) int {
-	if err := json.NewEncoder(os.Stdout).Encode(jsonResponse{OK: true, Result: result}); err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(wire.Response[any]{OK: true, Result: result}); err != nil {
 		return reportFailure(fmt.Errorf("encode CLI response: %w", err))
 	}
 	return exitOK
@@ -145,8 +108,8 @@ func writeJSONFailure(err error) int {
 	if errors.As(err, &remote) {
 		code, message = remote.Code, remote.Message
 	}
-	if encodeErr := json.NewEncoder(os.Stdout).Encode(jsonResponse{
-		Error: &controlFailure{Code: code, Message: message},
+	if encodeErr := json.NewEncoder(os.Stdout).Encode(wire.Response[any]{
+		Error: &wire.Failure{Code: code, Message: message},
 	}); encodeErr != nil {
 		reportCLIError("encode CLI failure", encodeErr)
 	}
@@ -164,12 +127,7 @@ func configureJSON(ctx context.Context, client controljson.Client, source string
 	if err != nil {
 		return writeJSONFailure(err)
 	}
-	var configured struct {
-		Digest     string           `json:"digest"`
-		Sequence   uint64           `json:"sequence"`
-		Profiles   []controlProfile `json:"profiles"`
-		SourceKind string           `json:"source_kind"`
-	}
+	var configured wire.Configuration
 	err = client.Call(ctx, "Configure", struct {
 		SessionID        string `json:"session_id"`
 		ExpectedSequence uint64 `json:"expected_sequence"`
@@ -179,12 +137,9 @@ func configureJSON(ctx context.Context, client controljson.Client, source string
 		return writeJSONFailure(err)
 	}
 	return writeJSONResult(struct {
-		SessionID  string           `json:"session_id"`
-		Digest     string           `json:"digest"`
-		Sequence   uint64           `json:"sequence"`
-		Profiles   []controlProfile `json:"profiles"`
-		SourceKind string           `json:"source_kind"`
-	}{current.SessionID, configured.Digest, configured.Sequence, configured.Profiles, configured.SourceKind})
+		SessionID string `json:"session_id"`
+		wire.Configuration
+	}{current.SessionID, configured})
 }
 
 type startOptions struct {
@@ -267,7 +222,7 @@ func startJSON(ctx context.Context, client controljson.Client, args []string) in
 	if !current.Configured {
 		return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureNotConfigured), Message: "configure a session before starting it"})
 	}
-	var started controlResult
+	var started wire.Generation
 	err = client.Call(ctx, "Start", struct {
 		SessionID        string `json:"session_id"`
 		ExpectedSequence uint64 `json:"expected_sequence"`
@@ -280,7 +235,7 @@ func startJSON(ctx context.Context, client controljson.Client, args []string) in
 	return waitForConnection(ctx, client, current.SessionID, started)
 }
 
-func waitForConnection(ctx context.Context, client controljson.Client, sessionID string, started controlResult) int {
+func waitForConnection(ctx context.Context, client controljson.Client, sessionID string, started wire.Generation) int {
 	connected := false
 	defer func() {
 		if !connected {
@@ -379,7 +334,7 @@ func stopJSON(ctx context.Context, client controljson.Client, args []string) int
 		}
 		return writeJSONResult(snapshot)
 	}
-	var stopped controlResult
+	var stopped wire.Generation
 	if err := client.Call(ctx, "Stop", struct {
 		SessionID  string `json:"session_id"`
 		Generation uint64 `json:"generation"`
@@ -417,8 +372,8 @@ func snapshotJSON(ctx context.Context, client controljson.Client) int {
 	return writeJSONResult(snapshot)
 }
 
-func callSnapshot(ctx context.Context, client controljson.Client, sessionID string) (controlSnapshot, error) {
-	var snapshot controlSnapshot
+func callSnapshot(ctx context.Context, client controljson.Client, sessionID string) (wire.Snapshot, error) {
+	var snapshot wire.Snapshot
 	err := client.Call(ctx, "Snapshot", struct {
 		SessionID string `json:"session_id"`
 	}{SessionID: sessionID}, &snapshot)
@@ -456,7 +411,7 @@ func cleanupSession(client controljson.Client, sessionID string, generation uint
 	if generation == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), sessionapi.CleanupTimeout)
 	defer cancel()
 	current, err := callSnapshot(ctx, client, sessionID)
 	if err != nil {
@@ -465,7 +420,7 @@ func cleanupSession(client controljson.Client, sessionID string, generation uint
 	if current.Generation != generation || current.CleanupComplete {
 		return cleanupFailure(&current)
 	}
-	var stopped controlResult
+	var stopped wire.Generation
 	if err := client.Call(ctx, "Stop", struct {
 		SessionID  string `json:"session_id"`
 		Generation uint64 `json:"generation"`
@@ -491,14 +446,14 @@ func cleanupSession(client controljson.Client, sessionID string, generation uint
 	}
 }
 
-func cleanupFailure(snapshot *controlSnapshot) error {
+func cleanupFailure(snapshot *wire.Snapshot) error {
 	if snapshot.LastFailure != nil && snapshot.LastFailure.Code == string(sessionapi.FailureCleanup) {
 		return failureError(snapshot.LastFailure)
 	}
 	return nil
 }
 
-func failureError(failure *controlFailure) error {
+func failureError(failure *wire.Failure) error {
 	if failure == nil {
 		return nil
 	}

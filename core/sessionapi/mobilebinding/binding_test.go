@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/sessionapi"
+	"core/sessionapi/wire"
 )
 
 const syntheticConfig = `[[Outline]]
@@ -25,7 +26,7 @@ func TestFailureEnvelopeRetainsOriginalCause(t *testing.T) {
 		Code: sessionapi.FailurePlatform, Message: "platform preparation failed", Cause: original,
 	})
 	var decoded struct {
-		Error envelopeError `json:"error"`
+		Error wire.Failure `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(response), &decoded); err != nil {
 		t.Fatal(err)
@@ -37,7 +38,7 @@ func TestFailureEnvelopeRetainsOriginalCause(t *testing.T) {
 }
 
 func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
+	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
 	if strings.Contains(initial, "SessionID") || !strings.Contains(initial, `"session_id"`) {
 		t.Fatalf("snapshot did not use stable snake_case: %s", initial)
@@ -55,7 +56,7 @@ func TestJSONEnvelopeUsesStableKeys(t *testing.T) {
 }
 
 func TestCallJSONReturnsAcceptedURLInSharedSnapshot(t *testing.T) {
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Loader: acceptedURLLoader{}}))
+	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{Loader: acceptedURLLoader{}}))
 	initial := binding.Snapshot("")
 	sessionID := jsonSessionID(t, initial)
 	sequence := int64Field(t, initial, "sequence")
@@ -72,7 +73,7 @@ func TestCallJSONReturnsAcceptedURLInSharedSnapshot(t *testing.T) {
 }
 
 func TestCallJSONWithConfigurationUsesSharedDispatcherAndSeparateSecret(t *testing.T) {
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
+	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
 	sessionID := jsonSessionID(t, initial)
 	sequence := int64Field(t, initial, "sequence")
@@ -98,7 +99,7 @@ func TestCallJSONWithConfigurationUsesSharedDispatcherAndSeparateSecret(t *testi
 }
 
 func TestCallJSONWithEmptyMailboxLeavesConfigurationValidationToGo(t *testing.T) {
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
+	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
 	params := json.RawMessage(`{"session_id":"` + jsonSessionID(t, initial) + `","expected_sequence":` + strconv.FormatInt(int64Field(t, initial, "sequence"), 10) + `}`)
 	response := binding.CallJSONWithConfiguration(
@@ -115,7 +116,7 @@ func TestStartJSONAcceptsSourceInRequestOrSeparateMailbox(t *testing.T) {
 		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
 			Loader: acceptedURLLoader{}, Runtime: &blockingRuntime{}, Platform: &recordingPlatform{},
 		})
-		binding := NewForTest(manager)
+		binding := NewForDesktop(manager)
 		initial := binding.Snapshot("")
 		sessionID := jsonSessionID(t, initial)
 		params := `{"session_id":"` + sessionID + `","expected_sequence":` +
@@ -142,7 +143,7 @@ func TestStartJSONAcceptsSourceInRequestOrSeparateMailbox(t *testing.T) {
 }
 
 func TestStartWithEmptyMailboxRejectsChangedSource(t *testing.T) {
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
+	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
 	params := json.RawMessage(`{"session_id":"` + jsonSessionID(t, initial) + `","expected_sequence":` +
 		strconv.FormatInt(int64Field(t, initial, "sequence"), 10) + `,"mode":"AUTO_SELECT","index":0}`)
@@ -164,7 +165,7 @@ func (acceptedURLLoader) Load(_ context.Context, source []byte) (sessionapi.Load
 
 func TestSnapshotDTOAlwaysRoundTripsRecoveringFlag(t *testing.T) {
 	for _, recovering := range []bool{false, true} {
-		encoded, err := json.Marshal(snapshotDTO(sessionapi.SnapshotResult{Recovering: recovering}))
+		encoded, err := json.Marshal(wire.SnapshotFrom(sessionapi.SnapshotResult{Recovering: recovering}))
 		if err != nil {
 			t.Fatalf("marshal snapshot: %v", err)
 		}
@@ -187,7 +188,7 @@ func TestSnapshotDTOAlwaysRoundTripsRecoveringFlag(t *testing.T) {
 }
 
 func TestSnapshotCarriesAcceptedConfiguration(t *testing.T) {
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{}))
+	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{}))
 	initial := binding.Snapshot("")
 	sessionID := jsonSessionID(t, initial)
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
@@ -210,7 +211,7 @@ func TestSnapshotCarriesAcceptedConfiguration(t *testing.T) {
 
 func TestBindingPreservesStaleStopAndIdempotentStop(t *testing.T) {
 	runtime := &blockingRuntime{}
-	binding := NewForTest(sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime}))
+	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime}))
 	initial := binding.Snapshot("")
 	sessionID := jsonSessionID(t, initial)
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))
@@ -234,7 +235,7 @@ func TestCallbacksCarryTheSessionAndGeneration(t *testing.T) {
 	platform := &recordingPlatform{}
 	runtime := &blockingRuntime{}
 	manager := sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime, Platform: platform})
-	binding := NewForTest(manager)
+	binding := NewForDesktop(manager)
 	initial := binding.Snapshot("")
 	sessionID := jsonSessionID(t, initial)
 	configured := binding.Configure(sessionID, int64Field(t, initial, "sequence"), []byte(syntheticConfig))

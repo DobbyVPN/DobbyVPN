@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"core/sessionapi/wire"
 )
 
 type DialFunc func(context.Context) (net.Conn, error)
@@ -57,14 +59,7 @@ func (c Client) Call(ctx context.Context, method string, params, result any) (ca
 	if err != nil {
 		return fmt.Errorf("read desktop control response: %w", err)
 	}
-	var response struct {
-		OK     bool            `json:"ok"`
-		Result json.RawMessage `json:"result"`
-		Error  *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
+	var response wire.Response[json.RawMessage]
 	if err := json.Unmarshal(line, &response); err != nil {
 		return fmt.Errorf("decode desktop control response: %w", err)
 	}

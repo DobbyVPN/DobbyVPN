@@ -16,6 +16,7 @@ import (
 	socks5 "github.com/things-go/go-socks5"
 	"golang.getoutline.org/sdk/transport"
 
+	"core/auth"
 	"core/dnscache"
 	"core/log"
 	"core/tunnel/protected_dialer"
@@ -84,7 +85,9 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 		hasUDPPath:   hasUDPPath,
 	}
 
+	username, password := auth.GenerateRandomAuth(), auth.GenerateRandomAuth()
 	server := socks5.NewServer(
+		socks5.WithCredential(socks5.StaticCredentials{username: password}),
 		socks5.WithDial(od.handleDial),
 		socks5.WithLogger(socksLogger{device: od}),
 	)
@@ -97,7 +100,7 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 	}
 
 	od.listener = listener
-	od.proxyAddr = listener.Addr().String()
+	od.proxyAddr = url.UserPassword(username, password).String() + "@" + listener.Addr().String()
 
 	od.runGuarded("socks5-serve", func() {
 		log.Debugf(Category, "SOCKS5 started on %s", od.proxyAddr)
@@ -105,7 +108,7 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 			if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
 				log.Debugf(Category, "SOCKS5 stopped on %s: closed", od.proxyAddr)
 			} else {
-				log.Debugf(Category, "SOCKS5 stopped unexpectedly on %s: %v", od.proxyAddr, err)
+				log.Errorf(Category, "SOCKS5 stopped unexpectedly on %s: %v", od.proxyAddr, err)
 			}
 		} else {
 			log.Debugf(Category, "SOCKS5 stopped on %s: nil error", od.proxyAddr)
@@ -122,7 +125,7 @@ type socksLogger struct {
 func (l socksLogger) Errorf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	if strings.Contains(msg, "chacha20poly1305: message authentication failed") && l.device != nil {
-		log.Debugf(Category,
+		log.Errorf(Category,
 			"[SOCKS5 internal][auth_error websocket=%v tcpPath=%v udpPath=%v packetDialer=%T] %s",
 			l.device.websocket,
 			l.device.hasTCPPath,
@@ -132,7 +135,7 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 		)
 		return
 	}
-	log.Debugf(Category, "[SOCKS5 internal] %s", msg)
+	log.Errorf(Category, "[SOCKS5 internal] %s", msg)
 }
 
 func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -143,7 +146,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
 	if host == "" || port == 0 {
-		log.Debugf(Category, "[SOCKS5 DIAL WARN] network=%s addr=%s parsedHost=%s parsedPort=%d", network, addr, host, port)
+		log.Warnf(Category, "[SOCKS5 DIAL WARN] network=%s addr=%s parsedHost=%s parsedPort=%d", network, addr, host, port)
 	}
 
 	switch network {
@@ -151,7 +154,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	case networkTCP:
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		if err != nil {
-			log.Debugf(Category, "[SOCKS5 TCP ERROR] dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
+			log.Errorf(Category, "[SOCKS5 TCP ERROR] dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
 			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
 		}
 
@@ -169,7 +172,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
 		if err != nil {
-			log.Debugf(Category, "[SOCKS5 UDP ERROR] dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
+			log.Errorf(Category, "[SOCKS5 UDP ERROR] dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
 			return nil, fmt.Errorf("PacketDialer failed for %s: %w", addr, err)
 		}
 
@@ -177,7 +180,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	}
 
 	err := fmt.Errorf("unsupported network %s", network)
-	log.Debugf(Category, "[SOCKS5 ERROR] dst=%s server=%s elapsed=%s err=%v", addr, serverIP, time.Since(start), err)
+	log.Errorf(Category, "[SOCKS5 ERROR] dst=%s server=%s elapsed=%s err=%v", addr, serverIP, time.Since(start), err)
 	return nil, err
 }
 
@@ -189,7 +192,7 @@ func (d *OutlineDevice) runGuarded(name string, fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Debugf(Category, "[OUTLINE PANIC] goroutine=%s panic=%v\n%s", name, r, string(debug.Stack()))
+				log.Errorf(Category, "[OUTLINE PANIC] goroutine=%s panic=%v\n%s", name, r, string(debug.Stack()))
 			}
 		}()
 		fn()

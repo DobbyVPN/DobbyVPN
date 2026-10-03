@@ -11,6 +11,7 @@ import (
 	"errors"
 
 	"core/sessionapi"
+	"core/sessionapi/wire"
 )
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
@@ -58,10 +59,6 @@ type platformControl interface {
 	protectActive(int32) bool
 }
 
-// NewForTest permits pure tests to inject a manager without constructing native
-// protocol implementations. Production mobile builds use New.
-func NewForTest(manager managerAPI) *Binding { return &Binding{manager: manager} }
-
 // NewForDesktop wraps the process-owned manager used by the desktop Go backend.
 func NewForDesktop(manager *sessionapi.Manager) *Binding {
 	return &Binding{manager: manager}
@@ -108,18 +105,7 @@ func (b *Binding) AttachFileSourceStore(path string) error {
 	return manager.AttachSourceStore(context.Background(), sessionapi.FileSourceStore{Path: path})
 }
 
-type envelope struct {
-	OK     bool           `json:"ok"`
-	Result interface{}    `json:"result,omitempty"`
-	Error  *envelopeError `json:"error,omitempty"`
-}
-
-type envelopeError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func success(value interface{}) string { return encode(envelope{OK: true, Result: value}) }
+func success(value interface{}) string { return encode(wire.Response[any]{OK: true, Result: value}) }
 func failed(err error) string {
 	message := err.Error()
 	var domain *sessionapi.Error
@@ -129,7 +115,7 @@ func failed(err error) string {
 			message += ": " + domain.Cause.Error()
 		}
 	}
-	return encode(envelope{OK: false, Error: &envelopeError{Code: string(sessionapi.CodeOf(err)), Message: message}})
+	return encode(wire.Response[any]{OK: false, Error: &wire.Failure{Code: string(sessionapi.CodeOf(err)), Message: message}})
 }
 func encode(value interface{}) string {
 	data, err := json.Marshal(value)
@@ -154,7 +140,7 @@ func (b *Binding) ConfigureContext(ctx context.Context, sessionID string, expect
 	if err != nil {
 		return failed(err)
 	}
-	return success(configureDTO(result))
+	return success(wire.ConfigurationFrom(result))
 }
 
 // Start starts an attempt only if the inspected snapshot is still current.
@@ -186,7 +172,7 @@ func (b *Binding) StartWithSourceContext(ctx context.Context, sessionID string, 
 	if err != nil {
 		return failed(err)
 	}
-	return success(startDTO(result))
+	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
 // Stop stops only the requested generation. Repeating a completed stop is
@@ -203,7 +189,7 @@ func (b *Binding) StopContext(ctx context.Context, sessionID string, generation 
 	if err != nil {
 		return failed(err)
 	}
-	return success(stopDTO(result))
+	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
 // Snapshot attaches to the process-owned session when sessionID is empty.
@@ -216,7 +202,7 @@ func (b *Binding) SnapshotContext(ctx context.Context, sessionID string) string 
 	if err != nil {
 		return failed(err)
 	}
-	return success(snapshotDTO(result))
+	return success(wire.SnapshotFrom(result))
 }
 
 // CallJSON is the shared desktop/iOS command dispatcher. Android's gomobile
@@ -286,87 +272,4 @@ func nonNegative(value int64, name string) (uint64, error) {
 		return 0, &sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: name + " must be non-negative"}
 	}
 	return uint64(value), nil
-}
-
-type profileDTO struct {
-	Index       int32  `json:"index"`
-	Protocol    string `json:"protocol"`
-	Description string `json:"description"`
-}
-type failureDTO struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-type configureResultDTO struct {
-	Digest     string       `json:"digest"`
-	Sequence   uint64       `json:"sequence,omitempty"`
-	SourceKind string       `json:"source_kind"`
-	Profiles   []profileDTO `json:"profiles"`
-}
-type generationResultDTO struct {
-	Generation uint64 `json:"generation"`
-	Sequence   uint64 `json:"sequence"`
-}
-type snapshotResultDTO struct {
-	SessionID       string       `json:"session_id"`
-	Sequence        uint64       `json:"sequence"`
-	Generation      uint64       `json:"generation"`
-	State           string       `json:"state"`
-	Configured      bool         `json:"configured"`
-	Digest          string       `json:"digest"`
-	SourceKind      string       `json:"source_kind"`
-	SourceURL       string       `json:"source_url,omitempty"`
-	SourceError     string       `json:"source_error,omitempty"`
-	Profiles        []profileDTO `json:"profiles"`
-	ActiveProfile   *profileDTO  `json:"active_profile,omitempty"`
-	LastFailure     *failureDTO  `json:"last_failure,omitempty"`
-	CleanupComplete bool         `json:"cleanup_complete"`
-	Recovering      bool         `json:"recovering"`
-	PrimaryAction   string       `json:"primary_action"`
-}
-
-func profileResultDTO(in sessionapi.ProfileSummary) profileDTO {
-	return profileDTO{Index: in.Index, Protocol: string(in.Protocol), Description: in.Description}
-}
-func profileResultPtr(in *sessionapi.ProfileSummary) *profileDTO {
-	if in == nil {
-		return nil
-	}
-	out := profileResultDTO(*in)
-	return &out
-}
-func profilesDTO(in []sessionapi.ProfileSummary) []profileDTO {
-	out := make([]profileDTO, len(in))
-	for i := range in {
-		out[i] = profileResultDTO(in[i])
-	}
-	return out
-}
-func configureDTO(in sessionapi.ConfigureResult) configureResultDTO {
-	return configureResultDTO{
-		Digest: in.Digest, Sequence: in.Sequence, SourceKind: string(in.SourceKind),
-		Profiles: profilesDTO(in.Profiles),
-	}
-}
-func startDTO(in sessionapi.StartResult) generationResultDTO {
-	return generationResultDTO{Generation: in.Generation, Sequence: in.Sequence}
-}
-func stopDTO(in sessionapi.StopResult) generationResultDTO {
-	return generationResultDTO{Generation: in.Generation, Sequence: in.Sequence}
-}
-func snapshotDTO(in sessionapi.SnapshotResult) snapshotResultDTO {
-	out := snapshotResultDTO{
-		SessionID: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
-		State: string(in.State), Configured: in.Configured, Digest: in.Digest,
-		SourceKind: string(in.SourceKind), SourceURL: in.SourceURL, SourceError: in.SourceError,
-		Profiles:        profilesDTO(in.Profiles),
-		ActiveProfile:   profileResultPtr(in.ActiveProfile),
-		CleanupComplete: in.CleanupComplete,
-		Recovering:      in.Recovering,
-		PrimaryAction:   in.PrimaryAction,
-	}
-	if in.LastFailure != "" {
-		out.LastFailure = &failureDTO{Code: string(in.LastFailure), Message: in.LastFailureMessage}
-	}
-	return out
 }

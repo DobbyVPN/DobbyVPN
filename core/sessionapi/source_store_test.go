@@ -9,7 +9,7 @@ import (
 )
 
 func TestFileSourceStoreLoadTreatsMissingDirectoryAsEmpty(t *testing.T) {
-	root := t.TempDir()
+	root := sourceStoreTestRoot(t)
 	store := FileSourceStore{
 		Path: filepath.Join(root, ".dobbyvpn", "configs", "connection-url.txt"),
 	}
@@ -20,7 +20,7 @@ func TestFileSourceStoreLoadTreatsMissingDirectoryAsEmpty(t *testing.T) {
 }
 
 func TestFileSourceStoreSavesAndClearsURL(t *testing.T) {
-	root := t.TempDir()
+	root := sourceStoreTestRoot(t)
 	current := filepath.Join(root, ".dobbyvpn", "configs", "connection-url.txt")
 	want := []byte("https://configs.invalid/saved")
 	store := FileSourceStore{Path: current}
@@ -46,7 +46,7 @@ func TestFileSourceStoreSavesAndClearsURL(t *testing.T) {
 }
 
 func TestFileSourceStoreRejectsSymlinkedPath(t *testing.T) {
-	root := t.TempDir()
+	root := sourceStoreTestRoot(t)
 	target := filepath.Join(root, "target")
 	if err := os.MkdirAll(target, 0700); err != nil {
 		t.Fatal(err)
@@ -62,4 +62,15 @@ func TestFileSourceStoreRejectsSymlinkedPath(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "configs")); !os.IsNotExist(err) {
 		t.Fatalf("Save created data through a symlink: %v", err)
 	}
+}
+
+// macOS's system temporary directory may be reached through /var -> /private/var.
+// Resolve that host alias before testing the store's rejection of symlink paths.
+func sourceStoreTestRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }

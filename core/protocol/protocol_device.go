@@ -8,7 +8,7 @@ type ProtocolDevice interface {
 	// Open starts the protocol engine.
 	Open(routingTableID int, uplinkIface string) error
 
-	// GetProxyAddr returns the local address (e.g., "127.0.0.1:1080")
+	// GetProxyAddr returns the authenticated local endpoint ("user:password@127.0.0.1:port")
 	// where tun2socks should forward device traffic.
 	GetProxyAddr() string
 

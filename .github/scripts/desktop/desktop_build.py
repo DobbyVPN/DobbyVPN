@@ -667,6 +667,16 @@ def append_cgo_ldflags(env: dict[str, str], *flags: str) -> None:
     env["CGO_LDFLAGS"] = " ".join(part for part in (existing, *flags) if part)
 
 
+def configure_macos_bridge_link(environment: dict[str, str]) -> None:
+    """Framework closure shared by backend builds and native executor tests."""
+    append_cgo_ldflags(
+        environment,
+        "-framework", "CoreFoundation", "-framework", "Security",
+        "-framework", "Foundation", "-framework", "Network",
+        "-framework", "NetworkExtension", "-framework", "SystemConfiguration",
+    )
+
+
 def configure_macos_deployment_target(
     target_platform: str, environment: dict[str, str]
 ) -> None:
@@ -1026,16 +1036,7 @@ def build_service(
                 retain_runtime_dependencies,
             )
         elif target_platform == "macos":
-            # Frameworks used by the in-process bridge must be passed to cgo.
-            append_cgo_ldflags(
-                env,
-                "-framework", "CoreFoundation",
-                "-framework", "Security",
-                "-framework", "Foundation",
-                "-framework", "Network",
-                "-framework", "NetworkExtension",
-                "-framework", "SystemConfiguration",
-            )
+            configure_macos_bridge_link(env)
         command = [str(go), "build", "-trimpath"]
         if debug:
             command.append("-gcflags=all=-N -l")

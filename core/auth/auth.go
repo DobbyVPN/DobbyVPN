@@ -1,13 +1,7 @@
 package auth
 
-import (
-	"crypto/rand"
-	"encoding/hex"
-)
+import "crypto/rand"
 
-// Generate a secure random 8-character hex string
-func GenerateRandomAuth() string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
+// GenerateRandomAuth returns an independent credential with at least 128 bits
+// of entropy, encoded using URL-safe characters for local SOCKS endpoints.
+func GenerateRandomAuth() string { return rand.Text() }

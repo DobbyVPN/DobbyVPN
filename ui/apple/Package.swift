@@ -32,6 +32,11 @@ let package = Package(
             dependencies: ["DobbyNativeUI"],
             path: "macos/app"
         ),
+        .testTarget(
+            name: "DobbyMacTransportTests",
+            dependencies: ["DobbyVPNMacApp"],
+            path: "macos/tests"
+        ),
         .target(
             name: "IOSLifecycleCore",
             path: "ios/integration",

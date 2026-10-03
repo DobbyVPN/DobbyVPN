@@ -91,6 +91,9 @@ jobs:
       - name: Run selected Go runtime tests
         run: python .github/scripts/source_checks.py go-native-runtime
 
+      - name: Check native Windows diagnostics
+        run: dotnet run --project torturer/native_ui/windows/NativeUI.csproj --configuration Release -- --diagnostics-test
+
   go_native_macos:
     name: Selected Go runtime tests on macOS
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}

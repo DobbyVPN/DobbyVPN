@@ -195,3 +195,20 @@ func TestReadSourceLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotPreservesPrimaryActionInCLIJSON(t *testing.T) {
+	client := testControlClient(t, func(controljson.Request) any {
+		return map[string]any{"session_id": "session", "primary_action": "CANCEL", "cleanup_complete": false}
+	})
+	snapshot, err := callSnapshot(context.Background(), client, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"primary_action":"CANCEL"`) {
+		t.Fatalf("CLI snapshot lost Go's action: %s", encoded)
+	}
+}

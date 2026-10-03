@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"core/sessionapi/mobilebinding"
+	"core/sessionapi/wire"
 )
 
 const maxRequestBytes = 8 << 20
@@ -88,16 +89,10 @@ func readLineBounded(reader *bufio.Reader, limit int) ([]byte, error) {
 }
 
 func writeFailure(conn net.Conn, code, message string) error {
-	response, _ := json.Marshal(struct {
-		OK    bool `json:"ok"`
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}{OK: false, Error: struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}{Code: code, Message: message}})
-	_, err := conn.Write(append(response, '\n'))
+	response, err := json.Marshal(wire.Response[any]{Error: &wire.Failure{Code: code, Message: message}})
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write(append(response, '\n'))
 	return err
 }

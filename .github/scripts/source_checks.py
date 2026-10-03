@@ -376,6 +376,7 @@ def go_native_runtime() -> None:
     flags = []
     if host_os() == "darwin":
         desktop_build.configure_macos_deployment_target("macos", environment)
+        desktop_build.configure_macos_bridge_link(environment)
         flags.append("-ldflags=-linkmode=external -extldflags=-lc++")
     elif host_os() == "windows":
         environment["PATH"] = str(GO_MODULE) + os.pathsep + environment.get("PATH", "")
