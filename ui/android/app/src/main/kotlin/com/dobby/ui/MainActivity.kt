@@ -527,6 +527,8 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
 
     init {
         isFillViewport = true
+        outlineProvider = android.view.ViewOutlineProvider.BOUNDS
+        clipToOutline = true
         addView(content)
     }
 
