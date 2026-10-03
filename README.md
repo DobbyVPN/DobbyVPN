@@ -64,8 +64,8 @@ their upstream build settings.
 Desktop Debug installers replace the regular installation. Android Debug uses
 a separate app named **DobbyVPN Debug** and a development certificate; a later
 Debug APK may require uninstalling the previous Debug app first. The iOS archive
-includes dSYMs and requires your own development signing and provisioning for
-the app and packet-tunnel extension before device installation. Production
+includes dSYMs and requires your own development signing and provisioning
+with debugger attachment (`get-task-allow`) enabled for the app and packet-tunnel extension before device installation. Production
 updates remain available through the usual channels.
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
