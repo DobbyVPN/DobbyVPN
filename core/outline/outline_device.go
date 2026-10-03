@@ -178,7 +178,11 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	case networkTCP:
 		conn, err := d.streamDialer.DialStream(ctx, addr)
 		if err != nil {
-			log.Errorf(Category, "[SOCKS5 TCP ERROR] dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
+			writeLog := log.Errorf
+			if errors.Is(ctx.Err(), context.Canceled) {
+				writeLog = log.Debugf
+			}
+			writeLog(Category, "[SOCKS5 TCP] dial ended dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
 			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
 		}
 
@@ -196,7 +200,11 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
 		if err != nil {
-			log.Errorf(Category, "[SOCKS5 UDP ERROR] dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
+			writeLog := log.Errorf
+			if errors.Is(ctx.Err(), context.Canceled) {
+				writeLog = log.Debugf
+			}
+			writeLog(Category, "[SOCKS5 UDP] dial ended dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
 			return nil, fmt.Errorf("PacketDialer failed for %s: %w", addr, err)
 		}
 

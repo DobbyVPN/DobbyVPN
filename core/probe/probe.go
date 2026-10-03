@@ -120,7 +120,11 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 				result.err,
 			)
 			endpointErrors = append(endpointErrors, endpointErr)
-			log.Warnf(
+			writeLog := log.Warnf
+			if errors.Is(ctx.Err(), context.Canceled) {
+				writeLog = log.Debugf
+			}
+			writeLog(
 				"PROBE",
 				"Tunnel probe target failed targetOrdinal=%d stage=%s status=%d errorClass=%s error=%v",
 				index,
@@ -147,7 +151,11 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 	}
 	log.Debugf("PROBE", "Tunnel probe latency samples successful=%d/%d required=%d", successes, len(httpProbeURLs), requiredSuccesses)
 	if successes < requiredSuccesses {
-		log.Warnf("PROBE", "Tunnel probe failed: not enough latency endpoints succeeded passed=%d required=%d total=%d", successes, requiredSuccesses, len(httpProbeURLs))
+		writeLog := log.Warnf
+		if errors.Is(ctx.Err(), context.Canceled) {
+			writeLog = log.Debugf
+		}
+		writeLog("PROBE", "Tunnel probe failed: not enough latency endpoints succeeded passed=%d required=%d total=%d", successes, requiredSuccesses, len(httpProbeURLs))
 		return 0, fmt.Errorf(
 			"tunnel probe reached %d/%d successful endpoints; %d required: %w",
 			successes,
