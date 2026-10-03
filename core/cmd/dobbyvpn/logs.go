@@ -75,6 +75,7 @@ func runLogs(args []string) int {
 
 func exportDiagnostics(destination string, paths []string) (err error) {
 	// Never overwrite a diagnostic input or an existing user file.
+	// #nosec G703 -- The CLI operator explicitly selects this new export path; O_EXCL refuses existing files and symlinks.
 	file, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -111,11 +112,11 @@ func (cursor *logCursor) copyAvailable(output io.Writer, path string) (err error
 	if info.Size() == cursor.offset {
 		return nil
 	}
-	if _, err := fmt.Fprintf(output, "\n--- %s ---\n", path); err != nil {
-		return err
+	if _, writeErr := fmt.Fprintf(output, "\n--- %s ---\n", path); writeErr != nil {
+		return writeErr
 	}
-	if _, err := file.Seek(cursor.offset, io.SeekStart); err != nil {
-		return err
+	if _, seekErr := file.Seek(cursor.offset, io.SeekStart); seekErr != nil {
+		return seekErr
 	}
 	count, err := io.CopyN(output, file, info.Size()-cursor.offset)
 	cursor.offset += count

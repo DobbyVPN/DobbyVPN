@@ -17,20 +17,36 @@ import SwiftUI
 
 struct DobbyShareSheet: NSViewRepresentable {
     let url: URL
+    @Environment(\.dismiss) private var dismiss
+
+    func makeCoordinator() -> Coordinator { Coordinator { dismiss() } }
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
+        let picker = NSSharingServicePicker(items: [url])
+        picker.delegate = context.coordinator
+        context.coordinator.picker = picker
         DispatchQueue.main.async {
-            NSSharingServicePicker(items: [url]).show(
-                relativeTo: view.bounds,
-                of: view,
-                preferredEdge: .minY
-            )
+            picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
         }
         return view
     }
 
     func updateNSView(_ view: NSView, context: Context) {}
+
+    final class Coordinator: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
+        let finished: () -> Void
+        var picker: NSSharingServicePicker?
+        init(finished: @escaping () -> Void) { self.finished = finished }
+        func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, didChoose service: NSSharingService?) {
+            if let service { service.delegate = self } else { finished() }
+        }
+        func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) { finished() }
+        func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
+            NSAlert(error: error).runModal()
+            finished()
+        }
+    }
 }
 #endif
 

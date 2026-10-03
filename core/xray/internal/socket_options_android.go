@@ -14,7 +14,7 @@ import (
 )
 
 // applyPlatformOutboundSocketOptions follows the outbound subset of Xray
-// v1.260327.0's Linux socket-option behavior. It is used by the Android
+// the pinned upstream Linux socket-option behavior. It is used by the Android
 // protected system dialer because Xray's implementation is package-private.
 func applyPlatformOutboundSocketOptions(network, _ string, fd uintptr, config *internet.SocketConfig) error {
 	if config == nil {

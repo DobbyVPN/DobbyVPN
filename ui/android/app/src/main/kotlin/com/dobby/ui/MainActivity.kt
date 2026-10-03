@@ -21,6 +21,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
@@ -323,7 +325,7 @@ private class SessionController(private val activity: MainActivity) {
                     source = if (state.sourceDirty || current.sourceUrl.isEmpty()) state.source else current.sourceUrl,
                     error = when {
                         current.sourceError.isNotEmpty() -> current.sourceError
-                        reattached -> ""
+                        reattached || state.session.sessionId.isEmpty() -> ""
                         else -> state.error
                     },
                     busy = if (clearBusy) false else state.busy,
@@ -434,7 +436,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                 TextButton(onClick = { configurationText = !configurationText }) {
                     Text(if (configurationText) "Use subscription URL" else "Use configuration text…")
                 }
-                Text(status, modifier = Modifier.semantics { contentDescription = status }, style = MaterialTheme.typography.titleMedium)
+                Text(status, modifier = Modifier.semantics { contentDescription = status; liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.titleMedium)
                 if (session.activeProfile.isNotEmpty()) {
                     Text(session.activeProfile, modifier = Modifier.semantics { contentDescription = "Active profile" })
                 }

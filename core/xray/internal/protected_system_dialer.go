@@ -77,7 +77,7 @@ func (d *protectedSystemDialer) dialStream(ctx context.Context, source xraynet.A
 		LocalAddr:       sourceAddr(destination.Network, source),
 		KeepAlive:       keepAlive,
 		KeepAliveConfig: keepAliveConfig,
-		Control:         d.control(ctx, destination, sockopt, false),
+		Control:         d.control(ctx, destination, sockopt),
 	}
 	if sockopt != nil && sockopt.TcpMptcp {
 		dialer.SetMultipathTCP(true)
@@ -86,34 +86,20 @@ func (d *protectedSystemDialer) dialStream(ctx context.Context, source xraynet.A
 }
 
 func (d *protectedSystemDialer) dialPacket(ctx context.Context, source xraynet.Address, destination xraynet.Destination, address string, sockopt *internet.SocketConfig) (net.Conn, error) {
-	if !hasBindAddress(sockopt) {
-		local := sourceAddr(xraynet.Network_UDP, source)
-		if local == nil {
-			local = &net.UDPAddr{IP: net.IPv4zero, Port: 0}
-		}
-		destinationAddr, err := net.ResolveUDPAddr("udp", address)
-		if err != nil {
-			return nil, err
-		}
-		listenConfig := net.ListenConfig{
-			Control: d.control(ctx, destination, sockopt, false),
-		}
-		packetConn, err := listenConfig.ListenPacket(ctx, local.Network(), local.String())
-		if err != nil {
-			return nil, err
-		}
-		return &internet.PacketConnWrapper{PacketConn: packetConn, Dest: destinationAddr}, nil
+	local := sourceAddr(xraynet.Network_UDP, source)
+	if local == nil {
+		local = &net.UDPAddr{IP: net.IPv4zero, Port: 0}
 	}
-
-	dialer := &net.Dialer{
-		Timeout:   16 * time.Second,
-		LocalAddr: sourceAddr(xraynet.Network_UDP, source),
-		Control:   d.control(ctx, destination, sockopt, true),
+	destinationAddr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return nil, err
 	}
-	if sockopt.TcpMptcp {
-		dialer.SetMultipathTCP(true)
+	listenConfig := net.ListenConfig{Control: d.control(ctx, destination, sockopt)}
+	packetConn, err := listenConfig.ListenPacket(ctx, local.Network(), local.String())
+	if err != nil {
+		return nil, err
 	}
-	return dialer.DialContext(ctx, destination.Network.SystemString(), address)
+	return &internet.PacketConnWrapper{PacketConn: packetConn, Dest: destinationAddr}, nil
 }
 
 func sourceAddr(network xraynet.Network, source xraynet.Address) net.Addr {
@@ -126,11 +112,7 @@ func sourceAddr(network xraynet.Network, source xraynet.Address) net.Addr {
 	return &net.UDPAddr{IP: source.IP(), Port: 0}
 }
 
-func hasBindAddress(sockopt *internet.SocketConfig) bool {
-	return sockopt != nil && len(sockopt.BindAddress) > 0 && sockopt.BindPort > 0
-}
-
-func (d *protectedSystemDialer) control(ctx context.Context, destination xraynet.Destination, sockopt *internet.SocketConfig, bindUDP bool) func(string, string, syscall.RawConn) error {
+func (d *protectedSystemDialer) control(ctx context.Context, destination xraynet.Destination, sockopt *internet.SocketConfig) func(string, string, syscall.RawConn) error {
 	return func(network, _ string, rawConn syscall.RawConn) error {
 		if err := d.protect(network, destination.NetAddr(), rawConn); err != nil {
 			return fmt.Errorf("failed to protect Xray outbound socket for %s: %w", destination.String(), err)
@@ -140,20 +122,13 @@ func (d *protectedSystemDialer) control(ctx context.Context, destination xraynet
 		}
 
 		var optionErr error
-		var bindErr error
 		if err := rawConn.Control(func(fd uintptr) {
 			optionErr = d.applyOptions(network, destination.NetAddr(), fd, sockopt)
-			if bindUDP {
-				bindErr = bindPlatformUDPAddress(fd, sockopt.BindAddress, sockopt.BindPort)
-			}
 		}); err != nil {
 			return err
 		}
 		if optionErr != nil {
 			xrayerrors.LogInfoInner(ctx, optionErr, "failed to apply socket options")
-		}
-		if bindErr != nil {
-			xrayerrors.LogInfoInner(ctx, bindErr, "failed to bind source address")
 		}
 		return nil
 	}

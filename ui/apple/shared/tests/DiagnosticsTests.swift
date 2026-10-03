@@ -1,3 +1,4 @@
+import Combine
 import DobbyNativeUI
 import Foundation
 import XCTest
@@ -21,7 +22,11 @@ final class DiagnosticsTests: XCTestCase {
         let file = directory.appendingPathComponent("backend.jsonl")
         try Data("first line\n".utf8).write(to: file)
         let model = DobbySessionViewModel(client: DiagnosticClient(paths: [file]))
+        let loaded = expectation(description: "initial display")
+        let subscription = model.$logs.first { $0.contains("first line") }.sink { _ in loaded.fulfill() }
         model.refreshLogs()
+        await fulfillment(of: [loaded], timeout: 5)
+        subscription.cancel()
         let text = String(repeating: "complete fresh diagnostic λ\n", count: 10000)
         try Data(text.utf8).write(to: file)
         let completed = expectation(description: "fresh export")

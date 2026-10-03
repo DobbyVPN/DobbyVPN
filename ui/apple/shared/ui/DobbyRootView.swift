@@ -1,4 +1,9 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
@@ -46,6 +51,7 @@ public struct DobbyRootView: View {
             content
                 .onAppear { view.model.setLogsVisible(true) }
                 .onDisappear { view.model.setLogsVisible(false) }
+                .onChange(of: view.model.status) { status in view.announceStatus(status) }
                 .onChange(of: view.scenePhase) { phase in view.model.setLogsVisible(phase == .active) }
                 .onChange(of: view.model.sourceText) { source in
                     if source.contains("\n") || source.trimmingCharacters(in: .whitespaces).hasPrefix("[") {
@@ -193,6 +199,19 @@ public struct DobbyRootView: View {
             DobbyLogView(text: model.logs, following: $followingLogs, jump: jumpToLatest)
                 .accessibilityIdentifier("Connection logs")
         }
+    }
+
+    private func announceStatus(_ status: String) {
+        guard scenePhase == .active else { return }
+#if os(iOS)
+        UIAccessibility.post(notification: .announcement, argument: status)
+#elseif os(macOS)
+        if let window = NSApp.mainWindow {
+            NSAccessibility.post(element: window, notification: .announcementRequested, userInfo: [
+                .announcement: status, .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+            ])
+        }
+#endif
     }
 
     private func removeExport() {

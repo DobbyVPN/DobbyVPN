@@ -31,8 +31,16 @@ directly to the backend and is not launched once per frontend action.
 
 The accepted subscription URL is persisted by the Go backend and returned in
 its session snapshot. Inline TOML is kept only in the current UI session.
-Product logs remain complete and unsanitized; the native frontends read the
-local log files and can export their contents.
+The main screen keeps your subscription URL, connection button, and live logs
+together. Use “Use configuration text…” for inline TOML, and About for version
+and source information. Logs follow new entries until you scroll back;
+“Jump to latest” resumes following. Share logs (Save logs on Windows) exports
+fresh, complete diagnostics with version and platform information.
+
+On Linux and other desktop platforms, use `dobby-cli logs` to view diagnostics,
+`dobby-cli logs --follow` to follow new entries, or
+`dobby-cli logs export diagnostics.txt` to save a fresh snapshot to a new file.
+Product logs and exports remain complete and unsanitized.
 
 The product Go toolchain is pinned in .go-version. The private owner Harness
 runs local checks against disposable guests. Release qualifies the packages it
