@@ -772,7 +772,7 @@ jobs:
               raise RuntimeError("\n".join(errors))
           PY
 
-      - name: Make system-service log readable for diagnostics
+      - name: Make qualification files readable for diagnostics
         if: always() && env.RUN_DIR != ''
         shell: bash
         run: |
@@ -780,13 +780,14 @@ jobs:
           if [ "$PLATFORM" != linux ] && [ "$PLATFORM" != macos ]; then
             exit 0
           fi
-          service_log="$RUN_DIR/service.log"
-          if [ ! -f "$service_log" ]; then
-            printf 'System-service log is unavailable before diagnostics collection: %s\n' "$service_log" >&2
+          if [ ! -d "$RUN_DIR" ]; then
+            printf 'Qualification directory is unavailable before diagnostics collection: %s\n' "$RUN_DIR" >&2
             exit 0
           fi
-          sudo chown "$(id -u):$(id -g)" "$service_log"
-          test -r "$service_log"
+          # The stopped privileged service also owns rotation generations,
+          # raw stderr and lock files. Keep all of them readable by the collector.
+          # -h preserves symlink targets; the collector rejects links itself.
+          sudo chown -Rh "$(id -u):$(id -g)" "$RUN_DIR"
 
       - name: Collect complete qualification diagnostics
         if: always() && env.RUN_DIR != ''

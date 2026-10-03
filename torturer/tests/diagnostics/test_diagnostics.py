@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import traceback
 import unittest
 from unittest import mock
 
@@ -132,6 +133,94 @@ class DiagnosticPreservationTests(unittest.TestCase):
         forwarded = destination.buffer.getvalue()
         self.assertIn(stdout, forwarded)
         self.assertIn(stderr, forwarded)
+
+    def test_hosted_read_failure_keeps_other_streams_and_original_error(self) -> None:
+        collector = _load_script(
+            "dobbyvpn_collect_read_failure", PRODUCT_ROOT / ".github/scripts/collect_diagnostics.py",
+        )
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            source = root / "source"
+            source.mkdir()
+            denied = source / "service.log.lock"
+            denied.touch()
+            payload = b'original stderr credential="fixture"\x00\xff\n'
+            (source / "service.stderr.log").write_bytes(payload)
+            output = root / "diagnostics"
+            original_read = Path.read_bytes
+            error = PermissionError("original root-owned lock read error")
+
+            def read(path):
+                if path == denied:
+                    raise error
+                return original_read(path)
+
+            stderr = BinaryStderr()
+            with mock.patch.object(Path, "read_bytes", read), redirect_stdout(StringIO()), redirect_stderr(stderr):
+                with self.assertRaises(collector.CollectionError) as caught:
+                    collector.collect([root / "missing-source", source], output)
+
+            self.assertEqual((output / "source/service.stderr.log").read_bytes(), payload)
+            self.assertIn(payload, stderr.buffer.getvalue())
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual([row["path"] for row in manifest["files"]], ["source/service.stderr.log"])
+            details = "".join(traceback.format_exception(caught.exception))
+            self.assertIn("missing-source", details)
+            self.assertIn("PermissionError: original root-owned lock read error", details)
+            self.assertIn("source/service.log.lock", details)
+
+    def test_hosted_folder_failure_keeps_readable_siblings(self) -> None:
+        collector = _load_script(
+            "dobbyvpn_collect_folder_failure", PRODUCT_ROOT / ".github/scripts/collect_diagnostics.py",
+        )
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            source = root / "source"
+            blocked = source / "blocked"
+            blocked.mkdir(parents=True)
+            (source / "test.log").write_bytes(b"readable sibling\n")
+            output = root / "diagnostics"
+            original_scan = collector.os.scandir
+
+            def scan(path):
+                if path == blocked:
+                    raise PermissionError("original directory read error")
+                return original_scan(path)
+
+            with mock.patch.object(collector.os, "scandir", scan), redirect_stdout(StringIO()), redirect_stderr(BinaryStderr()):
+                with self.assertRaises(collector.CollectionError) as caught:
+                    collector.collect([source], output)
+
+            self.assertEqual((output / "source/test.log").read_bytes(), b"readable sibling\n")
+            self.assertIn("original directory read error", "".join(traceback.format_exception(caught.exception)))
+
+    def test_hosted_write_failure_still_forwards_original_and_copies_other_files(self) -> None:
+        collector = _load_script(
+            "dobbyvpn_collect_write_failure", PRODUCT_ROOT / ".github/scripts/collect_diagnostics.py",
+        )
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            source = root / "source"
+            source.mkdir()
+            payload = b"original output\x00\xff\n"
+            (source / "a.log").write_bytes(payload)
+            (source / "b.log").write_bytes(b"other output\n")
+            output = root / "diagnostics"
+            original_write = Path.write_bytes
+
+            def write(path, data):
+                if path == output / "source/a.log":
+                    raise OSError("original output write error")
+                return original_write(path, data)
+
+            stderr = BinaryStderr()
+            with mock.patch.object(Path, "write_bytes", write), redirect_stdout(StringIO()), redirect_stderr(stderr):
+                with self.assertRaises(collector.CollectionError) as caught:
+                    collector.collect([source], output)
+
+            self.assertIn(payload, stderr.buffer.getvalue())
+            self.assertEqual((output / "source/b.log").read_bytes(), b"other output\n")
+            self.assertIn("original output write error", "".join(traceback.format_exception(caught.exception)))
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ def _forward_text_payload(relative: Path, payload: bytes) -> None:
     stream.flush()
 
 
-def _source_files(source: Path) -> list[Path]:
+def _source_files(source: Path, errors: list[Exception]) -> list[Path]:
     """Enumerate every regular file and fail visibly on unreadable folders."""
 
     pending = [source]
@@ -69,17 +69,17 @@ def _source_files(source: Path) -> list[Path]:
                 for entry in entries:
                     path = Path(entry.path)
                     if entry.is_symlink():
-                        raise CollectionError(
+                        errors.append(CollectionError(
                             f"diagnostics source contains a symlink: {path}"
-                        )
+                        ))
+                        continue
                     if entry.is_dir(follow_symlinks=False):
                         pending.append(path)
                     elif entry.is_file(follow_symlinks=False):
                         files.append(path)
         except OSError as error:
-            raise CollectionError(
-                f"diagnostics source directory could not be read: {directory}"
-            ) from error
+            error.add_note(f"diagnostics source directory could not be read: {directory}")
+            errors.append(error)
     return sorted(files)
 
 
@@ -91,62 +91,76 @@ def collect(sources: list[Path], output: Path) -> list[dict[str, object]]:
     output.chmod(0o700)
     records: list[dict[str, object]] = []
     seen_destinations: set[Path] = set()
+    errors: list[Exception] = []
     for source in sources:
         if not source.is_dir() or source.is_symlink():
-            raise CollectionError(f"diagnostics source is unavailable: {source}")
+            errors.append(CollectionError(f"diagnostics source is unavailable: {source}"))
+            continue
         source_resolved = source.resolve()
         if output_resolved == source_resolved or output_resolved.is_relative_to(source_resolved):
             raise CollectionError("diagnostics output must not be inside a source directory")
-        for path in _source_files(source):
+        for path in _source_files(source, errors):
             relative = Path(source.name) / path.relative_to(source)
             destination = output / relative
             if destination in seen_destinations:
                 raise CollectionError(f"diagnostics sources overlap at {relative}")
             seen_destinations.add(destination)
-            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             try:
-                payload = path.read_bytes()
-            except OSError as error:
-                raise CollectionError(
-                    f"diagnostics source file could not be read: {relative}"
-                ) from error
-            if path.suffix.lower() == ".png":
-                kind = "binary"
-                mime = "image/png"
-                stored = payload
-            elif _looks_text(path, payload):
-                kind = "text"
-                mime = mimetypes.guess_type(path.name)[0] or "text/plain"
-                stored = payload
-            else:
-                kind = "binary"
-                mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-                stored = payload
-            destination.write_bytes(stored)
-            destination.chmod(0o600)
-            try:
-                if destination.read_bytes() != stored:
-                    raise CollectionError(f"diagnostics transfer verification failed: {relative}")
-            except OSError as error:
-                raise CollectionError(f"diagnostics transfer verification failed: {relative}") from error
-            record: dict[str, object] = {
-                "path": relative.as_posix(),
-                "kind": kind,
-                "mime_type": mime,
-                "mime": mime,
-                "bytes": len(stored),
-                "sha256": _sha256(stored),
-            }
-            records.append(record)
-            print(json.dumps(record, sort_keys=True))
-            if kind == "text":
-                _forward_text_payload(relative, stored)
-    if not records:
-        raise CollectionError("diagnostics sources contain no readable files")
+                try:
+                    payload = path.read_bytes()
+                except OSError as error:
+                    raise CollectionError(
+                        f"diagnostics source file could not be read: {relative}"
+                    ) from error
+                if path.suffix.lower() == ".png":
+                    kind = "binary"
+                    mime = "image/png"
+                    stored = payload
+                elif _looks_text(path, payload):
+                    kind = "text"
+                    mime = mimetypes.guess_type(path.name)[0] or "text/plain"
+                    stored = payload
+                else:
+                    kind = "binary"
+                    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+                    stored = payload
+                if kind == "text":
+                    _forward_text_payload(relative, stored)
+                destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                destination.write_bytes(stored)
+                destination.chmod(0o600)
+                try:
+                    if destination.read_bytes() != stored:
+                        raise CollectionError(f"diagnostics transfer verification failed: {relative}")
+                except OSError as error:
+                    raise CollectionError(f"diagnostics transfer verification failed: {relative}") from error
+                record: dict[str, object] = {
+                    "path": relative.as_posix(),
+                    "kind": kind,
+                    "mime_type": mime,
+                    "mime": mime,
+                    "bytes": len(stored),
+                    "sha256": _sha256(stored),
+                }
+                records.append(record)
+                print(json.dumps(record, sort_keys=True))
+            except (OSError, CollectionError) as error:
+                error.add_note(f"diagnostics file: {relative}")
+                errors.append(error)
     manifest = {"schema": 3, "files": records}
     manifest_path = output / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    manifest_path.chmod(0o600)
+    try:
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        manifest_path.chmod(0o600)
+    except OSError as error:
+        error.add_note(f"diagnostics manifest: {manifest_path}")
+        errors.append(error)
+    if errors:
+        raise CollectionError("diagnostics collection encountered failures") from ExceptionGroup(
+            "diagnostic collection failures", errors,
+        )
+    if not records:
+        raise CollectionError("diagnostics sources contain no readable files")
     return records
 
 
