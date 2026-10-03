@@ -58,7 +58,7 @@ internal static class NativeDiagnosticsTests
                     await diagnostics.SaveAsync(destination, "replacement");
                     throw new InvalidOperationException("locked destination was overwritten");
                 }
-                catch (IOException) { }
+                catch (Exception failure) when (failure is IOException or UnauthorizedAccessException) { }
             }
             Require(!Directory.EnumerateFiles(directory, ".dobby-export-*.tmp").Any(), "partial export left behind");
             using var partial = new MemoryStream();

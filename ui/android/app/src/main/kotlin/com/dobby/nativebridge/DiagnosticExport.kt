@@ -18,6 +18,7 @@ internal fun writeDiagnosticArchive(destination: OutputStream, paths: List<File>
         val errors = mutableListOf<String>()
         for (file in paths) {
             val input = try {
+                if (file.exists() && !file.isFile) throw IOException("Diagnostic input is not a regular file: ${file.path}")
                 file.inputStream()
             } catch (failure: FileNotFoundException) {
                 if (file.exists()) errors.add("${file.path}: ${failure.stackTraceToString()}")

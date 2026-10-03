@@ -29,8 +29,8 @@ internal fun verifyStreamingDiagnostics(cache: File) {
                 check(actual.contentEquals(block)) { "Diagnostic bytes changed" }
             }
             val footer = input.bufferedReader().readText()
-            check(footer.contains("collection_errors") && footer.contains(directory.path)) {
-                "Diagnostic collection failure missing"
+            check(JSONObject(footer.trim()).getString("collection_errors").contains(directory.path)) {
+                "Diagnostic collection failure missing: $footer"
             }
         }
         val destinationFailure = IOException("synthetic destination failure")
