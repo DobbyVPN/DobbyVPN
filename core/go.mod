@@ -20,7 +20,7 @@ require (
 	golang.getoutline.org/sdk/x v0.1.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.47.0
-	golang.zx2c4.com/wireguard/windows v1.0.1
+	golang.zx2c4.com/wireguard/windows v1.1.1
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 	trusttunnel-go v0.0.0-00010101000000-000000000000
