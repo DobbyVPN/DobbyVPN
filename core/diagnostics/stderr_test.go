@@ -17,6 +17,7 @@ func TestStderrRetainsOvershootRotationAndPanic(t *testing.T) {
 		if err := CaptureStderr(path, ""); err != nil {
 			panic(err)
 		}
+		checkStderrOwnership(t)
 		stderrCapture.mu.Lock()
 		stderrCapture.limit = 1024
 		stderrCapture.mu.Unlock()
@@ -24,6 +25,7 @@ func TestStderrRetainsOvershootRotationAndPanic(t *testing.T) {
 		if err := stderrCapture.rotate(); err != nil {
 			panic(err)
 		}
+		checkStderrOwnership(t)
 		fmt.Fprintln(Stderr, "after-rotation")
 		if err := writeNativeStderr([]byte("native descriptor after rotation\n")); err != nil {
 			panic(err)
@@ -39,7 +41,7 @@ func TestStderrRetainsOvershootRotationAndPanic(t *testing.T) {
 	defer cancel()
 	child := exec.CommandContext(ctx, executable, "-test.run=^TestStderrRetainsOvershootRotationAndPanic$")
 	child.Env = append(os.Environ(), "DOBBY_TEST_STDERR_CHILD="+path)
-	output, err := child.CombinedOutput()
+	output, err := runStderrChild(t, child)
 	// Preserve the child's complete output even when its panic is intentionally
 	// captured by the product instead of the test process's pipes.
 	if len(output) > 0 {
@@ -63,5 +65,8 @@ func TestStderrRetainsOvershootRotationAndPanic(t *testing.T) {
 		if !bytes.Contains(current, []byte(want)) {
 			t.Fatalf("raw current lost %q: %s", want, current)
 		}
+	}
+	if count := bytes.Count(current, []byte("panic: original panic cause")); count != 1 {
+		t.Fatalf("panic cause written %d times: %s", count, current)
 	}
 }

@@ -39,9 +39,13 @@ func withFileLock(path string, operation func() error) (resultErr error) {
 		}
 	}
 	if err := lockFile(lock); err != nil {
-		return err
+		return fmt.Errorf("lock diagnostic file %s: %w", path, err)
 	}
-	defer func() { resultErr = errors.Join(resultErr, unlockFile(lock)) }()
+	defer func() {
+		if err := unlockFile(lock); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("unlock diagnostic file %s: %w", path, err))
+		}
+	}()
 	return operation()
 }
 
