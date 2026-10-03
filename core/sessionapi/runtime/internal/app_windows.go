@@ -22,7 +22,6 @@ var windowsRunSequence atomic.Uint64
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
 	startedAt := time.Now()
-	defer protected_dialer.ResetDefaultRoute()
 	routePlan := routing.NewPlan(fmt.Sprintf("windows-%d-%d", startedAt.UnixNano(), windowsRunSequence.Add(1)))
 
 	if app.ProtocolDevice == nil {
@@ -49,6 +48,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			if protocolOpened {
 				return app.ProtocolDevice.Close()
 			}
+			return nil
+		},
+		func(context.Context) error {
+			protected_dialer.ResetDefaultRoute()
 			return nil
 		})
 

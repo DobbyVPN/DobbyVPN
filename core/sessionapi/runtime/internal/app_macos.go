@@ -20,7 +20,6 @@ import (
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
 	log.Debugf(Category, "[Darwin][Init] VPN initialization started")
-	defer protected_dialer.ResetDefaultRoute()
 	if app.ProtocolDevice == nil {
 		err := fmt.Errorf("protocol device is not initialized")
 		signalInit(initResult, err)
@@ -54,7 +53,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		log.Errorf(Category, "[Darwin-Protect] failed to detect default interface for protected sockets: %v", err)
 	} else {
 		log.Debugf(Category, "[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
-		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)
 	}
 
 	routePlan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
@@ -73,7 +71,14 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 				return app.ProtocolDevice.Close()
 			}
 			return nil
+		},
+		func(context.Context) error {
+			protected_dialer.ResetDefaultRoute()
+			return nil
 		})
+	if err == nil {
+		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)
+	}
 
 	if serverIP.String() != "127.0.0.1" {
 		log.Debugf(Category, "[Darwin][Routing] acquiring direct VPN bypass route")
