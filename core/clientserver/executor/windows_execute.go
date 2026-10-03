@@ -142,22 +142,26 @@ func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeReq
 		return true, 1
 	}
 	stopControl, serveDone := serveDesktopControl(listener)
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptSessionChange}
-	for request := range requests {
-		if request.Cmd != svc.Stop {
-			log.Debugf(desktopLogCategory, "Unexpected service control request #%d", request.Cmd)
-			continue
+	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	var serveErr error
+running:
+	for {
+		select {
+		case serveErr = <-serveDone:
+			break running
+		case request, ok := <-requests:
+			if !ok || request.Cmd == svc.Stop || request.Cmd == svc.Shutdown {
+				break running
+			}
+			if request.Cmd == svc.Interrogate {
+				changes <- request.CurrentStatus
+			}
 		}
-		if err := stopControl(); err != nil {
-			log.Debugf(desktopLogCategory, "[ERROR] failed to close desktop control: %v", err)
-			return true, 1
-		}
-		if err := <-serveDone; err != nil {
-			log.Debugf(desktopLogCategory, "[ERROR] desktop control stopped with error: %v", err)
-			return true, 1
-		}
-		changes <- svc.Status{State: svc.StopPending}
-		return false, 0
+	}
+	changes <- svc.Status{State: svc.StopPending, WaitHint: 30000}
+	if err := shutdownDesktop(stopControl, serveErr); err != nil {
+		log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
+		return true, 1
 	}
 	return false, 0
 }
@@ -176,12 +180,13 @@ func run() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	<-signals
-	if err := stopControl(); err != nil {
-		panic(fmt.Sprintf("failed to close desktop control pipe: %v", err))
+	var serveErr error
+	select {
+	case <-signals:
+	case serveErr = <-serveDone:
 	}
-	if err := <-serveDone; err != nil {
-		panic(fmt.Sprintf("desktop control stopped with error: %v", err))
+	if err := shutdownDesktop(stopControl, serveErr); err != nil {
+		panic(fmt.Sprintf("desktop shutdown failed: %v", err))
 	}
 }
 

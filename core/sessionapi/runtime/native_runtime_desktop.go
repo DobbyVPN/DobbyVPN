@@ -13,6 +13,7 @@ import (
 	"core/dnscache"
 	"core/log"
 	"core/protocol"
+	"core/sessionapi"
 	"core/sessionapi/runtime/internal"
 	"core/tunnel"
 )
@@ -31,13 +32,6 @@ type nativeRuntime struct {
 
 	mu sync.Mutex
 }
-
-// desktopShutdownTimeout bounds the wait for platform cleanup after a
-// disconnect. Windows removes a generation's owned routes one at a time, so
-// the old ten-second bound could expire while cleanup was still progressing.
-// The bound remains finite: a genuinely hung native runtime is still reported
-// as a cleanup failure.
-const desktopShutdownTimeout = 30 * time.Second
 
 func newNativeRuntime(device protocol.ProtocolDevice, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
 	cfg := common.GetNetworkConfig()
@@ -62,13 +56,13 @@ func newNativeRuntime(device protocol.ProtocolDevice, dnsCache *dnscache.Cache, 
 	return c
 }
 
-func (c *nativeRuntime) Connect() error {
+func (c *nativeRuntime) Connect(ctx context.Context) error {
 	if c == nil {
 		return errors.New("desktop session runtime is not initialized")
 	}
 
 	c.mu.Lock()
-	if c.state != stateIdle && c.state != stateFailed {
+	if c.state != stateIdle {
 		state := c.state
 		c.mu.Unlock()
 		return lifecycleBusyError(state)
@@ -83,7 +77,7 @@ func (c *nativeRuntime) Connect() error {
 	c.state = statePreparing
 	c.runErr = nil
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.done = make(chan struct{})
 
@@ -116,7 +110,7 @@ func (c *nativeRuntime) Connect() error {
 	select {
 	case err := <-initResult:
 		if err != nil {
-			shutdownErr := c.stopAndWait("after initialization error")
+			shutdownErr := c.stopAndWait(sessionapi.CleanupContext(ctx), "after initialization error")
 			c.mu.Lock()
 			if c.generation == generation {
 				c.state = stateFailed
@@ -134,8 +128,10 @@ func (c *nativeRuntime) Connect() error {
 		c.mu.Unlock()
 		log.Debugf(nativeLogCategory, "Desktop session runtime initialized successfully")
 		return nil
+	case <-ctx.Done():
+		return errors.Join(ctx.Err(), c.stopAndWait(sessionapi.CleanupContext(ctx), "after acquisition cancellation"))
 	case <-time.After(30 * time.Second):
-		shutdownErr := c.stopAndWait("after initialization timeout")
+		shutdownErr := c.stopAndWait(sessionapi.CleanupContext(ctx), "after initialization timeout")
 		c.mu.Lock()
 		if c.generation == generation {
 			c.state = stateFailed
@@ -145,7 +141,7 @@ func (c *nativeRuntime) Connect() error {
 	}
 }
 
-func (c *nativeRuntime) Disconnect() error {
+func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 	if c == nil {
 		return errors.New("desktop session runtime is not initialized")
 	}
@@ -174,7 +170,7 @@ func (c *nativeRuntime) Disconnect() error {
 	if cancel != nil {
 		cancel()
 	}
-	if err := c.waitForShutdown(done, "disconnect"); err != nil {
+	if err := c.waitForShutdown(ctx, done, "disconnect"); err != nil {
 		return err
 	}
 	if err := c.terminalRunError(c.generationValue()); err != nil {
@@ -183,7 +179,7 @@ func (c *nativeRuntime) Disconnect() error {
 	return nil
 }
 
-func (c *nativeRuntime) stopAndWait(reason string) error {
+func (c *nativeRuntime) stopAndWait(ctx context.Context, reason string) error {
 	c.mu.Lock()
 	if c.state != stateStopping {
 		c.state = stateStopping
@@ -194,10 +190,10 @@ func (c *nativeRuntime) stopAndWait(reason string) error {
 	if cancel != nil {
 		cancel()
 	}
-	return c.waitForShutdown(done, reason)
+	return c.waitForShutdown(ctx, done, reason)
 }
 
-func (c *nativeRuntime) waitForShutdown(done <-chan struct{}, reason string) error {
+func (c *nativeRuntime) waitForShutdown(ctx context.Context, done <-chan struct{}, reason string) error {
 	if done == nil {
 		return nil
 	}
@@ -205,9 +201,9 @@ func (c *nativeRuntime) waitForShutdown(done <-chan struct{}, reason string) err
 	case <-done:
 		log.Debugf(nativeLogCategory, "Desktop session runtime shutdown completed after %s", reason)
 		return nil
-	case <-time.After(desktopShutdownTimeout):
+	case <-ctx.Done():
 		log.Debugf(nativeLogCategory, "Desktop session runtime shutdown wait timed out after %s", reason)
-		return fmt.Errorf("timeout waiting for native session runtime shutdown after %s", reason)
+		return fmt.Errorf("waiting for native session runtime shutdown after %s: %w", reason, ctx.Err())
 	}
 }
 

@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func TestMobileConnectRecoveryContractUsesLockedCleanup(t *testing.T) {
 	if strings.Contains(text, "err = errors.Join(fmt.Errorf(\"mobile session connect panic") {
 		t.Fatal("mobile Connect contains an inline panic recovery path")
 	}
-	if strings.Contains(text, "c.Disconnect()") {
+	if strings.Contains(text, "c.Disconnect(context.Background())") {
 		t.Fatal("mobile Connect recovery must not call lock-taking Disconnect")
 	}
 }
@@ -91,7 +92,7 @@ func TestDisconnectReturnsRunCleanupFailure(t *testing.T) {
 	done := make(chan struct{})
 	c := &nativeRuntime{state: statePreparing, generation: 3, cancel: func() { close(cancelled) }, done: done}
 	disconnected := make(chan error, 1)
-	go func() { disconnected <- c.Disconnect() }()
+	go func() { disconnected <- c.Disconnect(context.Background()) }()
 
 	select {
 	case <-cancelled:
@@ -117,7 +118,7 @@ func TestDisconnectFromTerminalFailureDoesNotRemainStopping(t *testing.T) {
 	want := errors.New("run failed")
 	c := &nativeRuntime{state: stateFailed, generation: 8, runErr: want}
 
-	if err := c.Disconnect(); !errors.Is(err, want) {
+	if err := c.Disconnect(context.Background()); !errors.Is(err, want) {
 		t.Fatalf("Disconnect error=%v, want %v", err, want)
 	}
 	if got := c.stateValue(); got != stateFailed {
@@ -145,7 +146,7 @@ func TestDisconnectRemainsStoppingUntilRunCleanupCompletes(t *testing.T) {
 	}
 
 	disconnected := make(chan error, 1)
-	go func() { disconnected <- c.Disconnect() }()
+	go func() { disconnected <- c.Disconnect(context.Background()) }()
 
 	select {
 	case <-cancelled:
@@ -166,7 +167,7 @@ func TestDisconnectRemainsStoppingUntilRunCleanupCompletes(t *testing.T) {
 	select {
 	case err := <-disconnected:
 		if err != nil {
-			t.Fatalf("Disconnect() error = %v", err)
+			t.Fatalf("Disconnect(context.Context) error = %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Disconnect did not return after cleanup")

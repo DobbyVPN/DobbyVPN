@@ -45,6 +45,7 @@ let package = Package(
             sources: [
                 "IOSProviderMessageProtocol.swift",
                 "IOSLifecycleDiagnostics.swift",
+                "TunnelSettingsOwner.swift",
             ]
         ),
         .testTarget(

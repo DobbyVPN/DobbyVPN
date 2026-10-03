@@ -52,8 +52,8 @@ type SocketProtector func(context.Context, int) error
 type CoreFactory func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore
 
 type sessionCore interface {
-	Connect() error
-	Disconnect() error
+	Connect(context.Context) error
+	Disconnect(context.Context) error
 }
 
 // connectCanceler is implemented by native runtimes whose Connect operation
@@ -174,7 +174,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	r.active = true
 	lease, err := r.startLocked(ctx, ref, profile)
 	if err != nil {
-		if lease != nil && errors.Is(err, errConnectCancellationPending) {
+		if lease != nil {
 			// The native startup is still the sole owner of its TUN/device.
 			// Keep r.active asserted until the transferred lease is stopped;
 			// the manager will retain it in the generation ledger even though
@@ -204,7 +204,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		r.options.ReadinessRetryInterval,
 	); err != nil {
 		log.Debugf(category, "initial readiness failed generation=%d; rolling back runtime lease", ref.Generation)
-		cleanupErr := lease.Stop(context.Background())
+		cleanupErr := lease.Stop(sessionapi.CleanupContext(ctx))
 		if cleanupErr == nil {
 			r.active = false
 		}
@@ -213,7 +213,18 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		} else {
 			log.Debugf(category, "initial readiness rollback complete generation=%d", ref.Generation)
 		}
-		return nil, errors.Join(fmt.Errorf("wait for initial tunnel readiness: %w", err), markCleanupFailure(cleanupErr))
+		cause := errors.Join(fmt.Errorf("wait for initial tunnel readiness: %w", err), markCleanupFailure(cleanupErr))
+		if cleanupErr != nil {
+			lease.setOnDone(func(err error) {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				if err == nil {
+					r.active = false
+				}
+			})
+			return lease, cause
+		}
+		return nil, cause
 	}
 	lease.setOnDone(func(cleanupErr error) {
 		r.mu.Lock()
@@ -246,7 +257,11 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 			// here would race a blocked platform call.
 			return owned, cause
 		}
-		return nil, errors.Join(cause, markCleanupFailure(owned.Stop(context.Background())))
+		cleanupErr := owned.Stop(sessionapi.CleanupContext(ctx))
+		if cleanupErr != nil {
+			return owned, errors.Join(cause, markCleanupFailure(cleanupErr))
+		}
+		return nil, cause
 	}
 
 	bypassPolicy, err := r.options.Inputs.Resolve(ctx, profile.ExcludeCIDRs)
@@ -287,6 +302,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 			return fail(errors.New("mobile runtime requires a TunnelProvider"))
 		}
 		tun, err = r.options.Tunnel.Acquire(ctx, ref)
+		if tun != nil {
+			owned.push(tun.Release)
+		}
 		if err != nil {
 			return fail(fmt.Errorf("acquire fresh TUN: %w", err))
 		}
@@ -294,7 +312,6 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		if tun == nil {
 			return fail(errors.New("acquire fresh TUN returned nil lease"))
 		}
-		owned.push(tun.Release)
 	}
 
 	client := r.options.NewCore(device, tun, dnsCache, bypassPolicy)
@@ -303,7 +320,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	}
 	// A partially connected native runtime can own a device/engine, so register its
 	// rollback before Connect rather than only after Connect reports success.
-	owned.push(func(context.Context) error { return client.Disconnect() })
+	owned.push(func(cleanupCtx context.Context) error { return client.Disconnect(cleanupCtx) })
 	if err := connectContext(ctx, client); err != nil {
 		return fail(fmt.Errorf("connect transactional native session runtime: %w", err))
 	}
@@ -368,7 +385,7 @@ func waitForInitialReadiness(
 
 func connectContext(ctx context.Context, client sessionCore) error {
 	result := make(chan error, 1)
-	go func() { result <- client.Connect() }()
+	go func() { result <- client.Connect(ctx) }()
 	select {
 	case err := <-result:
 		return err
@@ -386,7 +403,7 @@ func connectContext(ctx context.Context, client sessionCore) error {
 			// has returned.
 			return errors.Join(ctx.Err(), errConnectCancellationPending)
 		} else {
-			cancelErr = client.Disconnect()
+			cancelErr = client.Disconnect(sessionapi.CleanupContext(ctx))
 		}
 		// Do not return a failed start while Connect can still publish a late
 		// successful core. Waiting for its result preserves the ownership
@@ -399,10 +416,10 @@ func connectContext(ctx context.Context, client sessionCore) error {
 
 type lease struct {
 	proxyAddr    string
-	stopOnce     sync.Once
+	stopMu       sync.Mutex
+	stopped      bool
 	undo         []func(context.Context) error
 	onDone       func(error)
-	cleanupErr   error
 	healthCancel context.CancelFunc
 	healthDone   chan struct{}
 	healthFailed chan error
@@ -460,28 +477,35 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 }
 
 func (l *lease) Stop(ctx context.Context) error {
-	// sync.Once also makes concurrent Stop calls wait for the one cleanup run.
-	// The lease is fully initialized before it is returned, so Stop is its only
-	// writer from that point on.
-	l.stopOnce.Do(func() {
-		if l.healthCancel != nil {
-			l.healthCancel()
+	l.stopMu.Lock()
+	defer l.stopMu.Unlock()
+	if l.stopped {
+		return nil
+	}
+	if l.healthCancel != nil {
+		l.healthCancel()
+	}
+	if l.healthDone != nil {
+		select {
+		case <-l.healthDone:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		if l.healthDone != nil {
-			<-l.healthDone
+	}
+	// Never release a dependency while the owner above it still has resources.
+	// Failed entries stay in place so a later Stop can retry this exact owner.
+	for len(l.undo) > 0 {
+		i := len(l.undo) - 1
+		if err := l.undo[i](ctx); err != nil {
+			return err
 		}
-		var errs []error
-		for i := len(l.undo) - 1; i >= 0; i-- {
-			if err := l.undo[i](ctx); err != nil {
-				errs = append(errs, err)
-			}
-		}
-		l.cleanupErr = errors.Join(errs...)
-		if l.onDone != nil {
-			l.onDone(l.cleanupErr)
-		}
-	})
-	return l.cleanupErr
+		l.undo = l.undo[:i]
+	}
+	l.stopped = true
+	if l.onDone != nil {
+		l.onDone(nil)
+	}
+	return nil
 }
 
 type defaultInputProvider struct{}

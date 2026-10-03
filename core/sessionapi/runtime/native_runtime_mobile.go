@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -56,7 +57,7 @@ func newNativeRuntime(device protocol.ProtocolDevice, tun io.ReadWriteCloser, dn
 	return c
 }
 
-func (c *nativeRuntime) Connect() error {
+func (c *nativeRuntime) Connect(ctx context.Context) error {
 	if c == nil {
 		return errors.New("mobile session runtime is not initialized")
 	}
@@ -212,7 +213,7 @@ func (c *nativeRuntime) cleanupResourcesLocked() error {
 	return errors.Join(errs...)
 }
 
-func (c *nativeRuntime) Disconnect() error {
+func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 	if c == nil {
 		return errors.New("mobile session runtime is not initialized")
 	}

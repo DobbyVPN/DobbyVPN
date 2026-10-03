@@ -31,7 +31,7 @@ public final class NativeGoSession {
             throw error;
         }
         String sourcePath = NativeVpnBridge.sourceURLPath(context);
-        String attachFailure = attachNative(context, sourcePath);
+        String attachFailure = attachNative(context.getApplicationContext(), sourcePath);
         if (attachFailure == null || !attachFailure.isEmpty()) {
             IllegalStateException error = new IllegalStateException(
                 "Go backend saved configuration storage could not be attached"
@@ -57,6 +57,10 @@ public final class NativeGoSession {
     );
 
     public static native String stop(String sessionId, long generation);
+
+    static native String stopAndWait();
+
+    static native String resume();
 
     public static native String snapshot(String sessionId);
 }

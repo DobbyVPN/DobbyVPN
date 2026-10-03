@@ -161,6 +161,7 @@ object NativeVpnBridge {
 
     internal fun attach(candidate: DobbyVpnService) {
         synchronized(serviceLock) {
+            check(service == null || service === candidate) { "Previous VPN service still owns cleanup" }
             service = candidate
             serviceLock.notifyAll()
         }
@@ -199,12 +200,12 @@ object NativeVpnBridge {
     }
 
     @JvmStatic
-    fun acquireTunnel(sessionID: String, generation: Long): Int =
-        service?.acquireTunnel(sessionID, generation) ?: -1
+    fun acquireTunnel(sessionID: String, generation: Long): String =
+        service?.acquireTunnel(sessionID, generation) ?: """{"error":"VPN service unavailable","cleanup_pending":false}"""
 
     @JvmStatic
-    fun releaseTunnel(sessionID: String, generation: Long, fd: Int): Boolean =
-        service?.releaseTunnel(sessionID, generation, fd) ?: false
+    fun releaseTunnel(sessionID: String, generation: Long, fd: Int, timeoutMillis: Long): String =
+        service?.releaseTunnel(sessionID, generation, fd, timeoutMillis) ?: """{"error":"VPN service unavailable during release","cleanup_pending":true}"""
 
     @JvmStatic
     fun protectSocket(sessionID: String, generation: Long, fd: Int): Boolean =

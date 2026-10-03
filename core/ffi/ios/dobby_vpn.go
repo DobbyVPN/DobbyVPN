@@ -20,8 +20,8 @@ var mobileSessions = mobilebinding.New(nil)
 // Objective-C protocol instead of skipping an interface imported from another
 // Go package.
 type PlatformCallbacks interface {
-	AcquireTunnel(sessionID string, generation int64) int32
-	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
+	AcquireTunnel(sessionID string, generation int64) string
+	ReleaseTunnel(sessionID string, generation int64, fd int32, timeoutMillis int64) string
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(
 		sessionID string,
@@ -36,9 +36,13 @@ type PlatformCallbacks interface {
 
 // RegisterSessionPlatform installs the NetworkExtension boundary used by the
 // shared runtime.
-func RegisterSessionPlatform(callbacks PlatformCallbacks) {
+func RegisterSessionPlatform(callbacks PlatformCallbacks) string {
+	if err := mobileSessions.Resume(); err != nil {
+		return err.Error()
+	}
 	mobileSessions.SetPlatformCallbacks(callbacks)
 	mobileSessions.AttachSourceStore()
+	return ""
 }
 
 // CallSessionJSON accepts the same method/params command used by desktop
@@ -70,4 +74,14 @@ func GetTunnelFileDescriptor() int {
 		}
 	}
 	return -1
+}
+
+// StopSessionAndWait is the provider lifecycle boundary, separate from the
+// public command protocol. Callbacks stay registered until release completes.
+func StopSessionAndWait() string {
+	if err := mobileSessions.StopAndWait(context.Background()); err != nil {
+		return err.Error()
+	}
+	mobileSessions.SetPlatformCallbacks(nil)
+	return ""
 }

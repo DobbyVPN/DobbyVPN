@@ -67,14 +67,14 @@ type fakeCore struct {
 	stopEntered   chan<- struct{}
 }
 
-func (c fakeCore) Connect() error {
+func (c fakeCore) Connect(context.Context) error {
 	c.record.add("connect")
 	if c.block != nil {
 		<-c.block
 	}
 	return c.connectErr
 }
-func (c fakeCore) Disconnect() error {
+func (c fakeCore) Disconnect(context.Context) error {
 	c.record.add("core-stop")
 	if c.stopEntered != nil {
 		c.stopEntered <- struct{}{}
@@ -95,7 +95,7 @@ type cancelableBlockingCore struct {
 	cancelRequest chan struct{}
 }
 
-func (c *cancelableBlockingCore) Connect() error {
+func (c *cancelableBlockingCore) Connect(context.Context) error {
 	c.record.add("connect")
 	c.startOnce.Do(func() { close(c.started) })
 	<-c.release
@@ -108,7 +108,7 @@ func (c *cancelableBlockingCore) CancelConnect() {
 	c.cancelOnce.Do(func() { close(c.cancelRequest) })
 }
 
-func (c *cancelableBlockingCore) Disconnect() error {
+func (c *cancelableBlockingCore) Disconnect(context.Context) error {
 	<-c.connectDone
 	c.record.add("core-stop")
 	return nil

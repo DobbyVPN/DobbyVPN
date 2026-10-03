@@ -235,7 +235,10 @@ const (
 )
 
 type session struct {
-	mu sync.Mutex
+	mu            sync.Mutex
+	closing       bool
+	changed       chan struct{}
+	cleanupBudget *cleanupBudget
 
 	id          string
 	state       State
@@ -304,7 +307,7 @@ func NewManager(options ManagerOptions) *Manager {
 		runtime: r, platform: p, loader: loader, sourceStore: options.SourceStore, now: now, initErr: initErr,
 		session: &session{
 			id: id, state: StateIdle, cleanupDone: true, sequence: 1, sourceURL: sourceURL,
-			sourceKind: sourceKind, sourceError: sourceError,
+			sourceKind: sourceKind, sourceError: sourceError, changed: make(chan struct{}),
 		},
 	}
 }
@@ -440,7 +443,7 @@ func validateConfigureBeforeAccept(ctx context.Context, s *session, expectedSequ
 }
 
 func configurationBlocked(s *session) bool {
-	return s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed
+	return s.closing || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed
 }
 
 func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSequence uint64, target StartTarget) (result StartResult, err error) {
@@ -475,7 +478,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureNotConfigured, "configure a session before starting it")
 	}
-	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed {
+	if configurationBlocked(s) {
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureConflict, "previous generation has not completed cleanup")
 	}
@@ -491,6 +494,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	generation := s.generation
 	// Accepted work outlives the request and is canceled by Stop or recovery.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
+	s.cleanupBudget = &cleanupBudget{}
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, false, false, nil, "", ""
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.failureMessageAfterCleanup = ""
@@ -527,6 +531,16 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 		}
 		generation = s.generation
 	}
+	if s.state == StateFailed && s.cleanupFailed && s.ledger != nil && len(s.ledger.closers) > 0 {
+		// Only a completed failed cleanup may be retried. The previous worker
+		// has returned; the retained ledger serializes the same owner's retry.
+		s.cleanupBudget = &cleanupBudget{}
+		s.cleanupBudget.begin()
+		s.state, s.cleanupFailed = StateStopping, false
+		m.appendLocked(s)
+		go m.finish(s, generation, nil)
+		return StopResult{Generation: generation, Sequence: s.sequence}, nil
+	}
 	if s.state == StateIdle || s.state == StateConfigured || s.state == StateFailed {
 		// A runtime-owned health failure can finish cleanup before the mobile
 		// caller gets to issue its ordinary stop request. Once this exact
@@ -553,6 +567,7 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 	}
 	if s.state != StateStopping {
 		s.state = StateStopping
+		s.cleanupBudget.begin()
 		m.appendLocked(s)
 		result.Sequence = s.sequence
 		if s.cancel != nil {
@@ -687,7 +702,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 	}
 	profile := selection.profile
 	if selection.platformLease == nil || selection.runtimeLease == nil {
-		if cleanupErr := releaseProfileSelection(selection); cleanupErr != nil {
+		if cleanupErr := m.releaseSelection(s, selection); cleanupErr != nil {
 			m.finish(s, generation, wrapFailure(FailureCleanup, cleanupErr))
 		} else {
 			m.finish(s, generation, failure(FailureRuntime, "profile selection returned incomplete leases"))
@@ -697,7 +712,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 	s.mu.Lock()
 	if s.generation != generation || s.ledger == nil {
 		s.mu.Unlock()
-		if cleanupErr := releaseProfileSelection(selection); cleanupErr != nil {
+		if cleanupErr := m.releaseSelection(s, selection); cleanupErr != nil {
 			m.finish(s, generation, wrapFailure(FailureCleanup, cleanupErr))
 		}
 		return
@@ -769,6 +784,14 @@ func (m *Manager) selectProfileCandidate(ctx context.Context, s *session, genera
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return profileSelection{}, false, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(previousErrors...)))
 	}
+	s.mu.Lock()
+	if s.state == StateStopping || s.closing {
+		s.mu.Unlock()
+		return profileSelection{}, false, failure(FailureCanceled, "attempt stopped before acquisition")
+	}
+	s.cleanupBudget = &cleanupBudget{}
+	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
+	s.mu.Unlock()
 	ref := SessionRef{s.id, generation}
 	platformLease, prepareErr := m.platform.PrepareTunnel(ctx, ref)
 	if prepareErr == nil && platformLease == nil {
@@ -777,7 +800,7 @@ func (m *Manager) selectProfileCandidate(ctx context.Context, s *session, genera
 	if prepareErr != nil {
 		prepareErr = errors.Join(errors.Join(previousErrors...), prepareErr)
 		if platformLease != nil {
-			if releaseErr := platformLease.Release(context.Background()); releaseErr != nil {
+			if releaseErr := m.releaseSelection(s, profileSelection{platformLease: platformLease}); releaseErr != nil {
 				return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(prepareErr, releaseErr))
 			}
 		}
@@ -789,7 +812,14 @@ func (m *Manager) selectProfileCandidate(ctx context.Context, s *session, genera
 		startErr = failure(FailureRuntime, "runtime returned an empty lease")
 	}
 	if startErr != nil {
-		cleanupErr := releaseProfileSelection(profileSelection{platformLease: platformLease, runtimeLease: runtimeLease})
+		if runtimeLease != nil && CodeOf(startErr) == FailureCleanup {
+			s.mu.Lock()
+			s.ledger.push(platformLease.Release)
+			s.ledger.push(runtimeLease.Stop)
+			s.mu.Unlock()
+			return profileSelection{}, false, wrapFailure(FailureCleanup, startErr)
+		}
+		cleanupErr := m.releaseSelection(s, profileSelection{platformLease: platformLease, runtimeLease: runtimeLease})
 		if cleanupErr != nil {
 			return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(errors.Join(previousErrors...), startErr, cleanupErr))
 		}
@@ -808,13 +838,19 @@ func (m *Manager) selectProfileCandidate(ctx context.Context, s *session, genera
 	return profileSelection{profile: profile, platformLease: platformLease, runtimeLease: runtimeLease}, false, nil
 }
 
-func releaseProfileSelection(selection profileSelection) error {
-	var err error
-	if selection.runtimeLease != nil {
-		err = errors.Join(err, selection.runtimeLease.Stop(context.Background()))
-	}
+func (m *Manager) releaseSelection(s *session, selection profileSelection) error {
+	work := &ledger{}
 	if selection.platformLease != nil {
-		err = errors.Join(err, selection.platformLease.Release(context.Background()))
+		work.push(selection.platformLease.Release)
+	}
+	if selection.runtimeLease != nil {
+		work.push(selection.runtimeLease.Stop)
+	}
+	err := work.release(m.cleanupContext(s))
+	if err != nil {
+		s.mu.Lock()
+		s.ledger.closers = append(s.ledger.closers, work.closers...)
+		s.mu.Unlock()
 	}
 	return err
 }
@@ -852,11 +888,10 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error) {
 	}
 	wasStopping := s.state == StateStopping
 	work := s.ledger
-	s.ledger = nil
 	s.mu.Unlock()
 	var cleanupErr error
-	if work != nil {
-		cleanupErr = work.release(context.Background())
+	if work != nil && CodeOf(cause) != FailureCleanup {
+		cleanupErr = work.release(m.cleanupContext(s))
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -865,7 +900,13 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error) {
 	}
 	// Stop may arrive while the ledger is releasing outside the lock.
 	wasStopping = wasStopping || s.state == StateStopping
-	s.cleanupDone, s.cleanupFailed, s.cancel = true, cleanupErr != nil, nil
+	s.cleanupDone, s.cleanupFailed, s.cancel = cleanupErr == nil && CodeOf(cause) != FailureCleanup, cleanupErr != nil, nil
+	if s.cleanupDone {
+		s.ledger = nil
+		if s.cleanupBudget != nil && s.cleanupBudget.cancel != nil {
+			s.cleanupBudget.cancel()
+		}
+	}
 	if cleanupErr != nil || CodeOf(cause) == FailureCleanup {
 		s.cleanupFailed = true
 		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
@@ -909,13 +950,14 @@ func (m *Manager) finishWithPolicy(s *session, generation uint64, cause error) {
 
 func (m *Manager) startFailover(s *session, expectedGeneration uint64) {
 	s.mu.Lock()
-	if !s.configured || !s.cleanupDone || s.state != StateIdle || !s.recovering || s.generation != expectedGeneration {
+	if s.closing || !s.configured || !s.cleanupDone || s.state != StateIdle || !s.recovering || s.generation != expectedGeneration {
 		s.mu.Unlock()
 		return
 	}
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
+	s.cleanupBudget = &cleanupBudget{}
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active = cancel, &ledger{}, false, false, nil
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = StartTarget{Mode: AutoSelect}, false, ""
 	s.failureMessageAfterCleanup = ""
@@ -926,6 +968,8 @@ func (m *Manager) startFailover(s *session, expectedGeneration uint64) {
 }
 
 func (m *Manager) appendLocked(s *session) {
+	close(s.changed)
+	s.changed = make(chan struct{})
 	s.sequence++
 	m.platform.PublishState(context.Background(), StateChange{
 		SessionID: s.id, Generation: s.generation, State: s.state, Failure: s.lastFailure,
@@ -1014,13 +1058,14 @@ type ledger struct{ closers []func(context.Context) error }
 
 func (l *ledger) push(closer func(context.Context) error) { l.closers = append(l.closers, closer) }
 func (l *ledger) release(ctx context.Context) error {
-	var errs []error
-	for i := len(l.closers) - 1; i >= 0; i-- {
+	for len(l.closers) > 0 {
+		i := len(l.closers) - 1
 		if err := l.closers[i](ctx); err != nil {
-			errs = append(errs, err)
+			return err
 		}
+		l.closers = l.closers[:i]
 	}
-	return errors.Join(errs...)
+	return nil
 }
 
 type unsupportedRuntime struct{}

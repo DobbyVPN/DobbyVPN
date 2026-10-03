@@ -169,72 +169,29 @@ static jclass dobby_load_bridge(JNIEnv *env, jobject context) {
 	return global;
 }
 
-static int32_t dobby_call_acquire(const char *session, int64_t generation) {
+static char *dobby_call_tunnel(const char *session, int64_t generation, int32_t fd, int64_t timeout, bool acquire) {
 	bool attached = false; JNIEnv *env = dobby_env(&attached);
-	if (env == NULL) { dobby_detach(attached); return -1; }
+	if (env == NULL) { dobby_detach(attached); return NULL; }
 	pthread_mutex_lock(&dobby_bridge_lock);
-	if (dobby_bridge == NULL) {
-		pthread_mutex_unlock(&dobby_bridge_lock);
-		dobby_detach(attached);
-		return -1;
-	}
-	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "acquireTunnel", "(Ljava/lang/String;J)I");
-	if (method == NULL) {
-		dobby_record_jni_failure(env, "jni.acquire_tunnel_failed");
-		pthread_mutex_unlock(&dobby_bridge_lock);
-		dobby_detach(attached);
-		return -1;
-	}
-	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
-	if (id == NULL) {
-		dobby_record_jni_failure(env, "jni.acquire_tunnel_failed");
-		pthread_mutex_unlock(&dobby_bridge_lock);
-		dobby_detach(attached);
-		return -1;
-	}
-	jint result = (*env)->CallStaticIntMethod(env, dobby_bridge, method, id, (jlong)generation);
-	(*env)->DeleteLocalRef(env, id);
-	if ((*env)->ExceptionCheck(env)) {
-		dobby_record_jni_failure(env, "jni.acquire_tunnel_failed");
-		result = -1;
+	char *result = NULL;
+	if (dobby_bridge != NULL) {
+		jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge,
+			acquire ? "acquireTunnel" : "releaseTunnel",
+			acquire ? "(Ljava/lang/String;J)Ljava/lang/String;" : "(Ljava/lang/String;JIJ)Ljava/lang/String;");
+		jstring id = method == NULL ? NULL : (*env)->NewStringUTF(env, session == NULL ? "" : session);
+		if (method != NULL && id != NULL && !(*env)->ExceptionCheck(env)) {
+			jstring response = acquire
+				? (jstring)(*env)->CallStaticObjectMethod(env, dobby_bridge, method, id, (jlong)generation)
+				: (jstring)(*env)->CallStaticObjectMethod(env, dobby_bridge, method, id, (jlong)generation, (jint)fd, (jlong)timeout);
+			if (response != NULL && !(*env)->ExceptionCheck(env)) result = dobby_jstring_utf8(env, response);
+			if (response != NULL) (*env)->DeleteLocalRef(env, response);
+		}
+		if (id != NULL) (*env)->DeleteLocalRef(env, id);
+		if (result == NULL || (*env)->ExceptionCheck(env)) dobby_record_jni_failure(env, "jni.tunnel_callback_failed");
 	}
 	pthread_mutex_unlock(&dobby_bridge_lock);
 	dobby_detach(attached);
-	return (int32_t)result;
-}
-
-static bool dobby_call_release(const char *session, int64_t generation, int32_t fd) {
-	bool attached = false; JNIEnv *env = dobby_env(&attached);
-	if (env == NULL) { dobby_detach(attached); return false; }
-	pthread_mutex_lock(&dobby_bridge_lock);
-	if (dobby_bridge == NULL) {
-		pthread_mutex_unlock(&dobby_bridge_lock);
-		dobby_detach(attached);
-		return false;
-	}
-	jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge, "releaseTunnel", "(Ljava/lang/String;JI)Z");
-	if (method == NULL) {
-		dobby_record_jni_failure(env, "jni.release_tunnel_failed");
-		pthread_mutex_unlock(&dobby_bridge_lock);
-		dobby_detach(attached);
-		return false;
-	}
-	jstring id = (*env)->NewStringUTF(env, session == NULL ? "" : session);
-	if (id == NULL) {
-		dobby_record_jni_failure(env, "jni.release_tunnel_failed");
-		pthread_mutex_unlock(&dobby_bridge_lock);
-		dobby_detach(attached);
-		return false;
-	}
-	jboolean result = (*env)->CallStaticBooleanMethod(env, dobby_bridge, method, id, (jlong)generation, (jint)fd);
-	(*env)->DeleteLocalRef(env, id);
-	if ((*env)->ExceptionCheck(env)) {
-		dobby_record_jni_failure(env, "jni.release_tunnel_failed");
-		result = JNI_FALSE;
-	}
-	pthread_mutex_unlock(&dobby_bridge_lock);
-	dobby_detach(attached);
-	return result == JNI_TRUE;
+	return result;
 }
 
 static bool dobby_call_protect(const char *session, int64_t generation, int32_t fd) {
@@ -368,6 +325,7 @@ static jstring dobby_new_jstring(JNIEnv *env, const char *value) {
 import "C"
 
 import (
+	"context"
 	"unsafe"
 
 	"core/sessionapi/mobilebinding"
@@ -375,16 +333,23 @@ import (
 
 type jniPlatformCallbacks struct{}
 
-func (jniPlatformCallbacks) AcquireTunnel(sessionID string, generation int64) int32 {
-	value := C.CString(sessionID)
-	defer C.free(unsafe.Pointer(value))
-	return int32(C.dobby_call_acquire(value, C.int64_t(generation)))
+func (jniPlatformCallbacks) AcquireTunnel(sessionID string, generation int64) string {
+	return nativeTunnelCall(sessionID, generation, -1, 0, true)
 }
 
-func (jniPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32) bool {
+func (jniPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32, timeoutMillis int64) string {
+	return nativeTunnelCall(sessionID, generation, fd, timeoutMillis, false)
+}
+
+func nativeTunnelCall(sessionID string, generation int64, fd int32, timeoutMillis int64, acquire bool) string {
 	value := C.CString(sessionID)
 	defer C.free(unsafe.Pointer(value))
-	return bool(C.dobby_call_release(value, C.int64_t(generation), C.int32_t(fd)))
+	result := C.dobby_call_tunnel(value, C.int64_t(generation), C.int32_t(fd), C.int64_t(timeoutMillis), C.bool(acquire))
+	if result == nil {
+		return `{"error":"JNI tunnel callback unavailable; see native diagnostics","cleanup_pending":true}`
+	}
+	defer C.free(unsafe.Pointer(result))
+	return C.GoString(result)
 }
 
 func (jniPlatformCallbacks) ProtectSocket(sessionID string, generation int64, fd int32) bool {
@@ -496,4 +461,20 @@ func Java_com_dobby_nativebridge_NativeGoSession_snapshot(
 	env *C.JNIEnv, _ C.jclass, session C.jstring,
 ) C.jstring {
 	return jniResult(env, mobileSessions.Snapshot(jniString(env, session)))
+}
+
+//export Java_com_dobby_nativebridge_NativeGoSession_stopAndWait
+func Java_com_dobby_nativebridge_NativeGoSession_stopAndWait(env *C.JNIEnv, _ C.jclass) C.jstring {
+	if err := mobileSessions.StopAndWait(context.Background()); err != nil {
+		return jniResult(env, err.Error())
+	}
+	return jniResult(env, "")
+}
+
+//export Java_com_dobby_nativebridge_NativeGoSession_resume
+func Java_com_dobby_nativebridge_NativeGoSession_resume(env *C.JNIEnv, _ C.jclass) C.jstring {
+	if err := mobileSessions.Resume(); err != nil {
+		return jniResult(env, err.Error())
+	}
+	return jniResult(env, "")
 }

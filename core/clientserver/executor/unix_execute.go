@@ -193,12 +193,13 @@ func run() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	<-signals
-	if err := listener.Close(); err != nil {
-		panic(fmt.Sprintf("failed to close desktop control socket: %v", err))
+	var serveErr error
+	select {
+	case <-signals:
+	case serveErr = <-serveDone:
 	}
-	if err := <-serveDone; err != nil {
-		panic(fmt.Sprintf("desktop control stopped with error: %v", err))
+	if err := shutdownDesktop(listener.Close, serveErr); err != nil {
+		panic(fmt.Sprintf("desktop shutdown failed: %v", err))
 	}
 }
 

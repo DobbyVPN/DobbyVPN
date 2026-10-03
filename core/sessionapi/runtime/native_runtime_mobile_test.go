@@ -95,7 +95,7 @@ func TestMobileTunCloseResultIsCachedDuringRollback(t *testing.T) {
 func connectMobileBounded(t *testing.T, c *nativeRuntime) error {
 	t.Helper()
 	result := make(chan error, 1)
-	go func() { result <- c.Connect() }()
+	go func() { result <- c.Connect(context.Background()) }()
 	select {
 	case err := <-result:
 		return err
@@ -175,7 +175,7 @@ func TestMobileConnectCancellationDoesNotMutateBlockedStartupConcurrently(t *tes
 	tun := newMobileTestTun(t, nil)
 	c := newNativeRuntime(device, tun, dnscache.New(), emptyBypassPolicy(t))
 	result := make(chan error, 1)
-	go func() { result <- c.Connect() }()
+	go func() { result <- c.Connect(context.Background()) }()
 	<-device.opened
 
 	// CancelConnect must not wait for the lifecycle mutex held by Connect.
@@ -208,7 +208,7 @@ func TestMobileConnectCancellationDoesNotMutateBlockedStartupConcurrently(t *tes
 	if tun.closeCalls != 1 {
 		t.Fatalf("TUN close calls=%d, want 1", tun.closeCalls)
 	}
-	if err := c.Disconnect(); err != nil {
+	if err := c.Disconnect(context.Background()); err != nil {
 		t.Fatalf("Disconnect after canceled startup failed: %v", err)
 	}
 	if tun.closeCalls != 1 || device.closeCalls != 1 {

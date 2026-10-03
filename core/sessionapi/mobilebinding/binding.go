@@ -22,8 +22,8 @@ import (
 // closes that descriptor before ReleaseTunnel; a failed release prevents Go
 // from reporting cleanup as complete.
 type PlatformCallbacks interface {
-	AcquireTunnel(sessionID string, generation int64) int32
-	ReleaseTunnel(sessionID string, generation int64, fd int32) bool
+	AcquireTunnel(sessionID string, generation int64) string
+	ReleaseTunnel(sessionID string, generation int64, fd int32, timeoutMillis int64) string
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(sessionID string, generation int64, state string, failureCode string)
 }
@@ -65,6 +65,24 @@ func NewForTest(manager managerAPI) *Binding { return &Binding{manager: manager}
 // NewForDesktop wraps the process-owned manager used by the desktop Go backend.
 func NewForDesktop(manager *sessionapi.Manager) *Binding {
 	return &Binding{manager: manager}
+}
+
+// StopAndWait is reserved for OS lifecycle callbacks; CallJSON deliberately
+// exposes only the four existing desktop methods.
+func (b *Binding) StopAndWait(ctx context.Context) error {
+	owner, ok := b.manager.(interface{ StopAndWait(context.Context) error })
+	if !ok {
+		return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "shutdown owner is unavailable"}
+	}
+	return owner.StopAndWait(ctx)
+}
+
+func (b *Binding) Resume() error {
+	owner, ok := b.manager.(interface{ Resume() error })
+	if !ok {
+		return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "session owner is unavailable"}
+	}
+	return owner.Resume()
 }
 
 func (b *Binding) AttachSourceStore() {

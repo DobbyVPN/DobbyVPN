@@ -690,7 +690,7 @@ func TestStopReportsCleanupFailureAndBlocksRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+	if snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
 		t.Fatalf("cleanup snapshot=%#v", snapshot)
 	}
 	if _, err := startForTest(t, m, id, StartTarget{Mode: ProfileIndex, Index: 0}); CodeOf(err) != FailureConflict {
@@ -736,7 +736,7 @@ func TestPlatformAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *test
 		t.Fatal(err)
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+	if snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
 		t.Fatalf("cleanup snapshot=%#v", snapshot)
 	}
 }
@@ -759,7 +759,7 @@ func TestAutoSelectStartLeaseCleanupPreservesBothCauses(t *testing.T) {
 			t.Fatalf("failure snapshot lost %q: %#v", cause, snapshot)
 		}
 	}
-	if snapshot.LastFailure != FailureCleanup || !snapshot.CleanupComplete {
+	if snapshot.LastFailure != FailureCleanup || snapshot.CleanupComplete {
 		t.Fatalf("candidate platform failure snapshot=%#v", snapshot)
 	}
 	if _, err := m.Start(context.Background(), id, snapshot.Sequence, StartTarget{Mode: AutoSelect}); CodeOf(err) != FailureConflict {
@@ -851,7 +851,7 @@ func TestRuntimeAcquisitionErrorStillOwnsAndReportsReturnedLeaseCleanup(t *testi
 		t.Fatal(err)
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+	if snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
 		t.Fatalf("cleanup snapshot=%#v", snapshot)
 	}
 }
@@ -868,7 +868,7 @@ func TestRuntimeStartRollbackFailureBlocksRestartWithoutReturnedLeaseError(t *te
 		t.Fatal(err)
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	if snapshot.LastFailure != FailureCleanup || !snapshot.CleanupComplete {
+	if snapshot.LastFailure != FailureCleanup || snapshot.CleanupComplete {
 		t.Fatalf("runtime rollback snapshot=%#v", snapshot)
 	}
 	if _, err := m.Start(context.Background(), id, snapshot.Sequence, StartTarget{Mode: ProfileIndex, Index: 0}); CodeOf(err) != FailureConflict {
@@ -1157,7 +1157,7 @@ func TestStopReportsLateRuntimeLeaseCleanupFailure(t *testing.T) {
 		t.Fatal("late runtime lease was not stopped")
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+	if snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
 		t.Fatalf("cleanup snapshot=%#v", snapshot)
 	}
 }
@@ -1184,7 +1184,7 @@ func TestStopRetainsLateRuntimeRollbackFailureWithoutLease(t *testing.T) {
 	}
 	close(releaseStart)
 	snapshot := waitState(t, m, id, StateFailed)
-	if snapshot.LastFailure != FailureCleanup || !snapshot.CleanupComplete {
+	if snapshot.LastFailure != FailureCleanup || snapshot.CleanupComplete {
 		t.Fatalf("late rollback snapshot=%#v", snapshot)
 	}
 	if _, err := m.Start(context.Background(), id, snapshot.Sequence, StartTarget{Mode: ProfileIndex, Index: 0}); CodeOf(err) != FailureConflict {
@@ -1223,7 +1223,7 @@ func TestStopReportsLatePlatformLeaseCleanupFailure(t *testing.T) {
 		t.Fatal("late platform lease was not released")
 	}
 	snapshot := waitState(t, m, id, StateFailed)
-	if !snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
+	if snapshot.CleanupComplete || snapshot.LastFailure != FailureCleanup {
 		t.Fatalf("cleanup snapshot=%#v", snapshot)
 	}
 }

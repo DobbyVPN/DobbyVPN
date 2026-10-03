@@ -8,6 +8,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import org.json.JSONObject
 
 /** Android-only VPN boundary for the Go-owned session manager. */
 class DobbyVpnService : VpnService() {
@@ -16,6 +17,14 @@ class DobbyVpnService : VpnService() {
         private const val CHANNEL = "dobby_vpn"
         private const val NOTIFICATION_ID = 101
         private const val TAG = "DobbyVpnService"
+    }
+
+    private var shuttingDown = false
+    private var operationFailure: Throwable? = null
+
+    private fun recordFailure(event: String, failure: Throwable) {
+        operationFailure = failure
+        NativeVpnBridge.recordNativeFailure(this, event, failure)
     }
 
     private var activeSession: String? = null
@@ -30,9 +39,11 @@ class DobbyVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         try {
+            val failure = NativeGoSession.resume()
+            check(failure.isEmpty()) { failure }
             NativeVpnBridge.attach(this)
         } catch (failure: Throwable) {
-            NativeVpnBridge.recordNativeFailure(this, "vpn.service.attach_failed", failure)
+            recordFailure("vpn.service.attach_failed", failure)
             throw failure
         }
         Log.i(TAG, "VPN service created")
@@ -43,7 +54,7 @@ class DobbyVpnService : VpnService() {
             try {
                 ensureForeground()
             } catch (failure: Throwable) {
-                NativeVpnBridge.recordNativeFailure(this, "vpn.service.foreground_failed", failure)
+                recordFailure("vpn.service.foreground_failed", failure)
                 throw failure
             }
         }
@@ -51,17 +62,25 @@ class DobbyVpnService : VpnService() {
     }
 
     @Synchronized
-    fun acquireTunnel(sessionID: String, generation: Long): Int {
+    fun acquireTunnel(sessionID: String, generation: Long): String {
+        operationFailure = null
+        val fd = if (shuttingDown) -1 else acquireDescriptor(sessionID, generation)
+        return JSONObject().put("fd", fd).put("cleanup_pending", vpnInterface != null)
+            .apply { if (fd < 0) put("error", operationFailure?.stackTraceToString() ?: "VPN service is stopping") }
+            .toString()
+    }
+
+    private fun acquireDescriptor(sessionID: String, generation: Long): Int {
         if (activeSession != null && activeSession != sessionID) {
-            NativeVpnBridge.recordNativeFailure(
-                this, "vpn.service.acquire_rejected",
+            recordFailure(
+                "vpn.service.acquire_rejected",
                 IllegalStateException("VPN tunnel is owned by a different session"),
             )
             return -1
         }
         if (activeGeneration > generation || vpnInterface != null) {
-            NativeVpnBridge.recordNativeFailure(
-                this, "vpn.service.acquire_rejected",
+            recordFailure(
+                "vpn.service.acquire_rejected",
                 IllegalStateException("VPN tunnel is already active or generation is stale"),
             )
             return -1
@@ -69,8 +88,8 @@ class DobbyVpnService : VpnService() {
         try {
             ensureForeground()
         } catch (failure: Throwable) {
-            NativeVpnBridge.recordNativeFailure(this, "vpn.service.foreground_failed", failure)
-            throw failure
+            recordFailure("vpn.service.foreground_failed", failure)
+            return -1
         }
         val established = try {
             Builder()
@@ -87,24 +106,25 @@ class DobbyVpnService : VpnService() {
                 .establish()
         } catch (failure: Throwable) {
             Log.e(TAG, "VPN interface establish failed", failure)
-            NativeVpnBridge.recordNativeFailure(this, "vpn.service.establish_failed", failure)
+            recordFailure("vpn.service.establish_failed", failure)
             return -1
         } ?: run {
-            NativeVpnBridge.recordNativeFailure(
-                this, "vpn.service.establish_failed",
+            recordFailure(
+                "vpn.service.establish_failed",
                 IllegalStateException("VpnService.Builder.establish returned null"),
             )
             return -1
         }
 
+        activeSession = sessionID
+        activeGeneration = generation
+        vpnInterface = established
+        goTunFd = -1
         val duplicate = try {
             ParcelFileDescriptor.dup(established.fileDescriptor)
         } catch (failure: Throwable) {
-            try { established.close() } catch (cleanupFailure: Throwable) {
-                failure.addSuppressed(cleanupFailure)
-            }
             Log.e(TAG, "VPN interface duplication failed", failure)
-            NativeVpnBridge.recordNativeFailure(this, "vpn.service.duplicate_failed", failure)
+            recordFailure("vpn.service.duplicate_failed", failure)
             return -1
         }
         val detached = try {
@@ -113,11 +133,8 @@ class DobbyVpnService : VpnService() {
             try { duplicate.close() } catch (cleanupFailure: Throwable) {
                 failure.addSuppressed(cleanupFailure)
             }
-            try { established.close() } catch (cleanupFailure: Throwable) {
-                failure.addSuppressed(cleanupFailure)
-            }
             Log.e(TAG, "VPN descriptor transfer failed", failure)
-            NativeVpnBridge.recordNativeFailure(this, "vpn.service.detach_failed", failure)
+            recordFailure("vpn.service.detach_failed", failure)
             return -1
         }
         activeSession = sessionID
@@ -132,13 +149,21 @@ class DobbyVpnService : VpnService() {
     }
 
     @Synchronized
-    fun releaseTunnel(sessionID: String, generation: Long, fd: Int): Boolean {
+    fun releaseTunnel(sessionID: String, generation: Long, fd: Int, timeoutMillis: Long): String {
+        operationFailure = null
+        val released = timeoutMillis > 0 && releaseDescriptor(sessionID, generation, fd)
+        return JSONObject().put("cleanup_pending", !released)
+            .apply { if (!released) put("error", operationFailure?.stackTraceToString() ?: "VPN release remains pending") }
+            .toString()
+    }
+
+    private fun releaseDescriptor(sessionID: String, generation: Long, fd: Int): Boolean {
         if (sessionID == lastClosedSession && generation == lastClosedGeneration && fd == lastClosedFd) {
             return lastCloseSucceeded ?: false
         }
         if (sessionID != activeSession || generation != activeGeneration || fd != goTunFd) {
-            NativeVpnBridge.recordNativeFailure(
-                this, "vpn.service.release_rejected",
+            recordFailure(
+                "vpn.service.release_rejected",
                 IllegalStateException("VPN release did not match the active session, generation, and descriptor"),
             )
             return false
@@ -149,8 +174,8 @@ class DobbyVpnService : VpnService() {
     @Synchronized
     fun protectProtocolSocket(sessionID: String, generation: Long, fd: Int): Boolean {
         if (sessionID != activeSession || generation != activeGeneration || fd < 0) {
-            NativeVpnBridge.recordNativeFailure(
-                this, "vpn.service.protect_rejected",
+            recordFailure(
+                "vpn.service.protect_rejected",
                 IllegalStateException("VPN socket protect request did not match the active session, generation, and descriptor"),
             )
             return false
@@ -163,24 +188,48 @@ class DobbyVpnService : VpnService() {
                 )
             }
         } catch (failure: Throwable) {
-            NativeVpnBridge.recordNativeFailure(this, "vpn.service.protect_failed", failure)
+            recordFailure("vpn.service.protect_failed", failure)
             throw failure
         }
     }
 
     @Synchronized
     fun publishState(sessionID: String, generation: Long, state: String, failureCode: String) {
-        if (sessionID != activeSession || generation < activeGeneration) return
+        val active = sessionID == activeSession && generation == activeGeneration
+        val released = sessionID == lastClosedSession && generation == lastClosedGeneration && lastCloseSucceeded == true
+        if ((!active && !released) || (vpnInterface != null && !active)) return
         Log.i(TAG, "Go state=$state generation=$generation failure=$failureCode")
-        if (state == "IDLE" || state == "FAILED") {
+        if (state == "IDLE" || (state == "FAILED" && failureCode != "CLEANUP_FAILED")) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         }
     }
 
+    override fun onRevoke() {
+        shutdownOwner()
+        super.onRevoke()
+    }
+
     override fun onDestroy() {
-        synchronized(this) { closeTunnel() }
-        NativeVpnBridge.detach(this)
+        shutdownOwner()
         super.onDestroy()
+    }
+
+    private fun shutdownOwner() {
+        synchronized(this) {
+            if (shuttingDown) return
+            shuttingDown = true
+        }
+        // OS callbacks run on the main thread. Keep this service reachable by
+        // Go's release callback until the one owner confirms cleanup.
+        Thread({
+            val failure = NativeGoSession.stopAndWait()
+            if (failure.isEmpty()) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                NativeVpnBridge.detach(this)
+            } else {
+                recordFailure("vpn.service.shutdown_failed", IllegalStateException(failure))
+            }
+        }, "dobby-vpn-shutdown").start()
     }
 
     private fun closeTunnel(): Boolean {
@@ -193,9 +242,10 @@ class DobbyVpnService : VpnService() {
             true
         } catch (failure: Throwable) {
             Log.e(TAG, "VPN close failed", failure)
-            NativeVpnBridge.recordNativeFailure(this, "vpn.service.close_failed", failure)
+            recordFailure("vpn.service.close_failed", failure)
             false
         }
+        if (!closed) return false
         vpnInterface = null
         goTunFd = -1
         activeGeneration = -1

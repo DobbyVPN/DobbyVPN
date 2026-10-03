@@ -25,8 +25,8 @@ private enum GomobileProviderSessionClient {
 // be interpreted as illegal multiple class inheritance on Simulator builds.
 /// Go snapshots are authoritative; callbacks synchronize native tunnel state.
 private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksProtocol {
-    private let acquireHandler: (_ sessionID: String?, _ generation: Int64) -> Int32
-    private let releaseHandler: (_ sessionID: String?, _ generation: Int64) -> Bool
+    private let acquireHandler: (_ sessionID: String?, _ generation: Int64) -> String
+    private let releaseHandler: (_ sessionID: String?, _ generation: Int64, _ timeoutMillis: Int64) -> String
     private let stateHandler: (
         _ sessionID: String?,
         _ generation: Int64,
@@ -35,8 +35,8 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
     ) -> Void
 
     init(
-        acquireHandler: @escaping (_ sessionID: String?, _ generation: Int64) -> Int32,
-        releaseHandler: @escaping (_ sessionID: String?, _ generation: Int64) -> Bool,
+        acquireHandler: @escaping (_ sessionID: String?, _ generation: Int64) -> String,
+        releaseHandler: @escaping (_ sessionID: String?, _ generation: Int64, _ timeoutMillis: Int64) -> String,
         stateHandler: @escaping (
             _ sessionID: String?,
             _ generation: Int64,
@@ -50,15 +50,15 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         super.init()
     }
 
-    func acquireTunnel(_ sessionID: String?, generation: Int64) -> Int32 {
+    func acquireTunnel(_ sessionID: String?, generation: Int64) -> String {
         acquireHandler(sessionID, generation)
     }
 
-    func releaseTunnel(_ sessionID: String?, generation: Int64, fd: Int32) -> Bool {
+    func releaseTunnel(_ sessionID: String?, generation: Int64, fd: Int32, timeoutMillis: Int64) -> String {
         // Go owns and closes the duplicated descriptor before this callback.
         // The callback remains synchronous so OS routes are removed before Go
         // can publish cleanup-complete IDLE.
-        return releaseHandler(sessionID, generation)
+        return releaseHandler(sessionID, generation, timeoutMillis)
     }
 
     func protectSocket(_ sessionID: String?, generation: Int64, fd: Int32) -> Bool {
@@ -103,25 +103,26 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let secrets = SharedKeychainSecretStore.shared
     let commandQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.session-command")
     let settingsQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.settings")
-    static let settingsOperationTimeout: TimeInterval = 10
-    private lazy var callbackBridge = IOSPlatformCallbacks(
-        acquireHandler: { [weak self] sessionID, generation in
-            self?.acquireTunnel(sessionID: sessionID, generation: generation) ?? -1
-        },
-        releaseHandler: { [weak self] sessionID, generation in
-            self?.releaseTunnel(sessionID: sessionID, generation: generation) ?? false
-        },
-        stateHandler: { [weak self] sessionID, generation, state, failureCode in
-            self?.handleGoPublishedState(
-                sessionID: sessionID,
-                generation: generation,
-                state: state,
-                failureCode: failureCode
-            )
-        }
-    )
-    let settingsLock = NSLock()
-    var activeSettingsGeneration: Int64?
+    var callbackBridge: AnyObject?
+    private func registerPlatform() throws {
+        let bridge = IOSPlatformCallbacks(
+            acquireHandler: { sessionID, generation in
+                self.acquireTunnel(sessionID: sessionID, generation: generation)
+            },
+            releaseHandler: { sessionID, generation, timeoutMillis in
+                self.releaseTunnel(sessionID: sessionID, generation: generation, timeoutMillis: timeoutMillis)
+            },
+            stateHandler: { sessionID, generation, state, failureCode in
+                self.handleGoPublishedState(sessionID: sessionID, generation: generation, state: state, failureCode: failureCode)
+            }
+        )
+        let failure = DobbyvpnRegisterSessionPlatform(bridge)
+        guard failure.isEmpty else { throw sessionError(failure) }
+        callbackBridge = bridge
+    }
+    lazy var settingsOwner = TunnelSettingsOwner { [weak self] message in
+        self?.logs.writeLog(log: message)
+    }
 
     var pathMonitor: Network.NWPathMonitor?
     var lastPathSignature: String?
@@ -256,13 +257,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // The provider first starts in control mode. No routes, DNS settings,
         // or Go session are installed here, so configure cannot black-hole
         // traffic and NetworkExtension status cannot become product state.
-        let settingsCleared = settingsQueue.sync {
-            runSettingsOperation {
-                try await self.setTunnelNetworkSettings(nil)
-            }
-        }
-        guard settingsCleared else { throw sessionError("NETWORK_SETTINGS_CLEAR_FAILED") }
-        DobbyvpnRegisterSessionPlatform(callbackBridge)
+        try registerPlatform()
         logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for session command")
 
         startPathLogging()
@@ -289,7 +284,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel] stopTunnel teardown=begin")
         Task {
             await teardownForStop(reason: "stopTunnel(\(reason))")
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel teardown complete; calling completionHandler")
+            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel cleanup wait ended; calling OS completionHandler")
             completionHandler()
             logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
         }

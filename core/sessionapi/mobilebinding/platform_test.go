@@ -2,6 +2,7 @@ package mobilebinding
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -15,8 +16,15 @@ type releaseResultCallbacks struct {
 	releaseOK bool
 }
 
-func (releaseResultCallbacks) AcquireTunnel(string, int64) int32          { return -1 }
-func (c releaseResultCallbacks) ReleaseTunnel(string, int64, int32) bool  { return c.releaseOK }
+func (releaseResultCallbacks) AcquireTunnel(string, int64) string {
+	return `{"error":"acquire failed","cleanup_pending":false}`
+}
+func (c releaseResultCallbacks) ReleaseTunnel(string, int64, int32, int64) string {
+	if c.releaseOK {
+		return `{}`
+	}
+	return `{"error":"native release sentinel","cleanup_pending":true}`
+}
 func (releaseResultCallbacks) ProtectSocket(string, int64, int32) bool    { return true }
 func (releaseResultCallbacks) PublishState(string, int64, string, string) {}
 func (releaseResultCallbacks) LoadSourceURL() string                      { return "" }
@@ -112,7 +120,7 @@ func TestCallbackReplacementKeepsManagerAndLeaseOwner(t *testing.T) {
 	if binding.manager != manager {
 		t.Fatal("callback replacement replaced the session manager")
 	}
-	if err := adapter.release(ref, fd, acquiredWith); err != nil {
+	if err := adapter.release(context.Background(), ref, fd, acquiredWith); err != nil {
 		t.Fatal(err)
 	}
 	if first.releaseCount() != 1 || second.releaseCount() != 0 {
@@ -126,12 +134,14 @@ type trackingCallbacks struct {
 	releases  int
 }
 
-func (c *trackingCallbacks) AcquireTunnel(string, int64) int32 { return c.acquireFD }
-func (c *trackingCallbacks) ReleaseTunnel(string, int64, int32) bool {
+func (c *trackingCallbacks) AcquireTunnel(string, int64) string {
+	return fmt.Sprintf(`{"fd":%d}`, c.acquireFD)
+}
+func (c *trackingCallbacks) ReleaseTunnel(string, int64, int32, int64) string {
 	c.mu.Lock()
 	c.releases++
 	c.mu.Unlock()
-	return true
+	return `{}`
 }
 func (*trackingCallbacks) ProtectSocket(string, int64, int32) bool    { return true }
 func (*trackingCallbacks) PublishState(string, int64, string, string) {}
@@ -142,4 +152,14 @@ func (c *trackingCallbacks) releaseCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.releases
+}
+
+func TestNativeTunnelResultPreservesFailureAndPartialOwnership(t *testing.T) {
+	result, err := decodeTunnelResult(`{"error":"OS apply error: sentinel","cleanup_pending":true}`)
+	if err == nil || err.Error() != "OS apply error: sentinel" || !result.CleanupPending {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	if _, err := decodeTunnelResult("not JSON"); err == nil || !strings.Contains(err.Error(), "not JSON") {
+		t.Fatalf("malformed result lost original bytes: %v", err)
+	}
 }
