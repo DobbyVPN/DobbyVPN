@@ -195,7 +195,8 @@ public final class VpnManagerImpl: NSObject {
         let status = current?.connection.status ?? .invalid
         condition.unlock()
         if let loadError {
-            logs.writeLog(level: "ERROR", log: "[provider] NetworkExtension preference save/load failed:\n\(diagnosticErrorDescription(loadError))")
+            // The preference operation records its precise phase and original
+            // OS error. Propagate that error without logging it a second time.
             return String(reflecting: loadError)
         }
         guard let current else {
