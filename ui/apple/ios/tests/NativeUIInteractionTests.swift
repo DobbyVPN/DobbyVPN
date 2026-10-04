@@ -11,10 +11,13 @@ final class NativeUIInteractionTests: XCTestCase {
     func testNativeConnectionAboutAndLogs() throws {
         let configuration = app.textFields["Connection configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        assertLogLayout()
         attachScreenshot("startup")
 
         configuration.tap()
         configuration.typeText("invalidprofile")
+        assertLogLayout()
+        attachScreenshot("keyboard")
         dismissConfigurationKeyboard()
         openAbout()
         app.buttons["Done"].tap()
@@ -86,6 +89,14 @@ final class NativeUIInteractionTests: XCTestCase {
         expectSource(warm)
         XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid&url=duplicate")))
         expectSource(warm)
+    }
+
+    private func assertLogLayout() {
+        let logs = app.textViews["Connection logs"]
+        XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(logs.frame.height, 0)
+        XCTAssertGreaterThanOrEqual(logs.frame.minY, app.staticTexts["Logs"].frame.maxY)
+        XCTAssertLessThanOrEqual(logs.frame.maxY, app.frame.maxY)
     }
 
     private func dismissConfigurationKeyboard() {

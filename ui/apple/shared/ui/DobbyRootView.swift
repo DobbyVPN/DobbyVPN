@@ -10,6 +10,7 @@ public struct DobbyRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var configurationFocused: Bool
     @State private var showingAbout = false
+    @State private var controlsHeight: CGFloat = 0
     @State private var canPaste = false
     @State private var followingLogs = true
     @State private var exportedLogsURL: URL?
@@ -68,29 +69,36 @@ public struct DobbyRootView: View {
     private var content: some View {
         GeometryReader { geometry in
             VStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 10) {
-                    configurationEditor
-                    connectionSummary
-                    primaryAction
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(model.snapshot.profiles) { profile in
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(profile.name)
-                                        Text(profile.protocolName).font(.caption).foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        configurationEditor
+                        connectionSummary
+                        primaryAction
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(model.snapshot.profiles) { profile in
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(profile.name)
+                                            Text(profile.protocolName).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Button(model.actionTitle(profile.index)) { model.performPrimaryAction(profile.index) }
+                                            .disabled(!model.canAct(profile.index))
+                                            .accessibilityIdentifier("Profile \(profile.index + 1) action")
                                     }
-                                    Spacer()
-                                    Button(model.actionTitle(profile.index)) { model.performPrimaryAction(profile.index) }
-                                        .disabled(!model.canAct(profile.index))
-                                        .accessibilityIdentifier("Profile \(profile.index + 1) action")
                                 }
                             }
                         }
+                        .frame(maxHeight: min(180, geometry.size.height * 0.25))
+                        .fixedSize(horizontal: false, vertical: true)
                     }
-                    .frame(maxHeight: min(180, geometry.size.height * 0.25))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { size in
+                        Color.clear.preference(key: ControlsHeight.self, value: size.size.height)
+                    })
                 }
+                .frame(height: min(controlsHeight, geometry.size.height * 0.65))
+                .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
                 logs.frame(maxHeight: .infinity)
             }
             .padding(16)
@@ -235,6 +243,11 @@ public struct DobbyRootView: View {
         do { try FileManager.default.removeItem(at: url) } catch { model.reportLogsError(error.localizedDescription) }
         exportedLogsURL = nil
     }
+}
+
+private struct ControlsHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 public struct DobbyAboutView: View {
