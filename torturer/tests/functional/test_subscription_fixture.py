@@ -65,3 +65,20 @@ class SubscriptionFixtureTests(unittest.TestCase):
             self.assertIn("OSError: synthetic trust cleanup failure", rendered)
             self.assertIn("original cleanup note", rendered)
             self.assertTrue(fixture.directory.exists())
+
+    def test_interrupted_macos_trust_restores_original_authorization_on_failure(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            fixture = SubscriptionFixture(root / 'unused', root / 'fixture', 'macos')
+            fixture.directory.mkdir()
+            fixture.trusted = True
+            fixture.fingerprint = 'synthetic fingerprint'
+            fixture._save()
+            original = b'<plist>original authorization</plist>'
+            fixture.authorization.write_bytes(original)
+            with patch('torturer_runner.subscription_fixture.command', side_effect=[b'', OSError('delete failed'), b'']) as command:
+                with self.assertRaises(ExceptionGroup):
+                    SubscriptionFixture.cleanup_interrupted(fixture.directory)
+                self.assertEqual(command.call_args.kwargs, {'input_bytes': original})
+                self.assertIn('authorizationdb', command.call_args.args[0])
+            self.assertFalse(fixture.authorization.exists())
