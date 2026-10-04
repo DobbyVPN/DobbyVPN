@@ -125,6 +125,8 @@ class NativeUiInstrumentedTest {
         // Incomplete or invalid URLs must leave Connect disabled without fetching.
         dismissNativeInputAfterTextEntry()
 
+        verifyLogScrollingAndClear()
+
         // Navigate only after typing so a real control transition proves the
         // Entry focus/IME teardown completed and the entered source survives
         // an in-app screen change before Connect is exercised.
@@ -190,7 +192,6 @@ class NativeUiInstrumentedTest {
         val marker = "live-log-check-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.live", marker)
         waitForTextContaining(marker)
-        verifyLogScrollingAndClear()
         val existing = context.cacheDir.listFiles().orEmpty().map { it.name }.toSet()
         val exportMarker = "fresh-export-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.export", exportMarker)
@@ -237,16 +238,35 @@ class NativeUiInstrumentedTest {
         check(requireObject("Connection logs").text == frozen) { "ANDROID_LOG_SCROLL_POSITION_NOT_FROZEN" }
         val deadline = System.currentTimeMillis() + 10_000
         while (!requireObject("Connection logs").text.orEmpty().contains(pending) && System.currentTimeMillis() < deadline) {
-            requireObject("Connection logs").parent.fling(androidx.test.uiautomator.Direction.DOWN)
+            requireObject("Connection logs").parent.scroll(androidx.test.uiautomator.Direction.DOWN, 1f)
             device.waitForIdle()
         }
-        waitForTextContaining(pending)
+        check(requireObject("Connection logs").text.orEmpty().contains(pending)) {
+            "ANDROID_LOG_FOLLOW_NOT_RESUMED " + logGeometry()
+        }
         tapStable("Clear")
         val clearDeadline = System.currentTimeMillis() + 10_000
         while (requireObject("Connection logs").text.orEmpty().contains(prefix) && System.currentTimeMillis() < clearDeadline) Thread.sleep(100)
         check(!requireObject("Connection logs").text.orEmpty().contains(prefix)) { "ANDROID_CLEAR_RESTORED_HISTORY" }
         NativeVpnBridge.recordDiagnostic(context, "ui.test.after.clear", "$prefix-after-clear")
         waitForTextContaining("$prefix-after-clear")
+    }
+
+    private fun logGeometry(): String {
+        var result = "Log view unavailable"
+        instrumentation.runOnMainSync {
+            fun inspect(view: android.view.View) {
+                if (view.contentDescription == "Connection logs") {
+                    val parent = view.parent as android.view.View
+                    result = "textHeight=${view.height} viewportHeight=${parent.height} " +
+                        "scrollY=${parent.scrollY} canScrollDown=${parent.canScrollVertically(1)} " +
+                        "text=${(view as android.widget.TextView).text}"
+                }
+                if (view is android.view.ViewGroup) repeat(view.childCount) { inspect(view.getChildAt(it)) }
+            }
+            MainActivity.current?.window?.decorView?.let(::inspect)
+        }
+        return result
     }
 
     private fun launch() {

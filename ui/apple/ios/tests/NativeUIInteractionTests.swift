@@ -105,7 +105,7 @@ final class NativeUIInteractionTests: XCTestCase {
     private func assertLogLayout() {
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
-        XCTAssertGreaterThan(logs.frame.height, 0)
+        XCTAssertGreaterThanOrEqual(logs.frame.height, 60)
         XCTAssertGreaterThanOrEqual(logs.frame.minY, app.staticTexts["Logs"].frame.maxY)
         XCTAssertLessThanOrEqual(logs.frame.maxY, app.frame.maxY)
     }
