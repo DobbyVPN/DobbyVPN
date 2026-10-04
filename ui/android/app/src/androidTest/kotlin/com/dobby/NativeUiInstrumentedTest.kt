@@ -376,7 +376,7 @@ class NativeUiInstrumentedTest {
     private fun verifyInvalidImportOutcome() {
         assertConnectionDisabled("ANDROID_INVALID_URL_ENABLED_CONNECT")
         val output = device.executeShellCommand(
-            "am start -W -a android.intent.action.VIEW -d 'dobbyvpn://import?url=http%3A%2F%2Fexample.com' $packageName",
+            "am start -W -a android.intent.action.VIEW -d dobbyvpn://import?url=http%3A%2F%2Fexample.com $packageName",
         )
         check(output.contains("Status: ok")) { "ANDROID_IMPORT_ACTIVATION_FAILED:$output" }
         waitForOneOf(arrayOf("Error"), 10_000)

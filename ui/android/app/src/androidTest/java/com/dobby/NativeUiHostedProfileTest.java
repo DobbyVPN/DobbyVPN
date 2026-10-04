@@ -836,7 +836,7 @@ public final class NativeUiHostedProfileTest {
         }
         String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
         for (int delivery = 0; delivery < 2; delivery++) {
-            String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d '" + link + "' " + context.getPackageName());
+            String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d " + link + " " + context.getPackageName());
             if (!output.contains("Status: ok")) throw new AssertionError("Import activation failed: " + output);
         }
         assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
