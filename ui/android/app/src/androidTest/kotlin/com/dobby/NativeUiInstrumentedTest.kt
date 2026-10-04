@@ -97,6 +97,17 @@ class NativeUiInstrumentedTest {
     }
 
     @Test
+    fun cellularTransportIsAcceptedOnlyOutsideVpn() {
+        check(NativeUiHostedProfileTest.isPhysicalNetworkCandidate(true, false, false, true)) {
+            "ANDROID_CELLULAR_PHYSICAL_NETWORK_REJECTED"
+        }
+
+        check(!NativeUiHostedProfileTest.isPhysicalNetworkCandidate(false, false, false, true)) {
+            "ANDROID_VPN_NETWORK_MISCLASSIFIED_AS_PHYSICAL"
+        }
+    }
+
+    @Test
     fun releaseUiTypesAndShowsConnectFailureThenReopens() {
         launch()
 

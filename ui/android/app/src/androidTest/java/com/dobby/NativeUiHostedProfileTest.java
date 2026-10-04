@@ -1960,16 +1960,25 @@ public final class NativeUiHostedProfileTest {
                 .put("error_detail", CompleteThrowableReporter.format(failure));
     }
 
+    static boolean isPhysicalNetworkCandidate(NetworkCapabilities capabilities) {
+        return capabilities != null && isPhysicalNetworkCandidate(
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR));
+    }
+
+    static boolean isPhysicalNetworkCandidate(
+            boolean notVpn, boolean wifi, boolean ethernet, boolean cellular) {
+        return notVpn && (wifi || ethernet || cellular);
+    }
+
     private Network findPhysicalNetwork() {
         if (connectivity == null) return null;
         Network fallback = null;
         for (Network network : observedNetworks) {
             NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
-            if (capabilities == null
-                    || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                    || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
-                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))) continue;
+            if (!isPhysicalNetworkCandidate(capabilities)) continue;
             if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
                 return network;
