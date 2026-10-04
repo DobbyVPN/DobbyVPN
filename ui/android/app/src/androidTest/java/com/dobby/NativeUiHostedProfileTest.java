@@ -333,8 +333,8 @@ public final class NativeUiHostedProfileTest {
                                     operations, i + 1);
                             boolean consentHandled = false;
                             if (!startsLater) {
-                                consentHandled = connectThroughRenderedUI(
-                                        operationTimeout(operation));
+                                consentHandled = verifyManualConsent(operationTimeout(operation));
+                                consentHandled |= connectThroughRenderedUI(operationTimeout(operation));
                                 assertRenderedSourceRetained(2_000L);
                                 verifySubscriptionControls(command.getString("subscription_url"), operationTimeout(operation));
                                 disconnectThroughRenderedUI(
@@ -808,6 +808,30 @@ public final class NativeUiHostedProfileTest {
                 remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
         markProgress(operation, "connected-state", "completed");
         return consentNeeded;
+    }
+
+    private boolean verifyManualConsent(long timeout) throws Exception {
+        if (VpnService.prepare(context) == null) return false;
+        long deadline = System.currentTimeMillis() + timeout;
+        JSONObject initial = snapshotResult("");
+        tapEnabledControl("Profile 1 action", deadline);
+        UiObject2 cancel = uiDevice().wait(androidx.test.uiautomator.Until.findObject(
+                By.res("android:id/button2")), remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"));
+        if (cancel == null || !cancel.isEnabled()) throw new AssertionError("VPN consent cancel button unavailable");
+        cancel.click();
+        waitForUiControl("VPN permission was not granted", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject denied = snapshotResult("");
+        if (VpnService.prepare(context) == null || denied.getLong("generation") != initial.getLong("generation")
+                || !"IDLE".equals(denied.getString("state"))) {
+            throw new AssertionError("Denied consent started a connection: " + denied);
+        }
+        tapEnabledControl("Profile 1 action", deadline);
+        acceptVpnConsent(remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"), "manual-consent");
+        awaitSelection(initial.getLong("generation"), "PROFILE_INDEX", 0, deadline);
+        tapEnabledControl("Profile 1 action", deadline);
+        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        markProgress("configure", "manual-consent-denied-then-granted", "completed");
+        return true;
     }
 
     private void verifySubscriptionControls(String subscriptionURL, long timeout) throws Exception {
