@@ -52,8 +52,12 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Root.SizeChanged += (_, args) => ProfilesScroll.MaxHeight = Math.Min(180, args.NewSize.Height * 0.2);
-        foreach (var details in new[] { ProfileText, FailureText, ErrorText, LogsErrorText })
+        Root.SizeChanged += (_, args) =>
+        {
+            ControlsScroll.MaxHeight = args.NewSize.Height * 0.6;
+            ProfilesScroll.MaxHeight = Math.Min(180, args.NewSize.Height * 0.2);
+        };
+        foreach (var details in new[] { LoadStatus, ProfileText, FailureText, ErrorText, LogsErrorText })
         {
             details.Visibility = Visibility.Collapsed;
             details.RegisterPropertyChangedCallback(TextBlock.TextProperty, (sender, _) =>
