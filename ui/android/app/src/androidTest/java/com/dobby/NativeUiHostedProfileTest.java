@@ -682,8 +682,9 @@ public final class NativeUiHostedProfileTest {
             expectedRenderedSource = subscriptionURL;
             waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
             assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
-            if (!"IDLE".equals(snapshotResult("").getString("state"))) {
-                throw new AssertionError("Cold import started a connection without a user action");
+            JSONObject imported = snapshotResult("");
+            if (!"CONFIGURED".equals(imported.getString("state"))) {
+                throw new AssertionError("Cold import did not remain configured and disconnected: " + imported);
             }
             coldImportStarted = false;
             markProgress("configure", "cold-import-loaded", "completed");
@@ -835,7 +836,7 @@ public final class NativeUiHostedProfileTest {
         waitForUiControl("VPN permission was not granted", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject denied = snapshotResult("");
         if (VpnService.prepare(context) == null || denied.getLong("generation") != initial.getLong("generation")
-                || !"IDLE".equals(denied.getString("state"))) {
+                || !initial.getString("state").equals(denied.getString("state"))) {
             throw new AssertionError("Denied consent started a connection: " + denied);
         }
         tapEnabledControl("Profile 1 action", deadline);
