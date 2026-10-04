@@ -2452,7 +2452,7 @@ def cleanup(args: argparse.Namespace) -> int:
         try:
             SubscriptionFixture.cleanup_interrupted(run_dir / fixture_name)
         except Exception as error:
-            errors.append(f"cleanup-subscription-fixture: {type(error).__name__}: {error}")
+            errors.append("cleanup-subscription-fixture: " + "".join(traceback.format_exception(error)))
 
     if args.platform == "linux":
         helper = ROUTING_HELPERS / "linux.sh"

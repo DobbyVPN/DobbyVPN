@@ -346,6 +346,7 @@ class InformationRetentionTests(unittest.TestCase):
                 "configured": True,
                 "profiles": [{"index": 0}],
                 "active_profile": {"index": 0},
+                "source_url": "https://127.0.0.1:12345/subscription?cold=1",
             }
             base._connected.side_effect = [False, True, True, True, False]
             base._cleanup_verified.return_value = True

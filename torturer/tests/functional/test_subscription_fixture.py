@@ -23,7 +23,7 @@ class SubscriptionFixtureTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.URLError):
                     urllib.request.urlopen(url, timeout=5)
                 context = ssl.create_default_context(cafile=str(fixture.certificate))
-                with urllib.request.urlopen(url, context=context, timeout=5) as response:
+                with urllib.request.urlopen(url + "?cold=1", context=context, timeout=5) as response:
                     self.assertEqual(content, response.read())
                 with self.assertRaises(urllib.error.HTTPError) as failure:
                     urllib.request.urlopen(url.replace('/subscription', '/failure'), context=context, timeout=5)
@@ -48,3 +48,20 @@ class SubscriptionFixtureTests(unittest.TestCase):
                     unmounted = any('umount' in call.args[0] for call in command.call_args_list)
                     self.assertEqual(expect_unmount, unmounted)
                 self.assertFalse(fixture.directory.exists())
+
+    def test_cleanup_group_preserves_each_original_failure(self):
+        from torturer_runner.ui.journey import _exception_details
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            fixture = SubscriptionFixture(root / 'unused', root / 'fixture', 'windows')
+            fixture.directory.mkdir()
+            fixture.trusted = True
+            failure = OSError("synthetic trust cleanup failure")
+            failure.add_note("original cleanup note")
+            with patch('torturer_runner.subscription_fixture.command', side_effect=failure):
+                with self.assertRaises(ExceptionGroup) as caught:
+                    fixture.close()
+            rendered = _exception_details(caught.exception)
+            self.assertIn("OSError: synthetic trust cleanup failure", rendered)
+            self.assertIn("original cleanup note", rendered)
+            self.assertTrue(fixture.directory.exists())

@@ -21,12 +21,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -532,7 +534,10 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                 Button(
                     onClick = { focus.clearFocus(); controller.connectOrDisconnect() },
                     enabled = controller.canAct(),
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "VPN connection action" },
+                    modifier = Modifier.semantics {
+                        contentDescription = "VPN connection action"
+                        if (!controller.canAct()) disabled()
+                    },
                 ) {
                     if (state.busy || session.state in setOf("PROBING", "PREPARING", "STOPPING")) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -547,7 +552,10 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) { Text(profile.name); Text(profile.protocol, style = MaterialTheme.typography.bodySmall) }
                         Button(onClick = { controller.connectOrDisconnect(profile.index) }, enabled = controller.canAct(profile.index),
-                            modifier = Modifier.semantics { contentDescription = "Profile ${profile.index + 1} action" }) { Text(controller.actionTitle(profile.index)) }
+                            modifier = Modifier.semantics {
+                                contentDescription = "Profile ${profile.index + 1} action"
+                                if (!controller.canAct(profile.index)) disabled()
+                            }) { Text(controller.actionTitle(profile.index)) }
                     }
                 }
             }
@@ -588,7 +596,7 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         Text("Recent logs. Shared diagnostics include the complete files.", style = MaterialTheme.typography.labelSmall)
         AndroidView(
             factory = { LiveLogView(it) },
-            modifier = Modifier.fillMaxWidth().weight(1f),
+            modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
             update = { it.update(state.logs, state.clearRevision, color) },
         )
     }

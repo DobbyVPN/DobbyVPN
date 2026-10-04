@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import sys
 import time
+import traceback
 from typing import Any
 
 from torturer_contract.scenarios import ScenarioStep
@@ -52,12 +53,7 @@ class NativeUIJourneyError(RuntimeError):
 
 
 def _exception_details(error: BaseException) -> str:
-    details = [f"{type(error).__name__}: {error}"]
-    details.extend(
-        f"note: {note}"
-        for note in getattr(error, "__notes__", ())
-    )
-    return "\n".join(details)
+    return "".join(traceback.format_exception(error)).rstrip()
 
 
 _REQUIRED_TRUE_CHECKS = frozenset({
@@ -457,7 +453,15 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             ui.reopen, milestone="reopened",
         )
         checks["reopen_connected"] = True
-        checks["cold_import_native"] = True
+        deadline = time.monotonic() + request_timeout
+        while time.monotonic() < deadline:
+            reopened = base._snapshot(min(30.0, max(0.1, deadline - time.monotonic())), "NATIVE_IMPORT_STATUS_FAILED")
+            if reopened.get("source_url") == url + "?cold=1":
+                checks["cold_import_native"] = True
+                break
+            time.sleep(0.1)
+        if checks.get("cold_import_native") is not True:
+            raise NativeUIJourneyError("Cold import did not automatically load the supplied URL")
         if not connected(args.timeout):
             raise NativeUIJourneyError("base adapter did not observe service continuity after UI reopen")
 

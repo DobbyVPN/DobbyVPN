@@ -351,7 +351,7 @@ class NativeUIController:
         return {"closed": True}
 
     def reopen(self) -> dict:
-        self.start(import_url=self.profile.read_text(encoding="utf-8").strip())
+        self.start(import_url=self.profile.read_text(encoding="utf-8").strip() + "?cold=1")
         return self.wait_status("Connected")
 
     def collect_diagnostics(self) -> None:

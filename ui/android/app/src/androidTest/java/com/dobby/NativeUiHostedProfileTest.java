@@ -336,6 +336,7 @@ public final class NativeUiHostedProfileTest {
                                 consentHandled = connectThroughRenderedUI(
                                         operationTimeout(operation));
                                 assertRenderedSourceRetained(2_000L);
+                                verifySubscriptionControls(command.getString("subscription_url"), operationTimeout(operation));
                                 disconnectThroughRenderedUI(
                                         operationTimeout(operation));
                                 boolean noVpn = awaitVpnNetwork(
@@ -807,6 +808,69 @@ public final class NativeUiHostedProfileTest {
                 remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
         markProgress(operation, "connected-state", "completed");
         return consentNeeded;
+    }
+
+    private void verifySubscriptionControls(String subscriptionURL, long timeout) throws Exception {
+        long deadline = System.currentTimeMillis() + timeout;
+        JSONObject initial = snapshotResult("");
+        int count = initial.getJSONArray("profiles").length();
+        int first = count > 1 && initial.getJSONObject("active_profile").getInt("index") == 0 ? 1 : 0;
+        if (count == 1) disconnectThroughRenderedUI(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        tapEnabledControl("Profile " + (first + 1) + " action", deadline);
+        JSONObject manual = awaitSelection(initial.getLong("generation"), "PROFILE_INDEX", first, deadline);
+        if (count > 1) {
+            int second = first == 0 ? 1 : 0;
+            tapEnabledControl("Profile " + (second + 1) + " action", deadline);
+            manual = awaitSelection(manual.getLong("generation"), "PROFILE_INDEX", second, deadline);
+        }
+        tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForFocusedNativeInput(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT")).setText(
+                subscriptionURL.substring(0, subscriptionURL.lastIndexOf('/')) + "/failure");
+        dismissNativeInputIfVisible();
+        waitForUiControl("Retry", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject failedLoad = snapshotResult("");
+        if (!"CONNECTED".equals(failedLoad.getString("state"))
+                || failedLoad.getLong("generation") != manual.getLong("generation")
+                || !failedLoad.getString("active_digest").equals(manual.getString("active_digest"))) {
+            throw new AssertionError("Failed subscription load interrupted the tunnel");
+        }
+        String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
+        for (int delivery = 0; delivery < 2; delivery++) {
+            String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d '" + link + "' " + context.getPackageName());
+            if (!output.contains("Status: ok")) throw new AssertionError("Import activation failed: " + output);
+        }
+        assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
+        awaitSelection(manual.getLong("generation"), "AUTO_SELECT", -1, deadline);
+        tapUiControl("Clear", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        markProgress("configure", "manual-switch-failed-load-import-clear", "completed");
+    }
+
+    private void tapEnabledControl(String label, long deadline) throws Exception {
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 control = findUiObject(label);
+            if (control != null && control.isEnabled()) {
+                tapUiControl(label, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                return;
+            }
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new AssertionError("Control did not become enabled: " + label);
+    }
+
+    private JSONObject awaitSelection(long previous, String mode, int index, long deadline) throws Exception {
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject value = snapshotResult("");
+            if ("FAILED".equals(value.optString("state"))) throw new AssertionError("Native selection failed: " + value);
+            if ("CONNECTED".equals(value.optString("state")) && value.optLong("generation") > previous
+                    && mode.equals(value.optString("active_mode"))
+                    && (index < 0 || value.getJSONObject("active_profile").getInt("index") == index)) {
+                waitForUiState("Connected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                return value;
+            }
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new AssertionError("Native selection did not reach the requested profile: " + mode + "/" + index);
     }
 
     private void assertRenderedSourceRetained(long timeout) throws Exception {

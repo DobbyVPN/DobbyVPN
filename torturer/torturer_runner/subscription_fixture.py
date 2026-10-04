@@ -12,18 +12,19 @@ import os
 from pathlib import Path
 import shutil
 import ssl
-import subprocess
 import threading
 import uuid
+from urllib.parse import urlsplit
 
 from .diagnostics import emit_streams
+from .process_capture import exception_output, run_finite_capture
 
 
 def command(arguments: list[str]) -> bytes:
     try:
-        result = subprocess.run(arguments, capture_output=True, timeout=30, check=False)
-    except subprocess.TimeoutExpired as error:
-        emit_streams("subscription-fixture", error.stdout, error.stderr)
+        result = run_finite_capture(arguments, timeout_seconds=30)
+    except BaseException as error:
+        emit_streams("subscription-fixture", *exception_output(error))
         raise
     emit_streams("subscription-fixture", result.stdout, result.stderr)
     result.check_returncode()
@@ -67,10 +68,11 @@ class SubscriptionFixture:
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                if self.path == "/failure":
+                path = urlsplit(self.path).path
+                if path == "/failure":
                     self.send_error(503, "Synthetic subscription failure")
                     return
-                if self.path != "/subscription":
+                if path != "/subscription":
                     self.send_error(404)
                     return
                 content = fixture.profile.read_bytes()
@@ -88,7 +90,7 @@ class SubscriptionFixture:
         if self.platform == "macos":
             self.trusted = True
             self._save()
-            command(["sudo", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", str(self.certificate)])
+            command(["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", str(self.certificate)])
         elif self.platform == "windows":
             self.trusted = True
             self._save()
@@ -147,8 +149,9 @@ class SubscriptionFixture:
         cleanup: list[list[str]] = []
         if self.trusted:
             if self.platform == "macos":
-                cleanup = [["sudo", "security", "remove-trusted-cert", "-d", str(self.certificate)],
-                           ["sudo", "security", "delete-certificate", "-Z", self.fingerprint, "/Library/Keychains/System.keychain"]]
+                # Root's -t removes both user and admin trust before the exact certificate.
+                cleanup = [["sudo", "-n", "security", "delete-certificate", "-t", "-Z", self.fingerprint,
+                            "/Library/Keychains/System.keychain"]]
             elif self.platform == "windows":
                 cleanup = [["certutil", "-delstore", "Root", self.fingerprint]]
         if self.android_staged:

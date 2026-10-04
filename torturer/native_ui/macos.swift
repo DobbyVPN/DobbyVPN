@@ -39,6 +39,8 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
         try require(queue.count <= 8192, "Accessibility tree exceeds 8192 elements")
         let element = queue[index]
         index += 1
+        // Log details change during refresh; controls live outside the text view.
+        if try label(element, kAXRoleAttribute) == kAXTextAreaRole { continue }
         let children = try attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
         queue.append(contentsOf: children)
     }
@@ -277,7 +279,7 @@ func run() throws -> [String: Any] {
         }
     } catch {
         if operation == "tree", let readError = error as? AccessibilityReadError,
-           readError.code == .failure || readError.code == .cannotComplete {
+           readError.code == .failure || readError.code == .cannotComplete || readError.code == .invalidUIElement {
             FileHandle.standardError.write(Data("\(readError) during tree discovery; retrying\n".utf8))
             return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity]
         }
