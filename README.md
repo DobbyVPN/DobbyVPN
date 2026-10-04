@@ -9,25 +9,11 @@ Change Date is October 1, 2030, and the Change License is Apache 2.0; see the
 license for the conversion terms. [Third-party notices](THIRD_PARTY_NOTICES)
 identify components that retain their own licenses.
 
-## Architecture
+## Using DobbyVPN
 
-Every supported platform uses the same Go backend for configuration loading and
-validation, profile selection, VPN session state, protocol runtimes, recovery,
-routing, cleanup, and diagnostics.
-
-The visible frontends are native to each supported UI platform:
-
-- SwiftUI on macOS and iOS.
-- Kotlin and Jetpack Compose on Android.
-- WinUI 3 and C# on Windows.
-- Linux has the Go backend and CLI; a Linux GUI is outside the current scope.
-
-The mobile frontends call the shared Go session API through their platform
-bridge. The macOS and Windows frontends control the installed Go backend
-through a local JSON endpoint: a Unix domain socket on macOS and a fixed named
-pipe on Windows. The Go backend runs as a launchd daemon on macOS, a Windows
-Service on Windows, and a systemd service on Linux. The operator CLI talks
-directly to the backend and is not launched once per frontend action.
+DobbyVPN has native apps for Windows, macOS, Android and iOS. Linux uses the
+command-line interface. Desktop installations include a background VPN service
+and the `dobby-cli` command.
 
 Enter or paste an HTTPS subscription URL to load its profiles automatically.
 Choose **Auto connect** to try profiles in subscription order, or **Connect**
@@ -59,11 +45,6 @@ and its saved view boundary. Each independently owned log keeps a current and pr
 generation, rotating after 150 MB while preserving complete records. Product
 logs and exports remain unsanitized.
 
-The product Go toolchain is pinned in .go-version. The private owner Harness
-runs local checks against disposable guests. Release qualifies the packages it
-builds. Publication is a separate manual step and requires an explicit owner
-request.
-
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
 Android: [Add the DobbyVPN repository to F-Droid](https://fdroid.link/#https://f-repo.dobbyvpn.com/fdroid/repo?fingerprint=F22F23E62C095BEED3A71C4B0D69C7F3A768E52DFE6A83AAF6A2E6AB9E2FEDC4).
@@ -87,8 +68,8 @@ updates remain available through the usual channels.
 
 DeepWiki: https://deepwiki.com/DobbyVPN/DobbyVPN
 
-Use TOML configuration inline or fetch it from an HTTPS subscription URL. HTTP
-URLs are rejected, redirects must remain HTTPS, and downloaded or inline
+Subscriptions use TOML. The CLI also accepts TOML files and inline configuration.
+HTTP URLs are rejected, redirects must remain HTTPS, and downloaded or inline
 configuration is limited to 1 MiB. Add each connection variant in an ordered
 `[[Outline]]`, `[[Xray]]`, or `[[TrustTunnel]]` section. The optional root
 `[ExcludeIPs]` section bypasses the VPN for the destinations in its `IPs` list.
@@ -136,16 +117,14 @@ address = "127.0.0.1:10808"
 IPs = ["200.200.200.200/32"]
 ```
 
-DobbyVPN starts configured variants in order and keeps the first one whose
-tunnel becomes ready. It does not tear down and recreate that working tunnel.
-Automatic selection is the GUI behavior. On desktop,
+**Auto connect** tries configured variants in order and keeps the first one whose
+tunnel becomes ready. Selecting a profile explicitly uses only that profile,
+including during recovery. On desktop,
 `dobby-cli configure <file-or-https-url>` accepts a TOML file or HTTPS
 subscription URL and returns the ordered backend profile inventory as JSON.
 `dobby-cli start --profile <index> --session-id <id> --config-digest <digest>`
 starts one accepted profile; `stop --session-id <id> --generation <number>`
-ends that generation. Session commands always emit JSON. This operator/test
-mode skips automatic selection and does not switch to another profile after a
-health failure.
+ends that generation. Session commands always emit JSON.
 
 After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs
