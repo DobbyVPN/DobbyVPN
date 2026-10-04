@@ -262,7 +262,24 @@ private class SessionController(private val activity: MainActivity) {
         }
     }
 
-    fun permissionResult(granted: Boolean) = continuePermission(granted)
+    fun permissionResult(granted: Boolean) {
+        if (permissionTarget == null) return
+        if (!granted) { continuePermission(false); return }
+        state = state.copy(busy = true, error = "")
+        // Granting consent only authorizes VpnService. Prepare again off the UI
+        // thread to start it and wait for attachment before Go acquires a TUN.
+        worker.execute {
+            val ready = NativeVpnBridge.prepare(activity)
+            main.post {
+                if (permissionTarget == null) return@post
+                if (ready == 1) continuePermission(true)
+                else {
+                    permissionTarget = null
+                    report("Android VPN service could not be prepared after permission approval")
+                }
+            }
+        }
+    }
 
     private fun continuePermission(granted: Boolean) {
         val target = permissionTarget ?: return
