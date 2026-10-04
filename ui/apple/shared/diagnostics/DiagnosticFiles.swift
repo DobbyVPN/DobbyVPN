@@ -231,6 +231,12 @@ public enum DiagnosticFiles {
                             } else { return }
                         }
                     }
+                    // The producer may still be writing the final UTF-8 character.
+                    if let lead = data.lastIndex(where: { $0 & 0xC0 != 0x80 }) {
+                        let byte = data[lead]
+                        let expected = byte >= 0xF0 && byte <= 0xF4 ? 4 : byte >= 0xE0 && byte <= 0xEF ? 3 : byte >= 0xC2 && byte <= 0xDF ? 2 : 1
+                        if data.distance(from: lead, to: data.endIndex) < expected { data.removeSubrange(lead...) }
+                    }
                     let stream = friendlyStream(input.path.lastPathComponent)
                     let lines = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
                     for (index, line) in lines.enumerated() {

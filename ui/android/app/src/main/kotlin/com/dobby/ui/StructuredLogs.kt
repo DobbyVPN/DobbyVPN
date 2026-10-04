@@ -54,7 +54,12 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
                         }
                     }
                     val stream = friendlyStream(File(path).name)
-                    val lines = bytes.toString(Charsets.UTF_8).split('\n')
+                    val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+                    val characters = java.nio.CharBuffer.allocate(bytes.size)
+                    // A writer may be between bytes of the final UTF-8 character.
+                    decoder.decode(java.nio.ByteBuffer.wrap(bytes), characters, false)
+                    characters.flip()
+                    val lines = characters.toString().split('\n')
                     lines.forEachIndexed { index, raw ->
                         val entryId = "$id:$position"
                         position += raw.toByteArray(Charsets.UTF_8).size + 1

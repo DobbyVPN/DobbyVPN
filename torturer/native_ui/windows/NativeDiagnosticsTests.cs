@@ -122,6 +122,10 @@ internal static class NativeDiagnosticsTests
             parsed = await view.EntriesAsync();
             Require(parsed.Error == "" && parsed.Entries.Select(e => e.Message).SequenceEqual(new[] { "new after rotation" }), "Clear did not survive rotation/restart or partial boundary");
             Require(File.ReadAllText(structured + ".previous").StartsWith(later), "Clear modified retained bytes");
+            File.WriteAllBytes(structured, Encoding.UTF8.GetBytes("partial ").Concat(new byte[] { 0xCE }).ToArray());
+            Require((await view.EntriesAsync()).Entries.Single().Message == "partial ", "Incomplete UTF-8 fabricated text");
+            File.WriteAllText(structured, "partial λ\n");
+            Require((await view.EntriesAsync()).Entries.Single().Message == "partial λ", "Completed UTF-8 was lost");
             Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, input protection, and failure cleanup passed");
         }
         finally { Directory.Delete(directory, recursive: true); }

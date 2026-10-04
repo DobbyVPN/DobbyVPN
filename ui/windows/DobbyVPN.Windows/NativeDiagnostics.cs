@@ -161,7 +161,10 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
                 }
                 var name = Path.GetFileName(path);
                 var stream = name.Contains("stderr") ? "Backend stderr" : name.Contains("ui") ? "App" : "Backend";
-                var lines = Encoding.UTF8.GetString(bytes).Split('\n');
+                var characters = new char[bytes.Length];
+                // Keep an incomplete final UTF-8 character pending until the next read.
+                var length = Encoding.UTF8.GetDecoder().GetChars(bytes, 0, bytes.Length, characters, 0, flush: false);
+                var lines = new string(characters, 0, length).Split('\n');
                 for (var index = 0; index < lines.Length; index++)
                 {
                     var raw = lines[index];

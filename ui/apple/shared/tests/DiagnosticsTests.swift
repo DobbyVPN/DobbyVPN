@@ -219,6 +219,10 @@ extension DiagnosticsTests {
         let cleared = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
         XCTAssertTrue(cleared.error.isEmpty)
         XCTAssertEqual(cleared.entries.map(\.message), ["new event"])
+        try (Data("partial ".utf8) + Data([0xCE])).write(to: backend)
+        XCTAssertEqual(DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary).entries.map(\.message), ["partial "])
+        try Data("partial λ\n".utf8).write(to: backend)
+        XCTAssertEqual(DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary).entries.map(\.message), ["partial λ"])
         XCTAssertEqual(try String(contentsOf: stderr, encoding: .utf8), early + "\nraw stack\n  frame\n")
     }
 }

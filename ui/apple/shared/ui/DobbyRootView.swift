@@ -181,7 +181,7 @@ public struct DobbyRootView: View {
                 Text(model.actionTitle())
             }
 #if os(iOS)
-            .frame(maxWidth: .infinity, minHeight: 30)
+            .frame(minHeight: 30)
 #endif
         }
         .buttonStyle(.borderedProminent)
