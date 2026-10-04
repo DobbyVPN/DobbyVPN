@@ -212,6 +212,8 @@ public final class NativeUiHostedProfileTest {
     private final JSONArray commandOutputDiagnostics = new JSONArray();
     private final JSONArray consentDiagnosticFailures = new JSONArray();
     private String expectedRenderedSource = "";
+    private String launchSubscriptionURL = "";
+    private boolean coldImportStarted;
     private final File screenshotDirectory = new File(
             // Instrumentation executes in the target application's UID. The
             // instrumentation APK's cache is a different sandbox and is not
@@ -296,6 +298,7 @@ public final class NativeUiHostedProfileTest {
         markProgress("command", "start", "started");
         boolean guiAuto = GUI_AUTO_MODE.equals(command.optString(
                 "ui_mode", command.optString("coverage_lane", "")));
+        launchSubscriptionURL = guiAuto ? command.getString("subscription_url") : "";
         if (guiAuto && command.has("profile_index")) {
             throw new IllegalArgumentException("ANDROID_GUI_AUTO_PROFILE_INDEX_FORBIDDEN");
         }
@@ -675,6 +678,16 @@ public final class NativeUiHostedProfileTest {
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         foregroundActivity = ensureForegroundActivity();
         markProgress("configure", "surface", "completed");
+        if (coldImportStarted) {
+            expectedRenderedSource = subscriptionURL;
+            waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+            assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+            if (!"IDLE".equals(snapshotResult("").getString("state"))) {
+                throw new AssertionError("Cold import started a connection without a user action");
+            }
+            coldImportStarted = false;
+            markProgress("configure", "cold-import-loaded", "completed");
+        }
         markProgress("configure", "configuration-control", "started");
         tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         UiObject2 input = waitForFocusedNativeInput(
@@ -1422,6 +1435,12 @@ public final class NativeUiHostedProfileTest {
         Intent launch = context.getPackageManager()
                 .getLaunchIntentForPackage(context.getPackageName());
         if (launch == null) throw new IllegalStateException("ANDROID_LAUNCH_ACTIVITY_MISSING");
+        if (!launchSubscriptionURL.isEmpty()) {
+            launch = new Intent(Intent.ACTION_VIEW, new Uri.Builder().scheme("dobbyvpn")
+                    .authority("import").appendQueryParameter("url", launchSubscriptionURL).build())
+                    .setPackage(context.getPackageName());
+            coldImportStarted = true;
+        }
         // The controller may have launched the production app immediately
         // before --no-restart instrumentation. That Activity was resumed
         // before AndroidX's lifecycle monitor was installed, so it may not be
@@ -1430,10 +1449,11 @@ public final class NativeUiHostedProfileTest {
         // monitor both get a chance to observe the resumed screen.
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Intent selectedLaunch = launch;
         try {
             // Schedule only the launch call, then observe the real resumed
             // Activity through the lifecycle monitor.
-            instrumentation.runOnMainSync(() -> context.startActivity(launch));
+            instrumentation.runOnMainSync(() -> context.startActivity(selectedLaunch));
         } catch (RuntimeException error) {
             throw new IllegalStateException("ANDROID_LAUNCH_ACTIVITY_FAILED", error);
         }
