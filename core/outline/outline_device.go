@@ -96,6 +96,7 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 	username, password := auth.GenerateRandomAuth(), auth.GenerateRandomAuth()
 	server := socks5.NewServer(
 		socks5.WithGPool(od),
+		socks5.WithResolver(od),
 		socks5.WithCredential(socks5.StaticCredentials{username: password}),
 		socks5.WithDial(od.handleDial),
 		socks5.WithLogger(socksLogger{device: od}),

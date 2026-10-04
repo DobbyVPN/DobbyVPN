@@ -89,6 +89,28 @@ func (d *OutlineDevice) dialContext(parent context.Context) (operation context.C
 	return ctx, func() { stop(); cancel() }
 }
 
+// Resolve keeps SOCKS hostname lookups under the same owner as dialing. The
+// upstream default uses net.ResolveIPAddr with a background context, which can
+// leave Close waiting for DNS workers after the tunnel has already stopped.
+func (d *OutlineDevice) Resolve(parent context.Context, name string) (context.Context, net.IP, error) {
+	ctx, cancel := d.dialContext(parent)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, name)
+	if err != nil {
+		return parent, nil, err
+	}
+	// Preserve ResolveIPAddr's preference for IPv4 when resolving a hostname.
+	for _, address := range addresses {
+		if address.IP.To4() != nil {
+			return parent, address.IP, nil
+		}
+	}
+	if len(addresses) == 0 {
+		return parent, nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	return parent, addresses[0].IP, nil
+}
+
 func (d *OutlineDevice) Close() error {
 	if d == nil {
 		return errors.New("outline device is not initialized")

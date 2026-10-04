@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,72 @@ import (
 	"golang.getoutline.org/sdk/transport"
 	"golang.org/x/net/proxy"
 )
+
+func TestCloseCancelsPendingSOCKSResolution(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	previous := net.DefaultResolver
+	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		once.Do(func() { close(started) })
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+			return nil, net.ErrClosed
+		}
+	}}
+	defer func() { net.DefaultResolver = previous }()
+	device, err := NewOutlineDevice("ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTp0ZXN0@127.0.0.1:443", dnscache.New())
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	defer device.Close()
+	defer close(release)
+	endpoint, err := url.Parse("socks5://" + device.GetProxyAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := endpoint.User.Password()
+	dialer, err := proxy.SOCKS5("tcp", endpoint.Host, &proxy.Auth{User: endpoint.User.Username(), Password: password}, &net.Dialer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dialDone := make(chan error, 1)
+	go func() {
+		conn, dialErr := dialer.(proxy.ContextDialer).DialContext(ctx, "tcp", "pending.example.invalid:443")
+		if conn != nil {
+			_ = conn.Close()
+		}
+		dialDone <- dialErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("SOCKS request did not reach DNS resolution")
+	}
+	done := make(chan error, 1)
+	go func() { done <- device.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for DNS after stopping the tunnel")
+	}
+	select {
+	case err := <-dialDone:
+		if err == nil {
+			t.Fatal("pending SOCKS request succeeded after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SOCKS request survived Close")
+	}
+}
 
 type localStreamDialer struct{}
 
