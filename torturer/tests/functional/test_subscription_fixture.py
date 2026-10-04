@@ -66,7 +66,7 @@ class SubscriptionFixtureTests(unittest.TestCase):
             self.assertIn("original cleanup note", rendered)
             self.assertTrue(fixture.directory.exists())
 
-    def test_interrupted_macos_trust_restores_original_authorization_on_failure(self):
+    def test_interrupted_macos_cleanup_removes_exact_certificate_and_trust(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             fixture = SubscriptionFixture(root / 'unused', root / 'fixture', 'macos')
@@ -74,11 +74,9 @@ class SubscriptionFixtureTests(unittest.TestCase):
             fixture.trusted = True
             fixture.fingerprint = 'synthetic fingerprint'
             fixture._save()
-            original = b'<plist>original authorization</plist>'
-            fixture.authorization.write_bytes(original)
-            with patch('torturer_runner.subscription_fixture.command', side_effect=[b'', OSError('delete failed'), b'']) as command:
-                with self.assertRaises(ExceptionGroup):
-                    SubscriptionFixture.cleanup_interrupted(fixture.directory)
-                self.assertEqual(command.call_args.kwargs, {'input_bytes': original})
-                self.assertIn('authorizationdb', command.call_args.args[0])
-            self.assertFalse(fixture.authorization.exists())
+            with patch('torturer_runner.subscription_fixture.command') as command:
+                SubscriptionFixture.cleanup_interrupted(fixture.directory)
+                command.assert_called_once_with([
+                    'sudo', '-n', 'security', 'delete-certificate', '-t', '-Z',
+                    'synthetic fingerprint', '/Library/Keychains/System.keychain'])
+            self.assertFalse(fixture.directory.exists())

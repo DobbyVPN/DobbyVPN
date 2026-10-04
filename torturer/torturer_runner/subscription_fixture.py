@@ -44,7 +44,6 @@ class SubscriptionFixture:
         self.port = 0
         self.certificate = directory / "ca.pem"
         self.key = directory / "key.pem"
-        self.authorization = directory / "trust-authorization.plist"
         self.fingerprint = ""
         self.android_directory = "/data/local/tmp/dobbyvpn-subscription-" + uuid.uuid4().hex
 
@@ -83,7 +82,7 @@ class SubscriptionFixture:
         if self.platform == "macos":
             self.trusted = True
             self._save()
-            self._mac_trust_command(["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", str(self.certificate)])
+            command(["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "/Library/Keychains/System.keychain", str(self.certificate)])
         elif self.platform == "windows":
             self.trusted = True
             self._save()
@@ -123,23 +122,6 @@ class SubscriptionFixture:
         )
         command([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(self.key),
                  "-out", str(self.certificate), "-days", "1", "-config", str(certificate_config)])
-
-    def _mac_trust_command(self, arguments: list[str]) -> None:
-        # Current macOS requires interactive admin authentication even as root.
-        # The VM lock owns this temporary permission; retain the original on interruption.
-        if not self.authorization.exists():
-            self.authorization.write_bytes(command(["sudo", "-n", "security", "authorizationdb", "read", "com.apple.trust-settings.admin"]))
-        try:
-            command(["sudo", "-n", "security", "authorizationdb", "write", "com.apple.trust-settings.admin", "allow"])
-            command(arguments)
-        finally:
-            self._restore_authorization()
-
-    def _restore_authorization(self) -> None:
-        if self.authorization.exists():
-            command(["sudo", "-n", "security", "authorizationdb", "write", "com.apple.trust-settings.admin"],
-                    input_bytes=self.authorization.read_bytes())
-            self.authorization.unlink()
 
     def _save(self) -> None:
         (self.directory / "trust.json").write_text(json.dumps({
@@ -193,16 +175,9 @@ class SubscriptionFixture:
             cleanup.append([*self.adb, "reverse", "--remove", f"tcp:{self.port}"])
         for arguments in cleanup:
             try:
-                if self.platform == "macos":
-                    self._mac_trust_command(arguments)
-                else:
-                    command(arguments)
+                command(arguments)
             except BaseException as error:
                 errors.append(error)
-        try:
-            self._restore_authorization()
-        except BaseException as error:
-            errors.append(error)
         if not errors and self.directory.exists():
             shutil.rmtree(self.directory)
         if errors:
