@@ -7,7 +7,8 @@
     <application
         android:name="com.dobby.DobbyApplication"
         android:allowBackup="false"
-        android:icon="@drawable/dobby_logo"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@style/Theme.Dobby"
         android:usesCleartextTraffic="false">
