@@ -1968,7 +1968,8 @@ public final class NativeUiHostedProfileTest {
             if (capabilities == null
                     || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                     || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                    ^ capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) continue;
+                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))) continue;
             if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                     && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
                 return network;
