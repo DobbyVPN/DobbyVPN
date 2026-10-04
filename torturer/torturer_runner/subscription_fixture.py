@@ -10,13 +10,28 @@ import json
 import http.server
 from pathlib import Path
 import shutil
+import secrets
+import socket
+import socketserver
 import ssl
+import tempfile
 import threading
 import uuid
 from urllib.parse import urlsplit
 
 from .diagnostics import emit_streams
 from .process_capture import exception_output, run_finite_capture
+
+
+class UnixHTTPServer(http.server.ThreadingHTTPServer):
+    """ADB can reach a filesystem socket across runner network namespaces."""
+
+    address_family = socket.AF_UNIX
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = 0
 
 
 def command(arguments: list[str], *, input_bytes: bytes | None = None) -> bytes:
@@ -42,6 +57,7 @@ class SubscriptionFixture:
         self.android_staged = False
         self.url = ""
         self.port = 0
+        self.socket_path = ""
         self.certificate = directory / "ca.pem"
         self.key = directory / "key.pem"
         self.fingerprint = ""
@@ -59,6 +75,9 @@ class SubscriptionFixture:
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            def address_string(self):
+                return "localhost"
+
             def do_GET(self):
                 path = urlsplit(self.path).path
                 if path == "/failure":
@@ -74,11 +93,18 @@ class SubscriptionFixture:
                 self.end_headers()
                 self.wfile.write(content)
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        if self.platform == "android":
+            # Keep this below AF_UNIX's path limit even in a long run directory.
+            self.socket_path = str(Path(tempfile.gettempdir()) / ("dobbyvpn-subscription-" + uuid.uuid4().hex + ".sock"))
+            self._save()
+            self.server = UnixHTTPServer(self.socket_path, Handler)
+            self.port = 49152 + secrets.randbelow(16384)
+        else:
+            self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            self.port = self.server.server_port
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(self.certificate, self.key)
         self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
-        self.port = self.server.server_port
         if self.platform == "macos":
             self.trusted = True
             self._save()
@@ -100,7 +126,7 @@ class SubscriptionFixture:
             command([*self.adb, "shell", "mount", "--bind", self.android_directory, "/system/etc/security/cacerts"])
             self.forwarded = True
             self._save()
-            command([*self.adb, "reverse", f"tcp:{self.port}", f"tcp:{self.port}"])
+            command([*self.adb, "reverse", "--no-rebind", f"tcp:{self.port}", f"localfilesystem:{self.socket_path}"])
         elif self.platform != "untrusted":
             raise ValueError("Unsupported subscription fixture trust target")
         self.trusted = self.platform != "untrusted"
@@ -128,6 +154,7 @@ class SubscriptionFixture:
             "platform": self.platform, "adb": self.adb, "fingerprint": self.fingerprint,
             "trusted": self.trusted, "forwarded": self.forwarded, "port": self.port,
             "android_directory": self.android_directory, "android_staged": self.android_staged,
+            "socket_path": self.socket_path,
         }), encoding="utf-8")
 
     @classmethod
@@ -143,6 +170,7 @@ class SubscriptionFixture:
         fixture.port = state["port"]
         fixture.android_directory = state["android_directory"]
         fixture.android_staged = state["android_staged"]
+        fixture.socket_path = state.get("socket_path", "")
         fixture.close()
 
     def close(self) -> None:
@@ -172,10 +200,21 @@ class SubscriptionFixture:
             except BaseException as error:
                 errors.append(error)
         if self.forwarded:
-            cleanup.append([*self.adb, "reverse", "--remove", f"tcp:{self.port}"])
+            try:
+                mappings = command([*self.adb, "reverse", "--list"]).decode().splitlines()
+                target = [f"tcp:{self.port}", f"localfilesystem:{self.socket_path}"]
+                if any(line.split()[-2:] == target for line in mappings):
+                    cleanup.append([*self.adb, "reverse", "--remove", f"tcp:{self.port}"])
+            except BaseException as error:
+                errors.append(error)
         for arguments in cleanup:
             try:
                 command(arguments)
+            except BaseException as error:
+                errors.append(error)
+        if self.socket_path:
+            try:
+                Path(self.socket_path).unlink(missing_ok=True)
             except BaseException as error:
                 errors.append(error)
         if not errors and self.directory.exists():

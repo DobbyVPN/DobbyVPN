@@ -1,5 +1,6 @@
 """Exercise the disposable server without installing runner trust locally."""
 import ssl
+import socket
 import tempfile
 import unittest
 import urllib.error
@@ -11,6 +12,40 @@ from torturer_runner.subscription_fixture import SubscriptionFixture
 
 
 class SubscriptionFixtureTests(unittest.TestCase):
+    def test_android_tls_over_filesystem_socket_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            profile = root / 'profile'
+            profile.write_bytes(b'synthetic profile\n')
+            fixture = SubscriptionFixture(profile, root / 'fixture', 'android')
+            from torturer_runner.subscription_fixture import command as real_command
+
+            def command(arguments, **kwargs):
+                if arguments[0] != 'adb':
+                    return real_command(arguments, **kwargs)
+                if arguments[1:] == ['reverse', '--list']:
+                    return f'device tcp:{fixture.port} localfilesystem:{fixture.socket_path}\n'.encode()
+                if 'stat' in arguments:
+                    return b'7:101'
+                return b''
+
+            with patch('torturer_runner.subscription_fixture.command', side_effect=command) as calls:
+                try:
+                    fixture.start()
+                    context = ssl.create_default_context(cafile=str(fixture.certificate))
+                    with socket.socket(socket.AF_UNIX) as connection:
+                        connection.connect(fixture.socket_path)
+                        with context.wrap_socket(connection, server_hostname='127.0.0.1') as secured:
+                            secured.sendall(b'GET /subscription HTTP/1.0\r\nHost: localhost\r\n\r\n')
+                            with secured.makefile('rb') as response:
+                                self.assertTrue(response.read().endswith(profile.read_bytes()))
+                finally:
+                    fixture.close()
+                calls.assert_any_call(['adb', 'reverse', '--no-rebind', f'tcp:{fixture.port}', f'localfilesystem:{fixture.socket_path}'])
+                calls.assert_any_call(['adb', 'reverse', '--remove', f'tcp:{fixture.port}'])
+            self.assertFalse(Path(fixture.socket_path).exists())
+            self.assertFalse(fixture.directory.exists())
+
     def test_tls_payload_failure_and_disposal(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
