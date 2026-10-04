@@ -849,6 +849,7 @@ public final class NativeUiHostedProfileTest {
     private void tapEnabledControl(String label, long deadline) throws Exception {
         while (System.currentTimeMillis() < deadline) {
             UiObject2 control = findUiObject(label);
+            while (control != null && !control.isClickable()) control = control.getParent();
             if (control != null && control.isEnabled()) {
                 tapUiControl(label, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
                 return;

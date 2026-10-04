@@ -362,18 +362,10 @@ class NativeUiInstrumentedTest {
     }
 
     private fun assertConnectionDisabled(message: String) {
-        val labeled = requireObject(connectionActionLabel)
-        val nodes = java.util.ArrayDeque<UiObject2>()
-        nodes.add(labeled)
-        var button: UiObject2? = null
-        while (nodes.isNotEmpty() && button == null) {
-            val node = nodes.removeFirst()
-            if (node.className == "android.widget.Button") button = node else nodes.addAll(node.children)
-        }
-        var ancestor = labeled.parent
-        while (button == null && ancestor != null) {
-            if (ancestor.className == "android.widget.Button") button = ancestor else ancestor = ancestor.parent
-        }
+        // Compose's unmerged tree puts the label and Button role below the
+        // clickable node; only that action owner carries the enabled state.
+        var button: UiObject2? = requireObject(connectionActionLabel)
+        while (button != null && !button.isClickable) button = button.parent
         if (button == null || button.isEnabled) {
             val hierarchy = java.io.ByteArrayOutputStream()
             device.dumpWindowHierarchy(hierarchy)

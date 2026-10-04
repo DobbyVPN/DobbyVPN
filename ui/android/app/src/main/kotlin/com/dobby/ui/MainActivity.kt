@@ -28,7 +28,6 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -536,7 +535,6 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     enabled = controller.canAct(),
                     modifier = Modifier.semantics {
                         contentDescription = "VPN connection action"
-                        if (!controller.canAct()) disabled()
                     },
                 ) {
                     if (state.busy || session.state in setOf("PROBING", "PREPARING", "STOPPING")) {
@@ -554,7 +552,6 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                         Button(onClick = { controller.connectOrDisconnect(profile.index) }, enabled = controller.canAct(profile.index),
                             modifier = Modifier.semantics {
                                 contentDescription = "Profile ${profile.index + 1} action"
-                                if (!controller.canAct(profile.index)) disabled()
                             }) { Text(controller.actionTitle(profile.index)) }
                     }
                 }
