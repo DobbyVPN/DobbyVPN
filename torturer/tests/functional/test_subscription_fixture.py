@@ -84,6 +84,20 @@ class SubscriptionFixtureTests(unittest.TestCase):
                     self.assertEqual(expect_unmount, unmounted)
                 self.assertFalse(fixture.directory.exists())
 
+    def test_interrupted_android_reverse_preserves_another_listener(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            fixture = SubscriptionFixture(root / 'unused', root / 'fixture', 'android')
+            fixture.directory.mkdir()
+            fixture.forwarded = True
+            fixture.port = 50001
+            fixture.socket_path = str(root / 'owned.sock')
+            fixture._save()
+            with patch('torturer_runner.subscription_fixture.command', return_value=b'device tcp:50001 tcp:9000\n') as command:
+                SubscriptionFixture.cleanup_interrupted(fixture.directory)
+                command.assert_called_once_with(['adb', 'reverse', '--list'])
+            self.assertFalse(fixture.directory.exists())
+
     def test_cleanup_group_preserves_each_original_failure(self):
         from torturer_runner.ui.journey import _exception_details
         with tempfile.TemporaryDirectory() as scratch:
