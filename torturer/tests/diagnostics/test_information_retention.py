@@ -258,6 +258,8 @@ class InformationRetentionTests(unittest.TestCase):
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
                 mock.patch.object(native_ui, "smoke", smoke),
+                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value={name: True for name in ("manual_selection_native", "profile_switch_native", "failed_load_preserves_tunnel", "warm_import_native", "clear_logs_native")}),
+                mock.patch("torturer_runner.subscription_fixture.SubscriptionFixture", return_value=mock.Mock(directory=args.profile.parent, start=mock.Mock(return_value="https://127.0.0.1:12345/subscription"))),
             ):
                 with self.assertRaises(native_ui.NativeUIJourneyError) as caught:
                     native_ui.run_journey(args)
@@ -385,6 +387,8 @@ class InformationRetentionTests(unittest.TestCase):
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
                 mock.patch.object(native_ui, "smoke", smoke),
+                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value={name: True for name in ("manual_selection_native", "profile_switch_native", "failed_load_preserves_tunnel", "warm_import_native", "clear_logs_native")}),
+                mock.patch("torturer_runner.subscription_fixture.SubscriptionFixture", return_value=mock.Mock(directory=args.profile.parent, start=mock.Mock(return_value="https://127.0.0.1:12345/subscription"))),
             ):
                 result = native_ui.run_journey(args)
 

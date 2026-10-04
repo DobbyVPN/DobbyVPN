@@ -225,15 +225,45 @@ class NativeUIController:
         labels = value.get("labels", [])
         status = next((name for name in ("Connected", "Connecting", "Reconnecting", "Disconnected", "Stopping", "Failed", "Error") if name in labels), "Unknown")
         self.reconnecting_seen |= status == "Reconnecting"
-        return {"status": status, "labels": labels, "reconnecting_seen": self.reconnecting_seen}
+        return {"status": status, "labels": labels, "enabled_controls": value.get("enabled_controls", []), "reconnecting_seen": self.reconnecting_seen}
 
     def configure(self) -> dict:
-        if "Use configuration text…" in self.snapshot()["labels"]:
-            self._click("Use configuration text…")
         result = self._call("type", source=str(self.profile))
         if result.get("ready") is not True:
             raise NativeUISmokeError("configuration input is unavailable")
+        self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "subscription profiles did not load automatically")
         return {"input_verified": True, **self.snapshot()}
+
+    def select_profile(self, index: int) -> dict:
+        self._click(f"Profile {index + 1} action")
+        return self.wait_status("Connected")
+
+    def failing_subscription(self, url: str) -> dict:
+        original = self.profile.read_bytes()
+        try:
+            self.profile.write_text(url, encoding="utf-8")
+            result = self._call("type", source=str(self.profile))
+            if result.get("ready") is not True:
+                raise NativeUISmokeError("subscription input is unavailable")
+            self._wait(lambda: "Retry" in self.snapshot()["labels"], "failed subscription did not expose Retry")
+            return self.snapshot()
+        finally:
+            self.profile.write_bytes(original)
+
+    def import_link(self, url: str) -> dict:
+        from urllib.parse import quote
+        link = "dobbyvpn://import?url=" + quote(url, safe="")
+        command = ["open", link] if self.platform == "macos" else [str(self.binary), link]
+        result = _native_run(command, timeout_seconds=self.timeout)
+        if result.returncode:
+            raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+        self._wait(lambda: "Retry" not in self.snapshot()["labels"], "import did not replace failed subscription")
+        self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "imported profiles are unavailable")
+        return self.snapshot()
+
+    def clear_logs(self) -> dict:
+        self._click("Clear")
+        return self.snapshot()
 
     def wait_status(self, expected: str, *, allow_errors: bool = False) -> dict:
         state = {}
@@ -247,6 +277,7 @@ class NativeUIController:
         return state
 
     def _click(self, name: str) -> None:
+        self._wait(lambda: name in self.snapshot()["enabled_controls"], f"native control did not become enabled: {name}")
         if self._call("click", target=name).get("ready") is not True:
             raise NativeUISmokeError(f"native control unavailable: {name}")
 
@@ -261,7 +292,7 @@ class NativeUIController:
     def recover_after_process_loss(self) -> dict:
         self.reconnecting_seen = False
         self.wait_status("Disconnected", allow_errors=True)
-        self._wait(lambda: "Connect" in self.snapshot()["labels"], "replacement service did not expose Connect")
+        self._wait(lambda: "Auto connect" in self.snapshot()["labels"], "replacement service did not expose Connect")
         self.configure()
         return self.connect()
 

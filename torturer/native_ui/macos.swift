@@ -272,7 +272,8 @@ func run() throws -> [String: Any] {
         nodes = try elements(window)
         if operation == "tree" {
             let labels = try nodes.flatMap(names)
-            return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": labels]
+            let enabled = try nodes.filter { (try attribute($0, kAXEnabledAttribute)) as? Bool == true }.flatMap(names)
+            return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": labels, "enabled_controls": enabled]
         }
     } catch {
         if operation == "tree", let readError = error as? AccessibilityReadError,

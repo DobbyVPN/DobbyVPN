@@ -240,9 +240,11 @@ internal static class Program
             if (operation == "tree")
             {
                 string[] labels;
+                string[] enabled_controls;
                 try
                 {
                     var elements = Walk(root).Where(e => !e.Current.IsOffscreen).ToList();
+                    enabled_controls = elements.Where(e => e.Current.IsEnabled).SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray();
                     labels = elements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
                         .Where(s => s.Length > 0).Distinct().ToArray();
                 }
@@ -256,7 +258,7 @@ internal static class Program
                     return 0;
                 }
                 Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true, pid = process.Id, identity, labels
+                    ready = true, pid = process.Id, identity, labels, enabled_controls
                 }));
                 return 0;
             }

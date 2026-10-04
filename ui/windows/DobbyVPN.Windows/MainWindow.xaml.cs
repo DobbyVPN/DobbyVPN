@@ -203,7 +203,7 @@ public sealed partial class MainWindow : Window
     }
 
     private bool CanAct(int? index) => !_busy && _snapshot is { } s &&
-        (IsStopTarget(index) || (!_sourceDirty && !_loading && _loadError.Length == 0 && s.Configured && (s.PrimaryAction == "START" || s.CanSwitch)));
+        (IsStopTarget(index) || (!_sourceDirty && !_loading && _loadError.Length == 0 && s.Sequence >= _acceptedSequence && s.Configured && (s.PrimaryAction == "START" || s.CanSwitch)));
 
     private string ActionTitle(int? index) => IsStopTarget(index)
         ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")

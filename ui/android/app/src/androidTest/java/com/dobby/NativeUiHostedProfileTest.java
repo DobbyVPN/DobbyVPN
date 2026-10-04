@@ -323,7 +323,7 @@ public final class NativeUiHostedProfileTest {
                 switch (name) {
                     case "configure": {
                         if (guiAuto) {
-                            configureThroughRenderedUI(profile, operationTimeout(operation));
+                            configureThroughRenderedUI(command.getString("subscription_url"), operationTimeout(operation));
                             // The one-step configure scenario must prove that
                             // the rendered profile was accepted by Go.  A
                             // later connect/reconnect owns that visible start
@@ -668,23 +668,19 @@ public final class NativeUiHostedProfileTest {
      * UiAutomator supplies the text through the visible control; Connect
      * still calls the production Go binding.
      */
-    private void configureThroughRenderedUI(byte[] profile, long timeout) throws Exception {
+    private void configureThroughRenderedUI(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         markProgress("configure", "surface", "started");
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         foregroundActivity = ensureForegroundActivity();
         markProgress("configure", "surface", "completed");
         markProgress("configure", "configuration-control", "started");
-        if (findUiObject("Use configuration text…") != null) {
-            tapUiControl("Use configuration text…", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
-        }
-        tapUiControl("Configuration text",
-                remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+        tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         UiObject2 input = waitForFocusedNativeInput(
                 remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         markProgress("configure", "configuration-control", "completed");
 
-        String text = new String(profile, StandardCharsets.UTF_8);
+        String text = subscriptionURL;
         if (text.trim().isEmpty() || text.indexOf('\u0000') >= 0) {
             throw new IllegalArgumentException("ANDROID_PROFILE_TEXT_INVALID");
         }
@@ -700,13 +696,13 @@ public final class NativeUiHostedProfileTest {
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
 
         markProgress("configure", "rendered-navigation", "started");
-        tapUiControl("More options", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         tapUiControl("About", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         waitForUiControl("Back", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         tapUiControl("Back", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         assertRenderedSourceRetained(
                 Math.min(2_000L, remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT")));
+        waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         markProgress("configure", "rendered-navigation", "completed");
     }
 
@@ -803,17 +799,7 @@ public final class NativeUiHostedProfileTest {
             acceptVpnConsent(
                     remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"), operation);
             markProgress(operation, "consent", "completed");
-            // The first production click correctly reports the permission
-            // boundary as an error.  Once the system grant is durable, the
-            // next visible Connect click is the real Go start action.
-            markProgress(operation, "connect-retry", "started");
-            waitForUiControl(
-                    CONNECTION_ACTION_LABEL,
-                    remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
-            tapUiControl(
-                CONNECTION_ACTION_LABEL,
-                    remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
-            markProgress(operation, "connect-retry", "completed");
+
         }
         markProgress(operation, "connected-state", "started");
         waitForUiState(
@@ -827,7 +813,7 @@ public final class NativeUiHostedProfileTest {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         while (System.currentTimeMillis() < deadline) {
             UiObject2 input = findNativeInput();
-            UiObject2 label = findUiObject("Configuration text");
+            UiObject2 label = findUiObject("Subscription URL");
             String visibleText = input == null ? null : input.getText();
             if (input != null
                     && label != null
@@ -1046,7 +1032,7 @@ public final class NativeUiHostedProfileTest {
             String lastBounds) {
         String safeLabel = "About".equals(label)
                 || "Back".equals(label)
-                || "Configuration text".equals(label)
+                || "Subscription URL".equals(label)
                 || CONNECTION_ACTION_LABEL.equals(label)
                 ? label
                 : "other";

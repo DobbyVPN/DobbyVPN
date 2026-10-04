@@ -570,6 +570,11 @@ func retryableCleanup(s *session) bool {
 	return s.state == StateFailed && s.cleanupFailed && s.ledger != nil && len(s.ledger.closers) > 0
 }
 
+func acceptsStop(s *session, generation uint64) bool {
+	return generation != 0 && (generation == s.generation ||
+		s.recovering && generation == s.recoveryOriginGeneration || generation == s.switchOriginGeneration)
+}
+
 func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (result StopResult, err error) {
 	s, err := m.get(sessionID)
 	if err != nil {
@@ -577,21 +582,11 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if generation == 0 {
-		err := failure(FailureStaleGeneration, "generation is not active for this session")
-		return StopResult{}, err
+	if !acceptsStop(s, generation) {
+		return StopResult{}, failure(FailureStaleGeneration, "generation is not active for this session")
 	}
-	if generation != s.generation {
-		// The UI can issue Stop from a recovery snapshot whose cleanup-complete
-		// IDLE was published just before the next generation was reserved.
-		// Accept that originating generation only while this recovery chain is
-		// still active, then stop the current generation under the same lock.
-		if (!s.recovering || s.recoveryOriginGeneration != generation) && s.switchOriginGeneration != generation {
-			err := failure(FailureStaleGeneration, "generation is not active for this session")
-			return StopResult{}, err
-		}
-		generation = s.generation
-	}
+	// A stop from cleanup may arrive just after its replacement is reserved.
+	generation = s.generation
 	s.switchOriginGeneration = 0
 	if s.pending != nil {
 		s.pending = nil
@@ -941,11 +936,20 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 	return true
 }
 
+func attemptActive(state State) bool {
+	switch state {
+	case StateProbing, StatePreparing, StateConnected, StateStopping:
+		return true
+	default:
+		return false
+	}
+}
+
 // finish runs only in the attempt worker, after its current native
 // operation returns. It drains the generation ledger before another attempt.
 func (m *Manager) finish(s *session, generation uint64, cause error) {
 	s.mu.Lock()
-	if s.generation != generation || (s.state != StateProbing && s.state != StatePreparing && s.state != StateConnected && s.state != StateStopping) {
+	if s.generation != generation || !attemptActive(s.state) {
 		s.mu.Unlock()
 		return
 	}

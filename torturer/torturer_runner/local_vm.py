@@ -2447,6 +2447,13 @@ def cleanup(args: argparse.Namespace) -> int:
     release = state.get("release") if isinstance(state.get("release"), dict) else None
     installed_descriptor = run_dir / "installed.json"
     errors: list[str] = []
+    from .subscription_fixture import SubscriptionFixture
+    for fixture_name in ("native-subscription-fixture", "android-subscription-fixture"):
+        try:
+            SubscriptionFixture.cleanup_interrupted(run_dir / fixture_name)
+        except Exception as error:
+            errors.append(f"cleanup-subscription-fixture: {type(error).__name__}: {error}")
+
     if args.platform == "linux":
         helper = ROUTING_HELPERS / "linux.sh"
         _cleanup_logged(["sudo", "-n", str(helper), "remove"], cwd=run_dir, logs=logs, label="cleanup-routing", timeout=args.timeout, errors=errors)

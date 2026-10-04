@@ -227,7 +227,7 @@ private class SessionController(private val activity: MainActivity) {
     }
 
     fun canAct(index: Int? = null): Boolean = !state.busy && permissionTarget == null &&
-        (isStopTarget(index) || (!state.sourceDirty && !state.loading && state.loadError.isEmpty() && state.session.configured &&
+        (isStopTarget(index) || (!state.sourceDirty && !state.loading && state.loadError.isEmpty() && state.session.sequence >= acceptedSequence && state.session.configured &&
             (state.session.primaryAction == "START" || state.session.canSwitch)))
 
     fun actionTitle(index: Int? = null): String = if (isStopTarget(index)) {

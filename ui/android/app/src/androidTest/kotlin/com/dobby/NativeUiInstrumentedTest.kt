@@ -107,7 +107,7 @@ class NativeUiInstrumentedTest {
         // Resolve the app-owned diagnostic paths so the controller can
         // collect the native JSONL file after instrumentation completes.
         requireObject("Share logs")
-        waitForTextContaining("startup.diagnostic_store_ready")
+        waitForTextContaining("Android diagnostic store resolved")
         waitForOneOf(arrayOf("Disconnected"), 10_000)
 
         tapStable("Subscription URL")
@@ -121,14 +121,12 @@ class NativeUiInstrumentedTest {
         check(device.findObject(By.clazz("android.widget.EditText").pkg(packageName))?.isFocused == true) {
             "ANDROID_LOG_UPDATE_STOLE_INPUT_FOCUS"
         }
-        // The backend rejects this deliberately invalid source. The visible
-        // Error state proves the Compose input reached the production binding.
+        // Incomplete or invalid URLs must leave Connect disabled without fetching.
         dismissNativeInputAfterTextEntry()
 
         // Navigate only after typing so a real control transition proves the
         // Entry focus/IME teardown completed and the entered source survives
         // an in-app screen change before Connect is exercised.
-        tapStable("More options")
         tapAndWaitForVisible("About", "Back")
         tapStable("Back")
         waitForOneOf(arrayOf("Disconnected"), 30_000)
@@ -150,7 +148,6 @@ class NativeUiInstrumentedTest {
                 waitForConfigurationText(expectedSource, 10_000)
 
                 phase = "about"
-                tapStable("More options")
                 tapAndWaitForVisible("About", "Back")
                 phase = "back"
                 tapStable("Back")
@@ -173,7 +170,7 @@ class NativeUiInstrumentedTest {
             }
         }
 
-        tapAndWaitForFailureOutcome()
+        verifyInvalidImportOutcome()
         captureScreenshot("failure-state")
 
         // Exercise the user-visible lifecycle. The VPN service and Go session
@@ -333,13 +330,15 @@ class NativeUiInstrumentedTest {
         device.waitForIdle()
     }
 
-    private fun tapAndWaitForFailureOutcome() {
-        val outcomes = arrayOf("Error", "Failed")
-        tapStable(connectionActionLabel)
-        waitForOneOf(outcomes, 10_000)
-        check(waitForObject("Enter an HTTPS connection URL or inline configuration", 1_000) == null) {
-            "ANDROID_UI_SOURCE_WAS_EMPTY"
-        }
+    private fun verifyInvalidImportOutcome() {
+        check(!requireObject(connectionActionLabel).isEnabled) { "ANDROID_INVALID_URL_ENABLED_CONNECT" }
+        val output = device.executeShellCommand(
+            "am start -W -a android.intent.action.VIEW -d 'dobbyvpn://import?url=http%3A%2F%2Fexample.com' $packageName",
+        )
+        check(output.contains("Status: ok")) { "ANDROID_IMPORT_ACTIVATION_FAILED:$output" }
+        waitForOneOf(arrayOf("Error"), 10_000)
+        waitForTextContaining("HTTPS subscription URL")
+        check(!requireObject(connectionActionLabel).isEnabled) { "ANDROID_INVALID_IMPORT_ENABLED_CONNECT" }
     }
 
     private fun tapAndWaitForVisible(control: String, outcome: String) {

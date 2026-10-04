@@ -69,7 +69,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public var inventoryReady: Bool {
-        snapshot.configured && !sourceIsDirty && !loading && loadError.isEmpty
+        snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && loadError.isEmpty
     }
 
     public func isStopTarget(_ index: Int?) -> Bool {

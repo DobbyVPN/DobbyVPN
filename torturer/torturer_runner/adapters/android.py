@@ -400,6 +400,7 @@ class AndroidAdapter:
         self._progress_sink: Callable[[str, dict[str, object]], None] | None = None
         self._progress_scenario_id: str | None = None
         self._scratch_files: set[Path] = set()
+        self._subscription_fixture = None
         self._diagnostic_collection_sequence = 0
 
     @property
@@ -867,6 +868,9 @@ class AndroidAdapter:
             raise AdapterError("INVALID_FINALIZE_TIMEOUT")
         if deadline is not None and deadline <= time.monotonic():
             raise AdapterError("SERVICE_FINALIZE_TIMEOUT")
+        if self._subscription_fixture is not None:
+            self._subscription_fixture.close()
+            self._subscription_fixture = None
 
     def _run_instrumentation(
         self,
@@ -2260,7 +2264,15 @@ class AndroidAdapter:
                     (control_file, step.operation, float(step.timeout_seconds))
                 )
             operations.append(item)
+        subscription_url = None
+        if self.ui_mode == "gui-auto":
+            if self._subscription_fixture is None:
+                from torturer_runner.subscription_fixture import SubscriptionFixture
+                self._subscription_fixture = SubscriptionFixture(self.profile, self.profile.parent / "android-subscription-fixture", "android", adb=[str(self.adb)])
+                self._subscription_fixture.start()
+            subscription_url = self._subscription_fixture.url
         command = {
+            "subscription_url": subscription_url,
             "profile_file": profile_name,
             "output_file": output_name,
             "progress_file": progress_name,

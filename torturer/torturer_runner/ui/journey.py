@@ -16,6 +16,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import time
 from typing import Any
 
 from torturer_contract.scenarios import ScenarioStep
@@ -72,6 +73,11 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "reconnect_completed",
     "about_version",
     "about_source_commit",
+    "manual_selection_native",
+    "profile_switch_native",
+    "failed_load_preserves_tunnel",
+    "warm_import_native",
+    "clear_logs_native",
     "close_window",
     "reopen_connected",
     "process_loss_verified",
@@ -300,6 +306,43 @@ def _record_native_observations(
     checks[key("throughput_positive")] = _positive_throughput(throughput)
 
 
+def _exercise_subscription_controls(ui, base, url: str, timeout: float) -> dict[str, bool]:
+    initial = base._snapshot(min(timeout, 30), "NATIVE_SELECTION_STATUS_FAILED")
+    if len(initial.get("profiles", [])) < 2:
+        raise NativeUIJourneyError("Native switching qualification requires two supplied profiles")
+
+    def selected(previous: dict, index: int | None) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            current = base._snapshot(min(30, max(0.1, deadline - time.monotonic())), "NATIVE_SELECTION_STATUS_FAILED")
+            if current.get("state") == "FAILED":
+                raise NativeUIJourneyError(f"Native profile selection failed: {current}")
+            mode = "AUTO_SELECT" if index is None else "PROFILE_INDEX"
+            if (current.get("state") == "CONNECTED" and current.get("generation", 0) > previous.get("generation", 0)
+                    and current.get("active_mode") == mode
+                    and (index is None or current.get("active_profile", {}).get("index") == index)):
+                return current
+            time.sleep(0.1)
+        raise NativeUIJourneyError("Native selection did not reach its requested generation and profile")
+
+    first = 1 if initial["active_profile"]["index"] == 0 else 0
+    ui.select_profile(first)
+    manual = selected(initial, first)
+    second = 0 if first == 1 else 1
+    ui.select_profile(second)
+    switched = selected(manual, second)
+    ui.failing_subscription(url.rsplit("/", 1)[0] + "/failure")
+    after = base._snapshot(min(timeout, 30), "NATIVE_FAILED_LOAD_STATUS_FAILED")
+    if after.get("generation") != switched.get("generation") or after.get("state") != "CONNECTED" or after.get("active_digest") != switched.get("active_digest"):
+        raise NativeUIJourneyError("Failed subscription loading interrupted the active tunnel")
+    ui.import_link(url)
+    ui.connect()
+    selected(switched, None)
+    ui.clear_logs()
+    ui.capture("subscription-controls")
+    return {name: True for name in ("manual_selection_native", "profile_switch_native", "failed_load_preserves_tunnel", "warm_import_native", "clear_logs_native")}
+
+
 def run_journey(args: argparse.Namespace) -> dict[str, object]:
     _ensure_directory(args.raw_log_dir)
     runner = SubprocessRunner(
@@ -324,14 +367,20 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
     previous_log_directory = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
     os.environ["DOBBYVPN_NATIVE_UI_LOG_DIR"] = str(args.raw_log_dir)
     ui: Any | None = None
+    subscription = None
     request_timeout = min(args.timeout, _REQUEST_TIMEOUT)
     checks: dict[str, object] = {}
     primary: BaseException | None = None
     try:
+        from torturer_runner.subscription_fixture import SubscriptionFixture
+        subscription = SubscriptionFixture(args.profile, args.profile.parent / "native-subscription-fixture", args.platform)
+        url = subscription.start()
+        url_file = subscription.directory / "source.url"
+        url_file.write_text(url, encoding="utf-8")
         ui = smoke.NativeUIController(
             args.platform,
             args.ui,
-            args.profile,
+            url_file,
             _smoke_timeout(request_timeout),
             helper=args.ui_helper,
             screenshot_dir=args.raw_log_dir / "screenshots",
@@ -363,6 +412,7 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if active.get("active_profile") is None:
             raise NativeUIJourneyError("native UI Auto selection reported no active profile")
         checks["connect_native"] = True
+        checks.update(_exercise_subscription_controls(ui, base, url, request_timeout))
         _record_native_observations(base, checks, args.timeout)
 
         _native_ui_action(
@@ -461,6 +511,11 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             base.finalize(timeout_seconds=min(args.timeout, 30.0))
         except BaseException as error:
             cleanup_errors.append(f"base-finalize: {_exception_details(error)}")
+        if subscription is not None:
+            try:
+                subscription.close()
+            except BaseException as error:
+                cleanup_errors.append(f"subscription-fixture: {_exception_details(error)}")
         if previous_log_directory is None:
             os.environ.pop("DOBBYVPN_NATIVE_UI_LOG_DIR", None)
         else:
