@@ -6,8 +6,6 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -24,10 +22,9 @@ public final class AndroidNetworkProbeMain {
     private AndroidNetworkProbeMain() { }
 
     public static void main(String[] arguments) {
-        if (arguments.length != 4) {
+        if (arguments.length != 3) {
             throw new IllegalArgumentException("probe arguments are invalid");
         }
-        String outputPath = outputPath(arguments[3]);
         JSONObject result;
         try {
             String operation = arguments[0];
@@ -46,7 +43,6 @@ public final class AndroidNetworkProbeMain {
             result = failureResult(failure);
         }
         System.out.println(result.toString());
-        writeResult(outputPath, result);
     }
 
     private static JSONObject get(URL endpoint, boolean includeBody) throws Exception {
@@ -121,28 +117,6 @@ public final class AndroidNetworkProbeMain {
             throw new IllegalArgumentException("probe endpoint authority is invalid");
         }
         return endpoint;
-    }
-
-    private static String outputPath(String value) {
-        if (!value.matches(
-                "/data/local/tmp/dobbyvpn-probe-[0-9]+-[0-9]+/result\\.json")) {
-            throw new IllegalArgumentException("probe output path is invalid");
-        }
-        return value;
-    }
-
-    private static void writeResult(String path, JSONObject result) {
-        File outputFile = new File(path);
-        File temporary = new File(path + ".tmp");
-        try (FileOutputStream output = new FileOutputStream(temporary, false)) {
-            output.write((result.toString() + "\n").getBytes("UTF-8"));
-            output.getFD().sync();
-        } catch (IOException failure) {
-            throw new IllegalStateException("probe output write failed", failure);
-        }
-        if (!temporary.renameTo(outputFile)) {
-            throw new IllegalStateException("probe output commit failed");
-        }
     }
 
     private static Body readBody(InputStream input, boolean includeBody) throws IOException {

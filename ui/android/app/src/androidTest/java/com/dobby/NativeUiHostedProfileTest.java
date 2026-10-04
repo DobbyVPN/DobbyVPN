@@ -2083,7 +2083,6 @@ public final class NativeUiHostedProfileTest {
         }
         String probeRoot = "/data/local/tmp/dobbyvpn-probe-"
                 + android.os.Process.myPid() + "-" + System.nanoTime();
-        String outputPath = probeRoot + "/result.json";
         String output = "";
         Throwable operationFailure = null;
         try {
@@ -2103,11 +2102,8 @@ public final class NativeUiHostedProfileTest {
                     + " /system/bin " + NETWORK_PROBE_CLASS.getName()
                     + " " + operation
                     + " " + encodedEndpoint
-                    + " " + value
-                    + " " + outputPath;
-            String launchOutput = shellCommand(command).stdoutText().trim();
-            output = shellCommand("cat " + outputPath).stdoutText().trim();
-            if (output.isEmpty() && launchOutput.startsWith("{")) output = launchOutput;
+                    + " " + value;
+            output = shellCommand(command).stdoutText().trim();
             if (output.isEmpty()) {
                 throw new IOException("ANDROID_NETWORK_PROBE_OUTPUT_INVALID");
             }
