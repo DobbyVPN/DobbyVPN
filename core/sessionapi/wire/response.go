@@ -29,22 +29,33 @@ type Generation struct {
 	Generation uint64 `json:"generation"`
 	Sequence   uint64 `json:"sequence"`
 }
+type Selection struct {
+	Digest string `json:"digest"`
+	Mode   string `json:"mode"`
+	Index  int    `json:"index"`
+}
+
 type Snapshot struct {
-	SessionID       string    `json:"session_id"`
-	Sequence        uint64    `json:"sequence"`
-	Generation      uint64    `json:"generation"`
-	State           string    `json:"state"`
-	Configured      bool      `json:"configured"`
-	Digest          string    `json:"digest"`
-	SourceKind      string    `json:"source_kind"`
-	SourceURL       string    `json:"source_url,omitempty"`
-	SourceError     string    `json:"source_error,omitempty"`
-	Profiles        []Profile `json:"profiles"`
-	ActiveProfile   *Profile  `json:"active_profile,omitempty"`
-	LastFailure     *Failure  `json:"last_failure,omitempty"`
-	CleanupComplete bool      `json:"cleanup_complete"`
-	Recovering      bool      `json:"recovering"`
-	PrimaryAction   string    `json:"primary_action"`
+	ActiveDigest    string     `json:"active_digest"`
+	ActiveMode      string     `json:"active_mode"`
+	ActiveIndex     int        `json:"active_index"`
+	PendingTarget   *Selection `json:"pending_target,omitempty"`
+	CanSwitch       bool       `json:"can_switch"`
+	SessionID       string     `json:"session_id"`
+	Sequence        uint64     `json:"sequence"`
+	Generation      uint64     `json:"generation"`
+	State           string     `json:"state"`
+	Configured      bool       `json:"configured"`
+	Digest          string     `json:"digest"`
+	SourceKind      string     `json:"source_kind"`
+	SourceURL       string     `json:"source_url,omitempty"`
+	SourceError     string     `json:"source_error,omitempty"`
+	Profiles        []Profile  `json:"profiles"`
+	ActiveProfile   *Profile   `json:"active_profile,omitempty"`
+	LastFailure     *Failure   `json:"last_failure,omitempty"`
+	CleanupComplete bool       `json:"cleanup_complete"`
+	Recovering      bool       `json:"recovering"`
+	PrimaryAction   string     `json:"primary_action"`
 }
 
 func profileResultDTO(in sessionapi.ProfileSummary) Profile {
@@ -72,6 +83,7 @@ func ConfigurationFrom(in sessionapi.ConfigureResult) Configuration {
 }
 func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 	out := Snapshot{
+		ActiveDigest: in.ActiveDigest, ActiveMode: string(in.ActiveMode), ActiveIndex: in.ActiveIndex, CanSwitch: in.CanSwitch,
 		SessionID: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
 		State: string(in.State), Configured: in.Configured, Digest: in.Digest,
 		SourceKind: string(in.SourceKind), SourceURL: in.SourceURL, SourceError: in.SourceError,
@@ -80,6 +92,9 @@ func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 		CleanupComplete: in.CleanupComplete,
 		Recovering:      in.Recovering,
 		PrimaryAction:   in.PrimaryAction,
+	}
+	if in.PendingTarget != nil {
+		out.PendingTarget = &Selection{Digest: in.PendingTarget.Digest, Mode: string(in.PendingTarget.Mode), Index: in.PendingTarget.Index}
 	}
 	if in.LastFailure != "" {
 		out.LastFailure = &Failure{Code: string(in.LastFailure), Message: in.LastFailureMessage}

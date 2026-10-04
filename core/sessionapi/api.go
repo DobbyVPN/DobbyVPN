@@ -120,10 +120,25 @@ const (
 )
 
 type StartTarget struct {
-	Mode  StartMode
-	Index int
+	Mode           StartMode
+	Index          int
+	ReplaceCurrent bool
+	Digest         string
 	// Nil reuses the accepted configuration; non-nil replaces it before AUTO_SELECT startup.
 	Source []byte
+}
+
+// Selection identifies a target within one immutable configuration inventory.
+type Selection struct {
+	Digest string
+	Mode   StartMode
+	Index  int
+}
+
+type pendingStart struct {
+	target   StartTarget
+	profiles []RuntimeProfile
+	digest   string
 }
 
 type StartResult struct {
@@ -156,6 +171,11 @@ type SnapshotResult struct {
 	SourceURL          string
 	SourceError        string
 	Profiles           []ProfileSummary
+	ActiveDigest       string
+	ActiveMode         StartMode
+	ActiveIndex        int
+	PendingTarget      *Selection
+	CanSwitch          bool
 	ActiveProfile      *ProfileSummary
 	LastFailure        FailureCode
 	LastFailureMessage string
@@ -252,6 +272,11 @@ type session struct {
 	sourceError string
 	profiles    []RuntimeProfile
 
+	switchOriginGeneration     uint64
+	configureRequest           uint64
+	activeProfiles             []RuntimeProfile
+	activeDigest               string
+	pending                    *pendingStart
 	active                     *ProfileSummary
 	lastFailure                FailureCode
 	lastFailureMessage         string
@@ -386,6 +411,10 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 	}
 	s.mu.Lock()
 	preloadErr := validateConfigureBeforeLoad(ctx, s, expectedSequence)
+	if preloadErr == nil {
+		s.configureRequest++
+	}
+	request := s.configureRequest
 	s.mu.Unlock()
 	if preloadErr != nil {
 		return ConfigureResult{}, preloadErr
@@ -398,7 +427,7 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if acceptErr := validateConfigureBeforeAccept(ctx, s, expectedSequence); acceptErr != nil {
+	if acceptErr := validateConfigureBeforeAccept(ctx, s, request); acceptErr != nil {
 		return ConfigureResult{}, acceptErr
 	}
 	if m.sourceStore != nil {
@@ -412,10 +441,15 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 	}
 	s.profiles, s.digest, s.sourceKind, s.sourceURL, s.configured = parsed.profiles, parsed.digest, loaded.Kind, loaded.SourceURL, true
 	s.sourceError = ""
-	s.active, s.lastFailure, s.lastFailureMessage, s.state, s.cleanupDone, s.cleanupFailed = nil, "", "", StateConfigured, true, false
-	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
-	if err := log.SetPolicy(s.digest, map[string]any{"exclude_ips": s.profiles[0].ExcludeCIDRs, "profiles": summaries(s.profiles)}); err != nil {
-		log.Error("CONFIGURATION", "retain routing policy diagnostics failed", map[string]any{"cause": err.Error(), "configuration_digest": s.digest})
+	if s.cleanupDone && !s.cleanupFailed && !s.recovering && s.pending == nil {
+		s.active, s.lastFailure, s.lastFailureMessage, s.state = nil, "", "", StateConfigured
+		s.activeDigest, s.activeProfiles, s.activeTarget = "", nil, StartTarget{}
+		s.recoveryOriginGeneration, s.recoveryCount = 0, 0
+	}
+	if s.activeDigest == "" {
+		retainPolicy(s.digest, s.profiles)
+	} else {
+		log.Info("CONFIGURATION", "profile inventory loaded", map[string]any{"loaded_configuration_digest": s.digest, "profiles": summaries(s.profiles)})
 	}
 	m.appendLocked(s)
 	result := ConfigureResult{Digest: s.digest, Sequence: s.sequence, Profiles: summaries(s.profiles), SourceKind: s.sourceKind}
@@ -426,8 +460,8 @@ func validateConfigureBeforeLoad(ctx context.Context, s *session, expectedSequen
 	if s.sequence != expectedSequence {
 		return failure(FailureConflict, "session changed; refresh its snapshot before configuring")
 	}
-	if configurationBlocked(s) {
-		return failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
+	if s.closing || s.cleanupFailed {
+		return failure(FailureConflict, "session is shutting down or cleanup has failed")
 	}
 	if err := ctx.Err(); err != nil {
 		return failureWithCause(FailureCanceled, "configuration was canceled before loading", err)
@@ -435,21 +469,21 @@ func validateConfigureBeforeLoad(ctx context.Context, s *session, expectedSequen
 	return nil
 }
 
-func validateConfigureBeforeAccept(ctx context.Context, s *session, expectedSequence uint64) error {
-	if s.sequence != expectedSequence {
-		return failure(FailureConflict, "session changed while configuration was loading; refresh its snapshot")
+func validateConfigureBeforeAccept(ctx context.Context, s *session, request uint64) error {
+	if s.configureRequest != request {
+		return failure(FailureConflict, "configuration request was superseded")
 	}
 	if err := ctx.Err(); err != nil {
 		return failureWithCause(FailureCanceled, "configuration was canceled before it was accepted", err)
 	}
-	if configurationBlocked(s) {
-		return failure(FailureConflict, "cannot configure until the previous generation cleaned up successfully")
+	if s.closing || s.cleanupFailed {
+		return failure(FailureConflict, "session is shutting down or cleanup has failed")
 	}
 	return nil
 }
 
 func configurationBlocked(s *session) bool {
-	return s.closing || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed
+	return s.closing || s.pending != nil || s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.state == StateStopping || s.recovering || !s.cleanupDone || s.cleanupFailed
 }
 
 func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSequence uint64, target StartTarget) (result StartResult, err error) {
@@ -484,10 +518,6 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureNotConfigured, "configure a session before starting it")
 	}
-	if configurationBlocked(s) {
-		s.mu.Unlock()
-		return StartResult{}, failure(FailureConflict, "previous generation has not completed cleanup")
-	}
 	if target.Mode != AutoSelect && target.Mode != ProfileIndex {
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureInvalidArgument, "start mode must be AUTO_SELECT or PROFILE_INDEX")
@@ -496,6 +526,27 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureInvalidArgument, "profile index is out of range")
 	}
+	if target.Digest != "" && target.Digest != s.digest {
+		s.mu.Unlock()
+		return StartResult{}, failure(FailureConflict, "profile inventory changed; refresh its snapshot")
+	}
+	if configurationBlocked(s) {
+		if !target.ReplaceCurrent || !canSwitch(s) {
+			s.mu.Unlock()
+			return StartResult{}, failure(FailureConflict, "previous generation has not completed cleanup")
+		}
+		s.pending = &pendingStart{target: target, profiles: s.profiles, digest: s.digest}
+		s.switchOriginGeneration = s.generation
+		s.state = StateStopping
+		s.cleanupBudget.begin()
+		s.cancel()
+		m.appendLocked(s)
+		result = StartResult{Generation: s.generation, Sequence: s.sequence}
+		s.mu.Unlock()
+		return result, nil
+	}
+	s.activeProfiles, s.activeDigest = s.profiles, s.digest
+	retainPolicy(s.activeDigest, s.activeProfiles)
 	s.generation++
 	generation := s.generation
 	// Accepted work outlives the request and is canceled by Stop or recovery.
@@ -535,11 +586,16 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 		// IDLE was published just before the next generation was reserved.
 		// Accept that originating generation only while this recovery chain is
 		// still active, then stop the current generation under the same lock.
-		if !s.recovering || s.recoveryOriginGeneration != generation {
+		if (!s.recovering || s.recoveryOriginGeneration != generation) && s.switchOriginGeneration != generation {
 			err := failure(FailureStaleGeneration, "generation is not active for this session")
 			return StopResult{}, err
 		}
 		generation = s.generation
+	}
+	s.switchOriginGeneration = 0
+	if s.pending != nil {
+		s.pending = nil
+		m.appendLocked(s)
 	}
 	if retryableCleanup(s) {
 		// Only a completed failed cleanup may be retried. The previous worker
@@ -699,7 +755,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 	}()
 	if target.Mode == ProfileIndex {
 		s.mu.Lock()
-		profile := s.profiles[target.Index]
+		profile := s.activeProfiles[target.Index]
 		s.mu.Unlock()
 		if !m.advance(s, generation, StatePreparing, &profile.Summary) {
 			return
@@ -764,7 +820,7 @@ func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation 
 
 func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint64, target StartTarget) (profileSelection, error) {
 	s.mu.Lock()
-	profiles := append([]RuntimeProfile(nil), s.profiles...)
+	profiles := append([]RuntimeProfile(nil), s.activeProfiles...)
 	s.mu.Unlock()
 	candidates := profiles
 	if target.Mode == ProfileIndex {
@@ -873,6 +929,7 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 	}
 	s.state, s.active = state, cloneSummaryPtr(profile)
 	if state == StateConnected {
+		s.switchOriginGeneration = 0
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
 		s.lastFailure, s.lastFailureMessage = "", ""
@@ -913,6 +970,8 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 		s.cleanupBudget.finish()
 	}
 	if s.cleanupFailed {
+		s.switchOriginGeneration = 0
+		s.pending = nil
 		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
 		s.failureMessageAfterCleanup = ""
 		s.recovering, s.recoveryOriginGeneration = false, 0
@@ -936,7 +995,7 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 		}
 		s.state, s.active = StateIdle, nil
 		m.appendLocked(s)
-		if restart {
+		if restart || s.pending != nil {
 			go m.startFailover(s, generation)
 		} else {
 			s.recovering, s.recoveryOriginGeneration = false, 0
@@ -954,21 +1013,36 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 
 func (m *Manager) startFailover(s *session, expectedGeneration uint64) {
 	s.mu.Lock()
-	if s.closing || !s.configured || !s.cleanupDone || s.state != StateIdle || !s.recovering || s.generation != expectedGeneration {
+	if s.closing || !s.configured || !s.cleanupDone || s.state != StateIdle || (!s.recovering && s.pending == nil) || s.generation != expectedGeneration {
 		s.mu.Unlock()
 		return
+	}
+	target := s.activeTarget
+	if s.pending != nil {
+		target = s.pending.target
+		s.activeProfiles, s.activeDigest = s.pending.profiles, s.pending.digest
+		retainPolicy(s.activeDigest, s.activeProfiles)
+		s.pending = nil
+		s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
+		s.lastFailure, s.lastFailureMessage = "", ""
 	}
 	s.generation++
 	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cleanupBudget = &cleanupBudget{}
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active = cancel, &ledger{}, false, false, nil
-	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = StartTarget{Mode: AutoSelect}, false, ""
+	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.failureMessageAfterCleanup = ""
 	s.state = StateProbing
 	m.appendLocked(s)
 	s.mu.Unlock()
-	go m.runStart(ctx, s, generation, StartTarget{Mode: AutoSelect})
+	go m.runStart(ctx, s, generation, target)
+}
+
+func retainPolicy(digest string, profiles []RuntimeProfile) {
+	if err := log.SetPolicy(digest, map[string]any{"exclude_ips": profiles[0].ExcludeCIDRs, "profiles": summaries(profiles)}); err != nil {
+		log.Error("CONFIGURATION", "retain routing policy diagnostics failed", map[string]any{"cause": err.Error(), "configuration_digest": digest})
+	}
 }
 
 func (m *Manager) appendLocked(s *session) {
@@ -976,12 +1050,16 @@ func (m *Manager) appendLocked(s *session) {
 	s.changed = make(chan struct{})
 	s.sequence++
 	now := m.now()
-	details := map[string]any{"session_id": s.id, "generation": s.generation, "configuration_digest": s.digest, "sequence": s.sequence, "state": s.state, "cleanup_complete": s.cleanupDone, "recovering": s.recovering, "active_profile": s.active}
+	digest := s.activeDigest
+	if digest == "" {
+		digest = s.digest
+	}
+	details := map[string]any{"session_id": s.id, "generation": s.generation, "configuration_digest": digest, "loaded_configuration_digest": s.digest, "sequence": s.sequence, "state": s.state, "cleanup_complete": s.cleanupDone, "recovering": s.recovering, "active_profile": s.active}
 	if !s.lastTransitionAt.IsZero() {
 		details["previous_state_duration_ms"] = now.Sub(s.lastTransitionAt).Milliseconds()
 	}
 	s.lastTransitionAt = now
-	log.SetCorrelation(log.Correlation{SessionID: s.id, Generation: s.generation, ConfigurationDigest: s.digest})
+	log.SetCorrelation(log.Correlation{SessionID: s.id, Generation: s.generation, ConfigurationDigest: digest})
 	if s.lastFailure != "" {
 		details["failure_code"], details["cause"] = s.lastFailure, s.lastFailureMessage
 		log.Error("SESSION", "session state changed", details)
@@ -1004,9 +1082,14 @@ func (m *Manager) get(id string) (*session, error) {
 	return s, nil
 }
 func snapshotLocked(s *session) SnapshotResult {
+	var pending *Selection
+	if s.pending != nil {
+		pending = &Selection{Digest: s.pending.digest, Mode: s.pending.target.Mode, Index: s.pending.target.Index}
+	}
 	return SnapshotResult{
 		SessionID: s.id, Sequence: s.sequence, Generation: s.generation, State: s.state,
 		Configured: s.configured, Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL, SourceError: s.sourceError,
+		ActiveDigest: s.activeDigest, ActiveMode: s.activeTarget.Mode, ActiveIndex: s.activeTarget.Index, PendingTarget: pending, CanSwitch: canSwitch(s),
 		Profiles:      summaries(s.profiles),
 		ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure,
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,
@@ -1014,7 +1097,14 @@ func snapshotLocked(s *session) SnapshotResult {
 	}
 }
 
+func canSwitch(s *session) bool {
+	return !s.closing && s.state == StateConnected && !s.recovering && s.pending == nil && !s.cleanupFailed
+}
+
 func primaryActionLocked(s *session) string {
+	if s.pending != nil {
+		return "STOP"
+	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.recovering {
 		return "STOP"
 	}

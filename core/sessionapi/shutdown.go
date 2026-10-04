@@ -59,6 +59,7 @@ func (m *Manager) StopAndWait(ctx context.Context) error {
 	s := m.session
 	s.mu.Lock()
 	s.closing = true
+	s.pending = nil
 	s.recovering, s.restartAfterCleanup, s.recoveryOriginGeneration = false, false, 0
 	if !s.cleanupDone && s.state != StateFailed {
 		s.state = StateStopping

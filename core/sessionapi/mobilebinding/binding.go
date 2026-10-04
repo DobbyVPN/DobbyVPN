@@ -159,6 +159,15 @@ func (b *Binding) StartWithSource(sessionID string, expectedSequence int64, mode
 }
 
 func (b *Binding) StartWithSourceContext(ctx context.Context, sessionID string, expectedSequence int64, mode string, index int32, rawConfig []byte) string {
+	return b.startContext(ctx, sessionID, expectedSequence, mode, index, rawConfig, false, "")
+}
+
+// StartSelection requests a native profile switch, fenced to the loaded inventory.
+func (b *Binding) StartSelection(sessionID string, expectedSequence int64, mode string, index int32, digest string, replaceCurrent bool) string {
+	return b.startContext(context.Background(), sessionID, expectedSequence, mode, index, nil, replaceCurrent, digest)
+}
+
+func (b *Binding) startContext(ctx context.Context, sessionID string, expectedSequence int64, mode string, index int32, rawConfig []byte, replaceCurrent bool, digest string) string {
 	sequence, err := nonNegative(expectedSequence, "start sequence")
 	if err != nil {
 		return failed(err)
@@ -167,7 +176,7 @@ func (b *Binding) StartWithSourceContext(ctx context.Context, sessionID string, 
 		return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "profile index must be non-negative"})
 	}
 	result, err := b.manager.Start(ctx, sessionID, sequence, sessionapi.StartTarget{
-		Mode: sessionapi.StartMode(mode), Index: int(index), Source: bytes.Clone(rawConfig),
+		Mode: sessionapi.StartMode(mode), Index: int(index), Source: bytes.Clone(rawConfig), ReplaceCurrent: replaceCurrent, Digest: digest,
 	})
 	if err != nil {
 		return failed(err)
@@ -230,6 +239,8 @@ func (b *Binding) CallJSONWithConfiguration(
 		Source           *string `json:"source"`
 		Mode             string  `json:"mode"`
 		Index            int32   `json:"index"`
+		ReplaceCurrent   bool    `json:"replace_current"`
+		Digest           string  `json:"digest"`
 	}
 	if len(params) != 0 {
 		decoder := json.NewDecoder(bytes.NewReader(params))
@@ -254,12 +265,12 @@ func (b *Binding) CallJSONWithConfiguration(
 			if rawConfiguration == nil {
 				rawConfiguration = []byte{}
 			}
-			return b.StartWithSourceContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, rawConfiguration)
+			return b.startContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, rawConfiguration, value.ReplaceCurrent, value.Digest)
 		}
 		if value.Source != nil {
-			return b.StartWithSourceContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, []byte(*value.Source))
+			return b.startContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, []byte(*value.Source), value.ReplaceCurrent, value.Digest)
 		}
-		return b.StartContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index)
+		return b.startContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, nil, value.ReplaceCurrent, value.Digest)
 	case "Stop":
 		return b.StopContext(ctx, value.SessionID, value.Generation)
 	default:
