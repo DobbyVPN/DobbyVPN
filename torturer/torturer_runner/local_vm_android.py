@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from typing import Any
 
 from .android_diagnostics import OPTIONAL_MISSING, retained_log_sources
@@ -304,9 +305,9 @@ def _with_collection_errors(
         return result
     stderr = result.stderr or b""
     if collection_errors:
-        stderr += b"\n" + "\n".join(collection_errors).encode(
-            "utf-8", errors="backslashreplace"
-        ) + b"\n"
+        diagnostics = "\n".join(collection_errors)
+        print(diagnostics, file=sys.stderr, flush=True)
+        stderr += b"\n" + diagnostics.encode("utf-8", errors="backslashreplace") + b"\n"
     return subprocess.CompletedProcess(
         result.args, result.returncode or 1, result.stdout, stderr
     )
