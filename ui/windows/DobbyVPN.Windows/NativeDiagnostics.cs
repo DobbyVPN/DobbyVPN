@@ -181,7 +181,7 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
             catch (Exception error) { issues.Add($"{path}: {error}"); }
         }
         if (WriteFailure.Length > 0) issues.Add(WriteFailure);
-        return (entries.OrderBy(entry => entry.Time is null).ThenBy(entry => entry.Time).ToList(), string.Join("\n", issues));
+        return (entries.OrderBy(entry => entry.Time is not null).ThenBy(entry => entry.Time).ToList(), string.Join("\n", issues));
     });
 
     internal static Entry ParseEntry(string raw, string id, string stream)

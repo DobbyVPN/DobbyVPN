@@ -69,7 +69,7 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
             } catch (failure: java.io.FileNotFoundException) { if (File(path).exists()) errors.add("$path: ${failure.stackTraceToString()}") }
             catch (failure: Exception) { errors.add("$path: ${failure.stackTraceToString()}") }
         }
-        return entries.sortedWith(compareBy<LogEntry> { it.time == null }.thenBy { it.time }) to errors.joinToString("\n")
+        return entries.sortedWith(compareBy<LogEntry> { it.time != null }.thenBy { it.time }) to errors.joinToString("\n")
     }
 
     companion object {

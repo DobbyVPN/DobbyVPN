@@ -253,8 +253,8 @@ public enum DiagnosticFiles {
         let sorted = entries.enumerated().sorted { lhs, rhs in
             switch (lhs.element.date, rhs.element.date) {
             case let (left?, right?): return left == right ? lhs.offset < rhs.offset : left < right
-            case (_?, nil): return true
-            case (nil, _?): return false
+            case (_?, nil): return false
+            case (nil, _?): return true
             default: return lhs.offset < rhs.offset
             }
         }.map(\.element)
