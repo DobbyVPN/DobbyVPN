@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import json
 import http.server
-import os
 from pathlib import Path
 import shutil
 import ssl
@@ -32,9 +31,10 @@ def command(arguments: list[str]) -> bytes:
 
 
 class SubscriptionFixture:
-    def __init__(self, profile: Path, directory: Path, platform: str, *, adb: list[str] | None = None):
+    def __init__(self, profile: Path, directory: Path, platform: str, *, adb: list[str] | None = None, certificate_helper: Path | None = None):
         self.profile, self.directory, self.platform = profile, directory, platform
         self.adb = adb or ["adb"]
+        self.certificate_helper = certificate_helper
         self.server: http.server.ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.trusted = False
@@ -49,20 +49,12 @@ class SubscriptionFixture:
 
     def start(self) -> str:
         self.directory.mkdir(parents=True, exist_ok=False)
-        openssl = shutil.which("openssl")
-        if not openssl and self.platform == "windows":
-            openssl = str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/usr/bin/openssl.exe")
-        if not openssl:
-            raise RuntimeError("OpenSSL is required for the disposable subscription fixture")
-        certificate_config = self.directory / "openssl.cnf"
-        certificate_config.write_text(
-            "[req]\ndistinguished_name=subject\nx509_extensions=extensions\nprompt=no\n"
-            "[subject]\nCN=DobbyVPN Torturer " + uuid.uuid4().hex + "\n"
-            "[extensions]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:TRUE\n",
-            encoding="ascii",
-        )
-        command([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(self.key),
-                 "-out", str(self.certificate), "-days", "1", "-config", str(certificate_config)])
+        if self.platform == "windows":
+            if self.certificate_helper is None:
+                raise RuntimeError("Windows subscription fixture requires the prepared native test helper")
+            command([str(self.certificate_helper), "--subscription-certificate", str(self.directory)])
+        else:
+            self._generate_certificate()
         self.fingerprint = hashlib.sha1(ssl.PEM_cert_to_DER_cert(self.certificate.read_text()), usedforsecurity=False).hexdigest()
         fixture = self
 
@@ -96,7 +88,7 @@ class SubscriptionFixture:
             self._save()
             command(["certutil", "-addstore", "-f", "Root", str(self.certificate)])
         elif self.platform == "android":
-            certificate_hash = command([openssl, "x509", "-in", str(self.certificate), "-subject_hash_old", "-noout"]).decode().strip()
+            certificate_hash = command([shutil.which("openssl") or "openssl", "x509", "-in", str(self.certificate), "-subject_hash_old", "-noout"]).decode().strip()
             self.android_staged = True
             self._save()
             command([*self.adb, "shell", "mkdir", self.android_directory])
@@ -116,6 +108,20 @@ class SubscriptionFixture:
         self.thread.start()
         self.url = f"https://127.0.0.1:{self.port}/subscription"
         return self.url
+
+    def _generate_certificate(self) -> None:
+        openssl = shutil.which("openssl")
+        if not openssl:
+            raise RuntimeError("OpenSSL is required for the disposable subscription fixture")
+        certificate_config = self.directory / "openssl.cnf"
+        certificate_config.write_text(
+            "[req]\ndistinguished_name=subject\nx509_extensions=extensions\nprompt=no\n"
+            "[subject]\nCN=DobbyVPN Torturer " + uuid.uuid4().hex + "\n"
+            "[extensions]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:TRUE\n",
+            encoding="ascii",
+        )
+        command([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(self.key),
+                 "-out", str(self.certificate), "-days", "1", "-config", str(certificate_config)])
 
     def _save(self) -> None:
         (self.directory / "trust.json").write_text(json.dumps({

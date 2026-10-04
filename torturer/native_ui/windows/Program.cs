@@ -8,6 +8,8 @@ using System.Linq;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Threading;
 using System.Windows.Automation;
@@ -147,6 +149,20 @@ internal static class Program
     {
         try
         {
+            if (args.Length == 2 && args[0] == "--subscription-certificate")
+            {
+                using var key = RSA.Create(2048);
+                var request = new CertificateRequest("CN=DobbyVPN Torturer " + Guid.NewGuid().ToString("N"), key,
+                    HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+                var names = new SubjectAlternativeNameBuilder();
+                names.AddIpAddress(System.Net.IPAddress.Loopback);
+                request.CertificateExtensions.Add(names.Build());
+                using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+                File.WriteAllText(Path.Combine(args[1], "ca.pem"), certificate.ExportCertificatePem());
+                File.WriteAllText(Path.Combine(args[1], "key.pem"), key.ExportPkcs8PrivateKeyPem());
+                return 0;
+            }
             if (args.Length == 1 && args[0] == "--diagnostics-test")
             {
                 NativeDiagnosticsTests.RunAsync().GetAwaiter().GetResult();

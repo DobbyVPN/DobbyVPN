@@ -370,7 +370,7 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
     primary: BaseException | None = None
     try:
         from torturer_runner.subscription_fixture import SubscriptionFixture
-        subscription = SubscriptionFixture(args.profile, args.profile.parent / "native-subscription-fixture", args.platform)
+        subscription = SubscriptionFixture(args.profile, args.profile.parent / "native-subscription-fixture", args.platform, certificate_helper=args.ui_helper)
         url = subscription.start()
         url_file = subscription.directory / "source.url"
         url_file.write_text(url, encoding="utf-8")
@@ -576,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run_journey(args)
     except Exception as error:
-        rendered_error = f"{type(error).__name__}: {error}"
+        rendered_error = _exception_details(error)
         if args.output is not None:
             operation = getattr(error, "operation", None)
             stage = getattr(error, "stage", None)
