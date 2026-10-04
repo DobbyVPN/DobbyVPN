@@ -1213,6 +1213,7 @@ def build_native_ui(
             "CFBundleExecutable": "DobbyVPNMacApp",
             "CFBundleIdentifier": "vpn.dobby.desktop",
             "CFBundleName": "Dobby VPN",
+            "CFBundleURLTypes": [{"CFBundleURLName": "DobbyVPN", "CFBundleURLSchemes": ["dobbyvpn"]}],
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,

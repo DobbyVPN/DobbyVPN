@@ -4,7 +4,7 @@ namespace DobbyVPN.Windows;
 
 public partial class App : Application
 {
-    private Window? _window;
+    private MainWindow? _window;
 
     public App()
     {
@@ -25,6 +25,7 @@ public partial class App : Application
         {
             _window = new MainWindow();
             _window.Activate();
+            Program.Attach(_window);
         }
         catch (Exception error)
         {

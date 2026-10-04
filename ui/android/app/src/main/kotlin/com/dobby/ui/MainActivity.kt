@@ -1,5 +1,7 @@
 package com.dobby.ui
 
+import android.content.ClipboardManager
+import android.content.ClipDescription
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -18,7 +20,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalFocusManager
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
         current = this
         NativeGoSession.attach(this)
         controller = SessionController(this)
+        if (intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -65,6 +67,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
     }
 
     override fun onStart() {
@@ -88,6 +96,10 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private data class ProfileData(val index: Int, val description: String, val protocol: String) {
+    val name: String get() = description.ifBlank { "Profile ${index + 1}" }
+}
+private data class SelectionData(val digest: String, val mode: String, val index: Int)
 private data class SessionData(
     val sessionId: String = "",
     val sequence: Long = 0,
@@ -96,6 +108,14 @@ private data class SessionData(
     val primaryAction: String = "NONE",
     val configured: Boolean = false,
     val sourceUrl: String = "",
+    val digest: String = "",
+    val profiles: List<ProfileData> = emptyList(),
+    val activeDigest: String = "",
+    val activeMode: String = "",
+    val activeIndex: Int = 0,
+    val activeProfileIndex: Int = -1,
+    val pendingTarget: SelectionData? = null,
+    val canSwitch: Boolean = false,
     val activeProfile: String = "",
     val recovering: Boolean = false,
     val failure: String = "",
@@ -106,6 +126,9 @@ private data class ScreenState(
     val session: SessionData = SessionData(),
     val source: String = "",
     val sourceDirty: Boolean = false,
+    val loading: Boolean = false,
+    val loadError: String = "",
+    val canPaste: Boolean = false,
     val busy: Boolean = false,
     val error: String = "",
     val screen: String = "connection",
@@ -123,56 +146,160 @@ private class SessionController(private val activity: MainActivity) {
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var visible = false
     @Volatile private var latest = SessionData()
-    @Volatile private var pendingPermission = false
+    private var permissionTarget: Pair<SessionData, Int?>? = null
+    private val loadWorker = Executors.newSingleThreadExecutor()
+    private var loadInFlight = false
+    private var loadRevision = 0
+    private var pendingLoad: String? = null
+    private var debounce: Runnable? = null
+    private var restoredLoad = ""
+    private val clipboard = activity.getSystemService(ClipboardManager::class.java)
+    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener { refreshClipboard() }
 
     init {
+        clipboard.addPrimaryClipChangedListener(clipboardListener)
         worker.scheduleWithFixedDelay({ refreshSnapshot() }, 0, 500, TimeUnit.MILLISECONDS)
         NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
     }
 
-    fun sourceChanged(value: String) {
-        state = state.copy(source = value, sourceDirty = true, error = "")
+    fun sourceChanged(value: String, immediate: Boolean = false) {
+        if (permissionTarget != null) state = state.copy(busy = false)
+        permissionTarget = null
+        state = state.copy(source = value, sourceDirty = true, error = "", loadError = "")
+        loadRevision++
+        pendingLoad = null
+        debounce?.let(main::removeCallbacks)
+        val source = value.trim()
+        val uri = runCatching { java.net.URI(source) }.getOrNull()
+        if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) return
+        debounce = Runnable { pendingLoad = source; loadNext() }.also { main.postDelayed(it, if (immediate) 0 else 400) }
     }
 
-    fun show(screen: String) {
-        state = state.copy(screen = screen)
+    fun retryLoad() = sourceChanged(state.source, true)
 
-    }
-
-    fun connectOrDisconnect() {
-        if (state.busy) return
-        val current = latest
-        when (current.primaryAction) {
-            "STOP" -> {
-                if (current.generation <= 0) return
-                state = state.copy(busy = true, error = "")
-                worker.execute {
-                    runCatching { NativeGoSession.stop(current.sessionId, current.generation) }
-                        .onSuccess { response -> consumeSnapshotCommand(response, "Stop failed") }
-                        .onFailure { failure -> report(failure.message ?: "Stop failed") }
+    private fun loadNext() {
+        if (loadInFlight || latest.sessionId.isEmpty()) return
+        val source = pendingLoad ?: return
+        pendingLoad = null
+        loadInFlight = true
+        state = state.copy(loading = true)
+        val revision = loadRevision
+        loadWorker.execute {
+            val outcome = runCatching {
+                val snapshotResponse = JSONObject(NativeGoSession.snapshot(""))
+                requireOK(snapshotResponse)
+                val current = snapshotResponse.getJSONObject("result")
+                requireOK(JSONObject(NativeGoSession.configure(current.getString("session_id"), current.getLong("sequence"), source.toByteArray(Charsets.UTF_8))))
+            }
+            main.post {
+                loadInFlight = false
+                state = state.copy(loading = false)
+                if (revision == loadRevision) {
+                    state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
+                    else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
                 }
+                worker.execute { refreshSnapshot() }
+                loadNext()
             }
-            "START" -> {
-                state = state.copy(busy = true, error = "")
-                val currentUI = state
-                worker.execute { prepareAndStart(currentUI) }
-            }
-            else -> return
         }
     }
 
-    fun permissionResult(granted: Boolean) {
-        if (!pendingPermission) return
-        pendingPermission = false
-        if (!granted) {
-            report("VPN permission was not granted")
+    fun show(screen: String) { state = state.copy(screen = screen) }
+
+    fun isStopTarget(index: Int?): Boolean {
+        val s = state.session
+        s.pendingTarget?.let { return it.digest == s.digest && if (index == null) it.mode == "AUTO_SELECT" else it.mode == "PROFILE_INDEX" && it.index == index }
+        if (s.primaryAction != "STOP") return false
+        if (index == null) return s.activeMode == "AUTO_SELECT"
+        return s.activeDigest == s.digest && if (s.state == "CONNECTED") s.activeProfileIndex == index else s.activeMode == "PROFILE_INDEX" && s.activeIndex == index
+    }
+
+    fun canAct(index: Int? = null): Boolean = !state.busy && permissionTarget == null &&
+        (isStopTarget(index) || (!state.sourceDirty && !state.loading && state.loadError.isEmpty() && state.session.configured &&
+            (state.session.primaryAction == "START" || state.session.canSwitch)))
+
+    fun actionTitle(index: Int? = null): String = if (isStopTarget(index)) {
+        if (state.session.state == "CONNECTED" && state.session.pendingTarget == null) "Disconnect" else "Stop"
+    } else if (index == null) "Auto connect" else "Connect"
+
+    fun connectOrDisconnect(index: Int? = null) {
+        if (!canAct(index)) return
+        if (isStopTarget(index)) { stop(); return }
+        val current = latest
+        state = state.copy(busy = true, error = "")
+        permissionTarget = current to index
+        worker.execute {
+            when (NativeVpnBridge.prepare(activity)) {
+                1 -> main.post { continuePermission(true) }
+                0 -> main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
+                else -> main.post { permissionTarget = null; report("Android VPN service could not be prepared") }
+            }
+        }
+    }
+
+    fun stop() {
+        permissionTarget = null
+        val current = latest
+        if (state.busy || current.primaryAction != "STOP") return
+        state = state.copy(busy = true, error = "")
+        worker.execute {
+            runCatching { NativeGoSession.stop(current.sessionId, current.generation) }
+                .onSuccess { consumeSnapshotCommand(it, "Stop failed") }
+                .onFailure { report(it.message ?: "Stop failed", it) }
+        }
+    }
+
+    fun permissionResult(granted: Boolean) = continuePermission(granted)
+
+    private fun continuePermission(granted: Boolean) {
+        val target = permissionTarget ?: return
+        permissionTarget = null
+        if (!granted) { report("VPN permission was not granted"); return }
+        val (selected, index) = target
+        val current = latest
+        if (state.sourceDirty || current.sessionId != selected.sessionId || current.digest != selected.digest) {
+            state = state.copy(busy = false)
             return
         }
-        state = state.copy(error = "VPN permission granted. Press Connect to continue")
+        state = state.copy(busy = true, error = "")
+        worker.execute {
+            runCatching { NativeGoSession.startSelection(current.sessionId, current.sequence, if (index == null) "AUTO_SELECT" else "PROFILE_INDEX", index ?: 0, selected.digest) }
+                .onSuccess { consumeSnapshotCommand(it, "Connect failed") }
+                .onFailure { report(it.message ?: "Connect failed", it) }
+        }
     }
 
-    fun setVisible(value: Boolean) { visible = value }
+    fun setVisible(value: Boolean) { visible = value; if (value) refreshClipboard() }
+
+    private fun refreshClipboard() {
+        state = state.copy(canPaste = clipboard.hasPrimaryClip() && clipboard.primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true)
+    }
+
+    fun paste() {
+        val value = clipboard.primaryClip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
+        importSubscription(value)
+    }
+
+    private fun importSubscription(value: String) {
+        val uri = runCatching { java.net.URI(value) }.getOrNull()
+        if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) { report("Paste an HTTPS subscription URL with a host"); return }
+        if (value == state.source && (state.loading || !state.sourceDirty && state.session.configured)) return
+        sourceChanged(value, true)
+    }
+
+    fun importLink(value: String) {
+        try {
+            if (value.equals("dobbyvpn://", true)) return
+            val uri = java.net.URI(value)
+            require(uri.scheme.equals("dobbyvpn", true) && uri.host == "import" && uri.rawPath.isNullOrEmpty() && uri.rawFragment == null && uri.rawUserInfo == null && uri.port == -1)
+            val query = uri.rawQuery.orEmpty().split('&')
+            require(query.size == 1)
+            val pair = query.single().split('=', limit = 2)
+            require(pair.size == 2 && pair[0] == "url")
+            importSubscription(java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8"))
+        } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
+    }
 
     private fun readDiagnostics(): Pair<String, String> {
         val contents = mutableListOf<String>()
@@ -228,72 +355,11 @@ private class SessionController(private val activity: MainActivity) {
     }
 
     fun close() {
+        clipboard.removePrimaryClipChangedListener(clipboardListener)
         worker.shutdownNow()
         logWorker.shutdownNow()
-    }
-
-    private fun prepareAndStart(currentUI: ScreenState) {
-        try {
-            if (latest.sessionId.isEmpty()) refreshSnapshot()
-            var current = latest
-            if (current.sessionId.isEmpty()) throw IllegalStateException("Go session is not ready")
-            if (!current.configured || currentUI.sourceDirty) {
-                val source = currentUI.source.trim()
-                if (source.isEmpty()) {
-                    report("Enter an HTTPS connection URL or inline configuration")
-                    return
-                }
-                val response = JSONObject(
-                    NativeGoSession.configure(current.sessionId, current.sequence, source.toByteArray(Charsets.UTF_8)),
-                )
-                requireOK(response)
-                val configured = response.getJSONObject("result")
-                current = current.copy(
-                    sequence = configured.optLong("sequence", current.sequence),
-                    configured = true,
-                    sourceUrl = if (configured.optString("source_kind").equals("URL", true)) source else "",
-                    state = "CONFIGURED",
-                )
-                latest = current
-                main.post {
-                    state = state.copy(
-                        source = if (current.sourceUrl.isNotEmpty()) current.sourceUrl else source,
-                        sourceDirty = false,
-                        session = current,
-                    )
-                }
-            }
-
-            when (NativeVpnBridge.prepare(activity)) {
-                1 -> startCurrent(current)
-                0 -> {
-                    pendingPermission = true
-                    main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
-                }
-                else -> report("Android VPN service could not be prepared")
-            }
-        } catch (failure: Exception) {
-            report(commandError(failure), failure)
-        }
-    }
-
-    private fun startCurrent(current: SessionData) {
-        val response = JSONObject(
-            NativeGoSession.start(
-                current.sessionId,
-                current.sequence,
-                "AUTO_SELECT",
-                0,
-                null,
-            ),
-        )
-        requireOK(response)
-        val result = response.getJSONObject("result")
-        latest = current.copy(
-            sequence = result.optLong("sequence", current.sequence),
-            generation = result.optLong("generation", current.generation),
-        )
-        refreshSnapshot(clearBusy = true)
+        loadWorker.shutdownNow()
+        debounce?.let(main::removeCallbacks)
     }
 
     private fun refreshSnapshot(clearBusy: Boolean = false) {
@@ -318,6 +384,18 @@ private class SessionController(private val activity: MainActivity) {
                 primaryAction = snapshot.optString("primary_action", "NONE"),
                 configured = snapshot.optBoolean("configured"),
                 sourceUrl = snapshot.optString("source_url"),
+                digest = snapshot.optString("digest"),
+                profiles = snapshot.optJSONArray("profiles")?.let { profiles ->
+                    (0 until profiles.length()).map { profiles.getJSONObject(it) }.map {
+                        ProfileData(it.getInt("index"), it.optString("description"), it.optString("protocol"))
+                    }
+                }.orEmpty(),
+                activeDigest = snapshot.optString("active_digest"),
+                activeMode = snapshot.optString("active_mode"),
+                activeIndex = snapshot.optInt("active_index"),
+                activeProfileIndex = active?.optInt("index", -1) ?: -1,
+                pendingTarget = snapshot.optJSONObject("pending_target")?.let { SelectionData(it.getString("digest"), it.getString("mode"), it.getInt("index")) },
+                canSwitch = snapshot.optBoolean("can_switch"),
                 activeProfile = active?.let {
                     listOf(it.optString("protocol"), it.optString("description"))
                         .filter(String::isNotBlank)
@@ -343,6 +421,12 @@ private class SessionController(private val activity: MainActivity) {
                     },
                     busy = if (clearBusy) false else state.busy,
                 )
+                val restoreKey = current.sessionId + "|" + state.source
+                if (!current.configured && !state.sourceDirty && state.source.isNotEmpty() && restoredLoad != restoreKey) {
+                    restoredLoad = restoreKey
+                    sourceChanged(state.source, true)
+                }
+                loadNext()
             }
         } catch (failure: Exception) {
             latest = SessionData()
@@ -383,16 +467,10 @@ private class SessionController(private val activity: MainActivity) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DobbyApp(controller: SessionController) {
-    var menu by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(title = { Text("DobbyVPN") }, actions = {
-                TextButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = "More options" }) {
-                    Text("More")
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text("About") }, onClick = { menu = false; controller.show("about") })
-                }
+                TextButton(onClick = { controller.show("about") }) { Text("About") }
             })
         },
     ) { padding ->
@@ -409,10 +487,6 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
     val state = controller.state
     val session = state.session
     val focus = LocalFocusManager.current
-    var configurationText by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(state.source) {
-        if (state.source.contains('\n') || state.source.trimStart().startsWith("[")) configurationText = true
-    }
     val status = when {
         session.recovering -> "Reconnecting"
         state.error.isNotEmpty() -> "Error"
@@ -421,11 +495,6 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         session.state == "STOPPING" -> "Stopping"
         session.failure.isNotEmpty() -> "Failed"
         else -> "Disconnected"
-    }
-    val action = when (session.primaryAction) {
-        "START" -> "Connect"
-        "STOP" -> if (session.state == "CONNECTED") "Disconnect" else "Cancel"
-        else -> if (session.state == "STOPPING") "Stopping…" else "Waiting…"
     }
     BoxWithConstraints(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         val controlsHeight = maxHeight * 0.65f
@@ -436,22 +505,22 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
             ) {
                 OutlinedTextField(
                     value = state.source,
-                    onValueChange = controller::sourceChanged,
+                    onValueChange = { controller.sourceChanged(it) },
                     modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Connection configuration" },
-                    label = { Text(if (configurationText) "Configuration text" else "Subscription URL") },
-                    placeholder = { Text(if (configurationText) "Paste your configuration" else "https://…") },
-                    singleLine = !configurationText,
-                    minLines = if (configurationText) 3 else 1,
-                    maxLines = if (configurationText) 5 else 1,
-                    enabled = !state.busy,
+                    label = { Text("Subscription URL") },
+                    placeholder = { Text("https://…") },
+                    singleLine = true,
                     keyboardOptions = KeyboardOptions(
-                        keyboardType = if (configurationText) KeyboardType.Text else KeyboardType.Uri,
-                        imeAction = if (configurationText) ImeAction.Default else ImeAction.Done,
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Done,
                     ),
                     keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                 )
-                TextButton(onClick = { configurationText = !configurationText }) {
-                    Text(if (configurationText) "Use subscription URL" else "Use configuration text…")
+                if (state.canPaste) TextButton(onClick = controller::paste) { Text("Paste") }
+                if (state.loading) Text("Loading profiles…")
+                if (state.loadError.isNotEmpty()) {
+                    Text(state.loadError, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = controller::retryLoad) { Text("Retry") }
                 }
                 Text(status, modifier = Modifier.semantics { contentDescription = status; liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.titleMedium)
                 if (session.activeProfile.isNotEmpty()) {
@@ -459,25 +528,31 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                 }
                 if (state.error.isNotEmpty() || session.failure.isNotEmpty()) {
                     Text(
-                        when {
-                            state.error.contains("permission", ignoreCase = true) -> state.error
-                            session.sessionId.isEmpty() -> "VPN service is unavailable. See logs for details."
-                            else -> "Check your subscription URL or configuration. See logs for details."
-                        },
+                        state.error.ifEmpty { session.failure },
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
                 Button(
                     onClick = { focus.clearFocus(); controller.connectOrDisconnect() },
-                    enabled = !state.busy && session.primaryAction in setOf("START", "STOP"),
+                    enabled = controller.canAct(),
                     modifier = Modifier.fillMaxWidth().semantics { contentDescription = "VPN connection action" },
                 ) {
                     if (state.busy || session.state in setOf("PROBING", "PREPARING", "STOPPING")) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(action)
+                    Text(controller.actionTitle())
+                }
+                if (session.primaryAction == "STOP" && session.activeDigest != session.digest) {
+                    TextButton(onClick = controller::stop, enabled = !state.busy) { Text(if (session.state == "CONNECTED") "Disconnect" else "Stop") }
+                }
+                session.profiles.forEach { profile ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.weight(1f)) { Text(profile.name); Text(profile.protocol, style = MaterialTheme.typography.bodySmall) }
+                        Button(onClick = { controller.connectOrDisconnect(profile.index) }, enabled = controller.canAct(profile.index),
+                            modifier = Modifier.semantics { contentDescription = "Profile ${profile.index + 1} action" }) { Text(controller.actionTitle(profile.index)) }
+                    }
                 }
             }
             LogsPane(controller, Modifier.weight(1f))
@@ -492,6 +567,7 @@ private fun AboutScreen(controller: SessionController, modifier: Modifier) {
         SelectionContainer {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Version: ${BuildConfig.VERSION_NAME}")
+                Text("Commit: ${BuildConfig.PROJECT_REPOSITORY_COMMIT.take(8)}")
                 Text("Source commit: ${BuildConfig.PROJECT_REPOSITORY_COMMIT}", modifier = Modifier.semantics { contentDescription = "Source commit" })
             }
         }

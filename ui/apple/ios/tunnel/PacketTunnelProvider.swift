@@ -101,7 +101,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     var logs = IOSAppCompositionRoot.logsRepository
     private let secrets = SharedKeychainSecretStore.shared
-    let commandQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.session-command")
+    let commandQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.session-command", attributes: .concurrent)
     let settingsQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.settings")
     var callbackBridge: AnyObject?
     private func registerPlatform() throws {

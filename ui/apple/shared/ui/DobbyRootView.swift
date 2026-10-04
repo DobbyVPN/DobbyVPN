@@ -9,8 +9,8 @@ public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var configurationFocused: Bool
-    @State private var configurationText = false
     @State private var showingAbout = false
+    @State private var canPaste = false
     @State private var followingLogs = true
     @State private var jumpToLatest = 0
     @State private var exportedLogsURL: URL?
@@ -52,15 +52,11 @@ public struct DobbyRootView: View {
         let view: DobbyRootView
         func body(content: Content) -> some View {
             content
-                .onAppear { view.model.setLogsVisible(true) }
+                .onAppear { view.model.setLogsVisible(true); view.refreshClipboard() }
                 .onDisappear { view.model.setLogsVisible(false) }
                 .onChange(of: view.model.status) { status in view.announceStatus(status) }
-                .onChange(of: view.scenePhase) { phase in view.model.setLogsVisible(phase == .active) }
-                .onChange(of: view.model.sourceText) { source in
-                    if source.contains("\n") || source.trimmingCharacters(in: .whitespaces).hasPrefix("[") {
-                        view.configurationText = true
-                    }
-                }
+                .onChange(of: view.scenePhase) { phase in view.model.setLogsVisible(phase == .active); view.refreshClipboard() }
+                .onOpenURL { view.model.importLink($0) }
                 .sheet(isPresented: view.$showingAbout) {
                     DobbyAboutView(model: view.model)
                 }
@@ -71,72 +67,83 @@ public struct DobbyRootView: View {
     }
 
     private var content: some View {
-#if os(macOS)
-        VSplitView {
-            ScrollView {
-                connection.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: configurationText ? 260 : 160)
-            logs.padding(20).frame(minHeight: 140)
-        }
-#else
         GeometryReader { geometry in
             VStack(spacing: 12) {
-                ScrollView { connection.padding(.horizontal, 16).padding(.top, 12) }
-                    .frame(maxHeight: geometry.size.height * 0.55)
-                logs.padding(.horizontal, 16).padding(.bottom, 8)
+                VStack(alignment: .leading, spacing: 10) {
+                    configurationEditor
+                    connectionSummary
+                    primaryAction
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(model.snapshot.profiles) { profile in
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(profile.name)
+                                        Text(profile.protocolName).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Button(model.actionTitle(profile.index)) { model.performPrimaryAction(profile.index) }
+                                        .disabled(!model.canAct(profile.index))
+                                        .accessibilityIdentifier("Profile \(profile.index + 1) action")
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: min(180, geometry.size.height * 0.25))
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                logs.frame(maxHeight: .infinity)
             }
+            .padding(16)
         }
-#endif
     }
 
-    private var connection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            configurationEditor
-#if os(macOS)
-            HStack(spacing: 20) {
-                connectionSummary
-                Spacer()
-                primaryAction
-            }
-#else
-            connectionSummary
-            primaryAction.frame(maxWidth: .infinity)
-#endif
-        }
-    }
-
-    @ViewBuilder
     private var configurationEditor: some View {
-        Text(configurationText ? "Configuration text" : "Subscription URL").font(.headline)
-        if configurationText {
-            TextEditor(text: sourceBinding)
-                .frame(height: 100)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.4)))
-                .accessibilityIdentifier("Connection configuration")
-                .accessibilityLabel("Configuration text")
-                .focused($configurationFocused)
-                .disabled(model.busy)
-        } else {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Subscription URL").font(.headline)
             TextField("https://…", text: sourceBinding)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("Connection configuration")
                 .accessibilityLabel("Subscription URL")
                 .focused($configurationFocused)
-                .disabled(model.busy)
 #if os(iOS)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.done)
 #endif
+            pasteControl
+            if model.loading { ProgressView("Loading profiles…") }
+            if !model.loadError.isEmpty {
+                Text(model.loadError).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                Button("Retry") { model.retryLoad() }
+            }
         }
-        Button(configurationText ? "Use subscription URL" : "Use configuration text…") {
-            configurationText.toggle()
+    }
+
+    @ViewBuilder
+    private var pasteControl: some View {
+#if os(iOS)
+        if #available(iOS 16.0, *) {
+            PasteButton(payloadType: String.self) { values in
+                if let value = values.first { model.paste(value) }
+            }
+        } else if canPaste {
+            Button("Paste") { if let value = UIPasteboard.general.string { model.paste(value) } }
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.tint)
-        .font(.subheadline)
+#elseif os(macOS)
+        if canPaste {
+            Button("Paste") { if let value = NSPasteboard.general.string(forType: .string) { model.paste(value) } }
+        }
+#endif
+    }
+
+    private func refreshClipboard() {
+#if os(iOS)
+        canPaste = UIPasteboard.general.hasStrings
+#elseif os(macOS)
+        canPaste = NSPasteboard.general.availableType(from: [.string]) != nil
+#endif
     }
 
     private var sourceBinding: Binding<String> {
@@ -150,10 +157,12 @@ public struct DobbyRootView: View {
                 Text([profile.protocolName, profile.description].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.subheadline)
             }
+            if model.snapshot.primaryAction == "STOP" && model.snapshot.activeDigest != model.snapshot.digest {
+                Button(model.snapshot.state == "CONNECTED" ? "Disconnect" : "Stop") { model.stop() }
+                    .disabled(model.busy)
+            }
             if !model.error.isEmpty {
-                Text(model.snapshot.sessionID.isEmpty
-                     ? "VPN service is unavailable. See logs for details."
-                     : "Check your subscription URL or configuration. See logs for details.")
+                Text(model.error)
                     .font(.subheadline).foregroundStyle(.red)
             } else if model.snapshot.lastFailure != nil {
                 Text("Connection failed. See logs for details.").font(.subheadline).foregroundStyle(.red)
@@ -170,14 +179,14 @@ public struct DobbyRootView: View {
                 if model.busy || ["PROBING", "PREPARING", "STOPPING"].contains(model.snapshot.state) {
                     ProgressView().controlSize(.small)
                 }
-                Text(model.actionTitle)
+                Text(model.actionTitle())
             }
 #if os(iOS)
             .frame(maxWidth: .infinity, minHeight: 30)
 #endif
         }
         .buttonStyle(.borderedProminent)
-        .disabled(model.busy || !model.canPerformPrimaryAction)
+        .disabled(!model.canAct())
         .accessibilityIdentifier("VPN connection action")
         .keyboardShortcut(.return, modifiers: .command)
     }

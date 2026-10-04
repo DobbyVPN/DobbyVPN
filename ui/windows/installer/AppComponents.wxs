@@ -19,6 +19,15 @@
 					WorkingDirectory="DobbyVPNFolderBin" />
 			</File>
 		</Component>
+        <Component Directory="DobbyVPNFolderBin" Id="DobbyVPNProtocol" Guid="64714854-31e1-4ca5-ac1c-fbf384c58421">
+            <RegistryKey Root="HKLM" Key="Software\Classes\dobbyvpn" ForceDeleteOnUninstall="yes">
+                <RegistryValue Type="string" Value="URL:DobbyVPN" />
+                <RegistryValue Name="URL Protocol" Type="string" Value="" KeyPath="yes" />
+                <RegistryKey Key="shell\open\command">
+                    <RegistryValue Type="string" Value="&quot;[DobbyVPNFolderBin]DobbyVPN.exe&quot; &quot;%1&quot;" />
+                </RegistryKey>
+            </RegistryKey>
+        </Component>
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNCliExecutable" Guid="31c65f0f-407e-4d7b-99cb-3b5de6d2ea2e">
 			<File Source="dobbyVPN-windows\bin\dobby-cli.exe" KeyPath="yes" />
 		</Component>

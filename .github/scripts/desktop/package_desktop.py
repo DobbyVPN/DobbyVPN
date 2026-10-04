@@ -126,6 +126,7 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
             "CFBundleExecutable": "DobbyVPNMacApp",
             "CFBundleIdentifier": "vpn.dobby.desktop",
             "CFBundleName": "Dobby VPN",
+            "CFBundleURLTypes": [{"CFBundleURLName": "DobbyVPN", "CFBundleURLSchemes": ["dobbyvpn"]}],
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,

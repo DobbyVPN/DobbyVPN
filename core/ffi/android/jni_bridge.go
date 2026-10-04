@@ -449,6 +449,13 @@ func Java_com_dobby_nativebridge_NativeGoSession_start(
 	))
 }
 
+//export Java_com_dobby_nativebridge_NativeGoSession_startSelection
+func Java_com_dobby_nativebridge_NativeGoSession_startSelection(
+	env *C.JNIEnv, _ C.jclass, session C.jstring, sequence C.jlong, mode C.jstring, index C.jint, digest C.jstring,
+) C.jstring {
+	return jniResult(env, mobileSessions.StartSelection(jniString(env, session), int64(sequence), jniString(env, mode), int32(index), jniString(env, digest), true))
+}
+
 //export Java_com_dobby_nativebridge_NativeGoSession_stop
 func Java_com_dobby_nativebridge_NativeGoSession_stop(
 	env *C.JNIEnv, _ C.jclass, session C.jstring, generation C.jlong,

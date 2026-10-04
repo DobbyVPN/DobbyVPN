@@ -3,19 +3,22 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="DobbyVPN">
-  <Grid x:Name="Root" MinWidth="560" Margin="24" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="16">
+  <Grid x:Name="Root" MinWidth="560" Margin="24" RowDefinitions="Auto,Auto,Auto,Auto,*" RowSpacing="16">
     <Grid ColumnDefinitions="*,Auto">
       <TextBlock Text="DobbyVPN" Style="{StaticResource TitleTextBlockStyle}" />
       <Button Grid.Column="1" Content="About" Click="About_Click" />
     </Grid>
     <StackPanel Grid.Row="1" Spacing="6">
       <TextBox x:Name="SourceEditor" Header="Subscription URL" PlaceholderText="https://…" AutomationProperties.AutomationId="Connection configuration" AutomationProperties.Name="Subscription URL" />
-      <HyperlinkButton x:Name="SourceModeButton" Content="Use configuration text…" Click="SourceMode_Click" />
+      <Button x:Name="PasteButton" Content="Paste" Click="Paste_Click" Visibility="Collapsed" />
+      <TextBlock x:Name="LoadStatus" TextWrapping="Wrap" />
+      <Button x:Name="RetryButton" Content="Retry" Click="Retry_Click" Visibility="Collapsed" />
     </StackPanel>
     <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="16">
       <StackPanel Spacing="4">
         <TextBlock x:Name="StatusText" Text="Disconnected" AutomationProperties.AutomationId="Disconnected" AutomationProperties.LiveSetting="Polite" />
         <TextBlock x:Name="ProfileText" TextWrapping="WrapWholeWords" />
+        <Button x:Name="ActiveStopButton" Content="Disconnect" Click="ActiveStop_Click" Visibility="Collapsed" />
         <TextBlock x:Name="FailureText" TextWrapping="WrapWholeWords" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
         <TextBlock x:Name="ErrorText" TextWrapping="WrapWholeWords" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
       </StackPanel>
@@ -26,7 +29,10 @@
         </Button>
       </StackPanel>
     </Grid>
-    <Grid Grid.Row="3" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="8">
+    <ScrollViewer Grid.Row="3" MaxHeight="180" VerticalScrollBarVisibility="Auto">
+      <StackPanel x:Name="ProfileList" Spacing="8" />
+    </ScrollViewer>
+    <Grid Grid.Row="4" RowDefinitions="Auto,Auto,Auto,*" RowSpacing="8">
       <Grid ColumnDefinitions="*,Auto">
         <TextBlock Text="Logs" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">

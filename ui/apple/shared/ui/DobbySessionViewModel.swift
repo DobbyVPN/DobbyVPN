@@ -17,6 +17,15 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
+    @Published public private(set) var loading = false
+    @Published public private(set) var loadError = ""
+    private let loadWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.configuration")
+    private var loadInFlight = false
+    private var loadRevision = 0
+    private var pendingLoad: String?
+    private var debounce: Task<Void, Never>?
+    private var restoredLoad = ""
+
     public let client: DobbySessionClient
     private let worker = DispatchQueue(label: "com.dobbyvpn.native-ui.session")
     private var timer: Timer?
@@ -56,21 +65,90 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
-    public var actionTitle: String {
-        switch snapshot.primaryAction {
-        case "START": return "Connect"
-        case "STOP": return snapshot.state == "CONNECTED" ? "Disconnect" : "Cancel"
-        default: return snapshot.state == "STOPPING" ? "Stopping…" : "Waiting…"
+    public var inventoryReady: Bool {
+        snapshot.configured && !sourceIsDirty && !loading && loadError.isEmpty
+    }
+
+    public func isStopTarget(_ index: Int?) -> Bool {
+        if let pending = snapshot.pendingTarget {
+            return pending.digest == snapshot.digest && (index == nil ? pending.mode == "AUTO_SELECT" : pending.mode == "PROFILE_INDEX" && pending.index == index)
+        }
+        guard snapshot.primaryAction == "STOP" else { return false }
+        if index == nil { return snapshot.activeMode == "AUTO_SELECT" }
+        guard snapshot.activeDigest == snapshot.digest else { return false }
+        return snapshot.state == "CONNECTED" ? snapshot.activeProfile?.index == index : snapshot.activeMode == "PROFILE_INDEX" && snapshot.activeIndex == index
+    }
+
+    public func actionTitle(_ index: Int? = nil) -> String {
+        if isStopTarget(index) { return snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Disconnect" : "Stop" }
+        return index == nil ? "Auto connect" : "Connect"
+    }
+
+    public func canAct(_ index: Int? = nil) -> Bool {
+        !busy && !snapshot.sessionID.isEmpty && (isStopTarget(index) || inventoryReady && (snapshot.primaryAction == "START" || snapshot.canSwitch))
+    }
+
+    public func sourceChanged(_ value: String, immediate: Bool = false) {
+        sourceText = value
+        sourceIsDirty = true
+        error = ""
+        loadError = ""
+        loadRevision += 1
+        pendingLoad = nil
+        debounce?.cancel()
+        let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard validSubscription(source) else { return }
+        debounce = Task { [weak self] in
+            if !immediate { try? await Task.sleep(nanoseconds: 400_000_000) }
+            guard !Task.isCancelled, let self else { return }
+            self.pendingLoad = source
+            self.loadNext()
         }
     }
 
-    public var canPerformPrimaryAction: Bool {
-        !snapshot.sessionID.isEmpty && ["START", "STOP"].contains(snapshot.primaryAction)
+    public func paste(_ value: String) {
+        let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard validSubscription(source) else { error = "Paste an HTTPS subscription URL with a host"; return }
+        if source == sourceText && (loading || snapshot.configured && !sourceIsDirty) { return }
+        sourceChanged(source, immediate: true)
     }
 
-    public func sourceChanged(_ value: String) {
-        sourceText = value
-        error = ""
+    public func importLink(_ url: URL) {
+        do {
+            if let source = try subscriptionFromLink(url.absoluteString) { paste(source) }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    public func retryLoad() { sourceChanged(sourceText, immediate: true) }
+
+    private func loadNext() {
+        guard !loadInFlight, let source = pendingLoad, !snapshot.sessionID.isEmpty else { return }
+        pendingLoad = nil
+        loadInFlight = true
+        loading = true
+        let revision = loadRevision
+        let client = client
+        loadWorker.async { [weak self, client] in
+            let result = Result {
+                let current = try DobbyResponse.result(from: client.call("Snapshot", parameters: ["session_id": ""]), as: DobbySessionSnapshot.self)
+                try DobbyResponse.check(client.call("Configure", parameters: [
+                    "session_id": current.sessionID, "expected_sequence": current.sequence, "source": source,
+                ]))
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.loadInFlight = false
+                self.loading = false
+                if revision == self.loadRevision {
+                    switch result {
+                    case .success: self.markSourceAccepted(source)
+                    case let .failure(failure): self.loadError = failure.localizedDescription
+                    }
+                }
+                self.refreshSnapshot()
+                self.loadNext()
+            }
+        }
     }
 
     public func reportLogsError(_ message: String) {
@@ -107,6 +185,12 @@ public final class DobbySessionViewModel: ObservableObject {
                             self.sourceText = ""
                         }
                     }
+                    let restoreKey = value.sessionID + "|" + self.sourceText
+                    if !value.configured && !self.sourceIsDirty && !self.sourceText.isEmpty && self.restoredLoad != restoreKey {
+                        self.restoredLoad = restoreKey
+                        self.sourceChanged(self.sourceText, immediate: true)
+                    }
+                    self.loadNext()
                     if !value.sourceError.isEmpty {
                         self.error = value.sourceError
                     } else if reattached || recoveringFromSnapshotFailure {
@@ -120,42 +204,39 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
-    public func performPrimaryAction() {
-        guard !busy else { return }
-        guard canPerformPrimaryAction else { return }
-        guard !snapshot.sessionID.isEmpty else {
-            error = "Go backend session is not ready"
-            return
-        }
+    public func performPrimaryAction(_ index: Int? = nil) {
+        guard canAct(index) else { return }
+        if isStopTarget(index) { stop(); return }
+        performCommand(index: index, stopping: false)
+    }
+
+    public func stop() {
+        guard !busy, snapshot.primaryAction == "STOP" else { return }
+        performCommand(index: nil, stopping: true)
+    }
+
+    private func performCommand(index: Int?, stopping: Bool) {
         busy = true
         error = ""
         let current = snapshot
-        let action = current.primaryAction
-        let source = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let submitSource = action == "START" && (!current.configured || sourceIsDirty)
         let client = client
-        worker.async { [weak self, client, current, source, submitSource, action] in
-            let result = runPrimaryAction(
-                client: client,
-                current: current,
-                source: source,
-                submitSource: submitSource,
-                action: action
-            )
+        worker.async { [weak self, client] in
+            let outcome = Result {
+                if stopping {
+                    try DobbyResponse.check(client.call("Stop", parameters: ["session_id": current.sessionID, "generation": current.generation]))
+                } else {
+                    try DobbyResponse.check(client.call("Start", parameters: [
+                        "session_id": current.sessionID, "expected_sequence": current.sequence,
+                        "mode": index == nil ? "AUTO_SELECT" : "PROFILE_INDEX", "index": index ?? 0,
+                        "digest": current.digest, "replace_current": true,
+                    ]))
+                }
+            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.busy = false
-                switch result.outcome {
-                case .success:
-                    if submitSource && action == "START" { self.markSourceAccepted(source) }
-                    self.refreshSnapshot()
-                case let .failure(failure):
-                    if let refreshed = result.snapshotAfterFailure {
-                        self.snapshot = refreshed
-                    }
-                    self.error = failure.localizedDescription
-                    self.refreshSnapshot()
-                }
+                if case let .failure(failure) = outcome { self.error = failure.localizedDescription }
+                self.refreshSnapshot()
             }
         }
     }
@@ -248,41 +329,20 @@ private func readSnapshot(
     }
 }
 
-private func runPrimaryAction(
-    client: DobbySessionClient,
-    current: DobbySessionSnapshot,
-    source: String,
-    submitSource: Bool,
-    action: String
-) -> (outcome: Result<Void, Error>, snapshotAfterFailure: DobbySessionSnapshot?) {
-    let outcome = Result {
-        if action == "STOP" {
-            let response = client.call("Stop", parameters: [
-                "session_id": current.sessionID,
-                "generation": current.generation,
-            ])
-            try DobbyResponse.check(response)
-        } else if action == "START" {
-            guard !submitSource || !source.isEmpty else { throw DobbyClientError.noConfiguration }
-            var parameters: [String: Any] = [
-                "session_id": current.sessionID,
-                "expected_sequence": current.sequence,
-                "mode": "AUTO_SELECT",
-                "index": 0,
-            ]
-            if submitSource { parameters["source"] = source }
-            let response = client.call("Start", parameters: parameters)
-            try DobbyResponse.check(response)
-        } else {
-            throw DobbyClientError.invalidResponse
-        }
-    }
-    let snapshotAfterFailure: DobbySessionSnapshot?
-    if case .failure = outcome,
-       case let .success((value, _)) = readSnapshot(client: client, sessionID: current.sessionID) {
-        snapshotAfterFailure = value
-    } else {
-        snapshotAfterFailure = nil
-    }
-    return (outcome, snapshotAfterFailure)
+func validSubscription(_ value: String) -> Bool {
+    guard let url = URLComponents(string: value) else { return false }
+    return url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty
+}
+
+func subscriptionFromLink(_ value: String) throws -> String? {
+    func invalid() -> DobbyClientError { .command(code: "INVALID_ARGUMENT", message: "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL") }
+    guard value.range(of: "%(?![0-9a-fA-F]{2})", options: .regularExpression) == nil,
+          let link = URLComponents(string: value), link.scheme?.lowercased() == "dobbyvpn",
+          link.user == nil, link.password == nil, link.port == nil, link.fragment == nil else { throw invalid() }
+    if (link.host ?? "").isEmpty && link.path.isEmpty && link.query == nil { return nil }
+    guard link.host == "import", link.path.isEmpty,
+          let parameters = link.queryItems, parameters.count == 1,
+          parameters[0].name == "url", let source = parameters[0].value,
+          validSubscription(source) else { throw invalid() }
+    return source
 }

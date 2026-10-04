@@ -1,4 +1,5 @@
 using System.Reflection;
+using Windows.ApplicationModel.DataTransfer;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
@@ -25,7 +26,13 @@ public sealed partial class MainWindow : Window
     private string? _acceptedInThisWindow;
     private string? _renderedSource;
     private bool _sourceInitialized;
-    private bool _configurationText;
+    private long _loadRevision;
+    private bool _loading;
+    private string _actionsKey = "";
+    private string? _pendingLoad;
+    private string _loadError = "";
+    private string _restoredLoad = "";
+    private CancellationTokenSource? _debounce;
     private bool _followingLogs = true;
     private bool _updatingLogs;
     private ScrollViewer? _logScroll;
@@ -57,8 +64,7 @@ public sealed partial class MainWindow : Window
         {
             if (!_updatingSource)
             {
-                _sourceDirty = true;
-                ErrorText.Text = string.Empty;
+                SourceChanged();
             }
         };
         Closed += (_, _) =>
@@ -67,6 +73,10 @@ public sealed partial class MainWindow : Window
             _pollTimer.Dispose();
             _shutdown.Dispose();
         };
+        Clipboard.ContentChanged += ClipboardChanged;
+        Activated += (_, _) => RefreshClipboard();
+        Closed += (_, _) => Clipboard.ContentChanged -= ClipboardChanged;
+        RefreshClipboard();
         _ = PollSnapshotsAsync(_shutdown.Token);
         _ = RefreshSnapshotAsync();
     }
@@ -102,14 +112,7 @@ public sealed partial class MainWindow : Window
                 _ => "Disconnected"
             };
             AutomationProperties.SetAutomationId(StatusText, StatusText.Text);
-            SetConnectionAction(result.PrimaryAction switch
-            {
-                "START" => "Connect",
-                "STOP" => result.State == "CONNECTED" ? "Disconnect" : "Cancel",
-                _ => result.State == "STOPPING" ? "Stopping…" : "Waiting…"
-            });
-            ConnectionButton.IsEnabled = !_busy && (result.PrimaryAction is "START" or "STOP");
-            SourceEditor.IsEnabled = !_busy;
+            RenderActions();
             var progressing = _busy || result.State is "PROBING" or "PREPARING" or "STOPPING";
             ConnectionProgress.IsActive = progressing;
             ConnectionProgress.Visibility = progressing ? Visibility.Visible : Visibility.Collapsed;
@@ -137,6 +140,13 @@ public sealed partial class MainWindow : Window
                 _renderedSource = sourceToDisplay;
                 _sourceInitialized = true;
             }
+            var restoreKey = result.SessionId + "|" + SourceEditor.Text;
+            if (!result.Configured && !_sourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
+            {
+                _restoredLoad = restoreKey;
+                SourceChanged(immediate: true);
+            }
+            _ = LoadNextAsync();
             if (!string.IsNullOrEmpty(result.SourceError)) ShowError(result.SourceError, "Check the subscription URL or configuration. See logs for details.", "source.failure");
             else
             {
@@ -175,48 +185,170 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void ConnectionButton_Click(object sender, RoutedEventArgs e)
+    private bool IsStopTarget(int? index)
     {
-        if (_busy || _snapshot is null || _snapshot.PrimaryAction is not ("START" or "STOP")) return;
+        if (_snapshot is not { } s) return false;
+        if (s.PendingTarget is { } pending)
+            return pending.Digest == s.Digest && (index is null ? pending.Mode == "AUTO_SELECT" : pending.Mode == "PROFILE_INDEX" && pending.Index == index);
+        if (s.PrimaryAction != "STOP") return false;
+        if (index is null) return s.ActiveMode == "AUTO_SELECT";
+        return s.ActiveDigest == s.Digest && (s.State == "CONNECTED" ? s.ActiveProfile?.Index == index : s.ActiveMode == "PROFILE_INDEX" && s.ActiveIndex == index);
+    }
+
+    private bool CanAct(int? index) => !_busy && _snapshot is { } s &&
+        (IsStopTarget(index) || (!_sourceDirty && !_loading && _loadError.Length == 0 && s.Configured && (s.PrimaryAction == "START" || s.CanSwitch)));
+
+    private string ActionTitle(int? index) => IsStopTarget(index)
+        ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")
+        : (index is null ? "Auto connect" : "Connect");
+
+    private void RenderActions()
+    {
+        SetConnectionAction(ActionTitle(null));
+        ConnectionButton.IsEnabled = CanAct(null);
+        if (_snapshot is not { } current) return;
+        var actionsKey = JsonSerializer.Serialize(new { current.Sequence, _busy, _sourceDirty, _loading, _loadError });
+        if (actionsKey == _actionsKey) return;
+        _actionsKey = actionsKey;
+        ProfileList.Children.Clear();
+        ActiveStopButton.Visibility = current.PrimaryAction == "STOP" && current.ActiveDigest != current.Digest ? Visibility.Visible : Visibility.Collapsed;
+        ActiveStopButton.Content = current.State == "CONNECTED" ? "Disconnect" : "Stop";
+        ActiveStopButton.IsEnabled = !_busy;
+        foreach (var profile in current.Profiles)
+        {
+            var row = new Grid { ColumnSpacing = 12 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Children.Add(new TextBlock { Text = $"{(profile.Description.Length == 0 ? $"Profile {profile.Index + 1}" : profile.Description)} · {profile.Protocol}", TextWrapping = TextWrapping.Wrap });
+            var button = new Button { Content = ActionTitle(profile.Index), IsEnabled = CanAct(profile.Index) };
+            AutomationProperties.SetAutomationId(button, $"Profile {profile.Index + 1} action");
+            button.Click += async (_, _) => await PerformActionAsync(profile.Index);
+            Grid.SetColumn(button, 1);
+            row.Children.Add(button);
+            ProfileList.Children.Add(row);
+        }
+    }
+
+    private async void ConnectionButton_Click(object sender, RoutedEventArgs e) => await PerformActionAsync(null);
+    private async void ActiveStop_Click(object sender, RoutedEventArgs e) => await PerformActionAsync(null, forceStop: true);
+
+    private async Task PerformActionAsync(int? index, bool forceStop = false)
+    {
+        if (_busy || _snapshot is not { } current || (!forceStop && !CanAct(index))) return;
         _busy = true;
-        ConnectionButton.IsEnabled = false;
-        SourceEditor.IsEnabled = false;
+        RenderActions();
         ErrorText.Text = "";
         try
         {
-            var current = _snapshot;
-            if (current.PrimaryAction == "STOP")
-            {
+            if (forceStop || IsStopTarget(index))
                 await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation });
-            }
             else
-            {
-                var source = NormalizeSource(SourceEditor.Text).Trim();
-                var includeSource = !current.Configured || _sourceDirty;
-                if (includeSource && string.IsNullOrWhiteSpace(source))
-                    throw new InvalidOperationException("Enter an HTTPS connection URL or inline configuration.");
-                var parameters = new Dictionary<string, object>
-                {
-                    ["session_id"] = current.SessionId,
-                    ["expected_sequence"] = current.Sequence,
-                    ["mode"] = "AUTO_SELECT",
-                    ["index"] = 0
-                };
-                if (includeSource) parameters["source"] = source;
-                await CallAsync<JsonElement>("Start", parameters);
-                if (includeSource) MarkSourceAccepted(source);
-            }
+                await CallAsync<JsonElement>("Start", new {
+                    session_id = current.SessionId, expected_sequence = current.Sequence,
+                    mode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX", index = index ?? 0,
+                    digest = current.Digest, replace_current = true
+                });
+        }
+        catch (Exception error) { ShowError(error.ToString(), error.Message); }
+        finally { _busy = false; await RefreshSnapshotAsync(); RenderActions(); }
+    }
+
+    private static bool ValidSubscription(string source) => Uri.TryCreate(source, UriKind.Absolute, out var uri) && uri.Scheme == "https" && uri.Host.Length > 0;
+
+    private async void SourceChanged(bool immediate = false)
+    {
+        _sourceDirty = true;
+        _loadError = "";
+        ErrorText.Text = "";
+        RetryButton.Visibility = Visibility.Collapsed;
+        _loadRevision++;
+        _pendingLoad = null;
+        _debounce?.Cancel();
+        _debounce?.Dispose();
+        _debounce = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        var cancellation = _debounce.Token;
+        RenderActions();
+        var source = SourceEditor.Text.Trim();
+        if (!ValidSubscription(source)) { LoadStatus.Text = "Enter an HTTPS subscription URL"; return; }
+        try
+        {
+            if (!immediate) await Task.Delay(400, cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            _pendingLoad = source;
+            await LoadNextAsync();
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void ClipboardChanged(object? sender, object e) => DispatcherQueue.TryEnqueue(RefreshClipboard);
+    private void RefreshClipboard()
+    {
+        try { PasteButton.Visibility = Clipboard.GetContent().Contains(StandardDataFormats.Text) ? Visibility.Visible : Visibility.Collapsed; }
+        catch (Exception error) { RecordError(error.ToString()); PasteButton.Visibility = Visibility.Collapsed; }
+    }
+    private async void Paste_Click(object sender, RoutedEventArgs e)
+    {
+        try { ImportSubscription((await Clipboard.GetContent().GetTextAsync()).Trim()); }
+        catch (Exception error) { ShowError(error.ToString(), error.Message); }
+    }
+    private void ImportSubscription(string source)
+    {
+        if (!ValidSubscription(source)) throw new InvalidOperationException("Enter an HTTPS subscription URL with a host");
+        if (SourceEditor.Text == source && (_loading || !_sourceDirty && _snapshot?.Configured == true)) return;
+        SetSourceText(source);
+        SourceChanged(immediate: true);
+    }
+    public void ImportLink(string value)
+    {
+        Activate();
+        try
+        {
+            if (value.Equals("dobbyvpn://", StringComparison.OrdinalIgnoreCase)) return;
+            if (System.Text.RegularExpressions.Regex.IsMatch(value, "%(?![0-9a-fA-F]{2})")) throw new FormatException("Invalid URL escape");
+            var uri = new Uri(value);
+            if (uri.Scheme != "dobbyvpn" || uri.Host != "import" || uri.AbsolutePath is not ("" or "/") || uri.UserInfo.Length > 0 || !uri.IsDefaultPort || uri.Fragment.Length > 0)
+                throw new FormatException("Invalid import link");
+            var query = uri.Query.TrimStart('?').Split('&');
+            var pair = query[0].Split('=', 2);
+            if (query.Length != 1 || pair.Length != 2 || pair[0] != "url") throw new FormatException("The import link requires one url parameter");
+            ImportSubscription(Uri.UnescapeDataString(pair[1]));
+        }
+        catch (Exception error) { ShowError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL"); }
+    }
+
+    private void Retry_Click(object sender, RoutedEventArgs e) => SourceChanged(immediate: true);
+
+    private async Task LoadNextAsync()
+    {
+        if (_loading || _pendingLoad is not { } source || _snapshot is null) return;
+        _pendingLoad = null;
+        _loading = true;
+        var revision = _loadRevision;
+        LoadStatus.Text = "Loading profiles…";
+        RenderActions();
+        try
+        {
+            var current = await ReadSnapshotAsync();
+            await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source });
+            if (revision == _loadRevision) { MarkSourceAccepted(source); LoadStatus.Text = ""; }
         }
         catch (Exception error)
         {
-            ShowError(error.ToString(), _snapshot is null ? "VPN service is unavailable. See logs for details." : "Could not complete the request. Check your configuration and logs.");
+            if (revision == _loadRevision)
+            {
+                _loadError = error.Message;
+                LoadStatus.Text = _loadError;
+                RetryButton.Visibility = Visibility.Visible;
+                RecordError(error.ToString());
+            }
         }
         finally
         {
-            _busy = false;
-            SourceEditor.IsEnabled = true;
+            _loading = false;
             await RefreshSnapshotAsync();
+            RenderActions();
         }
+        await LoadNextAsync();
     }
 
     private async Task<T> CallAsync<T>(string method, object parameters)
@@ -251,7 +383,6 @@ public sealed partial class MainWindow : Window
         _updatingSource = true;
         try
         {
-            if (value.Contains('\n') || value.TrimStart().StartsWith('[')) SetSourceMode(true);
             SourceEditor.Text = value;
         }
         finally { _updatingSource = false; }
@@ -273,19 +404,6 @@ public sealed partial class MainWindow : Window
 
     private static string NormalizeSource(string value) =>
         value.Replace("\r\n", "\n").Replace("\r", "\n");
-
-    private void SetSourceMode(bool configurationText)
-    {
-        _configurationText = configurationText;
-        SourceEditor.Header = configurationText ? "Configuration text" : "Subscription URL";
-        SourceEditor.AcceptsReturn = configurationText;
-        SourceEditor.TextWrapping = configurationText ? TextWrapping.Wrap : TextWrapping.NoWrap;
-        SourceEditor.Height = configurationText ? 140 : double.NaN;
-        SourceModeButton.Content = configurationText ? "Use subscription URL" : "Use configuration text…";
-        AutomationProperties.SetName(SourceEditor, configurationText ? "Configuration text" : "Subscription URL");
-    }
-
-    private void SourceMode_Click(object sender, RoutedEventArgs e) => SetSourceMode(!_configurationText);
 
     private async void About_Click(object sender, RoutedEventArgs e)
     {
@@ -396,10 +514,25 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("active_profile")] public Profile? ActiveProfile { get; init; }
         [JsonPropertyName("last_failure")] public Failure? LastFailure { get; init; }
         [JsonPropertyName("recovering")] public bool Recovering { get; init; }
+        [JsonPropertyName("digest")] public string Digest { get; init; } = "";
+        [JsonPropertyName("profiles")] public Profile[] Profiles { get; init; } = [];
+        [JsonPropertyName("active_digest")] public string ActiveDigest { get; init; } = "";
+        [JsonPropertyName("active_mode")] public string ActiveMode { get; init; } = "";
+        [JsonPropertyName("active_index")] public int ActiveIndex { get; init; }
+        [JsonPropertyName("pending_target")] public Selection? PendingTarget { get; init; }
+        [JsonPropertyName("can_switch")] public bool CanSwitch { get; init; }
+    }
+
+    private sealed class Selection
+    {
+        public string Digest { get; init; } = "";
+        public string Mode { get; init; } = "";
+        public int Index { get; init; }
     }
 
     private sealed class Profile
     {
+        [JsonPropertyName("index")] public int Index { get; init; }
         [JsonPropertyName("protocol")] public string Protocol { get; init; } = "";
         [JsonPropertyName("description")] public string Description { get; init; } = "";
     }

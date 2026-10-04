@@ -22,6 +22,13 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let activeProfile: DobbyProfile?
     public let lastFailure: DobbyFailure?
     public let recovering: Bool
+    public let digest: String
+    public let profiles: [DobbyProfile]
+    public let activeDigest: String
+    public let activeMode: String
+    public let activeIndex: Int
+    public let pendingTarget: DobbySelection?
+    public let canSwitch: Bool
 
     public static let empty = Self(
         sessionID: "", sequence: 0, generation: 0, state: "IDLE", primaryAction: "NONE",
@@ -37,7 +44,12 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         case sourceError = "source_error"
         case activeProfile = "active_profile"
         case lastFailure = "last_failure"
-        case recovering
+        case recovering, digest, profiles
+        case activeDigest = "active_digest"
+        case activeMode = "active_mode"
+        case activeIndex = "active_index"
+        case pendingTarget = "pending_target"
+        case canSwitch = "can_switch"
     }
 
     public init(from decoder: Decoder) throws {
@@ -53,6 +65,13 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         activeProfile = try values.decodeIfPresent(DobbyProfile.self, forKey: .activeProfile)
         lastFailure = try values.decodeIfPresent(DobbyFailure.self, forKey: .lastFailure)
         recovering = try values.decodeIfPresent(Bool.self, forKey: .recovering) ?? false
+        digest = try values.decodeIfPresent(String.self, forKey: .digest) ?? ""
+        profiles = try values.decodeIfPresent([DobbyProfile].self, forKey: .profiles) ?? []
+        activeDigest = try values.decodeIfPresent(String.self, forKey: .activeDigest) ?? ""
+        activeMode = try values.decodeIfPresent(String.self, forKey: .activeMode) ?? ""
+        activeIndex = try values.decodeIfPresent(Int.self, forKey: .activeIndex) ?? 0
+        pendingTarget = try values.decodeIfPresent(DobbySelection.self, forKey: .pendingTarget)
+        canSwitch = try values.decodeIfPresent(Bool.self, forKey: .canSwitch) ?? false
     }
 
     public init(
@@ -71,20 +90,37 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         self.activeProfile = activeProfile
         self.lastFailure = lastFailure
         self.recovering = recovering
+        digest = ""
+        profiles = []
+        activeDigest = ""
+        activeMode = ""
+        activeIndex = 0
+        pendingTarget = nil
+        canSwitch = false
     }
 }
 
-public struct DobbyProfile: Decodable, Sendable {
+public struct DobbySelection: Decodable, Sendable {
+    public let digest: String
+    public let mode: String
+    public let index: Int
+}
+
+public struct DobbyProfile: Decodable, Sendable, Identifiable {
+    public let index: Int
+    public var id: Int { index }
+    public var name: String { description.isEmpty ? "Profile \(index + 1)" : description }
     public let protocolName: String
     public let description: String
 
     private enum CodingKeys: String, CodingKey {
         case protocolName = "protocol"
-        case description
+        case description, index
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        index = try values.decodeIfPresent(Int.self, forKey: .index) ?? 0
         protocolName = try values.decodeIfPresent(String.self, forKey: .protocolName) ?? ""
         description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
     }
@@ -143,7 +179,7 @@ public enum DobbyClientError: LocalizedError {
         case let .command(code, message):
             return "\(message) (\(code))"
         case .noConfiguration:
-            return "Enter an HTTPS connection URL or inline configuration"
+            return "Enter an HTTPS subscription URL"
         case let .diagnostics(message):
             return message
         }
