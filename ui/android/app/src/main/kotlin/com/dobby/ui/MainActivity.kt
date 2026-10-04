@@ -514,7 +514,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         val controlsHeight = maxHeight * 0.65f
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(
-                Modifier.heightIn(max = controlsHeight).verticalScroll(rememberScrollState()),
+                Modifier.heightIn(max = controlsHeight).clipToBounds().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 OutlinedTextField(
