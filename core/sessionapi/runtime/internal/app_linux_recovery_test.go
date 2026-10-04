@@ -3,9 +3,33 @@
 package internal
 
 import (
+	"core/routing"
 	"fmt"
 	"testing"
 )
+
+func TestReconcileLinuxUplinkWaitsForPhysicalDefault(t *testing.T) {
+	originalDiscover, originalReconcile := discoverLinuxUplink, reconcileLinuxRoutes
+	t.Cleanup(func() {
+		discoverLinuxUplink, reconcileLinuxRoutes = originalDiscover, originalReconcile
+	})
+	reconcileLinuxRoutes = func(string, string, string, int, int) error {
+		t.Fatal("must not guess an uplink while the TUN owns the main default")
+		return nil
+	}
+	discoverLinuxUplink = func() (string, string, error) {
+		return "", "", routing.ErrNoLinuxPhysicalDefault
+	}
+	if err := reconcileLinuxUplink("198.51.100.9", 233, 23333); err != nil {
+		t.Fatalf("normal TUN default reported as a reconciliation failure: %v", err)
+	}
+	discoverLinuxUplink = func() (string, string, error) {
+		return "", "", fmt.Errorf("route list unavailable")
+	}
+	if err := reconcileLinuxUplink("198.51.100.9", 233, 23333); err == nil {
+		t.Fatal("real route discovery failure was hidden")
+	}
+}
 
 func TestReconcileLinuxUplinkPublishesRediscoveredRouteAfterSuccess(t *testing.T) {
 	originalDiscover := discoverLinuxUplink

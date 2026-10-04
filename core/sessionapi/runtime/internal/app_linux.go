@@ -10,6 +10,7 @@ import (
 	"core/tunnel"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,6 +24,11 @@ var recoverLinuxOwnedRoutes = routing.RecoverLinuxOwnedRoutes
 
 func reconcileLinuxUplink(serverIP string, tableID, priority int) error {
 	gatewayIP, uplinkIface, err := discoverLinuxUplink()
+	if errors.Is(err, routing.ErrNoLinuxPhysicalDefault) {
+		// The main table normally contains only our gateway-less TUN default.
+		// Reconciliation starts when the physical uplink publishes a new route.
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("discover restored uplink: %w", err)
 	}

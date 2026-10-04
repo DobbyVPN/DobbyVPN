@@ -241,6 +241,16 @@ func TestDiscoverLinuxDefaultRouteUsesGatewayBackedMainTableRoute(t *testing.T) 
 	}
 }
 
+func TestDiscoverLinuxDefaultRouteRecognizesTunnelOnlyDefault(t *testing.T) {
+	fake := installLinuxNetlinkFake(t)
+	fake.routes = []netlink.Route{
+		{Dst: linuxDefaultIPNet(netlink.FAMILY_V4), LinkIndex: 7, Family: netlink.FAMILY_V4, Table: unix.RT_TABLE_MAIN, Type: unix.RTN_UNICAST},
+	}
+	if _, _, err := DiscoverLinuxDefaultRoute(); !errors.Is(err, ErrNoLinuxPhysicalDefault) {
+		t.Fatalf("tunnel-only default returned %v", err)
+	}
+}
+
 func TestDiscoverLinuxDefaultRoutePreservesNetlinkDiagnostic(t *testing.T) {
 	fake := installLinuxNetlinkFake(t)
 	fake.routeListError = errors.New("route list unavailable")

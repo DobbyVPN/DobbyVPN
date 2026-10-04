@@ -19,6 +19,9 @@ const linuxOwnedRouteProtocol netlink.RouteProtocol = 233
 
 const linuxOwnedProxyMetric = 233
 
+// ErrNoLinuxPhysicalDefault is expected while the VPN owns the main TUN default.
+var ErrNoLinuxPhysicalDefault = errors.New("main IPv4 table has no gateway-backed default route")
+
 var (
 	linuxRouteList = func(family int) ([]netlink.Route, error) {
 		return netlink.RouteListFiltered(
@@ -89,7 +92,7 @@ func DiscoverLinuxDefaultRoute() (gatewayIP, iface string, err error) {
 		}
 		return route.Gw.To4().String(), link.Attrs().Name, nil
 	}
-	return "", "", fmt.Errorf("main IPv4 table has no gateway-backed default route")
+	return "", "", ErrNoLinuxPhysicalDefault
 }
 
 func linuxMainIPv4DefaultRoutes() ([]netlink.Route, error) {
