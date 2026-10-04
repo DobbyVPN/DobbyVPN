@@ -66,6 +66,14 @@ public struct DobbyRootView: View {
         }
     }
 
+    private var controlsFraction: CGFloat {
+#if os(iOS)
+        0.4
+#else
+        0.65
+#endif
+    }
+
     private var content: some View {
         GeometryReader { geometry in
             VStack(spacing: 12) {
@@ -97,7 +105,7 @@ public struct DobbyRootView: View {
                         Color.clear.preference(key: ControlsHeight.self, value: size.size.height)
                     })
                 }
-                .frame(height: min(controlsHeight, geometry.size.height * 0.4))
+                .frame(height: min(controlsHeight, geometry.size.height * controlsFraction))
                 .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
                 logs.frame(maxHeight: .infinity)
             }
