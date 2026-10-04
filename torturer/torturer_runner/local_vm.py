@@ -1317,7 +1317,7 @@ def _start_macos_release(
         "pid_file": str(pid_file),
         "binary": str(service.resolve()),
         "socket": "/var/run/dobbyvpn/control.sock",
-        "environment": {"DOBBYVPN_CONTROL_SOCKET": "/var/run/dobbyvpn/control.sock", "DOBBY_LOG_PATH": str(logs / "service.log")},
+        "environment": {"DOBBYVPN_CONTROL_SOCKET": "/var/run/dobbyvpn/control.sock"},
         "launchd_label": "system/com.dobby.vpnservice",
         "plist": "/Library/LaunchDaemons/com.dobby.vpnservice.plist",
         "network_interface": network_interface,
