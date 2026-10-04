@@ -190,7 +190,7 @@ class NativeUIController:
         command = [str(self.binary)]
         if self.platform == "macos":
             command = ["open", "-W", "-n"]
-            for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET"):
+            for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET", "DOBBY_LOG_PATH"):
                 if value := os.environ.get(name):
                     command.extend(("--env", f"{name}={value}"))
             command.extend(("--stdout", str(prefix) + ".stdout.log", "--stderr", str(prefix) + ".stderr.log", str(self.binary)))
@@ -268,7 +268,18 @@ class NativeUIController:
         return self.snapshot()
 
     def clear_logs(self) -> dict:
+        previous = ""
+        def live_logs():
+            nonlocal previous
+            text = self._call("logs").get("text", "")
+            previous = next((line for line in text.splitlines() if " · " in line), "")
+            return bool(previous)
+        self._wait(live_logs, "native log view did not show structured live records")
         self._click("Clear")
+        def cleared():
+            view = self._call("logs")
+            return view.get("ready") is True and previous not in view.get("text", "")
+        self._wait(cleared, "Clear left the previous records visible")
         return self.snapshot()
 
     def wait_status(self, expected: str, *, allow_errors: bool = False) -> dict:

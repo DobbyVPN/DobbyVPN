@@ -285,6 +285,10 @@ func run() throws -> [String: Any] {
         }
         throw error
     }
+    if operation == "logs" {
+        let view = try find(nodes, "Connection logs", editor: true)
+        return ["ready": true, "text": try label(view, kAXValueAttribute)]
+    }
     func activate() throws {
         try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")
         let deadline = Date().addingTimeInterval(2)

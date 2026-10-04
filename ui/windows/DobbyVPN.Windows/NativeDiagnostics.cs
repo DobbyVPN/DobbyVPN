@@ -17,7 +17,9 @@ namespace DobbyVPN.Windows;
 internal sealed class NativeDiagnostics(string backendPath, string uiPath)
 {
     internal static NativeDiagnostics Current { get; } = new(
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DobbyVPN", "Logs", "backend.jsonl"),
+        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOBBY_LOG_PATH"))
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DobbyVPN", "Logs", "backend.jsonl")
+            : Environment.GetEnvironmentVariable("DOBBY_LOG_PATH")!,
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "Logs", "ui_diagnostics.jsonl"));
     private readonly object _gate = new();
     private readonly string[] _paths = [backendPath, backendPath + ".stderr", uiPath];

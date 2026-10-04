@@ -253,6 +253,15 @@ internal static class Program
                 if (!element.Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
                 return element;
             }
+            if (operation == "logs")
+            {
+                var entries = Walk(Find("Backend logs"), includeLogs: true)
+                    .Where(element => element.Current.ControlType == ControlType.Text)
+                    .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
+                        ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name);
+                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, text = string.Join("\n", entries) }));
+                return 0;
+            }
             if (operation == "tree")
             {
                 string[] labels;
@@ -376,7 +385,7 @@ internal static class Program
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 
-    private static IEnumerable<AutomationElement> Walk(AutomationElement root)
+    private static IEnumerable<AutomationElement> Walk(AutomationElement root, bool includeLogs = false)
     {
         var queue = new Queue<AutomationElement>();
         queue.Enqueue(root);
@@ -386,6 +395,8 @@ internal static class Program
             if (++count > 8192) throw new InvalidOperationException("Accessibility tree exceeds 8192 elements");
             var element = queue.Dequeue();
             yield return element;
+            // Control discovery does not need mutable log records or their Details children.
+            if (!includeLogs && element.Current.AutomationId == "Backend logs") continue;
             for (var child = TreeWalker.ControlViewWalker.GetFirstChild(element); child is not null;
                  child = TreeWalker.ControlViewWalker.GetNextSibling(child)) queue.Enqueue(child);
         }

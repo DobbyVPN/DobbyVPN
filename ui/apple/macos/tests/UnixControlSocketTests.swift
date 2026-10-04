@@ -17,7 +17,8 @@ final class UnixControlSocketTests: XCTestCase {
                 let reply = #"{"ok":true,"result":{"primary_action":"START"}}"# + "\n"
                 reply.withCString { XCTAssertEqual(send(client, $0, strlen($0), 0), reply.utf8.count) }
             }
-            let client = MacDesktopSessionClient(environment: ["DOBBYVPN_CONTROL_SOCKET": path])
+            let client = MacDesktopSessionClient(environment: ["DOBBYVPN_CONTROL_SOCKET": path, "DOBBY_LOG_PATH": path + ".log"])
+            XCTAssertEqual(client.diagnosticPaths.prefix(2).map(\.path), [path + ".log", path + ".log.stderr"])
             let result = client.call("Snapshot", parameters: [:])
             XCTAssertTrue(result.contains(#""primary_action":"START""#), result)
             wait(for: [finished], timeout: 2)

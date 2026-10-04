@@ -3,8 +3,10 @@ import Foundation
 
 final class MacDesktopSessionClient: DobbySessionClient {
     private let socketPath: String
+    private let backendLogPath: String
 
     init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        backendLogPath = environment["DOBBY_LOG_PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? "/Library/Logs/DobbyVPN/backend.jsonl"
         if let configured = environment["DOBBYVPN_CONTROL_SOCKET"], !configured.isEmpty {
             socketPath = configured
         } else {
@@ -13,8 +15,8 @@ final class MacDesktopSessionClient: DobbySessionClient {
     }
 
     var diagnosticPaths: [URL] {
-        [URL(fileURLWithPath: "/Library/Logs/DobbyVPN/backend.jsonl"),
-         URL(fileURLWithPath: "/Library/Logs/DobbyVPN/backend.jsonl.stderr"), uiDiagnosticPath]
+        [URL(fileURLWithPath: backendLogPath),
+         URL(fileURLWithPath: backendLogPath + ".stderr"), uiDiagnosticPath]
     }
 
     var uiDiagnosticPath: URL {

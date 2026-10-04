@@ -49,6 +49,7 @@ _MACOS_NATIVE_UI_ENVIRONMENT = frozenset({
     "HOME",
     "PYTHONPATH",
     "DOBBYVPN_CONTROL_SOCKET",
+    "DOBBY_LOG_PATH",
 })
 
 
