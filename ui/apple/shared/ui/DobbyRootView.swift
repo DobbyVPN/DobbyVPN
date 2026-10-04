@@ -97,7 +97,7 @@ public struct DobbyRootView: View {
                         Color.clear.preference(key: ControlsHeight.self, value: size.size.height)
                     })
                 }
-                .frame(height: min(controlsHeight, geometry.size.height * 0.45))
+                .frame(height: min(controlsHeight, geometry.size.height * 0.4))
                 .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
                 logs.frame(maxHeight: .infinity)
             }
