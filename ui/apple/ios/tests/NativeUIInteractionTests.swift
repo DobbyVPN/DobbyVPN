@@ -58,6 +58,17 @@ final class NativeUIInteractionTests: XCTestCase {
 
     }
 
+    func testLargeTextKeepsLogsAndControlsVisible() {
+        app.terminate()
+        app.launchArguments = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
+        assertLogLayout()
+        XCTAssertTrue(app.buttons["VPN connection action"].exists)
+        XCTAssertTrue(app.buttons["Clear"].isHittable)
+        attachScreenshot("large-text")
+    }
+
     private func verifyColdAndWarmImports() throws {
         guard #available(iOS 16.4, *) else { XCTFail("URL activation checks require iOS 16.4 or newer"); return }
         let cold = "https://example.invalid/cold?a=%2F"

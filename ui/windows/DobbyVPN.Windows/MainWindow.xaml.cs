@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
     private ScrollViewer? _logScroll;
     private bool _userScrolling;
     private List<NativeDiagnostics.Entry> _latestLogs = [];
+    private readonly HashSet<string> _expandedLogs = [];
     private string _renderedLogs = "";
     private readonly string _version;
     private readonly string _commit;
@@ -449,6 +450,12 @@ public sealed partial class MainWindow : Window
         _logScroll = LogsScroll;
         LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => _userScrolling = true), true);
         LogsScroll.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => _userScrolling = true), true);
+        LogsScroll.AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, args) =>
+        {
+            if (args.Key is global::Windows.System.VirtualKey.Up or global::Windows.System.VirtualKey.Down
+                or global::Windows.System.VirtualKey.PageUp or global::Windows.System.VirtualKey.PageDown
+                or global::Windows.System.VirtualKey.Home or global::Windows.System.VirtualKey.End) _userScrolling = true;
+        }), true);
         LogsScroll.ViewChanged += (_, _) =>
         {
             if (_updatingLogs || !_userScrolling) return;
@@ -468,6 +475,7 @@ public sealed partial class MainWindow : Window
             await _diagnostics.ClearViewAsync();
             _followingLogs = true;
             _latestLogs = [];
+            _expandedLogs.Clear();
             _renderedLogs = "";
             LogEntries.Children.Clear();
             _clearingLogs = false;
@@ -499,6 +507,7 @@ public sealed partial class MainWindow : Window
         _updatingLogs = true;
         _renderedLogs = key;
         LogEntries.Children.Clear();
+        _expandedLogs.IntersectWith(_latestLogs.Select(entry => entry.Id));
         foreach (var entry in _latestLogs)
         {
             var resource = entry.Level switch
@@ -515,8 +524,14 @@ public sealed partial class MainWindow : Window
             text.Blocks.Add(paragraph);
             LogEntries.Children.Add(text);
             if (entry.Level != "RAW")
-                LogEntries.Children.Add(new Expander { Header = "Details", HorizontalAlignment = HorizontalAlignment.Stretch,
-                    Content = new TextBlock { Text = entry.Raw, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } });
+            {
+                var details = new Expander { Header = "Details", HorizontalAlignment = HorizontalAlignment.Stretch,
+                    IsExpanded = _expandedLogs.Contains(entry.Id),
+                    Content = new TextBlock { Text = entry.Raw, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } };
+                details.Expanding += (_, _) => _expandedLogs.Add(entry.Id);
+                details.Collapsed += (_, _) => _expandedLogs.Remove(entry.Id);
+                LogEntries.Children.Add(details);
+            }
         }
         LogEntries.UpdateLayout();
         _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
