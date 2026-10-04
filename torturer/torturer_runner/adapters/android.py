@@ -17,7 +17,6 @@ import re
 import shlex
 import threading
 import time
-import tomllib
 from typing import Callable, Mapping
 import uuid
 
@@ -106,18 +105,6 @@ _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
-# The rendered lane selects one original-format profile while the binding
-# lane exercises the complete profile set. tomllib validates the source and
-# each bounded candidate; the product's Go parser remains authoritative.
-_GUI_SECTION_HEADER = re.compile(
-    rb"(?m)^[ \t]*(?:\[\[[ \t]*(?P<protocol>Outline|Xray|TrustTunnel)[ \t]*\]\]"
-    rb"|\[[ \t]*(?P<shared>ExcludeIPs)[ \t]*\])"
-    rb"[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)"
-)
-_GUI_PROFILE_PROTOCOLS = frozenset({"Outline", "Xray"})
-# Keep emulator input bounded; the binding lane owns the complete profile set.
-_GUI_PROFILE_MAX_BYTES = 64 * 1024
-_GUI_CONFIG_MAX_BYTES = 1024 * 1024
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
     "foreground": frozenset({"VPN_DIALOG", "PRODUCT", "OTHER", "NONE"}),
@@ -182,96 +169,6 @@ def _remaining(deadline: float, code: str) -> float:
     if value <= 0:
         raise ScenarioExecutionError(code)
     return value
-
-
-def _select_gui_profile(raw: bytes) -> bytes:
-    """Return one complete Outline or Xray profile from public-format TOML.
-
-    The rendered lane proves one real UI journey; the binding lane exercises
-    every configured profile. Bounded header candidates retain the source's
-    nested TOML and are accepted only when tomllib parses exactly one profile
-    equal to one from the fully parsed source. This also rejects header-like
-    text inside multiline strings. Shared exclusions are retained whether
-    they appear before or after the selected protocol block.
-    """
-    try:
-        source = tomllib.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
-        raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE") from None
-    allowed_sections = {"Outline", "Xray", "TrustTunnel", "ExcludeIPs"}
-    if set(source) - allowed_sections:
-        raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
-
-    for protocol in ("Outline", "Xray", "TrustTunnel"):
-        profiles = source.get(protocol)
-        if profiles is not None and (
-            not isinstance(profiles, list)
-            or any(not isinstance(profile, dict) for profile in profiles)
-        ):
-            raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
-    exclusions = source.get("ExcludeIPs")
-    if "ExcludeIPs" in source:
-        if not isinstance(exclusions, dict) or set(exclusions) - {"IPs"}:
-            raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
-        ips = exclusions.get("IPs", [])
-        if not isinstance(ips, list) or any(not isinstance(ip, str) for ip in ips):
-            raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
-
-    headers = tuple(_GUI_SECTION_HEADER.finditer(raw))
-    for index, header in enumerate(headers):
-        protocol_header = header.group("protocol")
-        if protocol_header is None:
-            continue
-        protocol = protocol_header.decode("ascii")
-        if protocol not in _GUI_PROFILE_PROTOCOLS:
-            continue
-        source_profiles = source.get(protocol)
-        if not isinstance(source_profiles, list):
-            continue
-
-        for end_index in range(index + 1, len(headers) + 1):
-            end = headers[end_index].start() if end_index < len(headers) else len(raw)
-            candidate = raw[header.start():end]
-            if len(candidate) > _GUI_PROFILE_MAX_BYTES:
-                break
-            try:
-                parsed = tomllib.loads(candidate.decode("utf-8"))
-            except (UnicodeDecodeError, tomllib.TOMLDecodeError):
-                continue
-            profiles = parsed.get(protocol)
-            if not isinstance(profiles, list) or len(profiles) != 1:
-                if isinstance(profiles, list) and len(profiles) > 1:
-                    break
-                continue
-            profile = profiles[0]
-            if not isinstance(profile, dict) or profile not in source_profiles:
-                continue
-            if set(parsed) - {protocol, "ExcludeIPs"}:
-                continue
-            if "ExcludeIPs" in parsed and parsed["ExcludeIPs"] != exclusions:
-                continue
-
-            selected = candidate
-            if "ExcludeIPs" in source and "ExcludeIPs" not in parsed:
-                exclude_lines = ["[ExcludeIPs]"]
-                if "IPs" in exclusions:
-                    exclude_lines.append(f"IPs = {json.dumps(exclusions['IPs'])}")
-                if selected and not selected.endswith((b"\n", b"\r")):
-                    selected += b"\n"
-                selected += ("\n".join(exclude_lines) + "\n").encode("utf-8")
-                if len(selected) > _GUI_CONFIG_MAX_BYTES:
-                    continue
-
-            expected = {protocol: [profile]}
-            if "ExcludeIPs" in source:
-                expected["ExcludeIPs"] = exclusions
-            try:
-                validated = tomllib.loads(selected.decode("utf-8"))
-            except (UnicodeDecodeError, tomllib.TOMLDecodeError):
-                continue
-            if validated == expected:
-                return selected
-    raise ScenarioExecutionError("ANDROID_GUI_PROFILE_UNAVAILABLE")
 
 
 def _scenario_deadlines(
@@ -725,8 +622,6 @@ class AndroidAdapter:
         progress_name = self._progress_name(command_file)
         device_files.extend(
             (
-                profile_name,
-                f"{profile_name}.tmp",
                 command_file.name,
                 f"{command_file.name}.tmp",
                 output_name,
@@ -738,18 +633,18 @@ class AndroidAdapter:
             device_files.extend(
                 (control_file, f"{control_file}.ready", f"{control_file}.tmp")
             )
-        try:
-            profile_bytes = self.profile.read_bytes()
-        except OSError as error:
-            raise ScenarioExecutionError("ANDROID_PROFILE_STAGE_FAILED") from error
-        if self.ui_mode == "gui-auto":
-            profile_bytes = _select_gui_profile(profile_bytes)
-        self._stage_private_file(
-            profile_name,
-            profile_bytes,
-            _remaining(deadline, "ANDROID_PROFILE_STAGE_TIMEOUT"),
-            "ANDROID_PROFILE_STAGE_FAILED",
-        )
+        if self.ui_mode == "protocol-matrix":
+            device_files.extend((profile_name, f"{profile_name}.tmp"))
+            try:
+                profile_bytes = self.profile.read_bytes()
+            except OSError as error:
+                raise ScenarioExecutionError("ANDROID_PROFILE_STAGE_FAILED") from error
+            self._stage_private_file(
+                profile_name,
+                profile_bytes,
+                _remaining(deadline, "ANDROID_PROFILE_STAGE_TIMEOUT"),
+                "ANDROID_PROFILE_STAGE_FAILED",
+            )
         try:
             command_bytes = command_file.read_bytes()
         except OSError as error:
@@ -2273,7 +2168,6 @@ class AndroidAdapter:
             subscription_url = self._subscription_fixture.url
         command = {
             "subscription_url": subscription_url,
-            "profile_file": profile_name,
             "output_file": output_name,
             "progress_file": progress_name,
             "coverage_lane": self.coverage_lane,
@@ -2286,6 +2180,8 @@ class AndroidAdapter:
             },
             "operations": operations,
         }
+        if self.ui_mode == "protocol-matrix":
+            command["profile_file"] = profile_name
         if self.ui_mode == "protocol-matrix" and self._selected_connection is not None:
             command["profile_index"] = self._selected_connection.index
         if self.source_sha is not None:

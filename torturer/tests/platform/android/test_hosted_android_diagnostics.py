@@ -9,15 +9,13 @@ import json
 from pathlib import Path
 import tempfile
 import time
-import tomllib
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 from torturer_contract.engine import ScenarioExecutionError
-from torturer_runner.adapters.android import AndroidAdapter, _select_gui_profile
+from torturer_runner.adapters.android import AndroidAdapter
 from torturer_runner.adapters.cli import CommandResult
-from disposable_vpn_server.outline import OutlineWSSProfile
 
 
 class BinaryStderr:
@@ -28,113 +26,19 @@ class BinaryStderr:
         pass
 
 
-class AndroidGuiProfileSelectionTests(unittest.TestCase):
-    def test_selects_one_profile_and_preserves_shared_exclusions(self) -> None:
-        raw = (
-            b"[ExcludeIPs]\nIPs = ['192.0.2.0/24']\n\n"
-            b"[[TrustTunnel]]\nDescription = 'not selected'\n"
-            b"[TrustTunnel.endpoint]\nhostname = 'trust.invalid'\n\n"
-            b"[[Outline]]\nDescription = 'synthetic Outline'\n"
-            b"Server = 'outline.invalid'\nPassword = 'synthetic'\nPort = 443\n\n"
-            b"[[Xray]]\nDescription = 'synthetic Xray'\noutbounds = []\n"
-        )
-
-        selected = _select_gui_profile(raw)
-        parsed = tomllib.loads(selected.decode("utf-8"))
-
-        self.assertEqual(set(parsed), {"Outline", "ExcludeIPs"})
-        self.assertEqual(parsed["Outline"][0]["Description"], "synthetic Outline")
-        self.assertEqual(parsed["Outline"][0]["Server"], "outline.invalid")
-        self.assertEqual(parsed["ExcludeIPs"], {"IPs": ["192.0.2.0/24"]})
-        self.assertLessEqual(len(selected), 64 * 1024)
-
-    def test_selects_xray_and_keeps_nested_configuration(self) -> None:
-        raw = (
-            b"[[Xray]]\n"
-            b"Description = 'synthetic Xray'\n"
-            b"log = { loglevel = 'info', output = { access = 'none' } }\n"
-            b"outbounds = [{ tag = 'proxy', protocol = 'vless', settings = { vnext = ["
-            b"{ address = 'xray.invalid', port = 443, users = ["
-            b"{ id = 'synthetic-id', flow = 'vision', encryption = 'none' }] }] } }]\n"
-            b"[Xray.extra]\nlabel = 'kept'\n\n"
-            b"[ExcludeIPs]\nIPs = ['198.51.100.8/32']\n"
-        )
-
-        selected = _select_gui_profile(raw)
-        parsed = tomllib.loads(selected.decode("utf-8"))
-
-        self.assertEqual(set(parsed), {"Xray", "ExcludeIPs"})
-        self.assertEqual(parsed["Xray"][0]["Description"], "synthetic Xray")
-        self.assertEqual(
-            parsed["Xray"][0]["outbounds"][0]["settings"]["vnext"][0]["users"][0]["id"],
-            "synthetic-id",
-        )
-        self.assertEqual(parsed["Xray"][0]["extra"], {"label": "kept"})
-        self.assertEqual(parsed["ExcludeIPs"], {"IPs": ["198.51.100.8/32"]})
-
-    def test_generated_render_profile_uses_original_public_toml(self) -> None:
-        profile = OutlineWSSProfile(web_path="/synthetic-path", secret="synthetic-secret")
-
-        selected = _select_gui_profile(profile.client_toml("https://vpn.invalid").encode())
-        parsed = tomllib.loads(selected.decode("utf-8"))
-
-        self.assertEqual(set(parsed), {"Outline", "ExcludeIPs"})
-        self.assertEqual(
-            parsed["Outline"][0]["Description"],
-            "DobbyVPN Torturer disposable Render service",
-        )
-        self.assertEqual(parsed["Outline"][0]["WebSocketPath"], "/synthetic-path")
-        self.assertEqual(parsed["ExcludeIPs"], {"IPs": []})
-
-    def test_header_inside_multiline_string_is_preserved_as_profile_content(self) -> None:
-        profile = (
-            b'[[Outline]]\nDescription = """Synthetic details include a header-like line.\n'
-            b'[ExcludeIPs]\n'
-            b'[[Xray]]\nDescription = "not an actual profile"\n"""\n'
-            b'Server = "outline.invalid"\nPassword = "synthetic"\nPort = 443\n'
-            b'\n[ExcludeIPs]\nIPs = ["203.0.113.0/24"]\n'
-        )
-        raw = profile
-
-        self.assertEqual(
-            _select_gui_profile(raw),
-            profile,
-        )
-
-    def test_large_shared_exclusions_before_or_after_single_profile_are_preserved(self) -> None:
-        ips = [f"198.18.{index >> 8}.{index & 255}/32" for index in range(13_954)]
-        profile = (
-            b'[[Outline]]\nDescription = "synthetic Outline"\n'
-            b'Server = "outline.invalid"\nPassword = "synthetic"\nPort = 443\n'
-        )
-        exclusions = b"[ExcludeIPs]\nIPs = " + json.dumps(ips).encode("utf-8") + b"\n"
-        cases = {
-            "before-profile": exclusions + b"\n" + profile,
-            "after-profile": profile + b"\n" + exclusions,
-        }
-
-        for placement, raw in cases.items():
-            with self.subTest(placement=placement):
-                selected = _select_gui_profile(raw)
-                parsed = tomllib.loads(selected.decode("utf-8"))
-
-                self.assertEqual(parsed["Outline"][0]["Description"], "synthetic Outline")
-                self.assertEqual(parsed["ExcludeIPs"]["IPs"], ips)
-                self.assertGreater(len(selected), 64 * 1024)
-                self.assertLessEqual(len(selected), 1024 * 1024)
-
-    def test_oversized_protocol_profile_is_still_rejected(self) -> None:
-        raw = (
-            b'[[Outline]]\nDescription = "'
-            + b"x" * (64 * 1024)
-            + b'"\nServer = "outline.invalid"\nPassword = "synthetic"\nPort = 443\n'
-        )
-
-        with self.assertRaisesRegex(ScenarioExecutionError, "ANDROID_GUI_PROFILE_UNAVAILABLE"):
-            _select_gui_profile(raw)
-
-
 class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
+    def test_https_gui_lane_does_not_require_a_staged_profile_file(self):
+        with tempfile.TemporaryDirectory() as name:
+            profile = Path(name) / "absent-profile.toml"
+            instrument = CommandResult(command=("adb", "instrument"), returncode=1,
+                                       stdout=b"INSTRUMENTATION_FAILED: synthetic\n", stderr=b"")
+            adapter = self.adapter_for(profile, instrument)
+            adapter.ui_mode = "gui-auto"
+            output = CommandResult(command=("adb", "cat"), returncode=0, stdout=b"{}", stderr=b"")
+            failure = self.run_failing_phase(adapter, profile, output, BinaryStderr())
+            self.assertIn("Android instrumentation failed", str(failure))
+            adapter._run_instrumentation.assert_called_once()
+
     @staticmethod
     def adapter_for(profile: Path, instrument: CommandResult) -> AndroidAdapter:
         adapter = AndroidAdapter.__new__(AndroidAdapter)

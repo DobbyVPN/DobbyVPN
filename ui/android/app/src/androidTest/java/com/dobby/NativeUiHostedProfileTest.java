@@ -287,7 +287,7 @@ public final class NativeUiHostedProfileTest {
         }
         File commandFile = safeFile(commandName);
         JSONObject command = readJson(commandFile);
-        File profileFile = safeFile(command.getString("profile_file"));
+        File profileFile = command.has("profile_file") ? safeFile(command.getString("profile_file")) : null;
         File outputFile = safeFile(command.getString("output_file"));
         JSONObject observation = baseObservation(command);
         String progressName = command.optString("progress_file", "");
@@ -313,7 +313,7 @@ public final class NativeUiHostedProfileTest {
                 sessionID = initial.getString("session_id");
                 sequence = initial.getLong("sequence");
             }
-            byte[] profile = readBytes(profileFile);
+            byte[] profile = guiAuto ? null : readBytes(profileFile);
             JSONArray operations = command.getJSONArray("operations");
             for (int i = 0; i < operations.length(); i++) {
                 JSONObject operation = operations.getJSONObject(i);
@@ -556,7 +556,7 @@ public final class NativeUiHostedProfileTest {
                         + CompleteThrowableReporter.format(failure));
             }
             try {
-                deleteIfPresent(profileFile);
+                if (profileFile != null) deleteIfPresent(profileFile);
             } catch (Throwable failure) {
                 cleanupError = cleanupError == null
                         ? "ANDROID_PROFILE_FILE_CLEANUP_FAILED"
@@ -665,7 +665,7 @@ public final class NativeUiHostedProfileTest {
     }
 
     /**
-     * Enter one fresh profile through the production Compose text field.
+     * Enter the subscription URL through the production Compose text field.
      * UiAutomator supplies the text through the visible control; Connect
      * still calls the production Go binding.
      */
@@ -1029,8 +1029,7 @@ public final class NativeUiHostedProfileTest {
 
     private UiObject2 findUiObject(String label, UiLookupCounters counters) {
         UiDevice device = uiDevice();
-        // A rendered profile can make the editable text node large. Prefer
-        // stable accessibility descriptions when locating visible controls.
+        // Prefer stable accessibility descriptions when locating visible controls.
         UiObject2 value = findVisibleUiObject(
                 device.findObjects(By.desc(label).pkg(context.getPackageName())), counters,
                 "description");
