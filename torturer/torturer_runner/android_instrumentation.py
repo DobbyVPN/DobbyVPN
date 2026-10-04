@@ -23,7 +23,7 @@ import sys
 
 ROUTING_RULE_CHAIN = "DOBBYVPN_TORTURER"
 
-_JUNIT_SUCCESS = re.compile(rb"^[ \t]*OK \(1 test\)[ \t]*$")
+_JUNIT_SUCCESS = re.compile(rb"^[ \t]*OK \((?:1 test|(?:[2-9]|[1-9][0-9]+) tests)\)[ \t]*$")
 _JUNIT_FAILURES = re.compile(rb"^[ \t]*FAILURES!!![ \t]*$")
 _INSTRUMENTATION_SUCCESS = re.compile(
     rb"^[ \t]*INSTRUMENTATION_CODE: -1[ \t]*$"
@@ -66,7 +66,8 @@ def parse_instrumentation_result(
     """Parse one completed ``am instrument`` invocation.
 
     The completion marker must be the final non-newline stdout line and the
-    JUnit summary must be an anchored ``OK (1 test)`` line.  Markers found only
+    JUnit summary must be an anchored ``OK (N tests)`` line with a positive
+    count (or ``OK (1 test)`` for a single test).  Markers found only
     on stderr never turn a result into a pass.  ``FAILURES!!!`` is rejected on
     either stream so a runner failure cannot be hidden in diagnostics.
     """
