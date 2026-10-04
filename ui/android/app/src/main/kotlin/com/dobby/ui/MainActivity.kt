@@ -626,9 +626,11 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
 
     fun update(entries: List<LogEntry>, clear: Int, color: Int) {
         latest = entries
+        val themeChanged = normalColor != color
         normalColor = color
         if (clear != lastClear) { following = true; lastClear = clear; expanded.clear() }
-        if (following && rendered != entries) render(entries)
+        if (following && (rendered != entries || themeChanged)) render(entries)
+        else if (themeChanged) render(rendered)
     }
 
     private fun render(entries: List<LogEntry>) {

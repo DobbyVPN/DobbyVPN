@@ -359,6 +359,13 @@ if ($env:DOBBYVPN_EXPECTED_VERSION -eq '1.5.0') {
 foreach ($name in $requiredFiles) {
   if (-not (Test-Path (Join-Path $root $name) -PathType Leaf)) { throw "missing installed file $name" }
 }
+if ([version]$env:DOBBYVPN_EXPECTED_VERSION -ge [version]'1.5.4') {
+  $scheme = Get-Item 'HKLM:\Software\Classes\dobbyvpn' -ErrorAction Stop
+  if ($null -eq $scheme.GetValue('URL Protocol', $null)) { throw "URL Protocol marker is missing" }
+  $command = (Get-Item 'HKLM:\Software\Classes\dobbyvpn\shell\open\command' -ErrorAction Stop).GetValue('')
+  $expected = '"' + (Join-Path $root 'bin\DobbyVPN.exe') + '" "%1"'
+  if ($command -ne $expected) { throw "unexpected protocol command: $command" }
+}
 $service = Get-Service -Name $serviceName -ErrorAction Stop
 if ($service.Status -ne 'Running') { throw "$serviceName is not running" }
 '''
@@ -389,6 +396,7 @@ $entries = @(
   @(Get-DobbyArpEntries) | Where-Object { $_.DisplayName -eq 'DobbyVPN' }
 )
 if ($entries.Count -ne 0) { throw "DobbyVPN remains registered after uninstall" }
+if (Test-Path 'HKLM:\Software\Classes\dobbyvpn') { throw "DobbyVPN URL scheme remains registered after uninstall" }
 if (Test-Path (Join-Path ${env:ProgramFiles} 'DobbyVPN')) { throw "DobbyVPN install directory remains" }
 foreach ($name in @('DobbyVPN Server', 'DobbyVPN Go backend')) {
   $service = $null

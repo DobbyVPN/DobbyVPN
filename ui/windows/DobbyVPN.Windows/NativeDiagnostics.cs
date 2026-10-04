@@ -82,27 +82,6 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         }
     }
 
-    public async Task<string> PreviewAsync()
-    {
-        var text = new StringBuilder();
-        foreach (var path in _paths.SelectMany(path => new[] {path + ".previous", path}))
-        {
-            try
-            {
-                await using var input = OpenLog(path);
-                var count = (int)Math.Min(131072, input.Length);
-                input.Seek(-count, SeekOrigin.End);
-                var bytes = new byte[count];
-                await input.ReadExactlyAsync(bytes);
-                text.AppendLine($"--- {Path.GetFileName(path)} ---").AppendLine(Encoding.UTF8.GetString(bytes));
-            }
-            catch (FileNotFoundException) { }
-            catch (DirectoryNotFoundException) { }
-            catch (Exception error) { text.AppendLine($"{path}: {error}"); }
-        }
-        return text.Append(WriteFailure).ToString();
-    }
-
     internal sealed record Entry(string Id, string Timestamp, string Level, string Source, string Message, string Raw, DateTimeOffset? Time);
 
     [StructLayout(LayoutKind.Sequential)]

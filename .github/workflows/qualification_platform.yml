@@ -398,7 +398,7 @@ jobs:
           # The 20 lifecycle cycles reached final reopen at the former 300s
           # limit on hosted API 35; leave time for live-log/export assertions.
           timeout --foreground 420s "$ADB" shell am instrument -w -r \
-            -e class com.dobby.NativeUiInstrumentedTest \
+            -e class com.dobby.NativeUiInstrumentedTest,com.dobby.NativeDiagnosticRetentionTest \
             com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
             >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
           if [ "$ui_status" -eq 124 ]; then

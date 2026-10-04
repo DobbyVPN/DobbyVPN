@@ -178,7 +178,7 @@ class NativeUIController:
                     raise NativeUISmokeError(message)
                 time.sleep(min(0.1, self.timeout))
 
-    def start(self) -> dict:
+    def start(self, import_url: str | None = None) -> dict:
         if self.process is not None:
             raise NativeUISmokeError("native UI is already running")
         if self.platform == "macos":
@@ -194,6 +194,12 @@ class NativeUIController:
                 if value := os.environ.get(name):
                     command.extend(("--env", f"{name}={value}"))
             command.extend(("--stdout", str(prefix) + ".stdout.log", "--stderr", str(prefix) + ".stderr.log", str(self.binary)))
+        if import_url is not None:
+            from urllib.parse import quote
+            link = "dobbyvpn://import?url=" + quote(import_url, safe="")
+            if self.platform == "macos":
+                command.insert(len(command) - 1, "-a")
+            command.append(link)
         with Path(str(prefix) + ".launcher.stdout.log").open("xb") as stdout, Path(str(prefix) + ".launcher.stderr.log").open("xb") as stderr:
             self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
         if self.platform == "windows":
@@ -345,7 +351,7 @@ class NativeUIController:
         return {"closed": True}
 
     def reopen(self) -> dict:
-        self.start()
+        self.start(import_url=self.profile.read_text(encoding="utf-8").strip())
         return self.wait_status("Connected")
 
     def collect_diagnostics(self) -> None:

@@ -176,22 +176,6 @@ public enum DiagnosticFiles {
         return inputs
     }
 
-    public static func preview(paths: [URL]) -> (text: String, error: String) {
-        var issues: [String] = []
-        var text: [String] = []
-        let inputs = capture(paths, issues: &issues)
-        for input in inputs {
-            do {
-                try withFile(input.file) { file in
-                    try file.seek(toOffset: input.length > 131_072 ? input.length - 131_072 : 0)
-                    let data = try file.read(upToCount: 131_072) ?? Data()
-                    text.append("--- \(input.path.lastPathComponent) ---\n" + String(decoding: data, as: UTF8.self))
-                }
-            } catch { issues.append("\(input.path.path): \(String(reflecting: error))") }
-        }
-        return (text.joined(separator: "\n"), issues.joined(separator: "\n"))
-    }
-
     public struct Entry: Identifiable, Equatable, Sendable {
         public let id: String
         public let timestamp: String

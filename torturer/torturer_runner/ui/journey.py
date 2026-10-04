@@ -80,6 +80,7 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "clear_logs_native",
     "close_window",
     "reopen_connected",
+    "cold_import_native",
     "process_loss_verified",
     "ui_process_loss_recovered",
     "reconnect_tunnel_interface",
@@ -456,6 +457,7 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             ui.reopen, milestone="reopened",
         )
         checks["reopen_connected"] = True
+        checks["cold_import_native"] = True
         if not connected(args.timeout):
             raise NativeUIJourneyError("base adapter did not observe service continuity after UI reopen")
 

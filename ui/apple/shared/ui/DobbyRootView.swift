@@ -247,6 +247,7 @@ public struct DobbyAboutView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("About DobbyVPN").font(.title2.bold())
             Text("Version: \(model.client.version)").accessibilityIdentifier("About version metadata")
+            Text("Commit: \(model.client.sourceCommit.prefix(12))")
             Text("Source commit: \(model.client.sourceCommit)")
                 .textSelection(.enabled).accessibilityIdentifier("About source commit metadata")
             if model.client.sourceCommit.count == 40,

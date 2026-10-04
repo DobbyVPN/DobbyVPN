@@ -25,7 +25,9 @@ internal static class NativeDiagnosticsTests
                 diagnostics.Record($"error-{index}:" + new string('x', 10000), "ui.failure");
             // A new owner must read the complete persisted UI history.
             diagnostics = new NativeDiagnostics(backend, ui);
-            var preview = await diagnostics.PreviewAsync();
+            var previewEntries = await diagnostics.EntriesAsync();
+            Require(previewEntries.Error == "", previewEntries.Error);
+            var preview = string.Join("\n", previewEntries.Entries.Select(entry => entry.Message));
             Require(preview.Length < 530000, "preview is not bounded");
             Require(!preview.Contains("error-0:") && preview.Contains("error-99:"), "preview is not the recent tail");
             await diagnostics.SaveAsync(destination, "test metadata\n");
@@ -101,6 +103,25 @@ internal static class NativeDiagnosticsTests
             using var text = new StreamReader(uncompressed);
             var details = await text.ReadToEndAsync();
             Require(details.Contains(directory) && details.Contains("error-0:"), "read failure hid available logs");
+            var structured = Path.Combine(directory, "structured.jsonl");
+            var structuredUI = Path.Combine(directory, "structured-ui.jsonl");
+            const string earlier = "{\"timestamp\":\"2026-01-01T00:00:01Z\",\"level\":\"WARN\",\"message\":\"earlier λ\",\"extra\":42}\n";
+            const string later = "{\"timestamp\":\"2026-01-01T00:00:02Z\",\"message\":\"later\"}\n";
+            File.WriteAllText(structured, later + "trace line 1\ntrace line 2\n");
+            File.WriteAllText(structuredUI, earlier + "{\"message\":\"incomplete");
+            var view = new NativeDiagnostics(structured, structuredUI);
+            var parsed = await view.EntriesAsync();
+            Require(parsed.Error == "", parsed.Error);
+            Require(parsed.Entries.Select(e => e.Message).SequenceEqual(new[] { "earlier λ", "later", "trace line 1", "trace line 2" }), "structured ordering or partial record failed");
+            Require(parsed.Entries[0].Level == "WARN" && parsed.Entries[0].Raw.Contains("extra"), "structured details lost");
+            await view.ClearViewAsync();
+            File.Move(structured, structured + ".previous");
+            File.WriteAllText(structured, "new after rotation\n");
+            File.AppendAllText(structuredUI, " record\"}\n");
+            view = new NativeDiagnostics(structured, structuredUI);
+            parsed = await view.EntriesAsync();
+            Require(parsed.Error == "" && parsed.Entries.Select(e => e.Message).SequenceEqual(new[] { "new after rotation" }), "Clear did not survive rotation/restart or partial boundary");
+            Require(File.ReadAllText(structured + ".previous").StartsWith(later), "Clear modified retained bytes");
             Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, input protection, and failure cleanup passed");
         }
         finally { Directory.Delete(directory, recursive: true); }

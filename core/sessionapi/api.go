@@ -940,9 +940,10 @@ func attemptActive(state State) bool {
 	switch state {
 	case StateProbing, StatePreparing, StateConnected, StateStopping:
 		return true
-	default:
+	case StateIdle, StateConfigured, StateFailed:
 		return false
 	}
+	return false
 }
 
 // finish runs only in the attempt worker, after its current native

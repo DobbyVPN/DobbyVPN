@@ -29,7 +29,7 @@ final class DiagnosticsTests: XCTestCase {
         try Data("first line\n".utf8).write(to: file)
         let model = DobbySessionViewModel(client: DiagnosticClient(paths: [file]))
         let loaded = expectation(description: "initial display")
-        let subscription = model.$logs.first { $0.contains("first line") }.sink { _ in loaded.fulfill() }
+        let subscription = model.$logEntries.first { $0.contains { $0.message == "first line" } }.sink { _ in loaded.fulfill() }
         model.refreshLogs()
         await fulfillment(of: [loaded], timeout: 5)
         subscription.cancel()
@@ -75,7 +75,7 @@ final class DiagnosticsTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let missing = directory.appendingPathComponent("missing.jsonl")
-        XCTAssertEqual(diagnosticPreview(paths: [missing]).error, "")
+        XCTAssertEqual(structuredPreview(paths: [missing], boundary: directory.appendingPathComponent("view")).error, "")
         XCTAssertEqual(try exportDiagnostics(paths: [missing], to: directory.appendingPathComponent("export.gz"), header: ""), "")
     }
 
@@ -91,9 +91,9 @@ final class DiagnosticsTests: XCTestCase {
         let writer = try FileHandle(forWritingTo: source)
         for _ in 0..<1024 { try writer.write(contentsOf: block) }
         try writer.close()
-        let preview = diagnosticPreview(paths: [source])
+        let preview = structuredPreview(paths: [source], boundary: directory.appendingPathComponent("view"))
         XCTAssertTrue(preview.error.isEmpty)
-        XCTAssertLessThan(preview.text.count, 263_000)
+        XCTAssertLessThan(preview.entries.map(\.message).joined().count, 263_000)
         let header = "test metadata\n"
         XCTAssertEqual(try exportDiagnostics(paths: [source], to: destination, header: header), "")
         guard let reader = gzopen(destination.path, "rb") else { return XCTFail("open gzip") }
@@ -171,9 +171,9 @@ final class DiagnosticsTests: XCTestCase {
             completed.fulfill()
         }
         await fulfillment(of: [completed], timeout: 10)
-        let preview = diagnosticPreview(paths: client.diagnosticPaths)
-        XCTAssertFalse(preview.text.contains("error-0:"))
-        XCTAssertTrue(preview.text.contains("error-99:"))
+        let preview = structuredPreview(paths: client.diagnosticPaths, boundary: directory.appendingPathComponent("view"))
+        XCTAssertFalse(preview.entries.map(\.message).joined().contains("error-0:"))
+        XCTAssertTrue(preview.entries.map(\.message).joined().contains("error-99:"))
     }
 
 }

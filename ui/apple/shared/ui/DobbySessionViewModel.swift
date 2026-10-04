@@ -8,7 +8,6 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var error = "" {
         didSet { if !error.isEmpty && error != oldValue { recordError(error) } }
     }
-    @Published public private(set) var logs = ""
     @Published var logEntries: [DobbyLogEntry] = []
     @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
@@ -285,7 +284,6 @@ public final class DobbySessionViewModel: ObservableObject {
                 guard let self else { return }
                 self.logsInFlight = false
                 self.logEntries = result.entries
-                self.logs = result.entries.map(\.message).joined(separator: "\n")
                 self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
             }
         }
@@ -301,7 +299,6 @@ public final class DobbySessionViewModel: ObservableObject {
                 switch result {
                 case .success:
                     self.logEntries = []
-                    self.logs = ""
                     self.clearRevision += 1
                     self.refreshLogs()
                 case let .failure(error): self.reportLogsError(error.localizedDescription)

@@ -29,13 +29,26 @@ pipe on Windows. The Go backend runs as a launchd daemon on macOS, a Windows
 Service on Windows, and a systemd service on Linux. The operator CLI talks
 directly to the backend and is not launched once per frontend action.
 
-The accepted subscription URL is persisted by the Go backend and returned in
-its session snapshot. Inline TOML is kept only in the current UI session.
-The main screen keeps your subscription URL, connection button, and live logs
-together. Use “Use configuration text…” for inline TOML, and About for version
-and source information. Logs follow new entries until you scroll back;
-“Jump to latest” resumes following. Share logs (Save logs on Windows) exports
-both retained log generations as a gzip file with version and platform information.
+Enter or paste an HTTPS subscription URL to load its profiles automatically.
+Choose **Auto connect** to try profiles in subscription order, or **Connect**
+beside a profile to select it. Choosing another profile while connected stops
+the old tunnel before starting the new one. Loading a subscription keeps the
+current connection running. Failed loads offer **Retry**; **Stop** or
+**Disconnect** remains available for the active connection. The backend saves
+the accepted URL and restores it when the app reopens. About shows the version,
+commit and source link. File and inline configuration remain available in the CLI.
+
+Logs show timestamps, severity labels and colors, source, and readable messages.
+Expand **Details** to inspect the original record. Scroll up to hold your reading
+position; return to the bottom to follow updates. **Clear** hides earlier entries
+across app restarts without deleting diagnostics. Share logs (Save logs on
+Windows) exports both retained generations as a gzip file with version and
+platform information, including entries hidden by Clear.
+
+An installed native app accepts `dobbyvpn://` to open it and
+`dobbyvpn://import?url=https%3A%2F%2Fexample.com%2Fsubscription` to fill and
+load a subscription. Imports do not connect or disconnect a tunnel. Linux
+continues to use the CLI.
 
 On Linux and other desktop platforms, use `dobby-cli logs` to view diagnostics,
 `dobby-cli logs --follow` to follow new entries, or

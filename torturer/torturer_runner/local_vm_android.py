@@ -221,7 +221,7 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
             serial,
             [
                 "shell", "am", "instrument", "-w", "-r",
-                "-e", "class", "com.dobby.NativeUiInstrumentedTest",
+                "-e", "class", "com.dobby.NativeUiInstrumentedTest,com.dobby.NativeDiagnosticRetentionTest",
                 "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
             ],
             run_dir=run_dir,

@@ -139,15 +139,22 @@ struct DobbyLogView: NSViewRepresentable {
         view.backgroundColor = .textBackgroundColor
         view.setAccessibilityIdentifier("Connection logs")
         scroll.contentView.postsBoundsChangedNotifications = true
-        context.coordinator.observer = NotificationCenter.default.addObserver(
+        let coordinator = context.coordinator
+        coordinator.observers.append(NotificationCenter.default.addObserver(
+            forName: NSScrollView.willStartLiveScrollNotification, object: scroll, queue: .main
+        ) { [weak coordinator] _ in coordinator?.userScrolling = true })
+        coordinator.observers.append(NotificationCenter.default.addObserver(
+            forName: NSScrollView.didEndLiveScrollNotification, object: scroll, queue: .main
+        ) { [weak coordinator] _ in coordinator?.userScrolling = false })
+        coordinator.observers.append(NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak coordinator = context.coordinator, weak scroll] _ in
-            guard let coordinator, let scroll, !coordinator.updating else { return }
+            guard let coordinator, let scroll, !coordinator.updating, coordinator.userScrolling else { return }
             let atBottom = scroll.contentView.bounds.maxY >= (scroll.documentView?.bounds.height ?? 0) - 24
             if coordinator.parent.following != atBottom {
                 DispatchQueue.main.async { coordinator.parent.following = atBottom }
             }
-        }
+        })
         return scroll
     }
 
@@ -182,7 +189,8 @@ struct DobbyLogView: NSViewRepresentable {
         var parent: DobbyLogView
         var lastClear = 0
         var updating = false
-        var observer: NSObjectProtocol?
+        var observers: [NSObjectProtocol] = []
+        var userScrolling = false
         var entries: [DobbyLogEntry] = []
         var expanded = Set<String>()
         init(_ parent: DobbyLogView) { self.parent = parent }
@@ -198,7 +206,7 @@ struct DobbyLogView: NSViewRepresentable {
             updating = false
             return true
         }
-        deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+        deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
     }
 }
 #endif

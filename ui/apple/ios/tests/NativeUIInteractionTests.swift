@@ -51,6 +51,41 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["VPN connection action"].exists)
         attachScreenshot("reopened")
+        try verifyColdAndWarmImports()
+
+    }
+
+    private func verifyColdAndWarmImports() throws {
+        guard #available(iOS 16.4, *) else { XCTFail("URL activation checks require iOS 16.4 or newer"); return }
+        let cold = "https://example.invalid/cold?a=%2F"
+        let warm = "https://example.invalid/warm"
+        func link(_ source: String) throws -> URL {
+            var components = URLComponents()
+            components.scheme = "dobbyvpn"
+            components.host = "import"
+            components.queryItems = [URLQueryItem(name: "url", value: source)]
+            return try XCTUnwrap(components.url)
+        }
+        func expectSource(_ value: String) {
+            let field = app.textFields["Connection configuration"]
+            XCTAssertTrue(field.waitForExistence(timeout: 15))
+            let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", value), object: field
+            )], timeout: 15)
+            XCTAssertEqual(result, .completed)
+            XCTAssertFalse(app.buttons["VPN connection action"].isEnabled)
+        }
+        app.terminate()
+        app.open(try link(cold))
+        expectSource(cold)
+        XCUIDevice.shared.system.open(try link(warm))
+        expectSource(warm)
+        XCUIDevice.shared.system.open(try link(warm))
+        expectSource(warm)
+        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://")))
+        expectSource(warm)
+        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid&url=duplicate")))
+        expectSource(warm)
     }
 
     private func dismissConfigurationKeyboard() {

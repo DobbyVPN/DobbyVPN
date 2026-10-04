@@ -189,6 +189,7 @@ class NativeUiInstrumentedTest {
         val marker = "live-log-check-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.live", marker)
         waitForTextContaining(marker)
+        verifyLogScrollingAndClear()
         val existing = context.cacheDir.listFiles().orEmpty().map { it.name }.toSet()
         val exportMarker = "fresh-export-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.export", exportMarker)
@@ -216,6 +217,35 @@ class NativeUiInstrumentedTest {
         device.pressBack()
         check(exported.delete()) { "ANDROID_LOG_EXPORT_CLEANUP_FAILED" }
         launch()
+    }
+
+    private fun verifyLogScrollingAndClear() {
+        val context = instrumentation.targetContext
+        val prefix = "scroll-check-${System.nanoTime()}"
+        repeat(80) { NativeVpnBridge.recordDiagnostic(context, "ui.test.scroll", "$prefix-$it") }
+        waitForTextContaining("$prefix-79")
+        val logs = requireObject("Connection logs")
+        val viewport = logs.parent
+        check(viewport.scroll(androidx.test.uiautomator.Direction.UP, 1f)) { "ANDROID_LOG_SCROLL_UP_FAILED" }
+        device.waitForIdle()
+        val frozen = requireObject("Connection logs").text
+        val pending = "$prefix-pending"
+        NativeVpnBridge.recordDiagnostic(context, "ui.test.scroll.pending", pending)
+        // Two foreground refresh intervals must not change a frozen reader.
+        Thread.sleep(1_600)
+        check(requireObject("Connection logs").text == frozen) { "ANDROID_LOG_SCROLL_POSITION_NOT_FROZEN" }
+        val deadline = System.currentTimeMillis() + 10_000
+        while (!requireObject("Connection logs").text.orEmpty().contains(pending) && System.currentTimeMillis() < deadline) {
+            requireObject("Connection logs").parent.fling(androidx.test.uiautomator.Direction.DOWN)
+            device.waitForIdle()
+        }
+        waitForTextContaining(pending)
+        tapStable("Clear")
+        val clearDeadline = System.currentTimeMillis() + 10_000
+        while (requireObject("Connection logs").text.orEmpty().contains(prefix) && System.currentTimeMillis() < clearDeadline) Thread.sleep(100)
+        check(!requireObject("Connection logs").text.orEmpty().contains(prefix)) { "ANDROID_CLEAR_RESTORED_HISTORY" }
+        NativeVpnBridge.recordDiagnostic(context, "ui.test.after.clear", "$prefix-after-clear")
+        waitForTextContaining("$prefix-after-clear")
     }
 
     private fun launch() {

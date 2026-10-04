@@ -35,6 +35,8 @@ public sealed partial class MainWindow : Window
     private string _loadError = "";
     private string _restoredLoad = "";
     private CancellationTokenSource? _debounce;
+    private long _logRevision;
+    private bool _clearingLogs;
     private bool _followingLogs = true;
     private bool _updatingLogs;
     private ScrollViewer? _logScroll;
@@ -416,6 +418,7 @@ public sealed partial class MainWindow : Window
     {
         var details = new StackPanel { Spacing = 12 };
         details.Children.Add(new TextBlock { Text = $"Version: {_version}", IsTextSelectionEnabled = true });
+        details.Children.Add(new TextBlock { Text = $"Commit: {_commit[..Math.Min(12, _commit.Length)]}" });
         details.Children.Add(new TextBlock { Text = $"Source commit: {_commit}", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
         if (_commit.Length == 40)
             details.Children.Add(new HyperlinkButton { Content = "Source code", NavigateUri = new Uri($"https://github.com/DobbyVPN/DobbyVPN/tree/{_commit}") });
@@ -459,21 +462,29 @@ public sealed partial class MainWindow : Window
     {
         try
         {
+            if (_clearingLogs) return;
+            _clearingLogs = true;
+            ++_logRevision;
             await _diagnostics.ClearViewAsync();
             _followingLogs = true;
             _latestLogs = [];
             _renderedLogs = "";
             LogEntries.Children.Clear();
+            _clearingLogs = false;
             await RefreshLogsAsync();
         }
         catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+        finally { _clearingLogs = false; }
     }
 
     private async Task RefreshLogsAsync()
     {
         try
         {
+            if (_clearingLogs) return;
+            var revision = ++_logRevision;
             var preview = await _diagnostics.EntriesAsync();
+            if (revision != _logRevision) return;
             _latestLogs = preview.Entries;
             LogsErrorText.Text = preview.Error;
             if (_followingLogs) RenderLogs();

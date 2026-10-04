@@ -4,6 +4,7 @@ import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.dobby.nativebridge.NativeVpnBridge
+import com.dobby.ui.StructuredLogs
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -15,6 +16,41 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NativeDiagnosticRetentionTest {
+    @Test
+    fun structuredViewKeepsOrderingRawDetailsAndDurableClear() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "structured-${System.nanoTime()}")
+        assertTrue(directory.mkdir())
+        try {
+            val backend = File(directory, "backend.jsonl")
+            val native = File(directory, "ui.jsonl")
+            val boundary = File(directory, "view.json")
+            val later = """{"timestamp":"2026-01-01T00:00:02Z","message":"later"}""" + "\n"
+            backend.writeText(later + "trace line 1\ntrace line 2\n")
+            native.writeText("""{"timestamp":"2026-01-01T00:00:01Z","level":"WARN","message":"earlier λ","extra":42}""" + "\n" + """{"message":"incomplete""")
+            var view = StructuredLogs(listOf(backend.path, native.path), boundary)
+            val (entries, error) = view.read()
+            assertEquals("", error)
+            assertEquals(listOf("earlier λ", "later", "trace line 1", "trace line 2"), entries.map { it.message })
+            assertEquals("WARN", entries[0].level)
+            assertTrue(entries[0].raw.contains("extra"))
+            view.clear()
+            assertTrue(backend.renameTo(File(backend.path + ".previous")))
+            backend.writeText("new after rotation\n")
+            native.appendText(" record\"}\n")
+            view = StructuredLogs(listOf(backend.path, native.path), boundary)
+            val (after, failure) = view.read()
+            assertEquals("", failure)
+            assertEquals(listOf("new after rotation"), after.map { it.message })
+            assertTrue(File(backend.path + ".previous").readText().startsWith(later))
+            val capture = StructuredLogs.parse("""{"event":"stderr.capture","level":"ERROR"}""", "capture", "Tunnel stderr")
+            assertEquals("INFO", capture.level)
+            assertEquals("Stderr capture initialized", capture.message)
+        } finally {
+            assertTrue(directory.deleteRecursively())
+        }
+    }
+
     @Test
     fun failedAppendRetainsOriginalRecordAndChunkedFallbackBytes() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

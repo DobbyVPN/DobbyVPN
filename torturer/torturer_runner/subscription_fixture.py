@@ -53,9 +53,15 @@ class SubscriptionFixture:
             openssl = str(Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/usr/bin/openssl.exe")
         if not openssl:
             raise RuntimeError("OpenSSL is required for the disposable subscription fixture")
+        certificate_config = self.directory / "openssl.cnf"
+        certificate_config.write_text(
+            "[req]\ndistinguished_name=subject\nx509_extensions=extensions\nprompt=no\n"
+            "[subject]\nCN=DobbyVPN Torturer " + uuid.uuid4().hex + "\n"
+            "[extensions]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:TRUE\n",
+            encoding="ascii",
+        )
         command([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(self.key),
-                 "-out", str(self.certificate), "-days", "1", "-subj", "/CN=DobbyVPN Torturer " + uuid.uuid4().hex,
-                 "-addext", "subjectAltName=IP:127.0.0.1", "-addext", "basicConstraints=critical,CA:TRUE"])
+                 "-out", str(self.certificate), "-days", "1", "-config", str(certificate_config)])
         self.fingerprint = hashlib.sha1(ssl.PEM_cert_to_DER_cert(self.certificate.read_text()), usedforsecurity=False).hexdigest()
         fixture = self
 
