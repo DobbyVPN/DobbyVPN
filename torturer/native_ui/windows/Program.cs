@@ -152,13 +152,13 @@ internal static class Program
             if (args.Length == 2 && args[0] == "--subscription-certificate")
             {
                 using var key = RSA.Create(2048);
-                var request = new CertificateRequest("CN=DobbyVPN Torturer " + Guid.NewGuid().ToString("N"), key,
+                var certificateRequest = new CertificateRequest("CN=DobbyVPN Torturer " + Guid.NewGuid().ToString("N"), key,
                     HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-                request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+                certificateRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
                 var names = new SubjectAlternativeNameBuilder();
                 names.AddIpAddress(System.Net.IPAddress.Loopback);
-                request.CertificateExtensions.Add(names.Build());
-                using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+                certificateRequest.CertificateExtensions.Add(names.Build());
+                using var certificate = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
                 File.WriteAllText(Path.Combine(args[1], "ca.pem"), certificate.ExportCertificatePem());
                 File.WriteAllText(Path.Combine(args[1], "key.pem"), key.ExportPkcs8PrivateKeyPem());
                 return 0;

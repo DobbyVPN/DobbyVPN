@@ -103,6 +103,7 @@ class NativeUiInstrumentedTest {
         waitForOneOf(arrayOf("Disconnected"), 30_000)
         requireObject(connectionActionLabel)
         captureScreenshot("startup")
+        assertConnectionDisabled("ANDROID_INITIAL_CONNECT_ENABLED")
 
         // Resolve the app-owned diagnostic paths so the controller can
         // collect the native JSONL file after instrumentation completes.
@@ -360,15 +361,35 @@ class NativeUiInstrumentedTest {
         device.waitForIdle()
     }
 
+    private fun assertConnectionDisabled(message: String) {
+        val labeled = requireObject(connectionActionLabel)
+        val nodes = java.util.ArrayDeque<UiObject2>()
+        nodes.add(labeled)
+        var button: UiObject2? = null
+        while (nodes.isNotEmpty() && button == null) {
+            val node = nodes.removeFirst()
+            if (node.className == "android.widget.Button") button = node else nodes.addAll(node.children)
+        }
+        var ancestor = labeled.parent
+        while (button == null && ancestor != null) {
+            if (ancestor.className == "android.widget.Button") button = ancestor else ancestor = ancestor.parent
+        }
+        if (button == null || button.isEnabled) {
+            val hierarchy = java.io.ByteArrayOutputStream()
+            device.dumpWindowHierarchy(hierarchy)
+            throw AssertionError("$message button_found=${button != null}\n" + hierarchy.toString("UTF-8"))
+        }
+    }
+
     private fun verifyInvalidImportOutcome() {
-        check(!requireObject(connectionActionLabel).isEnabled) { "ANDROID_INVALID_URL_ENABLED_CONNECT" }
+        assertConnectionDisabled("ANDROID_INVALID_URL_ENABLED_CONNECT")
         val output = device.executeShellCommand(
             "am start -W -a android.intent.action.VIEW -d 'dobbyvpn://import?url=http%3A%2F%2Fexample.com' $packageName",
         )
         check(output.contains("Status: ok")) { "ANDROID_IMPORT_ACTIVATION_FAILED:$output" }
         waitForOneOf(arrayOf("Error"), 10_000)
         waitForTextContaining("HTTPS subscription URL")
-        check(!requireObject(connectionActionLabel).isEnabled) { "ANDROID_INVALID_IMPORT_ENABLED_CONNECT" }
+        assertConnectionDisabled("ANDROID_INVALID_IMPORT_ENABLED_CONNECT")
     }
 
     private fun tapAndWaitForVisible(control: String, outcome: String) {
