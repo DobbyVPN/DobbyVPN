@@ -103,6 +103,121 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         return text.Append(WriteFailure).ToString();
     }
 
+    internal sealed record Entry(string Id, string Timestamp, string Level, string Source, string Message, string Raw, DateTimeOffset? Time);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileInformation
+    {
+        public uint Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
+        public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(SafeFileHandle file, out FileInformation information);
+    private static string Identity(FileStream file)
+    {
+        if (!GetFileInformationByHandle(file.SafeFileHandle, out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return $"{info.Volume}:{info.IndexHigh}:{info.IndexLow}";
+    }
+
+    public Task ClearViewAsync() => Task.Run(() =>
+    {
+        var offsets = new Dictionary<string, long>();
+        foreach (var path in _paths)
+            NativeLogFiles.WithLock(path, false, () =>
+            {
+                foreach (var name in new[] { path + ".previous", path })
+                {
+                    try { using var file = OpenLog(name); offsets[Identity(file)] = file.Length; }
+                    catch (FileNotFoundException) { }
+                    catch (DirectoryNotFoundException) { }
+                }
+            });
+        var boundary = uiPath + ".view";
+        Directory.CreateDirectory(Path.GetDirectoryName(boundary)!);
+        var temporary = boundary + ".tmp";
+        try
+        {
+            using (var output = new FileStream(temporary, FileMode.Create, FileAccess.Write))
+            {
+                JsonSerializer.Serialize(output, offsets);
+                output.Flush(true);
+            }
+            File.Move(temporary, boundary, true);
+        }
+        finally { File.Delete(temporary); }
+    });
+
+    public Task<(List<Entry> Entries, string Error)> EntriesAsync() => Task.Run(() =>
+    {
+        var entries = new List<Entry>();
+        var issues = new List<string>();
+        Dictionary<string, long> offsets;
+        try { offsets = File.Exists(uiPath + ".view") ? JsonSerializer.Deserialize<Dictionary<string, long>>(File.ReadAllText(uiPath + ".view")) ?? [] : []; }
+        catch (Exception error) { return (entries, $"Viewing boundary: {error}"); }
+        foreach (var path in _paths.SelectMany(path => new[] { path + ".previous", path }))
+        {
+            try
+            {
+                using var file = OpenLog(path);
+                var id = Identity(file);
+                var size = file.Length;
+                var start = Math.Max(Math.Min(offsets.GetValueOrDefault(id), size), Math.Max(0, size - 131072));
+                file.Position = start > 0 ? start - 1 : 0;
+                var bytes = new byte[(int)Math.Min(size - file.Position, 131073)];
+                file.ReadExactly(bytes);
+                var position = start;
+                if (start > 0 && bytes.Length > 0)
+                {
+                    var boundaryLine = bytes[0] == 10;
+                    bytes = bytes[1..];
+                    if (!boundaryLine)
+                    {
+                        var newline = Array.IndexOf(bytes, (byte)10);
+                        if (newline < 0) continue;
+                        position += newline + 1;
+                        bytes = bytes[(newline + 1)..];
+                    }
+                }
+                var name = Path.GetFileName(path);
+                var stream = name.Contains("stderr") ? "Backend stderr" : name.Contains("ui") ? "App" : "Backend";
+                var lines = Encoding.UTF8.GetString(bytes).Split('\n');
+                for (var index = 0; index < lines.Length; index++)
+                {
+                    var raw = lines[index];
+                    var entryId = $"{id}:{position}";
+                    position += Encoding.UTF8.GetByteCount(raw) + 1;
+                    if (raw.Length == 0 || index == lines.Length - 1 && raw.StartsWith('{')) continue;
+                    entries.Add(ParseEntry(raw, entryId, stream));
+                }
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            catch (Exception error) { issues.Add($"{path}: {error}"); }
+        }
+        if (WriteFailure.Length > 0) issues.Add(WriteFailure);
+        return (entries.OrderBy(entry => entry.Time is null).ThenBy(entry => entry.Time).ToList(), string.Join("\n", issues));
+    });
+
+    internal static Entry ParseEntry(string raw, string id, string stream)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            var value = document.RootElement;
+            string Field(string key, string fallback = "") => value.TryGetProperty(key, out var field) && field.ValueKind == JsonValueKind.String ? field.GetString()! : fallback;
+            var timestamp = Field("timestamp");
+            var capture = Field("event") == "stderr.capture";
+            return new Entry(id, timestamp, capture ? "INFO" : Field("level", "INFO").ToUpperInvariant(),
+                string.Join(" · ", new[] { stream, Field("source") }.Where(text => text.Length > 0)),
+                capture ? "Stderr capture initialized" : Field("message", raw), raw,
+                DateTimeOffset.TryParse(timestamp, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var time) ? time : null);
+        }
+        catch (Exception error) when (error is JsonException or InvalidOperationException)
+        { return new Entry(id, "", "RAW", stream, raw, raw, null); }
+    }
+
     public async Task ExportAsync(Stream destination, string header)
     {
         var inputs = new List<(string Path, FileStream File, long Length)>();

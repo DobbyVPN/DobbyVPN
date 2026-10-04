@@ -192,6 +192,109 @@ public enum DiagnosticFiles {
         return (text.joined(separator: "\n"), issues.joined(separator: "\n"))
     }
 
+    public struct Entry: Identifiable, Equatable, Sendable {
+        public let id: String
+        public let timestamp: String
+        public let level: String
+        public let source: String
+        public let message: String
+        public let raw: String
+        public let date: Date?
+    }
+
+    private static func identity(_ file: FileHandle) throws -> String {
+        var info = stat()
+        guard fstat(file.fileDescriptor, &info) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        return "\(info.st_dev):\(info.st_ino)"
+    }
+
+    public static func clearView(paths: [URL], boundary: URL) throws {
+        var issues: [String] = []
+        let inputs = capture(paths, issues: &issues)
+        var offsets: [String: UInt64] = [:]
+        for input in inputs {
+            do { try withFile(input.file) { offsets[try identity($0)] = input.length } }
+            catch { issues.append(String(reflecting: error)) }
+        }
+        guard issues.isEmpty else { throw Failure(issues.joined(separator: "\n")) }
+        try FileManager.default.createDirectory(at: boundary.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(offsets).write(to: boundary, options: .atomic)
+    }
+
+    public static func entries(paths: [URL], boundary: URL) -> (entries: [Entry], error: String) {
+        var issues: [String] = []
+        var offsets: [String: UInt64] = [:]
+        do {
+            if FileManager.default.fileExists(atPath: boundary.path) { offsets = try JSONDecoder().decode([String: UInt64].self, from: Data(contentsOf: boundary)) }
+        } catch { return ([], "Viewing boundary: \(String(reflecting: error))") }
+        var entries: [Entry] = []
+        for input in capture(paths, issues: &issues) {
+            do {
+                try withFile(input.file) { file in
+                    let id = try identity(file)
+                    let cleared = min(offsets[id] ?? 0, input.length)
+                    let start = max(cleared, input.length > 131_072 ? input.length - 131_072 : 0)
+                    try file.seek(toOffset: start > 0 ? start - 1 : 0)
+                    var data = try file.read(upToCount: 131_073) ?? Data()
+                    var position = start
+                    if start > 0 {
+                        let atBoundary = data.first == 10
+                        if !data.isEmpty { data.removeFirst() }
+                        if !atBoundary {
+                            if let newline = data.firstIndex(of: 10) {
+                                position += UInt64(data.distance(from: data.startIndex, to: newline) + 1)
+                                data = Data(data[data.index(after: newline)...])
+                            } else { return }
+                        }
+                    }
+                    let stream = friendlyStream(input.path.lastPathComponent)
+                    let lines = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+                    for (index, line) in lines.enumerated() {
+                        let raw = String(line)
+                        defer { position += UInt64(raw.utf8.count + 1) }
+                        if raw.isEmpty { continue }
+                        // A growing JSON record is held until its newline arrives.
+                        if index == lines.count - 1 && raw.hasPrefix("{") { continue }
+                        entries.append(parseEntry(raw, id: "\(id):\(position)", stream: stream))
+                    }
+                }
+            } catch { issues.append("\(input.path.path): \(String(reflecting: error))") }
+        }
+        let sorted = entries.enumerated().sorted { lhs, rhs in
+            switch (lhs.element.date, rhs.element.date) {
+            case let (left?, right?): return left == right ? lhs.offset < rhs.offset : left < right
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return lhs.offset < rhs.offset
+            }
+        }.map(\.element)
+        return (sorted, issues.joined(separator: "\n"))
+    }
+
+    public static func friendlyStream(_ name: String) -> String {
+        let name = name.replacingOccurrences(of: ".previous", with: "")
+        if name.contains("stderr") { return name.contains("tunnel") ? "Tunnel stderr" : "Backend stderr" }
+        if name.contains("ui") || name.contains("app") { return "App" }
+        if name.contains("tunnel") { return "Tunnel" }
+        return "Backend"
+    }
+
+    public static func parseEntry(_ raw: String, id: String, stream: String) -> Entry {
+        guard let data = raw.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return Entry(id: id, timestamp: "", level: "RAW", source: stream, message: raw, raw: raw, date: nil)
+        }
+        let timestamp = value["timestamp"] as? String ?? ""
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fractional = formatter.date(from: timestamp)
+        formatter.formatOptions = [.withInternetDateTime]
+        let date = fractional ?? formatter.date(from: timestamp)
+        let capture = value["event"] as? String == "stderr.capture"
+        return Entry(id: id, timestamp: timestamp, level: capture ? "INFO" : (value["level"] as? String ?? "INFO").uppercased(),
+                     source: stream + ((value["source"] as? String).map { " · " + $0 } ?? ""),
+                     message: capture ? "Stderr capture initialized" : value["message"] as? String ?? raw, raw: raw, date: date)
+    }
+
     public static func export(paths: [URL], to path: URL, header: String) throws -> String {
         var issues: [String] = []
         let inputs = capture(paths, issues: &issues)

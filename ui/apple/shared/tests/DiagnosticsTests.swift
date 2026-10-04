@@ -195,3 +195,30 @@ private func readGzip(_ path: URL) throws -> Data {
         data.append(next)
     }
 }
+
+extension DiagnosticsTests {
+    func testStructuredViewClearRotationAndPartialRecords() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let backend = directory.appendingPathComponent("backend.jsonl")
+        let stderr = directory.appendingPathComponent("tunnel.stderr")
+        let boundary = directory.appendingPathComponent("view.json")
+        let late = #"{"timestamp":"2026-10-04T10:00:02Z","level":"WARN","message":"later","detail":"retained"}"#
+        let early = #"{"timestamp":"2026-10-04T10:00:01Z","event":"stderr.capture","message":"capture"}"#
+        try Data((late + "\n{\"timestamp\":").utf8).write(to: backend)
+        try Data((early + "\nraw stack\n  frame\n").utf8).write(to: stderr)
+        let preview = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
+        XCTAssertTrue(preview.error.isEmpty)
+        XCTAssertEqual(preview.entries.map(\.message), ["Stderr capture initialized", "later", "raw stack", "  frame"])
+        XCTAssertEqual(preview.entries[1].raw, late)
+        XCTAssertTrue(preview.entries[0].source.contains("Tunnel stderr"))
+        try DiagnosticFiles.clearView(paths: [backend, stderr], boundary: boundary)
+        try FileManager.default.moveItem(at: backend, to: URL(fileURLWithPath: backend.path + ".previous"))
+        try Data("new event\n".utf8).write(to: backend)
+        let cleared = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
+        XCTAssertTrue(cleared.error.isEmpty)
+        XCTAssertEqual(cleared.entries.map(\.message), ["new event"])
+        XCTAssertEqual(try String(contentsOf: stderr, encoding: .utf8), early + "\nraw stack\n  frame\n")
+    }
+}

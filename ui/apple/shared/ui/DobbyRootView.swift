@@ -12,7 +12,6 @@ public struct DobbyRootView: View {
     @State private var showingAbout = false
     @State private var canPaste = false
     @State private var followingLogs = true
-    @State private var jumpToLatest = 0
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
 
@@ -157,7 +156,7 @@ public struct DobbyRootView: View {
                 Text([profile.protocolName, profile.description].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.subheadline)
             }
-            if model.snapshot.primaryAction == "STOP" && model.snapshot.activeDigest != model.snapshot.digest {
+            if model.snapshot.primaryAction == "STOP" && !model.isStopTarget(nil) && !model.snapshot.profiles.contains(where: { model.isStopTarget($0.index) }) {
                 Button(model.snapshot.state == "CONNECTED" ? "Disconnect" : "Stop") { model.stop() }
                     .disabled(model.busy)
             }
@@ -196,8 +195,7 @@ public struct DobbyRootView: View {
             HStack {
                 Text("Logs").font(.headline)
                 Spacer()
-                Button("Jump to latest") { followingLogs = true; jumpToLatest += 1 }
-                    .disabled(followingLogs)
+                Button("Clear") { model.clearLogs() }
                 Button {
                     model.prepareLogsExport { url in
                         exportedLogsURL = url
@@ -214,7 +212,7 @@ public struct DobbyRootView: View {
             }
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
-            DobbyLogView(text: model.logs, following: $followingLogs, jump: jumpToLatest)
+            DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
                 .accessibilityIdentifier("Connection logs")
         }
     }

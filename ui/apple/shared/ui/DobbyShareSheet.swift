@@ -52,9 +52,9 @@ struct DobbyShareSheet: NSViewRepresentable {
 
 #if os(iOS)
 struct DobbyLogView: UIViewRepresentable {
-    let text: String
+    let entries: [DobbyLogEntry]
     @Binding var following: Bool
-    let jump: Int
+    let clear: Int
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -73,32 +73,45 @@ struct DobbyLogView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
-        guard following || jump != coordinator.lastJump else { return }
+        if clear != coordinator.lastClear { following = true; coordinator.expanded.removeAll() }
+        guard following else { return }
+        coordinator.entries = entries
+        let attributed = logText(entries, expanded: coordinator.expanded)
+        let text = attributed.string
         coordinator.updating = true
         let offset = view.contentOffset
         let selection = view.selectedRange
         if view.text != text {
-            if text.hasPrefix(view.text) {
-                view.textStorage.append(NSAttributedString(string: String(text.dropFirst(view.text.count)), attributes: [
-                    .font: UIFont.preferredFont(forTextStyle: .caption1), .foregroundColor: UIColor.label,
-                ]))
-            } else { view.text = text }
+            view.attributedText = attributed
             view.selectedRange = NSRange(location: min(selection.location, view.textStorage.length), length: 0)
             if NSMaxRange(selection) <= view.textStorage.length { view.selectedRange = selection }
         }
         view.layoutIfNeeded()
-        if following || jump != coordinator.lastJump {
+        if following || clear != coordinator.lastClear {
             view.scrollRangeToVisible(NSRange(location: view.textStorage.length, length: 0))
         } else { view.setContentOffset(offset, animated: false) }
-        coordinator.lastJump = jump
+        coordinator.lastClear = clear
         coordinator.updating = false
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: DobbyLogView
-        var lastJump = 0
+        var lastClear = 0
         var updating = false
+        var entries: [DobbyLogEntry] = []
+        var expanded = Set<String>()
         init(_ parent: DobbyLogView) { self.parent = parent }
+        func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
+            guard let index = Int(url.lastPathComponent), entries.indices.contains(index) else { return false }
+            let id = entries[index].id
+            if !expanded.insert(id).inserted { expanded.remove(id) }
+            updating = true
+            let offset = textView.contentOffset
+            textView.attributedText = logText(entries, expanded: expanded)
+            textView.setContentOffset(offset, animated: false)
+            updating = false
+            return false
+        }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard !updating, scrollView.isDragging || scrollView.isDecelerating else { return }
             let atBottom = scrollView.contentOffset.y + scrollView.bounds.height >= scrollView.contentSize.height - 24
@@ -108,9 +121,9 @@ struct DobbyLogView: UIViewRepresentable {
 }
 #elseif os(macOS)
 struct DobbyLogView: NSViewRepresentable {
-    let text: String
+    let entries: [DobbyLogEntry]
     @Binding var following: Bool
-    let jump: Int
+    let clear: Int
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -119,7 +132,8 @@ struct DobbyLogView: NSViewRepresentable {
         guard let view = scroll.documentView as? NSTextView else { return scroll }
         view.isEditable = false
         view.isSelectable = true
-        view.isRichText = false
+        view.isRichText = true
+        view.delegate = context.coordinator
         view.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         view.textColor = .textColor
         view.backgroundColor = .textBackgroundColor
@@ -141,37 +155,84 @@ struct DobbyLogView: NSViewRepresentable {
         guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage else { return }
         let coordinator = context.coordinator
         coordinator.parent = self
-        guard following || jump != coordinator.lastJump else { return }
+        if clear != coordinator.lastClear { following = true; coordinator.expanded.removeAll() }
+        guard following else { return }
+        coordinator.entries = entries
+        let attributed = logText(entries, expanded: coordinator.expanded)
+        let text = attributed.string
         coordinator.updating = true
         let origin = scroll.contentView.bounds.origin
         let selection = view.selectedRange()
         if view.string != text {
-            if text.hasPrefix(view.string) {
-                storage.append(NSAttributedString(string: String(text.dropFirst(view.string.count)), attributes: [
-                    .font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular),
-                    .foregroundColor: NSColor.textColor,
-                ]))
-            } else { view.string = text }
+            storage.setAttributedString(attributed)
             if NSMaxRange(selection) <= storage.length { view.setSelectedRange(selection) }
         }
         if let container = view.textContainer { view.layoutManager?.ensureLayout(for: container) }
-        if following || jump != coordinator.lastJump {
+        if following || clear != coordinator.lastClear {
             view.scrollRangeToVisible(NSRange(location: storage.length, length: 0))
         } else {
             scroll.contentView.scroll(to: origin)
             scroll.reflectScrolledClipView(scroll.contentView)
         }
-        coordinator.lastJump = jump
+        coordinator.lastClear = clear
         coordinator.updating = false
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: DobbyLogView
-        var lastJump = 0
+        var lastClear = 0
         var updating = false
         var observer: NSObjectProtocol?
+        var entries: [DobbyLogEntry] = []
+        var expanded = Set<String>()
         init(_ parent: DobbyLogView) { self.parent = parent }
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL, let index = Int(url.lastPathComponent), entries.indices.contains(index) else { return false }
+            let id = entries[index].id
+            if !expanded.insert(id).inserted { expanded.remove(id) }
+            updating = true
+            let scroll = textView.enclosingScrollView
+            let origin = scroll?.contentView.bounds.origin
+            textView.textStorage?.setAttributedString(logText(entries, expanded: expanded))
+            if let origin { scroll?.contentView.scroll(to: origin) }
+            updating = false
+            return true
+        }
         deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     }
 }
 #endif
+
+#if os(iOS)
+private typealias LogColor = UIColor
+private let logFont = UIFont.preferredFont(forTextStyle: .caption1)
+private var normalLogColor: LogColor { .label }
+private var mutedLogColor: LogColor { .secondaryLabel }
+#elseif os(macOS)
+private typealias LogColor = NSColor
+private let logFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+private var normalLogColor: LogColor { .textColor }
+private var mutedLogColor: LogColor { .secondaryLabelColor }
+#endif
+
+private func logText(_ entries: [DobbyLogEntry], expanded: Set<String>) -> NSAttributedString {
+    let output = NSMutableAttributedString(string: "")
+    for (index, entry) in entries.enumerated() {
+        let color: LogColor
+        switch entry.level {
+        case "ERROR", "FATAL", "PANIC": color = .systemRed
+        case "WARN", "WARNING": color = .systemOrange
+        case "DEBUG", "TRACE": color = mutedLogColor
+        default: color = normalLogColor
+        }
+        let header = [entry.timestamp, entry.level, entry.source].filter { !$0.isEmpty }.joined(separator: " · ")
+        output.append(NSAttributedString(string: header + "\n" + entry.message + "\n", attributes: [.font: logFont, .foregroundColor: color]))
+        if entry.level != "RAW", let link = URL(string: "dobbylog://record/\(index)") {
+            output.append(NSAttributedString(string: expanded.contains(entry.id) ? "Hide details\n" : "Details\n", attributes: [.font: logFont, .link: link]))
+            if expanded.contains(entry.id) {
+                output.append(NSAttributedString(string: entry.raw + "\n", attributes: [.font: logFont, .foregroundColor: normalLogColor]))
+            }
+        }
+    }
+    return output
+}

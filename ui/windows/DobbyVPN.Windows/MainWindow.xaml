@@ -36,13 +36,15 @@
       <Grid ColumnDefinitions="*,Auto">
         <TextBlock Text="Logs" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-          <Button Content="Jump to latest" Click="JumpToLatest_Click" />
+          <Button Content="Clear" Click="ClearLogs_Click" />
           <Button Content="Save logs…" Click="SaveLogs_Click" />
         </StackPanel>
       </Grid>
       <TextBlock x:Name="LogsErrorText" Grid.Row="1" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="WrapWholeWords" />
       <TextBlock Grid.Row="2" Text="Recent logs. Saved diagnostics include both retained generations." Style="{StaticResource CaptionTextBlockStyle}" />
-      <TextBox x:Name="LogsText" Grid.Row="3" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap" FontFamily="Consolas" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="Backend logs" Loaded="LogsText_Loaded" />
+      <ScrollViewer x:Name="LogsScroll" Grid.Row="3" VerticalScrollBarVisibility="Auto" Loaded="LogsText_Loaded" AutomationProperties.AutomationId="Backend logs">
+        <StackPanel x:Name="LogEntries" Spacing="8" />
+      </ScrollViewer>
     </Grid>
   </Grid>
 </Window>

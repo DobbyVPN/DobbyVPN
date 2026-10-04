@@ -132,7 +132,8 @@ private data class ScreenState(
     val busy: Boolean = false,
     val error: String = "",
     val screen: String = "connection",
-    val logs: String = "",
+    val logs: List<LogEntry> = emptyList(),
+    val clearRevision: Int = 0,
     val logsError: String = "",
     val exportingLogs: Boolean = false,
 )
@@ -153,8 +154,15 @@ private class SessionController(private val activity: MainActivity) {
     private var pendingLoad: String? = null
     private var debounce: Runnable? = null
     private var restoredLoad = ""
+    private var acceptedSequence = 0L
     private val clipboard = activity.getSystemService(ClipboardManager::class.java)
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener { refreshClipboard() }
+
+    private val diagnosticView = StructuredLogs(
+        NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).toList(),
+        File(activity.filesDir, "diagnostic-view.json"),
+    )
+
 
     init {
         clipboard.addPrimaryClipChangedListener(clipboardListener)
@@ -190,12 +198,15 @@ private class SessionController(private val activity: MainActivity) {
                 val snapshotResponse = JSONObject(NativeGoSession.snapshot(""))
                 requireOK(snapshotResponse)
                 val current = snapshotResponse.getJSONObject("result")
-                requireOK(JSONObject(NativeGoSession.configure(current.getString("session_id"), current.getLong("sequence"), source.toByteArray(Charsets.UTF_8))))
+                val configured = JSONObject(NativeGoSession.configure(current.getString("session_id"), current.getLong("sequence"), source.toByteArray(Charsets.UTF_8)))
+                requireOK(configured)
+                configured.getJSONObject("result").getLong("sequence")
             }
             main.post {
                 loadInFlight = false
                 state = state.copy(loading = false)
                 if (revision == loadRevision) {
+                    if (outcome.isSuccess) acceptedSequence = outcome.getOrThrow()
                     state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
                     else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
                 }
@@ -211,7 +222,7 @@ private class SessionController(private val activity: MainActivity) {
         val s = state.session
         s.pendingTarget?.let { return it.digest == s.digest && if (index == null) it.mode == "AUTO_SELECT" else it.mode == "PROFILE_INDEX" && it.index == index }
         if (s.primaryAction != "STOP") return false
-        if (index == null) return s.activeMode == "AUTO_SELECT"
+        if (index == null) return s.activeMode == "AUTO_SELECT" && s.activeDigest == s.digest
         return s.activeDigest == s.digest && if (s.state == "CONNECTED") s.activeProfileIndex == index else s.activeMode == "PROFILE_INDEX" && s.activeIndex == index
     }
 
@@ -301,36 +312,19 @@ private class SessionController(private val activity: MainActivity) {
         } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
     }
 
-    private fun readDiagnostics(): Pair<String, String> {
-        val contents = mutableListOf<String>()
-        val errors = mutableListOf<String>()
-        NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).flatMap { sequenceOf(it + ".previous", it) }.forEach { path ->
-            try {
-                val file = File(path)
-                if (file.exists()) {
-                    val text = file.inputStream().use { stream ->
-                        val size = stream.channel.size()
-                        val bytes = ByteArray(minOf(size, 131_072L).toInt())
-                        stream.channel.position(size - bytes.size)
-                        java.io.DataInputStream(stream).readFully(bytes)
-                        bytes.toString(Charsets.UTF_8)
-                    }
-                    contents.add(text)
-                }
-            } catch (failure: Exception) {
-                errors.add("$path: ${failure.stackTraceToString()}")
-            }
-        }
-        if (NativeVpnBridge.nativeDiagnosticsUnavailable()) {
-            errors.add("Some native diagnostics could not be saved. Check Android system logs.")
-        }
-        val text = contents.joinToString("\n")
-        return text to errors.joinToString("\n")
-    }
 
     private fun readLogs() {
-        val (text, error) = readDiagnostics()
-        main.post { state = state.copy(logs = text, logsError = error) }
+        val (entries, error) = diagnosticView.read()
+        main.post { state = state.copy(logs = entries, logsError = error) }
+    }
+
+    fun clearLogs() {
+        logWorker.execute {
+            try {
+                diagnosticView.clear()
+                main.post { state = state.copy(logs = emptyList(), clearRevision = state.clearRevision + 1) }
+            } catch (failure: Exception) { main.post { state = state.copy(logsError = failure.stackTraceToString()) } }
+        }
     }
 
     fun exportLogs() {
@@ -411,6 +405,8 @@ private class SessionController(private val activity: MainActivity) {
             )
             latest = current
             main.post {
+                if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
+                if (current.sessionId != state.session.sessionId) acceptedSequence = 0
                 state = state.copy(
                     session = current,
                     source = if (state.sourceDirty || current.sourceUrl.isEmpty()) state.source else current.sourceUrl,
@@ -544,7 +540,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     }
                     Text(controller.actionTitle())
                 }
-                if (session.primaryAction == "STOP" && session.activeDigest != session.digest) {
+                if (session.primaryAction == "STOP" && !controller.isStopTarget(null) && session.profiles.none { controller.isStopTarget(it.index) }) {
                     TextButton(onClick = controller::stop, enabled = !state.busy) { Text(if (session.state == "CONNECTED") "Disconnect" else "Stop") }
                 }
                 session.profiles.forEach { profile ->
@@ -579,12 +575,11 @@ private fun AboutScreen(controller: SessionController, modifier: Modifier) {
 @Composable
 private fun LogsPane(controller: SessionController, modifier: Modifier) {
     val state = controller.state
-    var jump by remember { mutableIntStateOf(0) }
     val color = MaterialTheme.colorScheme.onSurface.toArgb()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Logs", modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
-            TextButton(onClick = { jump++ }) { Text("Jump to latest") }
+            TextButton(onClick = controller::clearLogs) { Text("Clear") }
             TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
         }
         if (state.logsError.isNotEmpty()) {
@@ -594,7 +589,7 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         AndroidView(
             factory = { LiveLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f),
-            update = { it.update(state.logs, jump, color) },
+            update = { it.update(state.logs, state.clearRevision, color) },
         )
     }
 }
@@ -602,45 +597,70 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
 private class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
     private val content = android.widget.TextView(context).apply {
         textSize = 12f
-        typeface = android.graphics.Typeface.MONOSPACE
         setTextIsSelectable(true)
+        movementMethod = android.text.method.LinkMovementMethod.getInstance()
         contentDescription = "Connection logs"
     }
     private var following = true
-    private var lastJump = 0
-    private var rendered = ""
+    private var updating = false
+    private var userScrolling = false
+    private var lastClear = 0
+    private var normalColor = android.graphics.Color.BLACK
+    private var rendered = emptyList<LogEntry>()
+    private var latest = emptyList<LogEntry>()
+    private val expanded = mutableSetOf<String>()
 
-    init {
-        isFillViewport = true
-        outlineProvider = android.view.ViewOutlineProvider.BOUNDS
-        clipToOutline = true
-        addView(content)
-    }
+    init { isFillViewport = true; addView(content) }
 
     override fun onInterceptTouchEvent(event: android.view.MotionEvent): Boolean {
-        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) following = false
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) userScrolling = true
         return super.onInterceptTouchEvent(event)
     }
 
-    override fun onTouchEvent(event: android.view.MotionEvent): Boolean {
-        val handled = super.onTouchEvent(event)
-        if (event.actionMasked == android.view.MotionEvent.ACTION_UP) {
-            post { following = !canScrollVertically(1) }
-        }
-        return handled
+    override fun onScrollChanged(left: Int, top: Int, oldLeft: Int, oldTop: Int) {
+        super.onScrollChanged(left, top, oldLeft, oldTop)
+        if (updating || !userScrolling || top == oldTop) return
+        following = !canScrollVertically(1)
+        if (following && latest != rendered) post { render(latest) }
     }
 
-    fun update(text: String, jump: Int, color: Int) {
-        content.setTextColor(color)
-        if (jump != lastJump) { following = true; lastJump = jump }
-        if (!following) return
-        if (rendered != text) {
-            val offset = scrollY
-            if (text.startsWith(rendered)) content.append(text.substring(rendered.length)) else content.text = text
-            rendered = text
-            // fullScroll also moves keyboard focus; log refresh must not take
-            // focus from the configuration field or dismiss its keyboard.
-            post { if (following) scrollTo(0, content.bottom) else scrollTo(0, offset) }
-        } else if (following) { post { scrollTo(0, content.bottom) } }
+    fun update(entries: List<LogEntry>, clear: Int, color: Int) {
+        latest = entries
+        normalColor = color
+        if (clear != lastClear) { following = true; lastClear = clear; expanded.clear() }
+        if (following && rendered != entries) render(entries)
+    }
+
+    private fun render(entries: List<LogEntry>) {
+        updating = true
+        rendered = entries
+        val text = android.text.SpannableStringBuilder()
+        entries.forEach { entry ->
+            val start = text.length
+            text.append(listOf(entry.timestamp, entry.level, entry.source).filter(String::isNotEmpty).joinToString(" · "))
+                .append("\n").append(entry.message).append("\n")
+            val color = when (entry.level) {
+                "ERROR", "FATAL", "PANIC" -> android.graphics.Color.rgb(220, 65, 65)
+                "WARN", "WARNING" -> android.graphics.Color.rgb(180, 120, 0)
+                "DEBUG", "TRACE" -> android.graphics.Color.GRAY
+                else -> normalColor
+            }
+            text.setSpan(android.text.style.ForegroundColorSpan(color), start, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (entry.level != "RAW") {
+                val linkStart = text.length
+                text.append(if (expanded.contains(entry.id)) "Hide details\n" else "Details\n")
+                text.setSpan(object : android.text.style.ClickableSpan() {
+                    override fun onClick(widget: android.view.View) {
+                        if (!expanded.add(entry.id)) expanded.remove(entry.id)
+                        render(rendered)
+                    }
+                }, linkStart, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                if (expanded.contains(entry.id)) text.append(entry.raw).append("\n")
+            }
+        }
+        val offset = scrollY
+        content.setTextColor(normalColor)
+        content.text = text
+        post { if (following) scrollTo(0, content.bottom) else scrollTo(0, offset); updating = false }
     }
 }

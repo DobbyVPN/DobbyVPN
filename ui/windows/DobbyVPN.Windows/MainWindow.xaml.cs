@@ -8,6 +8,7 @@ using System.IO.Pipes;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.Storage.Pickers;
 
@@ -27,6 +28,7 @@ public sealed partial class MainWindow : Window
     private string? _renderedSource;
     private bool _sourceInitialized;
     private long _loadRevision;
+    private long _acceptedSequence;
     private bool _loading;
     private string _actionsKey = "";
     private string? _pendingLoad;
@@ -36,6 +38,9 @@ public sealed partial class MainWindow : Window
     private bool _followingLogs = true;
     private bool _updatingLogs;
     private ScrollViewer? _logScroll;
+    private bool _userScrolling;
+    private List<NativeDiagnostics.Entry> _latestLogs = [];
+    private string _renderedLogs = "";
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
@@ -101,7 +106,9 @@ public sealed partial class MainWindow : Window
         try
         {
             var result = await ReadSnapshotAsync();
+            if (result.SessionId == _snapshot?.SessionId && result.Sequence < Math.Max(_snapshot.Sequence, _acceptedSequence)) return;
             var recoveringFromSnapshotError = _snapshot is null || StatusText.Text == "Error";
+            if (result.SessionId != _snapshot?.SessionId) _acceptedSequence = 0;
             _snapshot = result;
             StatusText.Text = result.Recovering ? "Reconnecting" : result.State switch
             {
@@ -191,7 +198,7 @@ public sealed partial class MainWindow : Window
         if (s.PendingTarget is { } pending)
             return pending.Digest == s.Digest && (index is null ? pending.Mode == "AUTO_SELECT" : pending.Mode == "PROFILE_INDEX" && pending.Index == index);
         if (s.PrimaryAction != "STOP") return false;
-        if (index is null) return s.ActiveMode == "AUTO_SELECT";
+        if (index is null) return s.ActiveMode == "AUTO_SELECT" && s.ActiveDigest == s.Digest;
         return s.ActiveDigest == s.Digest && (s.State == "CONNECTED" ? s.ActiveProfile?.Index == index : s.ActiveMode == "PROFILE_INDEX" && s.ActiveIndex == index);
     }
 
@@ -211,7 +218,7 @@ public sealed partial class MainWindow : Window
         if (actionsKey == _actionsKey) return;
         _actionsKey = actionsKey;
         ProfileList.Children.Clear();
-        ActiveStopButton.Visibility = current.PrimaryAction == "STOP" && current.ActiveDigest != current.Digest ? Visibility.Visible : Visibility.Collapsed;
+        ActiveStopButton.Visibility = current.PrimaryAction == "STOP" && !IsStopTarget(null) && !current.Profiles.Any(profile => IsStopTarget(profile.Index)) ? Visibility.Visible : Visibility.Collapsed;
         ActiveStopButton.Content = current.State == "CONNECTED" ? "Disconnect" : "Stop";
         ActiveStopButton.IsEnabled = !_busy;
         foreach (var profile in current.Profiles)
@@ -329,8 +336,8 @@ public sealed partial class MainWindow : Window
         try
         {
             var current = await ReadSnapshotAsync();
-            await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source });
-            if (revision == _loadRevision) { MarkSourceAccepted(source); LoadStatus.Text = ""; }
+            var configured = await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source });
+            if (revision == _loadRevision) { _acceptedSequence = configured.GetProperty("sequence").GetInt64(); MarkSourceAccepted(source); LoadStatus.Text = ""; }
         }
         catch (Exception error)
         {
@@ -436,48 +443,73 @@ public sealed partial class MainWindow : Window
 
     private void LogsText_Loaded(object sender, RoutedEventArgs e)
     {
-        _logScroll = FindChild<ScrollViewer>(LogsText);
-        if (_logScroll is not null)
-            _logScroll.ViewChanged += (_, _) =>
-            {
-                if (!_updatingLogs) _followingLogs = _logScroll.VerticalOffset >= _logScroll.ScrollableHeight - 4;
-            };
+        _logScroll = LogsScroll;
+        LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => _userScrolling = true), true);
+        LogsScroll.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => _userScrolling = true), true);
+        LogsScroll.ViewChanged += (_, _) =>
+        {
+            if (_updatingLogs || !_userScrolling) return;
+            _followingLogs = LogsScroll.VerticalOffset >= LogsScroll.ScrollableHeight - 8;
+            if (_followingLogs) RenderLogs();
+        };
         _ = RefreshLogsAsync();
     }
 
-    private void JumpToLatest_Click(object sender, RoutedEventArgs e)
+    private async void ClearLogs_Click(object sender, RoutedEventArgs e)
     {
-        _followingLogs = true;
-        _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
-        _ = RefreshLogsAsync();
+        try
+        {
+            await _diagnostics.ClearViewAsync();
+            _followingLogs = true;
+            _latestLogs = [];
+            _renderedLogs = "";
+            LogEntries.Children.Clear();
+            await RefreshLogsAsync();
+        }
+        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
     }
 
     private async Task RefreshLogsAsync()
     {
-        if (!_followingLogs) return;
         try
         {
-            var text = await _diagnostics.PreviewAsync();
-            if (text.Length > 262144) text = text[^262144..];
-            if (text != LogsText.Text)
-            {
-                var offset = _logScroll?.VerticalOffset ?? 0;
-                var selection = LogsText.SelectionStart;
-                var length = LogsText.SelectionLength;
-                _updatingLogs = true;
-                LogsText.Text = text;
-                LogsText.Select(Math.Min(selection, text.Length), Math.Min(length, Math.Max(0, text.Length - selection)));
-                LogsText.UpdateLayout();
-                _logScroll?.ChangeView(null, _followingLogs ? _logScroll.ScrollableHeight : offset, null, true);
-                _updatingLogs = false;
-            }
-            LogsErrorText.Text = "";
+            var preview = await _diagnostics.EntriesAsync();
+            _latestLogs = preview.Entries;
+            LogsErrorText.Text = preview.Error;
+            if (_followingLogs) RenderLogs();
         }
-        catch (Exception error)
+        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+    }
+
+    private void RenderLogs()
+    {
+        var key = string.Join("|", _latestLogs.Select(entry => entry.Id + entry.Raw));
+        if (_updatingLogs || key == _renderedLogs) return;
+        _updatingLogs = true;
+        _renderedLogs = key;
+        LogEntries.Children.Clear();
+        foreach (var entry in _latestLogs)
         {
-            RecordError(error.ToString());
-            LogsErrorText.Text = "Diagnostics could not be displayed. Details are included in saved logs.";
+            var resource = entry.Level switch
+            {
+                "ERROR" or "FATAL" or "PANIC" => "SystemFillColorCriticalBrush",
+                "WARN" or "WARNING" => "SystemFillColorCautionBrush",
+                "DEBUG" or "TRACE" => "TextFillColorSecondaryBrush",
+                _ => "TextFillColorPrimaryBrush"
+            };
+            var text = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)Application.Current.Resources[resource] };
+            var paragraph = new Paragraph();
+            paragraph.Inlines.Add(new Run { Text = string.Join(" · ", new[] { entry.Timestamp, entry.Level, entry.Source }.Where(value => value.Length > 0)) + "\n" + entry.Message });
+            text.Blocks.Add(paragraph);
+            LogEntries.Children.Add(text);
+            if (entry.Level != "RAW")
+                LogEntries.Children.Add(new Expander { Header = "Details", HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Content = new TextBlock { Text = entry.Raw, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } });
         }
+        LogEntries.UpdateLayout();
+        _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { _updatingLogs = false; _userScrolling = false; });
     }
 
     private string ExportHeader =>

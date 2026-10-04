@@ -9,6 +9,8 @@ public final class DobbySessionViewModel: ObservableObject {
         didSet { if !error.isEmpty && error != oldValue { recordError(error) } }
     }
     @Published public private(set) var logs = ""
+    @Published var logEntries: [DobbyLogEntry] = []
+    @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
     @Published public private(set) var exportingLogs = false
     @Published public var sourceText = "" {
@@ -25,6 +27,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var pendingLoad: String?
     private var debounce: Task<Void, Never>?
     private var restoredLoad = ""
+    private var acceptedSequence: Int64 = 0
 
     public let client: DobbySessionClient
     private let worker = DispatchQueue(label: "com.dobbyvpn.native-ui.session")
@@ -74,7 +77,7 @@ public final class DobbySessionViewModel: ObservableObject {
             return pending.digest == snapshot.digest && (index == nil ? pending.mode == "AUTO_SELECT" : pending.mode == "PROFILE_INDEX" && pending.index == index)
         }
         guard snapshot.primaryAction == "STOP" else { return false }
-        if index == nil { return snapshot.activeMode == "AUTO_SELECT" }
+        if index == nil { return snapshot.activeMode == "AUTO_SELECT" && snapshot.activeDigest == snapshot.digest }
         guard snapshot.activeDigest == snapshot.digest else { return false }
         return snapshot.state == "CONNECTED" ? snapshot.activeProfile?.index == index : snapshot.activeMode == "PROFILE_INDEX" && snapshot.activeIndex == index
     }
@@ -131,9 +134,10 @@ public final class DobbySessionViewModel: ObservableObject {
         loadWorker.async { [weak self, client] in
             let result = Result {
                 let current = try DobbyResponse.result(from: client.call("Snapshot", parameters: ["session_id": ""]), as: DobbySessionSnapshot.self)
-                try DobbyResponse.check(client.call("Configure", parameters: [
+                let response = client.call("Configure", parameters: [
                     "session_id": current.sessionID, "expected_sequence": current.sequence, "source": source,
-                ]))
+                ])
+                return try DobbyResponse.result(from: response, as: ConfigurationReceipt.self).sequence
             }
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -141,7 +145,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.loading = false
                 if revision == self.loadRevision {
                     switch result {
-                    case .success: self.markSourceAccepted(source)
+                    case let .success(sequence): self.acceptedSequence = sequence; self.markSourceAccepted(source)
                     case let .failure(failure): self.loadError = failure.localizedDescription
                     }
                 }
@@ -169,6 +173,8 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.snapshotInFlight = false
                 switch decoded {
                 case let .success((value, reattached)):
+                    if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
+                    if value.sessionID != self.snapshot.sessionID { self.acceptedSequence = 0 }
                     self.snapshot = value
                     if let failure = value.lastFailure {
                         let details = "\(failure.message) (\(failure.code))"
@@ -272,13 +278,34 @@ public final class DobbySessionViewModel: ObservableObject {
         guard !logsInFlight else { return }
         logsInFlight = true
         let paths = client.diagnosticPaths
+        let boundary = client.uiDiagnosticPath.appendingPathExtension("view")
         logWorker.async { [weak self] in
-            let result = diagnosticPreview(paths: paths)
+            let result = structuredPreview(paths: paths, boundary: boundary)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.logsInFlight = false
-                if self.logs != result.text { self.logs = result.text }
+                self.logEntries = result.entries
+                self.logs = result.entries.map(\.message).joined(separator: "\n")
                 self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
+            }
+        }
+    }
+
+    public func clearLogs() {
+        let paths = client.diagnosticPaths
+        let boundary = client.uiDiagnosticPath.appendingPathExtension("view")
+        logWorker.async { [weak self] in
+            let result = Result { try clearDiagnosticView(paths: paths, boundary: boundary) }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.logEntries = []
+                    self.logs = ""
+                    self.clearRevision += 1
+                    self.refreshLogs()
+                case let .failure(error): self.reportLogsError(error.localizedDescription)
+                }
             }
         }
     }
@@ -346,3 +373,5 @@ func subscriptionFromLink(_ value: String) throws -> String? {
           validSubscription(source) else { throw invalid() }
     return source
 }
+
+private struct ConfigurationReceipt: Decodable { let sequence: Int64 }

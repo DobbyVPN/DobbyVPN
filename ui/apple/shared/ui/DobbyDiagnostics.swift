@@ -16,3 +16,10 @@ func diagnosticPreview(paths: [URL]) -> (text: String, error: String) {
 func exportDiagnostics(paths: [URL], to url: URL, header: String) throws -> String {
     try DiagnosticFiles.export(paths: paths, to: url, header: header)
 }
+
+typealias DobbyLogEntry = DiagnosticFiles.Entry
+
+func structuredPreview(paths: [URL], boundary: URL) -> (entries: [DobbyLogEntry], error: String) {
+    DiagnosticFiles.entries(paths: paths, boundary: boundary)
+}
+func clearDiagnosticView(paths: [URL], boundary: URL) throws { try DiagnosticFiles.clearView(paths: paths, boundary: boundary) }
