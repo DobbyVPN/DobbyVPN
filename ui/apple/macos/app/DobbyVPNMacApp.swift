@@ -14,6 +14,7 @@ struct DobbyVPNMacApp: App {
         WindowGroup {
             DobbyRootView(model: model)
                 .sheet(isPresented: $showingAbout) { DobbyAboutView(model: model) }
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         }
         .commands {
             CommandGroup(replacing: .appInfo) {

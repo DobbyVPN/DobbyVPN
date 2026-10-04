@@ -113,6 +113,7 @@ class NativeUIController:
         self.process: subprocess.Popen | None = None
         self.pid: int | None = None
         self.identity: str | None = None
+        self.window_id: str | None = None
         self.launch_count = self.capture_count = 0
         self.reconnecting_seen = False
 
@@ -186,6 +187,7 @@ class NativeUIController:
             if self._call("probe").get("alive"):
                 raise NativeUISmokeError("candidate UI is already running before launch")
         self.launch_count += 1
+        self.window_id = None
         prefix = self.logs / f"{self.platform}-app-{self.launch_count:02d}"
         command = [str(self.binary)]
         if self.platform == "macos":
@@ -228,6 +230,13 @@ class NativeUIController:
 
     def snapshot(self) -> dict:
         value = self._call("tree")
+        if self.platform == "macos" and value.get("ready") is True:
+            window_id = value.get("window_id")
+            if value.get("window_count") != 1 or not window_id:
+                raise NativeUISmokeError(f"expected one identifiable native window: {value}")
+            if self.window_id is not None and window_id != self.window_id:
+                raise NativeUISmokeError(f"native window changed within one launch: {self.window_id} -> {window_id}")
+            self.window_id = window_id
         labels = value.get("labels", [])
         status = next((name for name in ("Connected", "Connecting", "Reconnecting", "Disconnected", "Stopping", "Failed", "Error") if name in labels), "Unknown")
         self.reconnecting_seen |= status == "Reconnecting"
@@ -260,9 +269,10 @@ class NativeUIController:
         from urllib.parse import quote
         link = "dobbyvpn://import?url=" + quote(url, safe="")
         command = ["open", link] if self.platform == "macos" else [str(self.binary), link]
-        result = _native_run(command, timeout_seconds=self.timeout)
-        if result.returncode:
-            raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+        for _ in range(2):
+            result = _native_run(command, timeout_seconds=self.timeout)
+            if result.returncode:
+                raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
         self._wait(lambda: "Retry" not in self.snapshot()["labels"], "import did not replace failed subscription")
         self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "imported profiles are unavailable")
         return self.snapshot()
