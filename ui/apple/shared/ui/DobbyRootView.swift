@@ -76,6 +76,9 @@ public struct DobbyRootView: View {
 
     private var content: some View {
         GeometryReader { geometry in
+            // Keyboard and scene transitions can briefly propose an invalid
+            // size. Fixed frames must always receive finite, nonnegative values.
+            let availableHeight = geometry.size.height.isFinite ? max(0, geometry.size.height) : 0
             VStack(spacing: 12) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -98,15 +101,15 @@ public struct DobbyRootView: View {
                                 }
                             }
                         }
-                        .frame(maxHeight: min(180, geometry.size.height * 0.25))
+                        .frame(maxHeight: min(180, availableHeight * 0.25))
                         .fixedSize(horizontal: false, vertical: true)
                     }
                     .background(GeometryReader { size in
                         Color.clear.preference(key: ControlsHeight.self, value: size.size.height)
                     })
                 }
-                .frame(height: min(controlsHeight, geometry.size.height * controlsFraction))
-                .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
+                .frame(height: min(controlsHeight, availableHeight * controlsFraction))
+                .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0.isFinite ? max(0, $0) : 0 }
                 logs.frame(maxHeight: .infinity)
             }
             .padding(16)
