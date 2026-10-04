@@ -1,5 +1,6 @@
 """Exercise the disposable server without installing runner trust locally."""
 import ssl
+import importlib.util
 import socket
 import tempfile
 import unittest
@@ -12,6 +13,34 @@ from torturer_runner.subscription_fixture import SubscriptionFixture
 
 
 class SubscriptionFixtureTests(unittest.TestCase):
+    def test_tcp_fixture_and_cleanup_without_unix_socket_support(self):
+        import torturer_runner.subscription_fixture as source
+        spec = importlib.util.spec_from_file_location('torturer_runner.fixture_without_unix', source.__file__)
+        module = importlib.util.module_from_spec(spec)
+        unix_family = getattr(socket, 'AF_UNIX', None)
+        if unix_family is not None:
+            del socket.AF_UNIX
+        try:
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                profile = root / 'profile'
+                profile.write_bytes(b'synthetic profile\n')
+                fixture = module.SubscriptionFixture(profile, root / 'fixture', 'untrusted')
+                try:
+                    url = fixture.start()
+                    context = ssl.create_default_context(cafile=str(fixture.certificate))
+                    with urllib.request.urlopen(url, context=context, timeout=5) as response:
+                        self.assertEqual(profile.read_bytes(), response.read())
+                finally:
+                    fixture.close()
+                module.SubscriptionFixture.cleanup_interrupted(fixture.directory)
+                self.assertFalse(fixture.directory.exists())
+        finally:
+            if unix_family is not None:
+                socket.AF_UNIX = unix_family
+
+    @unittest.skipUnless(hasattr(socket, 'AF_UNIX'), 'Android host needs Unix sockets')
     def test_android_tls_over_filesystem_socket_and_cleanup(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)

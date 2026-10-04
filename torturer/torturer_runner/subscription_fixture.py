@@ -26,7 +26,9 @@ from .process_capture import exception_output, run_finite_capture
 class UnixHTTPServer(http.server.ThreadingHTTPServer):
     """ADB can reach a filesystem socket across runner network namespaces."""
 
-    address_family = socket.AF_UNIX
+    def __init__(self, *args, **kwargs):
+        self.address_family = socket.AF_UNIX
+        super().__init__(*args, **kwargs)
 
     def server_bind(self):
         socketserver.TCPServer.server_bind(self)
