@@ -43,6 +43,10 @@ public final class AndroidNetworkProbeMain {
             result = failureResult(failure);
         }
         System.out.println(result.toString());
+        System.out.flush();
+        // app_process otherwise waits in DestroyJavaVM for network-created
+        // threads after main returns, keeping UiAutomation's pipes open.
+        System.exit(0);
     }
 
     private static JSONObject get(URL endpoint, boolean includeBody) throws Exception {
