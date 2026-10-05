@@ -465,16 +465,7 @@ func readSource(source string) (data []byte, resultErr error) {
 	const limit = 1 << 20
 	cleanPath := filepath.Clean(source)
 	if isInlineTOMLSource(source) {
-		if _, statErr := os.Stat(cleanPath); statErr != nil {
-			if errors.Is(statErr, os.ErrNotExist) || errors.Is(statErr, syscall.ENAMETOOLONG) || strings.ContainsAny(source, "\r\n") {
-				if len(source) > limit {
-					return nil, errors.New("configuration exceeds the 1 MiB size limit")
-				}
-				return []byte(source), nil
-			}
-			return nil, fmt.Errorf("cannot read configuration file: %w", statErr)
-		}
-		return readSourceFile(cleanPath, limit)
+		return readInlineTOMLSource(source, cleanPath, limit)
 	}
 
 	sourceURL, isURL, err := parseSourceURL(source)
@@ -485,6 +476,22 @@ func readSource(source string) (data []byte, resultErr error) {
 		return sourceURL, nil
 	}
 	return readSourceFile(cleanPath, limit)
+}
+
+func readInlineTOMLSource(source, path string, limit int) ([]byte, error) {
+	_, statErr := os.Stat(path)
+	if statErr == nil {
+		return readSourceFile(path, limit)
+	}
+	if !errors.Is(statErr, os.ErrNotExist) &&
+		!errors.Is(statErr, syscall.ENAMETOOLONG) &&
+		!strings.ContainsAny(source, "\r\n") {
+		return nil, fmt.Errorf("cannot read configuration file: %w", statErr)
+	}
+	if len(source) > limit {
+		return nil, errors.New("configuration exceeds the 1 MiB size limit")
+	}
+	return []byte(source), nil
 }
 
 func readSourceFile(path string, limit int) (data []byte, resultErr error) {

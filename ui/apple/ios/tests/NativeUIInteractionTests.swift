@@ -48,8 +48,9 @@ final class NativeUIInteractionTests: XCTestCase {
         let commit = String(fullCommit.label.dropFirst(commitPrefix.count))
         XCTAssertNotNil(commit.range(of: "^[0-9a-fA-F]{40}$", options: .regularExpression))
         XCTAssertTrue(app.staticTexts["Commit: \(commit.prefix(12))"].exists)
-        let sourceLink = app.links["About source link"]
-        XCTAssertTrue(sourceLink.exists)
+        let sourceLink = app.descendants(matching: .any)
+            .matching(identifier: "About source link").firstMatch
+        XCTAssertTrue(sourceLink.waitForExistence(timeout: 10))
         XCTAssertEqual(sourceLink.value as? String, "https://github.com/DobbyVPN/DobbyVPN/tree/\(commit)")
         app.buttons["Done"].tap()
         XCTAssertEqual(configuration.value as? String, editedConfiguration)
@@ -107,8 +108,18 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         XCTAssertNotEqual(configuration.value as? String, clipboard, "Clipboard availability must not read its contents")
 
+        let logs = app.textViews["Connection logs"]
+        XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let previousRejections = occurrences(
+            of: "Paste an HTTPS subscription URL with a host", in: logs.value as? String ?? ""
+        )
         paste.tap()
-        XCTAssertTrue(app.staticTexts["Paste an HTTPS subscription URL with a host"].waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForLogOccurrences(
+            "Paste an HTTPS subscription URL with a host",
+            atLeast: previousRejections + 1,
+            in: logs,
+            timeout: 10
+        ))
         XCTAssertNotEqual(configuration.value as? String, clipboard, "Non-HTTPS clipboard text must be rejected")
     }
 
@@ -139,36 +150,47 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         let paste = app.buttons["Paste"]
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        let logs = app.textViews["Connection logs"]
+        XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let errorStatus = app.staticTexts["Error"]
+        var expectedErrorCount = occurrences(of: validationError, in: logs.value as? String ?? "")
         paste.tap()
-        XCTAssertTrue(app.staticTexts[validationError].waitForExistence(timeout: 10))
+        XCTAssertTrue(errorStatus.waitForExistence(timeout: 10))
+        expectedErrorCount += 1
+        XCTAssertTrue(waitForLogOccurrences(
+            validationError, atLeast: expectedErrorCount, in: logs, timeout: 10
+        ))
 
         for _ in 0..<8 {
             configuration.tap()
             configuration.typeText("x")
             dismissConfigurationKeyboard()
-            XCTAssertTrue(app.staticTexts[validationError].waitForNonExistence(timeout: 5))
+            XCTAssertTrue(errorStatus.waitForNonExistence(timeout: 5))
             paste.tap()
-            XCTAssertTrue(app.staticTexts[validationError].waitForExistence(timeout: 5))
+            XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
+            expectedErrorCount += 1
+            XCTAssertTrue(waitForLogOccurrences(
+                validationError, atLeast: expectedErrorCount, in: logs, timeout: 5
+            ))
         }
 
-        let logs = app.textViews["Connection logs"]
-        XCTAssertTrue(logs.waitForExistence(timeout: 10))
         let enoughEntries = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
             return self.occurrences(of: validationError, in: text) >= 6
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
         let beforeScroll = try XCTUnwrap(logs.value as? String)
-        XCTAssertGreaterThanOrEqual(occurrences(of: validationError, in: beforeScroll), 6)
+        let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
+        XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 6)
 
         logs.swipeDown()
         let frozen = try XCTUnwrap(logs.value as? String)
         configuration.tap()
         configuration.typeText("x")
         dismissConfigurationKeyboard()
-        XCTAssertTrue(app.staticTexts[validationError].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(errorStatus.waitForNonExistence(timeout: 5))
         paste.tap()
-        XCTAssertTrue(app.staticTexts[validationError].waitForExistence(timeout: 5))
+        XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
         let changedWhileScrolledUp = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value != %@", frozen), object: logs
         )
@@ -180,7 +202,10 @@ final class NativeUIInteractionTests: XCTestCase {
         logs.swipeUp()
         logs.swipeUp()
         logs.swipeUp()
-        let resumed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", frozen), object: logs)
+        let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
+            guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
+            return self.occurrences(of: validationError, in: text) > errorsBeforeScroll
+        }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed, "Returning to the bottom should resume new log entries")
     }
 
@@ -249,5 +274,18 @@ final class NativeUIInteractionTests: XCTestCase {
 
     private func occurrences(of needle: String, in text: String) -> Int {
         text.components(separatedBy: needle).count - 1
+    }
+
+    private func waitForLogOccurrences(
+        _ message: String,
+        atLeast count: Int,
+        in logs: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
+            guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
+            return self.occurrences(of: message, in: text) >= count
+        }, object: logs)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 }

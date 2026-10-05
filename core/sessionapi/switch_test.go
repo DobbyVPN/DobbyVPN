@@ -107,14 +107,14 @@ func TestConnectionLogCorrelationStaysOnActiveInventoryDuringLoad(t *testing.T) 
 			t.Errorf("stop test manager: %v", err)
 		}
 	}()
-	old, err := m.Snapshot(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
+	old, snapshotErr := m.Snapshot(context.Background(), id)
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
 	}
 	correlationConfig := []byte(strings.ReplaceAll(string(replacementConfig(t)), "replacement", "log-correlation"))
-	loaded, err := configureForTest(t, m, id, correlationConfig)
-	if err != nil {
-		t.Fatal(err)
+	loaded, configureErr := configureForTest(t, m, id, correlationConfig)
+	if configureErr != nil {
+		t.Fatal(configureErr)
 	}
 	if err := m.StopAndWait(context.Background()); err != nil {
 		t.Fatal(err)
@@ -122,9 +122,9 @@ func TestConnectionLogCorrelationStaysOnActiveInventoryDuringLoad(t *testing.T) 
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		var record struct {
@@ -356,21 +356,21 @@ func TestNewConfigureCommitsBeforeOlderDownloadFinishes(t *testing.T) {
 		},
 	}
 	m.loader = loader
-	before, err := m.Snapshot(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
+	before, snapshotErr := m.Snapshot(context.Background(), id)
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
 	}
 	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
 	go func() {
-		_, err := m.Configure(context.Background(), id, before.Sequence, firstSource)
-		firstDone <- err
+		_, configureErr := m.Configure(context.Background(), id, before.Sequence, firstSource)
+		firstDone <- configureErr
 	}()
 	if got := <-loader.entered; got != string(firstSource) {
 		t.Fatalf("first loader source = %q", got)
 	}
 	go func() {
-		_, err := m.Configure(context.Background(), id, before.Sequence, secondSource)
-		secondDone <- err
+		_, configureErr := m.Configure(context.Background(), id, before.Sequence, secondSource)
+		secondDone <- configureErr
 	}()
 	if got := <-loader.entered; got != string(secondSource) {
 		t.Fatalf("second loader source = %q", got)
@@ -381,13 +381,13 @@ func TestNewConfigureCommitsBeforeOlderDownloadFinishes(t *testing.T) {
 	if err := <-secondDone; err != nil {
 		t.Fatalf("newer configure: %v", err)
 	}
-	newest, err := m.Snapshot(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
+	newest, newestErr := m.Snapshot(context.Background(), id)
+	if newestErr != nil {
+		t.Fatal(newestErr)
 	}
-	wantDigest, err := parseConfig(secondConfig)
-	if err != nil {
-		t.Fatal(err)
+	wantDigest, digestErr := parseConfig(secondConfig)
+	if digestErr != nil {
+		t.Fatal(digestErr)
 	}
 	if newest.Digest != wantDigest.digest {
 		t.Fatalf("newer configure digest = %q, want %q", newest.Digest, wantDigest.digest)
@@ -397,9 +397,9 @@ func TestNewConfigureCommitsBeforeOlderDownloadFinishes(t *testing.T) {
 	if err := <-firstDone; CodeOf(err) != FailureConflict {
 		t.Fatalf("superseded older configure = %v, want conflict", err)
 	}
-	after, err := m.Snapshot(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
+	after, afterErr := m.Snapshot(context.Background(), id)
+	if afterErr != nil {
+		t.Fatal(afterErr)
 	}
 	if after.Digest != newest.Digest || after.Profiles[0].Description != "newer" {
 		t.Fatalf("older response overwrote accepted inventory: %#v", after)
@@ -408,21 +408,21 @@ func TestNewConfigureCommitsBeforeOlderDownloadFinishes(t *testing.T) {
 
 func TestFailedReplacementDoesNotRestorePriorConnection(t *testing.T) {
 	m, id, runtime := newSwitchingManager(t, false)
-	old, err := m.Snapshot(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
+	old, snapshotErr := m.Snapshot(context.Background(), id)
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
 	}
-	if _, err := configureForTest(t, m, id, replacementConfig(t)); err != nil {
-		t.Fatal(err)
+	if _, configureErr := configureForTest(t, m, id, replacementConfig(t)); configureErr != nil {
+		t.Fatal(configureErr)
 	}
-	loaded, err := m.Snapshot(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
+	loaded, loadedErr := m.Snapshot(context.Background(), id)
+	if loadedErr != nil {
+		t.Fatal(loadedErr)
 	}
-	if _, err := m.Start(context.Background(), id, loaded.Sequence, StartTarget{
+	if _, startErr := m.Start(context.Background(), id, loaded.Sequence, StartTarget{
 		Mode: ProfileIndex, Index: 0, Digest: loaded.Digest, ReplaceCurrent: true,
-	}); err != nil {
-		t.Fatal(err)
+	}); startErr != nil {
+		t.Fatal(startErr)
 	}
 	started := waitGenerationState(t, m, id, old.Generation+1, StateConnected)
 	if started.ActiveDigest != loaded.Digest || started.ActiveMode != ProfileIndex || started.ActiveIndex != 0 {

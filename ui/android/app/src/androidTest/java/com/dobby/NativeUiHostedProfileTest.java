@@ -968,12 +968,8 @@ public final class NativeUiHostedProfileTest {
         tapEnabledControl(control, deadline);
         Uri changedSource = Uri.parse(launchSubscriptionURL).buildUpon()
                 .appendQueryParameter("consent-currentness", "1").build();
-        Intent replacement = new Intent(Intent.ACTION_VIEW, new Uri.Builder().scheme("dobbyvpn")
-                .authority("import").appendQueryParameter("url", changedSource.toString()).build())
-                .setPackage(context.getPackageName());
-        Activity activity = MainActivity.current;
-        if (activity == null) throw new IllegalStateException("ANDROID_CONSENT_ACTIVITY_MISSING");
-        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> activity.onNewIntent(replacement));
+        if (MainActivity.current == null) throw new IllegalStateException("ANDROID_CONSENT_ACTIVITY_MISSING");
+        deliverWarmImport(changedSource.toString());
         acceptVpnConsent(remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"), "manual-consent");
         JSONObject current = waitForSessionSource(changedSource.toString(), remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         if (current.getLong("generation") != initial.getLong("generation")
@@ -1124,7 +1120,7 @@ public final class NativeUiHostedProfileTest {
         }
         assertOldConnectActionsDisabled(active);
         String marker = "held-load-log-" + System.nanoTime();
-        NativeVpnBridge.recordDiagnostic(context, "ui.test.held.load", marker);
+        NativeUiTestBridge.recordDiagnostic(context, "ui.test.held.load", marker);
         waitForUiControl(marker, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         tapEnabledControl(CONNECTION_ACTION_LABEL, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));

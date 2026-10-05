@@ -95,7 +95,11 @@ final class LogRenderingTests: XCTestCase {
     }
 
     private func resolved(_ color: NSColor, in appearance: NSAppearance) -> NSColor? {
-        color.resolvedColor(with: appearance).usingColorSpace(.deviceRGB)
+        var resolvedColor: NSColor?
+        appearance.performAsCurrentDrawingAppearance {
+            resolvedColor = color.usingColorSpace(NSColorSpace.deviceRGB)
+        }
+        return resolvedColor
     }
 }
 #endif
