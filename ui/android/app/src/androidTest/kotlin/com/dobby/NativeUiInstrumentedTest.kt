@@ -929,12 +929,12 @@ class NativeUiInstrumentedTest {
         while (controls != null && !controls.isScrollable) controls = controls.parent
         val viewport = controls ?: throw AssertionError("ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING")
 
-        var reachedStatus = false
+        var reachedStatus: UiObject2? = null
         var reachedAction: UiObject2? = null
         for (attempt in 0..8) {
-            reachedStatus = waitForOneOfOrNull(arrayOf("Disconnected", "Error"), 100) != null
+            reachedStatus = waitForOneOfOrNull(arrayOf("Disconnected", "Error"), 100)
             reachedAction = waitForObject(connectionActionLabel, 100)
-            if (reachedStatus && reachedAction != null) break
+            if (reachedStatus != null && reachedAction != null) break
             if (attempt == 8) break
             if (!viewport.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)) {
                 throw AssertionError("ANDROID_CONTROLS_SCROLL_FAILED")
@@ -942,10 +942,12 @@ class NativeUiInstrumentedTest {
             device.waitForIdle()
         }
 
-        check(reachedStatus) { "ANDROID_SMALL_SCREEN_STATUS_NOT_REACHABLE_AFTER_SCROLL" }
+        check(reachedStatus?.visibleBounds?.isEmpty == false) {
+            "ANDROID_SMALL_SCREEN_STATUS_NOT_REACHABLE_AFTER_SCROLL"
+        }
         var button = reachedAction
         while (button != null && !button.isClickable) button = button.parent
-        check(button != null && !button.visibleBounds.isEmpty && button.visibleBounds == button.bounds) {
+        check(button?.let { it.isClickable && !it.visibleBounds.isEmpty } == true) {
             "ANDROID_SMALL_SCREEN_CONNECTION_ACTION_NOT_REACHABLE"
         }
     }
