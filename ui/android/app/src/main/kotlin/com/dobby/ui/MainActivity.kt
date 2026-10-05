@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -39,6 +40,31 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+
+private const val COMPOSE_LAYOUT_TRACE_EXTRA = "dobbyvpn.traceComposeLayout"
+
+private object ComposeLayoutTrace {
+    private val lastMeasurements = mutableMapOf<String, String>()
+
+    @Synchronized
+    fun record(name: String, measurement: String) {
+        if (lastMeasurements.put(name, measurement) != measurement) {
+            android.util.Log.i("DobbyComposeLayout", "$name $measurement")
+        }
+    }
+}
+
+private fun Modifier.traceComposeConstraints(name: String): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    if (MainActivity.current?.intent?.getBooleanExtra(COMPOSE_LAYOUT_TRACE_EXTRA, false) == true) {
+        ComposeLayoutTrace.record(
+            name,
+            "incoming=$constraints boundedHeight=${constraints.hasBoundedHeight} " +
+                "measured=${placeable.width}x${placeable.height}",
+        )
+    }
+    layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
+}
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -615,9 +641,9 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         session.failure.isNotEmpty() -> "Failed"
         else -> "Disconnected"
     }
-    BoxWithConstraints(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+    BoxWithConstraints(modifier.traceComposeConstraints("connection-box").fillMaxSize().padding(horizontal = 16.dp)) {
         val controlsHeight = maxHeight * 0.5f
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.traceComposeConstraints("connection-column").fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(
                 Modifier.heightIn(max = controlsHeight).clipToBounds().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -726,7 +752,9 @@ private fun ColumnScope.LogsPane(controller: SessionController) {
     }
     AndroidView(
         factory = { controller.createLogView(it) },
-        modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
+        modifier = Modifier.fillMaxWidth().weight(1f)
+            .traceComposeConstraints("logs-android-view")
+            .clipToBounds(),
         update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
     )
 }

@@ -51,6 +51,50 @@ struct DobbyShareSheet: NSViewRepresentable {
 #endif
 
 #if os(iOS)
+private final class DobbyLogTextView: UITextView {
+    var preservesReadingPosition = false
+    private(set) var isRestoringReadingPosition = false
+    private var lastLayoutWidth: CGFloat?
+    private var anchorCharacterIndex: Int?
+    private var anchorViewportY: CGFloat?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let widthChanged = lastLayoutWidth.map { abs($0 - bounds.width) > 0.5 } ?? false
+        lastLayoutWidth = bounds.width
+        if widthChanged && preservesReadingPosition { restoreReadingPosition() }
+    }
+
+    func captureReadingPosition() {
+        guard textStorage.length > 0 else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        let point = CGPoint(
+            x: textContainerInset.left + 1,
+            y: contentOffset.y + textContainerInset.top + 1
+        )
+        let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+        let character = min(layoutManager.characterIndexForGlyph(at: glyph), textStorage.length - 1)
+        let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        anchorCharacterIndex = character
+        anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
+    }
+
+    private func restoreReadingPosition() {
+        guard let character = anchorCharacterIndex,
+              let viewportY = anchorViewportY,
+              textStorage.length > 0 else { return }
+        layoutManager.ensureLayout(for: textContainer)
+        let glyph = layoutManager.glyphIndexForCharacter(at: min(character, textStorage.length - 1))
+        let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let requestedY = line.minY + textContainerInset.top - viewportY
+        let maximumY = max(-adjustedContentInset.top, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        let restoredY = min(max(requestedY, -adjustedContentInset.top), maximumY)
+        isRestoringReadingPosition = true
+        setContentOffset(CGPoint(x: contentOffset.x, y: restoredY), animated: false)
+        isRestoringReadingPosition = false
+    }
+}
+
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     @Binding var following: Bool
@@ -59,7 +103,7 @@ struct DobbyLogView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
+        let view = DobbyLogTextView()
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = .secondarySystemBackground
@@ -73,6 +117,7 @@ struct DobbyLogView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
+        (view as? DobbyLogTextView)?.preservesReadingPosition = !following
         if clear != coordinator.lastClear { resetLogPresentationForClear(following: $following, expanded: &coordinator.expanded) }
         guard following else { return }
         coordinator.entries = entries
@@ -114,11 +159,13 @@ struct DobbyLogView: UIViewRepresentable {
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard !updating, scrollView.isDragging || scrollView.isDecelerating else { return }
+            if let logView = scrollView as? DobbyLogTextView, logView.isRestoringReadingPosition { return }
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height,
                 contentHeight: scrollView.contentSize.height
             )
             if parent.following != atBottom { parent.following = atBottom }
+            if !atBottom { (scrollView as? DobbyLogTextView)?.captureReadingPosition() }
         }
     }
 }

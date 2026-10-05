@@ -204,20 +204,16 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             run[run.index("-resultBundlePath") + 1], str(result_bundle)
         )
 
-    def test_ios_native_case_selectors_filter_to_one_exact_test_and_pass_source_sha(self) -> None:
+    def test_ios_native_case_selectors_filter_to_one_exact_test(self) -> None:
         udid = "01234567-89ab-cdef-0123-456789abcdef"
-        sha = "a" * 40
         command = ios_simulator_app.xcodebuild_ui_test_without_building_command(
             udid,
             Path("candidate/iosApp.xcodeproj"),
             Path("work/derived-data"),
             architecture="arm64",
             native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
-            source_sha=sha,
         )
-        self.assertEqual(command[:4], [
-            "/usr/bin/env", f"SOURCE_COMMIT={sha}", f"GITHUB_SHA={sha}", "xcodebuild",
-        ])
+        self.assertEqual(command[0], "xcodebuild")
         filters = [argument for argument in command if argument.startswith("-only-testing:")]
         self.assertEqual(filters, [
             "-only-testing:iosAppUITests/NativeUIInteractionTests/"
@@ -235,6 +231,20 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             ["-only-testing:iosAppUITests/NativeRendererInteractionTests/"
              "testSeverityColorsResolveForLightAndDarkAppearances"],
         )
+
+    def test_ios_test_bundle_embeds_candidate_source_commit_for_about_assertion(self) -> None:
+        project = (
+            Path(__file__).parents[4]
+            / "ui/apple/ios/iosApp.xcodeproj/project.pbxproj"
+        ).read_text(encoding="utf-8")
+        ui_test = (
+            Path(__file__).parents[4]
+            / "ui/apple/ios/tests/NativeUIInteractionTests.swift"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(project.count(
+            'INFOPLIST_KEY_DobbyTestSourceCommit = "$(DOBBY_SOURCE_COMMIT)";'
+        ), 2)
+        self.assertIn('object(forInfoDictionaryKey: "DobbyTestSourceCommit")', ui_test)
 
     def test_install_timeout_reports_elapsed_time_and_preserves_cleanup_window(self) -> None:
         udid = "01234567-89ab-cdef-0123-456789abcdef"

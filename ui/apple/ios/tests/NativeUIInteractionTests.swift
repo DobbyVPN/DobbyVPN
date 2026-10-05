@@ -56,9 +56,9 @@ final class NativeUIInteractionTests: XCTestCase {
         let commit = String(fullCommit.label.dropFirst(commitPrefix.count))
         XCTAssertNotNil(commit.range(of: "^[0-9a-fA-F]{40}$", options: .regularExpression))
         let expectedCommit = try XCTUnwrap(
-            ProcessInfo.processInfo.environment["GITHUB_SHA"] ??
-                ProcessInfo.processInfo.environment["SOURCE_COMMIT"],
-            "The Simulator lane should expose the selected product revision to XCTest"
+            Bundle(for: NativeUIInteractionTests.self)
+                .object(forInfoDictionaryKey: "DobbyTestSourceCommit") as? String,
+            "The XCTest bundle should contain the selected product revision"
         )
         XCTAssertEqual(commit, expectedCommit, "About should display the exact revision tested by this lane")
         XCTAssertTrue(app.staticTexts["Commit: \(commit.prefix(12))"].exists)
@@ -425,7 +425,8 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(logs.value as? String, frozen,
                        "A live rotation must not replace frozen log entries")
         XCTAssertTrue(frozen.contains(positionAnchor.record))
-        XCTAssertTrue(positionAnchor.element.isHittable,
+        let landscapeAnchor = try XCTUnwrap(detailElement(for: positionAnchor, in: logs))
+        XCTAssertTrue(landscapeAnchor.isHittable,
                       "The same rendered record should stay visible in landscape")
         XCUIDevice.shared.orientation = .portrait
         let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -435,7 +436,9 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(logs.value as? String, frozen,
                        "Returning to portrait must keep the frozen log entries")
         XCTAssertTrue(frozen.contains(positionAnchor.record))
-        XCTAssertTrue(positionAnchor.element.isHittable,
+        attachScreenshot("logs-freeze-returned-to-portrait")
+        let portraitAnchor = try XCTUnwrap(detailElement(for: positionAnchor, in: logs))
+        XCTAssertTrue(portraitAnchor.isHittable,
                       "The same rendered record should stay visible after returning to portrait")
 
         for _ in 0..<8 { logs.swipeUp() }
@@ -539,7 +542,7 @@ final class NativeUIInteractionTests: XCTestCase {
             .allElementsBoundByIndex
         for (index, element) in details.enumerated() where element.label == "Details" && element.isHittable {
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
-            guard (0.15...0.38).contains(relativeY),
+            guard (0.12...0.26).contains(relativeY),
                   let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { continue }
             return RenderedLogAnchor(detailIndex: index, record: record, element: element)
         }
@@ -553,8 +556,8 @@ final class NativeUIInteractionTests: XCTestCase {
         screenshotName: String? = nil
     ) -> CGFloat {
         let offsetBefore = anchor.element.frame.minY - logs.frame.minY
-        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.30))
-        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.40))
+        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.22))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.42))
         start.press(forDuration: 0.05, thenDragTo: end)
 
         let detailElements = logs.descendants(matching: .any)
@@ -574,6 +577,17 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue((logs.value as? String ?? "").contains(anchor.record),
                       "The anchored record should remain in the rendered log text")
         return offsetAfter
+    }
+
+    private func detailElement(for anchor: RenderedLogAnchor, in logs: XCUIElement) -> XCUIElement? {
+        guard let rendered = logs.value as? String else { return nil }
+        let details = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        for index in 0..<details.count {
+            guard renderedLogRecord(atDetailIndex: index, in: rendered) == anchor.record else { continue }
+            return details.element(boundBy: index)
+        }
+        return nil
     }
 
     private func renderedLogRecord(atDetailIndex index: Int, in text: String) -> String? {

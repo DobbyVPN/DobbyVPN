@@ -69,15 +69,18 @@ internal static class Program
 
     private static string[] DescribeProcessWindows(Process process)
     {
-        var windows = new List<string>();
+        return EnumerateProcessWindows(process).Select(window =>
+            DescribeWindow(window) +
+            $" visible={IsWindowVisible(window)} minimized={IsIconic(window)}").ToArray();
+    }
+
+    private static IntPtr[] EnumerateProcessWindows(Process process)
+    {
+        var windows = new List<IntPtr>();
         EnumThreadWindowsCallback callback = (window, _) =>
         {
             GetWindowThreadProcessId(window, out var ownerPid);
-            if (ownerPid == process.Id)
-            {
-                windows.Add(DescribeWindow(window) +
-                    $" visible={IsWindowVisible(window)} minimized={IsIconic(window)}");
-            }
+            if (ownerPid == process.Id) windows.Add(window);
             return true;
         };
         try
@@ -87,7 +90,8 @@ internal static class Program
         }
         catch (InvalidOperationException)
         {
-            windows.Add("thread list changed during enumeration");
+            // The caller will retry on its next bounded poll if the thread
+            // list changes while the window is being created.
         }
         GC.KeepAlive(callback);
         return windows.ToArray();
@@ -362,12 +366,36 @@ internal static class Program
             IntPtr window = IntPtr.Zero;
             if (traceFindAllProbe)
             {
-                WaitFor(() =>
+                string[] lastWindows = Array.Empty<string>();
+                string lastTitle = "unavailable";
+                try
                 {
-                    process.Refresh();
-                    window = process.MainWindowHandle;
-                    return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);
-                }, "UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 7.0);
+                    WaitFor(() =>
+                    {
+                        process.Refresh();
+                        window = process.MainWindowHandle;
+                        GetWindowThreadProcessId(window, out var ownerPid);
+                        if (window == IntPtr.Zero || ownerPid != process.Id ||
+                            !IsWindowVisible(window) || IsIconic(window))
+                        {
+                            window = EnumerateProcessWindows(process).FirstOrDefault(candidate =>
+                            {
+                                GetWindowThreadProcessId(candidate, out var candidatePid);
+                                return candidatePid == process.Id && IsWindowVisible(candidate) && !IsIconic(candidate);
+                            });
+                        }
+                        lastWindows = DescribeProcessWindows(process);
+                        lastTitle = process.MainWindowTitle;
+                        return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);
+                    }, "UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 7.0);
+                }
+                catch (TimeoutException error)
+                {
+                    throw new TimeoutException(
+                        $"{error.Message}; pid={process.Id}; session={process.SessionId}; " +
+                        $"mainWindowTitle=\"{lastTitle}\"; processTopLevelWindows=[{string.Join(" || ", lastWindows)}]",
+                        error);
+                }
             }
             else
             {

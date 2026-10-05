@@ -101,7 +101,8 @@ class NativeUiSmallScreenLogViewportTest {
 
     private fun launch() {
         val output = device.executeShellCommand(
-            "am start -W -n $packageName/com.dobby.ui.MainActivity",
+            "am start -W -n $packageName/com.dobby.ui.MainActivity " +
+                "--ez dobbyvpn.traceComposeLayout true",
         )
         check(output.contains("Status: ok") && output.contains("Complete")) {
             "ANDROID_LAUNCH_ACTIVITY_FAILED"

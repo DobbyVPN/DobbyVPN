@@ -22,7 +22,6 @@ _NATIVE_CASE_TEST_SELECTIONS = {
         "iosAppUITests/NativeUIInteractionTests/testLogsFreezeAndResumeAtBottom",
     IOS_RENDERER_SEVERITY_CASE: _DEFAULT_UI_TEST_SELECTION[1],
 }
-_SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
 class IOSSimulatorContractError(ValueError):
@@ -111,7 +110,6 @@ def xcodebuild_ui_test_without_building_command(
     *,
     architecture: str,
     native_cases: Sequence[str] | None = None,
-    source_sha: str | None = None,
 ) -> list[str]:
     """Run prepared XCTest products and retain their result bundle."""
     app_project = Path(project)
@@ -130,8 +128,6 @@ def xcodebuild_ui_test_without_building_command(
             "iOS UI test result bundle must end in .xcresult"
         )
     udid = _validate_udid(device_udid)
-    if source_sha is not None and not _SOURCE_SHA.fullmatch(source_sha):
-        raise IOSSimulatorContractError("iOS XCTest source commit must be a full lowercase SHA")
     simulator_architecture = "x86_64" if architecture == "amd64" else architecture
     selection = ui_test_selection(native_cases)
     command = [
@@ -154,13 +150,6 @@ def xcodebuild_ui_test_without_building_command(
         "CODE_SIGN_IDENTITY=-",
         "test-without-building",
     ]
-    if source_sha is not None:
-        return [
-            "/usr/bin/env",
-            f"SOURCE_COMMIT={source_sha}",
-            f"GITHUB_SHA={source_sha}",
-            *command,
-        ]
     return command
 
 

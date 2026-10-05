@@ -176,9 +176,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
         for assertion in (
             'var traceFindAllProbe = operation == "findall-probe";',
+            'window = EnumerateProcessWindows(process).FirstOrDefault(candidate =>',
             'WaitFor(() =>',
             'return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);',
             '"UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 7.0);',
+            'processTopLevelWindows=[{string.Join(" || ", lastWindows)}]',
             'const string automationId = "Connection configuration";',
             'TracePhase("uia-findall-probe-root-complete")',
             'TracePhase("uia-findall-probe-start automationId=Connection configuration");',
