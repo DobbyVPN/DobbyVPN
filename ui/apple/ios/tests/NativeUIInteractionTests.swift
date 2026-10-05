@@ -108,8 +108,14 @@ final class NativeUIInteractionTests: XCTestCase {
         app.launchArguments = []
         XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
         assertLogLayout()
-        XCTAssertTrue(app.buttons["VPN connection action"].isHittable)
-        XCTAssertTrue(app.buttons["Paste"].isHittable)
+        let controls = app.scrollViews.firstMatch
+        let paste = app.buttons["Paste"]
+        if !paste.isHittable { controls.swipeDown() }
+        XCTAssertTrue(paste.isHittable, "Paste should remain reachable at the largest accessibility text size")
+        let connectionAction = app.buttons["VPN connection action"]
+        if !connectionAction.isHittable { controls.swipeUp() }
+        XCTAssertTrue(connectionAction.isHittable,
+                      "The main connection action should remain reachable by scrolling at the largest accessibility text size")
         XCTAssertTrue(app.buttons["Clear"].isHittable)
         XCTAssertTrue(app.buttons["Share logs"].isHittable)
         attachScreenshot("large-text")

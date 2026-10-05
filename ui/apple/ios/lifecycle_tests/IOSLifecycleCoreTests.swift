@@ -40,6 +40,27 @@ final class IOSLifecycleCoreTests: XCTestCase {
         XCTAssertThrowsError(try IOSProviderCommand(method: "Snapshot", requestID: "snapshot", params: Data("{".utf8)))
     }
 
+    func testReadinessFailureCooldownExpiresAfterFiveSeconds() {
+        var cooldown = IOSReadinessFailureCooldown()
+        cooldown.recordFailure("original readiness failure", at: 10)
+
+        XCTAssertEqual(cooldown.cachedFailure(at: 10), "original readiness failure")
+        XCTAssertEqual(cooldown.cachedFailure(at: 14.999), "original readiness failure")
+        XCTAssertNil(cooldown.cachedFailure(at: 15))
+    }
+
+    func testReadinessFailureCooldownCanBeResetAndRestarted() {
+        var cooldown = IOSReadinessFailureCooldown()
+        cooldown.recordFailure("first failure", at: 10)
+        cooldown.recordFailure("second failure", at: 12)
+        XCTAssertEqual(cooldown.cachedFailure(at: 16.999), "second failure")
+        XCTAssertNil(cooldown.cachedFailure(at: 17))
+
+        cooldown.recordFailure("third failure", at: 20)
+        cooldown.clear()
+        XCTAssertNil(cooldown.cachedFailure(at: 20))
+    }
+
     func testConfigurationMailboxRoundTripsAndBindsTheRequest() throws {
         let rawConfiguration = Data("secret\nprofile bytes".utf8)
         let mailbox = try IOSConfigurationMailbox(requestID: "ios-configure-1", configuration: rawConfiguration)

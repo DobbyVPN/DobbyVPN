@@ -52,6 +52,7 @@ let package = Package(
             sources: [
                 "IOSProviderMessageProtocol.swift",
                 "IOSLifecycleDiagnostics.swift",
+                "IOSReadinessFailureCooldown.swift",
                 "TunnelSettingsOwner.swift",
             ]
         ),

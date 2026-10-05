@@ -16,6 +16,7 @@ public final class VpnManagerImpl: NSObject {
     let condition = NSCondition()
     var vpnManager: NETunnelProviderManager?
     var providerStatus: NEVPNStatus = .invalid
+    private var snapshotReadinessFailureCooldown = IOSReadinessFailureCooldown()
     private var observer: NSObjectProtocol?
 
     override public init() {
@@ -32,6 +33,9 @@ public final class VpnManagerImpl: NSObject {
                 return
             }
             self.providerStatus = connection.status
+            if connection.status == .connected {
+                self.snapshotReadinessFailureCooldown.clear()
+            }
             self.condition.broadcast()
             self.condition.unlock()
             self.logs.writeLog(
@@ -51,8 +55,23 @@ public final class VpnManagerImpl: NSObject {
             logs.writeLog(level: "ERROR", log: "[provider-message] rejected empty command")
             return Self.transportFailure("INTERNAL", message: "provider command is empty")
         }
+        let commandMethod = (try? IOSProviderCommand.decode(messageData))?.method
+        let useSnapshotReadinessCooldown = commandMethod == "Snapshot" && !Thread.isMainThread
+        if useSnapshotReadinessCooldown,
+           let readinessFailure = cachedSnapshotReadinessFailure() {
+            return transportFailureResponse(
+                for: messageData,
+                code: "PLATFORM_FAILED",
+                message: readinessFailure
+            )
+        }
         let deadline = monotonicNow() + IOSProviderTiming.appMessageTimeout
         if let readinessFailure = ensureProviderReady(until: deadline) {
+            if commandMethod != nil && !Thread.isMainThread {
+                condition.lock()
+                snapshotReadinessFailureCooldown.recordFailure(readinessFailure, at: monotonicNow())
+                condition.unlock()
+            }
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
@@ -151,6 +170,21 @@ public final class VpnManagerImpl: NSObject {
 
     private func monotonicNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    private func cachedSnapshotReadinessFailure() -> String? {
+        condition.lock()
+        if let current = vpnManager {
+            providerStatus = current.connection.status
+        }
+        if providerStatus == .connected {
+            snapshotReadinessFailureCooldown.clear()
+            condition.unlock()
+            return nil
+        }
+        let failure = snapshotReadinessFailureCooldown.cachedFailure(at: monotonicNow())
+        condition.unlock()
+        return failure
+    }
+
     private func ensureProviderReady(until deadline: TimeInterval) -> String? {
         if Thread.isMainThread {
             // Provider readiness waits must never freeze the UI thread. Refuse
@@ -166,6 +200,7 @@ public final class VpnManagerImpl: NSObject {
         if let current = vpnManager {
             providerStatus = current.connection.status
             if providerStatus == .connected {
+                snapshotReadinessFailureCooldown.clear()
                 condition.unlock()
                 return nil
             }
@@ -191,6 +226,9 @@ public final class VpnManagerImpl: NSObject {
         if let current {
             vpnManager = current
             providerStatus = current.connection.status
+            if providerStatus == .connected {
+                snapshotReadinessFailureCooldown.clear()
+            }
         }
         let status = current?.connection.status ?? .invalid
         condition.unlock()
@@ -205,7 +243,12 @@ public final class VpnManagerImpl: NSObject {
         }
         var observedStatus = status
         while remaining(until: deadline) != nil {
-            if observedStatus == .connected { return nil }
+            if observedStatus == .connected {
+                condition.lock()
+                snapshotReadinessFailureCooldown.clear()
+                condition.unlock()
+                return nil
+            }
             if observedStatus == .disconnecting {
                 guard let settled = waitForDisconnectToSettle(until: deadline) else {
                     logs.writeLog(level: "ERROR", log: "[provider] disconnect did not settle before the readiness deadline")
@@ -242,8 +285,12 @@ public final class VpnManagerImpl: NSObject {
             monotonicNow() < monotonicDeadline {
             let deadline = Date().addingTimeInterval(min(0.1, remaining(until: monotonicDeadline) ?? 0))
             condition.wait(until: deadline)
-            if let status = vpnManager?.connection.status { providerStatus = status }
+            if let status = vpnManager?.connection.status {
+                providerStatus = status
+                if status == .connected { snapshotReadinessFailureCooldown.clear() }
+            }
         }
+        if providerStatus == .connected { snapshotReadinessFailureCooldown.clear() }
         return providerStatus == .connected
     }
 
@@ -251,8 +298,14 @@ public final class VpnManagerImpl: NSObject {
         condition.lock()
         defer { condition.unlock() }
         while true {
-            if let status = vpnManager?.connection.status { providerStatus = status }
-            if providerStatus != .disconnecting { return providerStatus }
+            if let status = vpnManager?.connection.status {
+                providerStatus = status
+                if status == .connected { snapshotReadinessFailureCooldown.clear() }
+            }
+            if providerStatus != .disconnecting {
+                if providerStatus == .connected { snapshotReadinessFailureCooldown.clear() }
+                return providerStatus
+            }
             guard let remaining = remaining(until: monotonicDeadline), remaining > 0 else { return nil }
             condition.wait(until: Date().addingTimeInterval(min(0.1, remaining)))
         }
