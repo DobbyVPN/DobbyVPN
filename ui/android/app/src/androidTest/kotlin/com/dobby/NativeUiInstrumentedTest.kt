@@ -348,7 +348,7 @@ class NativeUiInstrumentedTest {
             clipboard.setPrimaryClip(ClipData.newPlainText("empty", ""))
             requireObject("Paste")
             tapStable("Paste")
-            waitForTextContaining("Clipboard text is empty")
+            waitForTextContaining("Clipboard item has no text")
 
             clipboard.setPrimaryClip(ClipData.newRawUri("non-text", Uri.parse("content://example.invalid/item")))
             requireObject("Paste")

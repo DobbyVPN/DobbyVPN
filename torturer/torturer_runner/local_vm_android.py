@@ -46,7 +46,16 @@ _SCREENSHOT_MARKER = re.compile(
     rb"width=([1-9][0-9]*) height=([1-9][0-9]*)$",
     re.MULTILINE,
 )
-_LOCAL_REQUIRED_SCREENSHOT_LABELS = ("startup", "failure-state", "reopened")
+_LAUNCHER_ARTWORK_MARKER = re.compile(
+    rb"^(?:DOBBY_INSTALLED_LAUNCHER_ARTWORK|INSTRUMENTATION_STATUS: stream=DOBBY_INSTALLED_LAUNCHER_ARTWORK) "
+    rb"path=(/data/user/0/com\.dobby\.vpn/cache/dobbyvpn-rendered-screenshots/"
+    rb"installed-launcher-artwork\.png) bytes=([0-9]+) sha256=([0-9a-f]{64}) "
+    rb"width=([1-9][0-9]*) height=([1-9][0-9]*) sampled_colors=([0-9]+)$",
+    re.MULTILINE,
+)
+_LOCAL_REQUIRED_SCREENSHOT_LABELS = (
+    "startup", "about-metadata", "landscape-large-font", "failure-state", "reopened",
+)
 
 
 def _error(message: str) -> Exception:
@@ -275,6 +284,21 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     except Exception as error:
         collection_errors.append(
             _render_collection_error("ANDROID_UI_SCREENSHOT_COLLECTION_FAILED", error)
+        )
+    try:
+        _collect_launcher_artwork(
+            adb_value,
+            serial,
+            result.stdout,
+            succeeded=parsed.succeeded,
+            run_dir=run_dir,
+            logs=logs,
+            timeout=min(timeout, 30),
+            environment=environment,
+        )
+    except Exception as error:
+        collection_errors.append(
+            _render_collection_error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED", error)
         )
     collection_errors.extend(
         _collect_android_diagnostics(
@@ -510,6 +534,67 @@ def _collect_rendered_screenshots(
             raise _error(
                 f"ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: invalid {label}: {error}"
             ) from error
+
+
+def _collect_launcher_artwork(
+    adb: str,
+    serial: str,
+    instrumentation_stdout: bytes,
+    *,
+    succeeded: bool,
+    run_dir: Path,
+    logs: Path,
+    timeout: float,
+    environment: dict[str, str],
+) -> None:
+    """Retain the rendered installed launcher icon for visual review."""
+
+    matches = list(_LAUNCHER_ARTWORK_MARKER.finditer(instrumentation_stdout))
+    if not matches:
+        if succeeded:
+            raise _error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED: instrumentation emitted no icon marker")
+        return
+    if len(matches) != 1:
+        raise _error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED: expected one icon marker")
+    match = matches[0]
+    remote = match.group(1).decode("ascii")
+    expected_bytes = int(match.group(2))
+    expected_sha256 = match.group(3).decode("ascii")
+    width = int(match.group(4))
+    height = int(match.group(5))
+    sampled_colors = int(match.group(6))
+    if (
+        not remote.startswith(_SCREENSHOT_ROOT)
+        or Path(remote).name != "installed-launcher-artwork.png"
+        or (width, height) != (512, 512)
+        or sampled_colors <= 2
+    ):
+        raise _error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED: icon marker is invalid")
+
+    destination = logs / "screenshots" / "android"
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    local = destination / "installed-launcher-artwork.png"
+    pulled = _adb_call(
+        adb,
+        serial,
+        ["pull", remote, str(local)],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-screenshot-installed-launcher-artwork",
+        timeout=max(1.0, timeout),
+        environment=environment,
+        check=False,
+    )
+    if pulled.returncode != 0:
+        raise _error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED: pull failed")
+    try:
+        assert_marker_matches(
+            file_metadata(local),
+            bytes_count=expected_bytes,
+            sha256_value=expected_sha256,
+        )
+    except (ScreenshotIntegrityError, OSError) as error:
+        raise _error(f"ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED: {error}") from error
 
 
 def cleanup(run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float) -> None:
