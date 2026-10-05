@@ -42,6 +42,8 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     companion object {
+        private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
+
         @Volatile
         @JvmField
         var current: MainActivity? = null
@@ -59,7 +61,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         current = this
         NativeGoSession.attach(this)
-        controller = SessionController(this)
+        controller = SessionController(this, savedInstanceState?.getBundle(LOG_VIEW_STATE))
         if (intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
@@ -67,6 +69,13 @@ class MainActivity : ComponentActivity() {
                     DobbyApp(controller)
                 }
             }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (::controller.isInitialized) {
+            controller.saveLogViewState()?.let { outState.putBundle(LOG_VIEW_STATE, it) }
         }
     }
 
@@ -139,7 +148,10 @@ private data class ScreenState(
     val exportingLogs: Boolean = false,
 )
 
-private class SessionController(private val activity: MainActivity) {
+private class SessionController(
+    private val activity: MainActivity,
+    private var restoredLogViewState: Bundle? = null,
+) {
     var state by mutableStateOf(ScreenState())
         private set
 
@@ -159,7 +171,9 @@ private class SessionController(private val activity: MainActivity) {
     private var restoredLoad = ""
     private var acceptedSequence = 0L
     private val clipboard = activity.getSystemService(ClipboardManager::class.java)
-    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener { refreshClipboard() }
+    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+        refreshClipboard()
+    }
 
     private val diagnosticView = StructuredLogs(
         NativeVpnBridge.diagnosticPaths(activity).lineSequence().filter(String::isNotBlank).toList(),
@@ -169,7 +183,10 @@ private class SessionController(private val activity: MainActivity) {
 
     init {
         clipboard.addPrimaryClipChangedListener(clipboardListener)
-        worker.scheduleWithFixedDelay({ refreshSnapshot() }, 0, 500, TimeUnit.MILLISECONDS)
+        worker.scheduleWithFixedDelay({
+            refreshSnapshot()
+            if (visible) refreshClipboard()
+        }, 0, 500, TimeUnit.MILLISECONDS)
         NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
     }
@@ -249,6 +266,25 @@ private class SessionController(private val activity: MainActivity) {
     }
 
     fun show(screen: String) { state = state.copy(screen = screen) }
+
+    fun createLogView(context: android.content.Context): LiveLogView = LiveLogView(context).also { view ->
+        restoredLogViewState?.let(view::restoreState)
+        restoredLogViewState = null
+    }
+
+    fun saveLogViewState(): Bundle? = restoredLogViewState ?: runCatching {
+        val view = activity.findViewById<android.view.View>(android.R.id.content)
+        view?.let { content ->
+            fun find(candidate: android.view.View): LiveLogView? {
+                if (candidate is LiveLogView) return candidate
+                if (candidate is android.view.ViewGroup) {
+                    repeat(candidate.childCount) { index -> find(candidate.getChildAt(index))?.let { return it } }
+                }
+                return null
+            }
+            find(content)?.saveState()
+        }
+    }.getOrNull()
 
     fun isStopTarget(index: Int?): Boolean {
         val s = state.session
@@ -333,10 +369,15 @@ private class SessionController(private val activity: MainActivity) {
     fun setVisible(value: Boolean) { visible = value; if (value) refreshClipboard() }
 
     private fun refreshClipboard() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { refreshClipboard() }
+            return
+        }
         val available = runCatching {
-            clipboard.hasPrimaryClip() && clipboard.primaryClipDescription?.let { description ->
-                description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) ||
-                    description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)
+            if (!clipboard.hasPrimaryClip()) false
+            else clipboard.primaryClipDescription?.mimeTypes?.any { type ->
+                type.equals(ClipDescription.MIMETYPE_TEXT_PLAIN, ignoreCase = true) ||
+                    type.equals(ClipDescription.MIMETYPE_TEXT_HTML, ignoreCase = true)
             } == true
         }.getOrDefault(false)
         if (state.canPaste != available) state = state.copy(canPaste = available)
@@ -383,6 +424,7 @@ private class SessionController(private val activity: MainActivity) {
     fun importLink(value: String) {
         try {
             val uri = java.net.URI(value)
+            if (uri.scheme.equals("dobbyvpn", true) && uri.rawSchemeSpecificPart == "//") return
             require(uri.scheme.equals("dobbyvpn", true) && uri.host == "import" && uri.rawPath.isNullOrEmpty() && uri.rawFragment == null && uri.rawUserInfo == null && uri.port == -1)
             val query = uri.rawQuery.orEmpty().split('&')
             require(query.size == 1)
@@ -665,7 +707,12 @@ private fun AboutScreen(controller: SessionController, modifier: Modifier) {
 @Composable
 private fun LogsPane(controller: SessionController, modifier: Modifier) {
     val state = controller.state
-    val color = MaterialTheme.colorScheme.onSurface.toArgb()
+    val colors = MaterialTheme.colorScheme
+    val normalColor = colors.onSurface.toArgb()
+    val mutedColor = colors.onSurfaceVariant.toArgb()
+    val warningColor = (if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFFFFD084)
+        else androidx.compose.ui.graphics.Color(0xFF8A5A00)).toArgb()
+    val errorColor = colors.error.toArgb()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Logs", modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
@@ -677,9 +724,9 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         }
         Text("Recent logs. Shared diagnostics include the complete files.", style = MaterialTheme.typography.labelSmall)
         AndroidView(
-            factory = { LiveLogView(it) },
+            factory = { controller.createLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
-            update = { it.update(state.logs, state.clearRevision, color) },
+            update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
         )
     }
 }
@@ -696,11 +743,43 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     private var userScrolling = false
     private var lastClear = 0
     private var normalColor = android.graphics.Color.BLACK
+    private var mutedColor = android.graphics.Color.GRAY
+    private var warningColor = android.graphics.Color.rgb(138, 90, 0)
+    private var errorColor = android.graphics.Color.rgb(179, 38, 30)
     private var rendered = emptyList<LogEntry>()
     private var latest = emptyList<LogEntry>()
     private val expanded = mutableSetOf<String>()
+    private var hasRendered = false
+    private var awaitingRestoredEntries = false
+    private var restoredScrollY: Int? = null
+    private var restoredVisibleBoundaries: Map<String, Long>? = null
 
     init { isFillViewport = true; addView(content) }
+
+    fun restoreState(state: Bundle) {
+        following = state.getBoolean("following", true)
+        restoredScrollY = state.getInt("scroll_y", 0).coerceAtLeast(0)
+        expanded.addAll(state.getStringArrayList("expanded_ids").orEmpty())
+        awaitingRestoredEntries = !following
+        val identities = state.getStringArrayList("visible_stream_ids").orEmpty()
+        val offsets = state.getLongArray("visible_stream_offsets")
+        restoredVisibleBoundaries = if (offsets != null && offsets.size == identities.size) {
+            identities.indices.associate { identities[it] to offsets[it] }
+        } else null
+    }
+
+    fun saveState(): Bundle = Bundle().apply {
+        putBoolean("following", following)
+        putInt("scroll_y", scrollY)
+        putStringArrayList("expanded_ids", ArrayList(expanded))
+        val visibleBoundaries = rendered.mapNotNull { entry ->
+            val separator = entry.id.lastIndexOf(':')
+            val offset = entry.id.substring(separator + 1).toLongOrNull()
+            if (separator < 0 || offset == null) null else entry.id.substring(0, separator) to offset
+        }.groupBy({ it.first }, { it.second }).mapValues { (_, offsets) -> offsets.maxOrNull() ?: 0L }
+        putStringArrayList("visible_stream_ids", ArrayList(visibleBoundaries.keys))
+        putLongArray("visible_stream_offsets", visibleBoundaries.values.toLongArray())
+    }
 
     override fun onInterceptTouchEvent(event: android.view.MotionEvent): Boolean {
         if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) userScrolling = true
@@ -714,12 +793,37 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         if (following && latest != rendered) post { render(latest) }
     }
 
-    fun update(entries: List<LogEntry>, clear: Int, color: Int) {
+    fun update(entries: List<LogEntry>, clear: Int, normal: Int, muted: Int, warning: Int, error: Int) {
+        if (clear != lastClear) {
+            following = true
+            lastClear = clear
+            expanded.clear()
+            awaitingRestoredEntries = false
+            restoredVisibleBoundaries = null
+        }
+        if (awaitingRestoredEntries && entries.isEmpty()) return
+        val themeChanged = normalColor != normal || mutedColor != muted || warningColor != warning || errorColor != error
+        normalColor = normal
+        mutedColor = muted
+        warningColor = warning
+        errorColor = error
+        if (awaitingRestoredEntries) {
+            val boundaries = restoredVisibleBoundaries
+            val visible = if (boundaries == null) entries else entries.filter { entry ->
+                val separator = entry.id.lastIndexOf(':')
+                val offset = entry.id.substring(separator + 1).toLongOrNull()
+                if (separator < 0 || offset == null) false
+                else boundaries[entry.id.substring(0, separator)]?.let { offset <= it } == true
+            }
+            awaitingRestoredEntries = false
+            restoredVisibleBoundaries = null
+            latest = entries
+            render(visible)
+            return
+        }
+        awaitingRestoredEntries = false
         latest = entries
-        val themeChanged = normalColor != color
-        normalColor = color
-        if (clear != lastClear) { following = true; lastClear = clear; expanded.clear() }
-        if (following && (rendered != entries || themeChanged)) render(entries)
+        if (!hasRendered || following && (rendered != entries || themeChanged)) render(entries)
         else if (themeChanged) render(rendered)
     }
 
@@ -732,9 +836,9 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
             text.append(listOf(entry.timestamp, entry.level, entry.source).filter(String::isNotEmpty).joinToString(" · "))
                 .append("\n").append(entry.message).append("\n")
             val color = when (entry.level) {
-                "ERROR", "FATAL", "PANIC" -> android.graphics.Color.rgb(220, 65, 65)
-                "WARN", "WARNING" -> android.graphics.Color.rgb(180, 120, 0)
-                "DEBUG", "TRACE" -> android.graphics.Color.GRAY
+                "ERROR", "FATAL", "PANIC" -> errorColor
+                "WARN", "WARNING" -> warningColor
+                "DEBUG", "TRACE" -> mutedColor
                 else -> normalColor
             }
             text.setSpan(android.text.style.ForegroundColorSpan(color), start, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -750,9 +854,14 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
                 if (expanded.contains(entry.id)) text.append(entry.raw).append("\n")
             }
         }
-        val offset = scrollY
+        val offset = restoredScrollY ?: scrollY
+        restoredScrollY = null
         content.setTextColor(normalColor)
         content.text = text
-        post { if (following) scrollTo(0, content.bottom) else scrollTo(0, offset); updating = false }
+        post {
+            if (following) scrollTo(0, content.bottom) else scrollTo(0, offset)
+            hasRendered = true
+            updating = false
+        }
     }
 }

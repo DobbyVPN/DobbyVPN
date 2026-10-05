@@ -993,16 +993,19 @@ public final class NativeUiHostedProfileTest {
     private void verifySubscriptionControls(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + timeout;
         JSONObject initial = snapshotResult("");
+        verifyAcceptedInventoryAfterActivityReopen(subscriptionURL, deadline);
+        initial = snapshotResult("");
         int count = initial.getJSONArray("profiles").length();
         int first = count > 1 && initial.getJSONObject("active_profile").getInt("index") == 0 ? 1 : 0;
         if (count == 1) disconnectThroughRenderedUI(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         tapEnabledControl("Profile " + (first + 1) + " action", deadline);
-        if (count > 1) verifyPendingProfileTransition(first, first == 0 ? 1 : 0, deadline);
+        if (count > 1) verifyPendingProfileTransition(first, first == 0 ? 1 : 0,
+                subscriptionURL, deadline);
         JSONObject manual = awaitSelection(initial.getLong("generation"), "PROFILE_INDEX", first, deadline);
         if (count > 1) {
             int second = first == 0 ? 1 : 0;
             tapEnabledControl("Profile " + (second + 1) + " action", deadline);
-            verifyPendingProfileTransition(second, first, deadline);
+            verifyPendingProfileTransition(second, first, subscriptionURL, deadline);
             manual = awaitSelection(manual.getLong("generation"), "PROFILE_INDEX", second, deadline);
         }
         tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
@@ -1056,6 +1059,8 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Successful Retry triggered an automatic subscription reload");
         }
         int beforeWarmLinks = retryResult.getInt("subscription_gets");
+        Activity warmActivity = MainActivity.current;
+        if (warmActivity == null) throw new AssertionError("Android Activity missing before warm import");
         expectedRenderedSource = subscriptionURL;
         long importStarted = SystemClock.elapsedRealtime();
         deliverWarmImport(subscriptionURL);
@@ -1065,6 +1070,9 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Deep-link import waited for the text-field debounce");
         }
         deliverWarmImport(subscriptionURL);
+        if (MainActivity.current != warmActivity) {
+            throw new AssertionError("Warm deep link replaced the existing Activity");
+        }
         assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject warmCounts = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject warmSnapshot = waitForSessionSource(subscriptionURL,
@@ -1076,6 +1084,9 @@ public final class NativeUiHostedProfileTest {
                 || !warmSnapshot.getString("active_digest").equals(manual.getString("active_digest"))) {
             throw new AssertionError("Repeated warm links duplicated a load or changed the active connection");
         }
+        if (MainActivity.current != warmActivity) {
+            throw new AssertionError("Repeated warm deep link replaced the existing Activity");
+        }
         tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
         verifyPendingAutoTransition(deadline);
         JSONObject auto = awaitSelection(manual.getLong("generation"), "AUTO_SELECT", -1, deadline);
@@ -1084,6 +1095,43 @@ public final class NativeUiHostedProfileTest {
         verifyReplacementInventoryWhileOldProfileIsActive(subscriptionURL, deadline);
         verifyLongListAndValidPaste(subscriptionURL, deadline);
         markProgress("configure", "manual-switch-failed-load-import-clear", "completed");
+    }
+
+    private void verifyAcceptedInventoryAfterActivityReopen(String subscriptionURL, long deadline)
+            throws Exception {
+        JSONObject before = snapshotResult("");
+        int requests = subscriptionFixtureState().getInt("subscription_gets");
+        expectedRenderedSource = subscriptionURL;
+        Activity current = MainActivity.current;
+        if (current == null) throw new AssertionError("Activity missing before inventory reopen");
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(current::finishAndRemoveTask);
+        long closeDeadline = Math.min(deadline, System.currentTimeMillis() + 5_000L);
+        while (MainActivity.current != null && System.currentTimeMillis() < closeDeadline) {
+            SystemClock.sleep(25L);
+        }
+        if (MainActivity.current != null) {
+            throw new AssertionError("Activity did not close before inventory reopen");
+        }
+        String output = uiDevice().executeShellCommand(
+                "am start -W -n " + context.getPackageName() + "/com.dobby.ui.MainActivity");
+        if (!output.contains("Status: ok")) {
+            throw new AssertionError("Activity reopen failed: " + output);
+        }
+        ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_REOPEN_STATE_INVALID"));
+        waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_REOPEN_STATE_INVALID"));
+        assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_REOPEN_STATE_INVALID"));
+        SystemClock.sleep(1_100L); // Covers multiple foreground Snapshot polls.
+        JSONObject after = snapshotResult("");
+        int finalRequests = subscriptionFixtureState().getInt("subscription_gets");
+        if (!subscriptionURL.equals(after.optString("source_url"))
+                || !before.optString("digest").equals(after.optString("digest"))
+                || before.optLong("generation") != after.optLong("generation")
+                || !before.optString("state").equals(after.optString("state"))
+                || !before.optString("active_digest").equals(after.optString("active_digest"))
+                || before.getJSONArray("profiles").length() != after.getJSONArray("profiles").length()
+                || finalRequests != requests) {
+            throw new AssertionError("Activity reopen or unchanged Snapshot polling reloaded/changed the accepted inventory");
+        }
     }
 
     private String urlWithQuery(String url, String key, String value) {
@@ -1108,6 +1156,10 @@ public final class NativeUiHostedProfileTest {
         deliverWarmImport(heldURL);
         waitForSubscriptionGets(before + 1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject held = waitForInFlightGets(1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForUiControl("Loading profiles…", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (findUiObject("Retry") != null) {
+            throw new AssertionError("Retry appeared before the held subscription load failed");
+        }
         deliverWarmImport(heldURL);
         deliverWarmImport(intermediateURL);
         deliverWarmImport(newestURL);
@@ -1215,8 +1267,49 @@ public final class NativeUiHostedProfileTest {
             scrollControlsToLastProfile(deadline);
             waitForUiControl("Profile 24 long-list", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             waitForEnabledControl("Profile 24 action", deadline);
+            assertLongListLeavesLogsUsable(deadline);
+            verifyBareLinkPreservesSource(deadline);
         } finally {
             clipboard.clearPrimaryClip();
+        }
+    }
+
+    private void assertLongListLeavesLogsUsable(long deadline) throws Exception {
+        UiDevice device = uiDevice();
+        int width = device.getDisplayWidth();
+        int height = device.getDisplayHeight();
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 logs = findUiObject("Connection logs");
+            if (logs != null && logs.getVisibleBounds().height() >= 24) return;
+            device.swipe(width / 2, height * 2 / 3, width / 2, height / 4, 12);
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new AssertionError("Long profile inventory left no usable log viewport");
+    }
+
+    private void verifyBareLinkPreservesSource(long deadline) throws Exception {
+        JSONObject before = snapshotResult("");
+        expectedRenderedSource = before.optString("source_url");
+        Activity activity = MainActivity.current;
+        if (activity == null) throw new AssertionError("Android Activity missing before bare-link delivery");
+        String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d 'dobbyvpn://' "
+                + context.getPackageName());
+        if (!output.contains("Status: ok")) {
+            throw new AssertionError("Bare deep-link activation failed: " + output);
+        }
+        if (MainActivity.current != activity) {
+            throw new AssertionError("Bare deep link replaced the existing Activity");
+        }
+        assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject after = snapshotResult("");
+        if (!before.optString("source_url").equals(after.optString("source_url"))
+                || !before.optString("digest").equals(after.optString("digest"))
+                || before.optLong("generation") != after.optLong("generation")
+                || !before.optString("state").equals(after.optString("state"))) {
+            throw new AssertionError("Bare deep link changed the accepted source or session");
+        }
+        if (findUiObject("Error") != null) {
+            throw new AssertionError("Bare deep link showed an import error");
         }
     }
 
@@ -1288,7 +1381,8 @@ public final class NativeUiHostedProfileTest {
         throw new AssertionError("Native selection did not reach the requested profile: " + mode + "/" + index);
     }
 
-    private void verifyPendingProfileTransition(int targetIndex, int competingIndex, long deadline) throws Exception {
+    private void verifyPendingProfileTransition(int targetIndex, int competingIndex,
+            String subscriptionURL, long deadline) throws Exception {
         String targetLabel = "Profile " + (targetIndex + 1) + " action";
         String competingLabel = "Profile " + (competingIndex + 1) + " action";
         while (System.currentTimeMillis() < deadline) {
@@ -1312,11 +1406,47 @@ public final class NativeUiHostedProfileTest {
                 if (competing == null || competing.isEnabled()) {
                     throw new AssertionError("Competing profile Connect remained enabled during switching");
                 }
+                Rect competingBounds = competing.getVisibleBounds();
+                if (competingBounds.isEmpty() || !uiDevice().click(
+                        competingBounds.centerX(), competingBounds.centerY())) {
+                    throw new AssertionError("Could not inject a competing tap during profile switching");
+                }
+                JSONObject afterCompetingTap = snapshotResult("");
+                if (!selectionRemainsTarget(afterCompetingTap, targetIndex, state.optString("digest"))) {
+                    throw new AssertionError("Competing tap displaced the authoritative profile target");
+                }
+                Activity activity = MainActivity.current;
+                if (activity == null) throw new AssertionError("Android Activity missing during profile selection");
+                int requests = subscriptionFixtureState().getInt("subscription_gets");
+                deliverWarmImport(subscriptionURL);
+                JSONObject afterImport = snapshotResult("");
+                if (MainActivity.current != activity
+                        || subscriptionFixtureState().getInt("subscription_gets") != requests
+                        || !state.optString("digest").equals(afterImport.optString("digest"))) {
+                    throw new AssertionError("Warm import changed the in-flight selection or reloaded its inventory");
+                }
+                if (!selectionRemainsTarget(afterImport, targetIndex, state.optString("digest"))) {
+                    throw new AssertionError("Warm import superseded the pending profile selection");
+                }
                 return;
             }
             SystemClock.sleep(20L);
         }
         throw new AssertionError("Pending profile transition was not rendered before selection completed");
+    }
+
+    private boolean selectionRemainsTarget(JSONObject snapshot, int targetIndex, String digest)
+            throws Exception {
+        if (!digest.equals(snapshot.optString("digest"))) return false;
+        JSONObject pending = snapshot.optJSONObject("pending_target");
+        if (pending != null) {
+            return "PROFILE_INDEX".equals(pending.optString("mode"))
+                    && pending.optInt("index", -1) == targetIndex
+                    && digest.equals(pending.optString("digest"));
+        }
+        JSONObject selected = snapshot.optJSONObject("active_profile");
+        return "CONNECTED".equals(snapshot.optString("state"))
+                && selected != null && selected.optInt("index", -1) == targetIndex;
     }
 
     private void verifyPendingAutoTransition(long deadline) throws Exception {

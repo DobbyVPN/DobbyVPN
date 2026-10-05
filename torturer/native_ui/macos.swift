@@ -202,6 +202,29 @@ func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, so
     }
     var primary: Error?
     do {
+        func verifyUnavailablePaste(_ reason: String) throws {
+            if let finder = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.finder" }) {
+                _ = finder.activate(options: [.activateAllWindows])
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            try require(app.activate(options: [.activateAllWindows]), "Could not refresh native Paste availability for \(reason) clipboard")
+            let nodes = try elements(window)
+            let currentEditor = try find(nodes, "Connection configuration", editor: true)
+            try require(try label(currentEditor, kAXValueAttribute) == fieldBeforeClipboard,
+                        "\(reason) clipboard availability changed the configuration before Paste was tapped")
+            let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
+            let pasteAvailable = try buttons.contains { try names($0).contains("Paste") }
+            try require(!pasteAvailable, "Native Paste button was available for a \(reason) clipboard")
+        }
+
+        board.clearContents()
+        try verifyUnavailablePaste("empty")
+        try require(
+            board.setData(Data("synthetic image payload".utf8), forType: NSPasteboard.PasteboardType("public.png")),
+            "Could not write synthetic non-text clipboard item"
+        )
+        try verifyUnavailablePaste("non-text")
+
         board.clearContents()
         try require(board.setString(value, forType: .string), "Could not write native clipboard")
         if let finder = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.finder" }) {
@@ -393,15 +416,34 @@ func run() throws -> [String: Any] {
               let scrollbar = try axElement(area, kAXVerticalScrollBarAttribute) else {
             throw HelperError("Native log viewer does not expose a vertical scrollbar")
         }
-        func scrollValue() throws -> Double {
-            guard let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
-                throw HelperError("Native log viewer scrollbar has no value")
+        func visibleRange() throws -> CFRange {
+            guard let value = try axValue(view, kAXVisibleCharacterRangeAttribute) else {
+                throw HelperError("Native log viewer has no visible character range")
             }
-            return value.doubleValue
+            var range = CFRange(location: 0, length: 0)
+            try require(AXValueGetValue(value, .cfRange, &range), "Could not read native log visible character range")
+            return range
         }
-        let target = position == "top" ? 0.0 : 1.0
-        let start = try scrollValue()
-        if abs(start - target) > 0.01 {
+        guard let rawCharacterCount = try attribute(view, kAXNumberOfCharactersAttribute) as? NSNumber else {
+            throw HelperError("Native log viewer has no character count")
+        }
+        let characterCount = rawCharacterCount.intValue
+        try require(characterCount > 0, "Native log viewer has no content to scroll")
+        func checkedVisibleRange() throws -> CFRange {
+            let range = try visibleRange()
+            try require(range.location >= 0 && range.length > 0 && range.location + range.length <= characterCount,
+                        "Native log viewer returned an invalid visible character range")
+            return range
+        }
+        func distanceFromTarget(_ range: CFRange) -> Int {
+            position == "top" ? range.location : characterCount - range.location - range.length
+        }
+        func isAtTarget(_ range: CFRange) -> Bool {
+            distanceFromTarget(range) <= 1
+        }
+        var range = try checkedVisibleRange()
+        try require(range.length < characterCount, "Native log viewer does not overflow its viewport; freeze/resume cannot be tested")
+        if !isAtTarget(range) {
             let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
             guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                                       mouseCursorPosition: center, mouseButton: .left) else {
@@ -410,7 +452,8 @@ func run() throws -> [String: Any] {
             moved.post(tap: .cghidEventTap)
             var reached = false
             for delta in [100, -100] {
-                for _ in 0..<8 {
+                var unchanged = 0
+                for _ in 0..<16 {
                     guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line,
                                               wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
                         throw HelperError("Could not create native log scroll event")
@@ -418,16 +461,41 @@ func run() throws -> [String: Any] {
                     event.location = center
                     event.post(tap: .cghidEventTap)
                     Thread.sleep(forTimeInterval: 0.05)
-                    if abs(try scrollValue() - target) <= 0.01 {
+                    let updated = try checkedVisibleRange()
+                    if isAtTarget(updated) {
                         reached = true
+                        range = updated
                         break
                     }
+                    let previousDistance = distanceFromTarget(range)
+                    let updatedDistance = distanceFromTarget(updated)
+                    if updatedDistance > previousDistance {
+                        range = updated
+                        break
+                    }
+                    if updatedDistance == previousDistance {
+                        unchanged += 1
+                        if unchanged >= 2 { break }
+                    } else {
+                        unchanged = 0
+                    }
+                    range = updated
                 }
                 if reached { break }
             }
-            try require(reached, "Native log viewer did not scroll to \(position)")
+            let visibleRangeDescription = "\(range.location)..<\(range.location + range.length)"
+            try require(reached,
+                        "Native log viewer did not scroll to \(position); " +
+                            "visible range=\(visibleRangeDescription), characters=\(characterCount)")
         }
-        return ["ready": true, "position": try scrollValue()]
+        guard let rawScrollbarPosition = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
+            throw HelperError("Native log viewer scrollbar has no value")
+        }
+        let scrollbarPosition = rawScrollbarPosition.doubleValue
+        return ["ready": true, "position": scrollbarPosition, "requested_position": position,
+                "visible_range_start": range.location,
+                "visible_range_end": range.location + range.length,
+                "character_count": characterCount]
     }
     func activate() throws {
         try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")

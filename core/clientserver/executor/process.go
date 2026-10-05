@@ -17,12 +17,12 @@ import (
 
 // Closing the listener stops new transports. The manager also fences requests
 // already accepted by a handler before it waits for the generation's cleanup.
-func shutdownDesktop(closeControl func() error, serveErr error) error {
+func shutdownDesktop(closeControl func() error, serveErr error, owner *mobilebinding.Binding) error {
 	closeErr := closeControl()
 	if errors.Is(closeErr, net.ErrClosed) {
 		closeErr = nil
 	}
-	return errors.Join(serveErr, closeErr, desktopProcessBinding().StopAndWait(context.Background()))
+	return errors.Join(serveErr, closeErr, owner.StopAndWait(context.Background()))
 }
 
 var (

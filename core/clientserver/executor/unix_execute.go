@@ -175,7 +175,7 @@ func run() {
 	case <-signals:
 	case serveErr = <-serveDone:
 	}
-	if err := shutdownDesktop(listener.Close, serveErr); err != nil {
+	if err := shutdownDesktop(listener.Close, serveErr, desktopProcessBinding()); err != nil {
 		panic(fmt.Sprintf("desktop shutdown failed: %v", err))
 	}
 }

@@ -18,6 +18,8 @@ final class NativeUIInteractionTests: XCTestCase {
         configuration.tap()
         configuration.typeText("invalidprofile")
         assertLogLayout()
+        XCTAssertTrue(app.buttons["Clear"].isHittable, "The log controls should remain reachable with the keyboard open")
+        XCTAssertTrue(app.buttons["Share logs"].isHittable, "Log export should remain reachable with the keyboard open")
         attachScreenshot("keyboard")
         dismissConfigurationKeyboard()
         openAbout()
@@ -67,20 +69,16 @@ final class NativeUIInteractionTests: XCTestCase {
         app.buttons["Paste"].tap()
         XCTAssertTrue(waitForLogOccurrences(clearSentinel, atLeast: sentinelCount + 1, in: logs, timeout: 20))
         app.buttons["Clear"].tap()
-        let cleared = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
-            guard let logs = element as? XCUIElement else { return false }
-            return !(logs.value as? String ?? "").contains(clearSentinel)
-        }, object: logs)
-        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 15), .completed, "Clear should hide records written before its boundary")
-        if #available(iOS 16.4, *) {
-            var invalidImport = URLComponents()
-            invalidImport.scheme = "dobbyvpn"
-            invalidImport.host = "import"
-            invalidImport.queryItems = [URLQueryItem(name: "url", value: "http://example.invalid")]
-            XCUIDevice.shared.system.open(try XCTUnwrap(invalidImport.url))
-            let resumed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value CONTAINS %@", "INVALID_ARGUMENT"), object: logs)
-            XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 15), .completed, "A new error should appear after Clear resumes following")
-        }
+        let emptied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", ""), object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [emptied], timeout: 15), .completed,
+                       "Clear should leave the rendered log view empty")
+        let configurationAfterClear = app.textFields["Connection configuration"]
+        configurationAfterClear.tap()
+        configurationAfterClear.typeText("x")
+        dismissConfigurationKeyboard()
+        app.buttons["Paste"].tap()
+        XCTAssertTrue(waitForLogOccurrences(clearSentinel, atLeast: 1, in: logs, timeout: 15),
+                      "Following should resume and render the first record written after Clear")
         XCTAssertFalse(app.buttons["Use configuration text…"].exists)
         XCTAssertTrue(app.textFields["Connection configuration"].exists)
 
@@ -88,6 +86,15 @@ final class NativeUIInteractionTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["VPN connection action"].exists)
+        let reopenedLogs = app.textViews["Connection logs"]
+        XCTAssertTrue(reopenedLogs.waitForExistence(timeout: 10))
+        let reopenedPostClearRecord = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", clearSentinel), object: reopenedLogs
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [reopenedPostClearRecord], timeout: 15), .completed,
+                       "The post-Clear record should remain available after relaunch")
+        XCTAssertEqual(occurrences(of: clearSentinel, in: reopenedLogs.value as? String ?? ""), 1,
+                       "Relaunch must retain the post-Clear record without restoring its earlier copies")
         attachScreenshot("reopened")
         try verifyColdAndWarmImports()
 
@@ -96,12 +103,80 @@ final class NativeUIInteractionTests: XCTestCase {
     func testLargeTextKeepsLogsAndControlsVisible() {
         app.terminate()
         app.launchArguments = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        UIPasteboard.general.string = "https://example.invalid/large-text"
         app.launch()
+        app.launchArguments = []
         XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
         assertLogLayout()
-        XCTAssertTrue(app.buttons["VPN connection action"].exists)
+        XCTAssertTrue(app.buttons["VPN connection action"].isHittable)
+        XCTAssertTrue(app.buttons["Paste"].isHittable)
         XCTAssertTrue(app.buttons["Clear"].isHittable)
+        XCTAssertTrue(app.buttons["Share logs"].isHittable)
         attachScreenshot("large-text")
+    }
+
+    func testCompactLandscapeKeepsConnectionControlsAndLogsReachable() {
+        app.terminate()
+        UIPasteboard.general.string = "https://example.invalid/landscape"
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        app.launch()
+
+        let rotated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.frame.width > self.app.frame.height
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [rotated], timeout: 15), .completed,
+                       "The Simulator should render the compact landscape layout")
+        XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
+        assertLogLayout()
+
+        let action = app.buttons["VPN connection action"]
+        if !action.isHittable {
+            let controls = app.scrollViews.firstMatch
+            XCTAssertTrue(controls.exists, "The controls should remain in a scrollable viewport on a short screen")
+            controls.swipeUp()
+        }
+        XCTAssertTrue(action.isHittable, "The main connection action should remain reachable after scrolling the controls")
+        let logs = app.textViews["Connection logs"]
+        XCTAssertGreaterThanOrEqual(logs.frame.height, 50, "The log viewer should retain usable height in landscape")
+        XCTAssertTrue(app.buttons["Clear"].isHittable)
+        XCTAssertTrue(app.buttons["Share logs"].isHittable)
+        XCTAssertLessThanOrEqual(logs.frame.maxY, app.frame.maxY)
+        attachScreenshot("compact-landscape")
+    }
+
+    func testEmptyAndNonTextClipboardDoesNotFillSubscriptionField() {
+        app.terminate()
+        UIPasteboard.general.items = []
+        app.launch()
+
+        let configuration = app.textFields["Connection configuration"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        let original = configuration.value as? String ?? ""
+        let paste = app.buttons["Paste"]
+        if #available(iOS 16.0, *) {
+            XCTAssertTrue(paste.waitForExistence(timeout: 10), "The system Paste control should be available with an empty clipboard")
+            if paste.isEnabled { paste.tap() }
+            XCTAssertEqual(configuration.value as? String ?? "", original,
+                           "An empty clipboard should not change the subscription field")
+        } else {
+            XCTAssertFalse(paste.exists, "The legacy Paste action should stay hidden when no text is available")
+        }
+
+        app.terminate()
+        UIPasteboard.general.setData(Data("synthetic image payload".utf8), forPasteboardType: "public.png")
+        app.launch()
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        let nonTextOriginal = configuration.value as? String ?? ""
+        let nonTextPaste = app.buttons["Paste"]
+        if #available(iOS 16.0, *) {
+            XCTAssertTrue(nonTextPaste.waitForExistence(timeout: 10), "The system Paste control should accept only compatible text")
+            if nonTextPaste.isEnabled { nonTextPaste.tap() }
+            XCTAssertEqual(configuration.value as? String ?? "", nonTextOriginal,
+                           "A non-text clipboard item should not fill the subscription field")
+        } else {
+            XCTAssertFalse(nonTextPaste.exists, "The legacy Paste action should stay hidden for non-text clipboard items")
+        }
     }
 
     func testPasteReadsClipboardOnlyAfterTapAndRejectsNonHTTPSInput() {
@@ -192,6 +267,10 @@ final class NativeUIInteractionTests: XCTestCase {
 
         logs.swipeDown()
         let frozen = try XCTUnwrap(logs.value as? String)
+        openAbout()
+        app.buttons["Done"].tap()
+        XCTAssertEqual(logs.value as? String, frozen,
+                       "Opening and dismissing About must not change the frozen log entries")
         configuration.tap()
         configuration.typeText("x")
         dismissConfigurationKeyboard()

@@ -146,7 +146,7 @@ running:
 		}
 	}
 	changes <- svc.Status{State: svc.StopPending, WaitHint: uint32(sessionapi.CleanupTimeout / time.Millisecond)}
-	if err := shutdownDesktop(stopControl, serveErr); err != nil {
+	if err := shutdownDesktop(stopControl, serveErr, desktopProcessBinding()); err != nil {
 		log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
 		return true, 1
 	}
@@ -200,7 +200,7 @@ func run() {
 	case <-signals:
 	case serveErr = <-serveDone:
 	}
-	if err := shutdownDesktop(stopControl, serveErr); err != nil {
+	if err := shutdownDesktop(stopControl, serveErr, desktopProcessBinding()); err != nil {
 		panic(fmt.Sprintf("desktop shutdown failed: %v", err))
 	}
 }

@@ -28,18 +28,32 @@ class NativeDiagnosticRetentionTest {
             val native = File(directory, "ui.jsonl")
             val boundary = File(directory, "view.json")
             val later = """{"timestamp":"2026-01-01T00:00:02Z","message":"later"}""" + "\n"
+            val earlierRaw = """{"timestamp":"2026-01-01T00:00:01Z","level":"WARN","message":"earlier λ","extra":42}"""
             backend.writeText(later + "trace line 1\ntrace line 2\n")
-            native.writeText("""{"timestamp":"2026-01-01T00:00:01Z","level":"WARN","message":"earlier λ","extra":42}""" + "\n" + """{"message":"incomplete""")
+            native.writeText(earlierRaw + "\n" + """{"message":"incomplete""")
             var view = StructuredLogs(listOf(backend.path, native.path), boundary)
             val (entries, error) = view.read()
             assertEquals("", error)
             assertEquals(listOf("earlier λ", "trace line 1", "trace line 2", "later"), entries.map { it.message })
             assertEquals("WARN", entries[0].level)
-            assertTrue(entries[0].raw.contains("extra"))
+            assertEquals("2026-01-01T00:00:01Z", entries[0].timestamp)
+            assertNotNull(entries[0].time)
+            assertEquals("App", entries[0].source)
+            assertEquals(earlierRaw, entries[0].raw)
+
+            native.appendText(" record\"}\n")
+            val (completed, completionError) = view.read()
+            assertEquals("", completionError)
+            val completedRecord = completed.single { it.message == "incomplete record" }
+            assertEquals("INFO", completedRecord.level)
+            assertEquals("", completedRecord.timestamp)
+            assertEquals(null, completedRecord.time)
+            assertEquals("App", completedRecord.source)
+            assertEquals("""{"message":"incomplete record"}""", completedRecord.raw)
+
             view.clear()
             assertTrue(backend.renameTo(File(backend.path + ".previous")))
             backend.writeText("new after rotation\n")
-            native.appendText(" record\"}\n")
             view = StructuredLogs(listOf(backend.path, native.path), boundary)
             val (after, failure) = view.read()
             assertEquals("", failure)
@@ -82,6 +96,9 @@ class NativeDiagnosticRetentionTest {
             assertEquals("App · native", tied[1].source)
             assertEquals(timestamp, tied[0].timestamp)
             assertEquals(timestamp, tied[1].timestamp)
+            val (repeated, repeatedError) = tieView.read()
+            assertEquals("", repeatedError)
+            assertEquals(tied.map { it.id to it.message }, repeated.map { it.id to it.message })
 
             val manyLines = buildString {
                 repeat(24_000) { index ->
@@ -95,6 +112,28 @@ class NativeDiagnosticRetentionTest {
             assertTrue(preview.last().message.startsWith("preview-"))
             assertTrue(preview.sumOf { it.raw.toByteArray(Charsets.UTF_8).size } <= 131_072)
             assertFalse(preview.any { it.raw.length > 131_072 })
+        } finally {
+            assertTrue(directory.deleteRecursively())
+        }
+    }
+
+    @Test
+    fun rawJsonLikeTraceKeepsItsTextAndDoesNotInventFields() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "structured-raw-${System.nanoTime()}")
+        assertTrue(directory.mkdir())
+        try {
+            val backend = File(directory, "backend.jsonl")
+            val boundary = File(directory, "view.json")
+            val first = "{\"message\": broken"
+            val second = "trace follows in order"
+            backend.writeText("$first\n$second\n")
+            val (entries, error) = StructuredLogs(listOf(backend.path), boundary).read()
+            assertEquals("", error)
+            assertEquals(listOf(first, second), entries.map { it.message })
+            assertTrue(entries.all { it.level == "RAW" && it.timestamp.isEmpty() && it.time == null })
+            assertEquals(listOf(first, second), entries.map { it.raw })
+            assertEquals(listOf("Backend", "Backend"), entries.map { it.source })
         } finally {
             assertTrue(directory.deleteRecursively())
         }

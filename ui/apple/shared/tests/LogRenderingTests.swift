@@ -8,14 +8,18 @@ import XCTest
 final class LogRenderingTests: XCTestCase {
     func testMacLogRenderingPreservesFieldsRawDetailsAndSeverityColors() throws {
         let rawError = #"{"timestamp":"2026-10-04T10:00:04Z","level":"ERROR","source":"transport","message":"failed","detail":"socket closed"}"#
+        let rawCapture = #"{"timestamp":"2026-10-04T10:00:00Z","event":"stderr.capture","level":"ERROR","source":"tunnel","message":"capture initialized"}"#
         let entries = [
+            entry(id: "capture", timestamp: "10:00:00", level: "INFO", source: "Tunnel stderr · tunnel", message: "Stderr capture initialized", raw: rawCapture),
             entry(id: "debug", timestamp: "10:00:01", level: "DEBUG", source: "Tunnel", message: "trace line", raw: #"{"detail":"trace"}"#),
             entry(id: "info", timestamp: "10:00:02", level: "INFO", source: "Backend", message: "ready", raw: #"{"detail":"ready"}"#),
             entry(id: "warn", timestamp: "10:00:03", level: "WARN", source: "Backend", message: "slow", raw: #"{"detail":"slow"}"#),
             entry(id: "error", timestamp: "10:00:04", level: "ERROR", source: "Backend · transport", message: "failed", raw: rawError),
         ]
 
-        let rendered = logText(entries, expanded: ["error"])
+        let rendered = logText(entries, expanded: ["capture", "error"])
+        XCTAssertTrue(rendered.string.contains("10:00:00 · INFO · Tunnel stderr · tunnel\nStderr capture initialized\nHide details\n"))
+        XCTAssertTrue(rendered.string.contains(rawCapture), "The capture Details action must preserve its original record")
         XCTAssertTrue(rendered.string.contains("10:00:01 · DEBUG · Tunnel\ntrace line\nDetails\n"))
         XCTAssertTrue(rendered.string.contains("10:00:02 · INFO · Backend\nready\nDetails\n"))
         XCTAssertTrue(rendered.string.contains("10:00:03 · WARN · Backend\nslow\nDetails\n"))

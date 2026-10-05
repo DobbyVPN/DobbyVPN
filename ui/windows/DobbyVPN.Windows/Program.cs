@@ -12,14 +12,14 @@ internal static class Program
     private static MainWindow? _window;
 
     [STAThread]
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
         var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
         var instance = AppInstance.FindOrRegisterForKey("DobbyVPN");
         if (!instance.IsCurrent)
         {
-            Task.Run(async () => await instance.RedirectActivationToAsync(activation)).GetAwaiter().GetResult();
+            await instance.RedirectActivationToAsync(activation);
             return;
         }
         Pending.Enqueue(activation);

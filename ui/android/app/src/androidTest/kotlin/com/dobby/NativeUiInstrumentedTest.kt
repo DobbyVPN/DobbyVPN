@@ -1,8 +1,10 @@
 package com.dobby
 
 import android.app.Instrumentation
+import android.app.UiModeManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -30,6 +32,8 @@ import java.util.zip.GZIPInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.time.Instant
+import org.json.JSONObject
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -43,6 +47,7 @@ class NativeUiInstrumentedTest {
     private val connectionActionLabel = "VPN connection action"
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
+    private var paletteMarkers: List<String> = emptyList()
     private val packageName = instrumentation.targetContext.packageName
     private val screenshotDirectory = File(
         // Instrumentation executes in the target application's UID. The
@@ -142,16 +147,30 @@ class NativeUiInstrumentedTest {
         val nativeInput = waitForFocusedNativeInput(10_000)
         nativeInput.setText("invalidprofile")
         device.waitForIdle()
+        check(waitForImeVisibility(expectedVisible = true, timeoutMillis = 2_000)) {
+            "ANDROID_UI_IME_SHOW_TIMEOUT"
+        }
+        assertLogPaneUsable("ANDROID_LOGS_NOT_VISIBLE_WITH_KEYBOARD")
         val typingMarker = "log-update-while-typing-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(instrumentation.targetContext, "ui.test.typing", typingMarker)
         waitForTextContaining(typingMarker)
         verifyStructuredLogDisplay(typingMarker)
+        val logReadPrefix = "log-read-responsiveness-${System.nanoTime()}"
+        repeat(384) { index ->
+            val message = if (index == 383) "$logReadPrefix-last" else "$logReadPrefix-$index-${"x".repeat(128)}"
+            NativeVpnBridge.recordDiagnostic(instrumentation.targetContext, "ui.test.log.read", message)
+        }
+        waitForTextContaining("$logReadPrefix-last")
         device.waitForIdle()
         check(device.findObject(By.clazz("android.widget.EditText").pkg(packageName))?.isFocused == true) {
-            "ANDROID_LOG_UPDATE_STOLE_INPUT_FOCUS"
+            "ANDROID_LOG_READ_STOLE_INPUT_FOCUS"
+        }
+        check(waitForImeVisibility(expectedVisible = true, timeoutMillis = 2_000)) {
+            "ANDROID_LOG_READ_DISMISSED_IME"
         }
         // Incomplete or invalid URLs must leave Connect disabled without fetching.
         dismissNativeInputAfterTextEntry()
+        verifyLogThemeColors()
 
         verifyLogScrollingAndClear()
 
@@ -294,13 +313,15 @@ class NativeUiInstrumentedTest {
         check(installedVersion == BuildConfig.VERSION_NAME) { "ANDROID_ABOUT_VERSION_BUILD_MISMATCH" }
         val commit = BuildConfig.PROJECT_REPOSITORY_COMMIT
         val link = BuildConfig.PROJECT_REPOSITORY_COMMIT_LINK
-        check(commit.isNotBlank() && commit != "N/A" && link.endsWith("/$commit")) {
+        val expectedLink = "https://github.com/DobbyVPN/DobbyVPN/tree/$commit"
+        check(commit.matches(Regex("[0-9a-f]{40}")) && link == expectedLink) {
             "ANDROID_ABOUT_SOURCE_METADATA_MISSING"
         }
         tapAndWaitForVisible("About", "Back")
         waitForTextContaining("Version: ${BuildConfig.VERSION_NAME}")
+        waitForTextContaining("Commit: ${commit.take(8)}")
         waitForTextContaining("Source commit: $commit")
-        val source = requireObject("Source code $link")
+        val source = requireObject("Source code $expectedLink")
         var clickable = source
         while (clickable != null && !clickable.isClickable) clickable = clickable.parent
         check(clickable?.isEnabled == true) { "ANDROID_ABOUT_SOURCE_LINK_DISABLED" }
@@ -312,6 +333,8 @@ class NativeUiInstrumentedTest {
     private fun verifyResponsiveLayout() {
         val originalScale = device.executeShellCommand("settings get system font_scale").trim()
         check(originalScale.toFloatOrNull() != null) { "ANDROID_FONT_SCALE_UNAVAILABLE:$originalScale" }
+        val originalDisplaySize = device.executeShellCommand("wm size")
+        val overrideSize = Regex("Override size: (\\d+x\\d+)").find(originalDisplaySize)?.groupValues?.get(1)
         try {
             device.setOrientationLeft()
             device.waitForIdle()
@@ -329,12 +352,36 @@ class NativeUiInstrumentedTest {
                 "ANDROID_LANDSCAPE_LAYOUT_NOT_USABLE"
             }
             requireObject("Connection logs")
+            assertLogPaneUsable("ANDROID_LOGS_NOT_VISIBLE_WITH_LARGE_TEXT")
             captureScreenshot("landscape-large-font")
+
+            device.setOrientationNatural()
+            device.executeShellCommand("wm size 360x640")
+            device.waitForIdle()
+            instrumentation.runOnMainSync { MainActivity.current?.recreate() }
+            waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)
+            check(device.displayWidth <= 360 && device.displayHeight <= 640) {
+                "ANDROID_SMALL_SCREEN_OVERRIDE_NOT_APPLIED ${device.displayWidth}x${device.displayHeight}"
+            }
+            requireObject("Subscription URL")
+            requireObject(connectionActionLabel)
+            assertLogPaneUsable("ANDROID_LOGS_NOT_VISIBLE_ON_SMALL_SCREEN")
         } finally {
             device.executeShellCommand("settings put system font_scale $originalScale")
+            device.executeShellCommand(if (overrideSize == null) "wm size reset" else "wm size $overrideSize")
             device.unfreezeRotation()
             device.setOrientationNatural()
             device.waitForIdle()
+        }
+    }
+
+    private fun assertLogPaneUsable(message: String) {
+        val view = connectionLogTextView()
+        val visible = Rect()
+        val viewport = view.parent as? View
+        check(view.getGlobalVisibleRect(visible) && visible.height() >= 24 && view.height >= 24
+                && (viewport?.height ?: 0) >= 24) {
+            "$message visible=$visible text_height=${view.height} viewport_height=${viewport?.height}"
         }
     }
 
@@ -363,11 +410,33 @@ class NativeUiInstrumentedTest {
         } finally {
             clipboard.clearPrimaryClip()
         }
-        check(waitForObject("Paste", 500) == null) { "ANDROID_PASTE_REMAINS_WITHOUT_CLIP" }
+        val clearDeadline = System.currentTimeMillis() + 2_000
+        while (System.currentTimeMillis() < clearDeadline && waitForObject("Paste", 100) != null) {
+            Thread.sleep(50)
+        }
+        val remainingPaste = waitForObject("Paste", 100)
+        check(remainingPaste == null) {
+            val types = clipboard.primaryClipDescription?.mimeTypes?.joinToString(",") ?: "<none>"
+            "ANDROID_PASTE_REMAINS_WITHOUT_CLIP has_primary_clip=${clipboard.hasPrimaryClip()} " +
+                "advertised_mime_types=$types"
+        }
     }
 
     private fun verifyStructuredLogDisplay(marker: String) {
         val context = instrumentation.targetContext
+        val debugMarker = "structured-debug-${System.nanoTime()}"
+        val warningMarker = "structured-warning-${System.nanoTime()}"
+        val captureRaw = JSONObject()
+            .put("timestamp", Instant.now().toString())
+            .put("level", "ERROR")
+            .put("event", "stderr.capture")
+            .put("source", "xray stderr")
+            .put("message", "capture fixture raw message")
+            .put("fixture_extra", "preserved")
+            .toString()
+        appendSyntheticDiagnostic(context, debugMarker, "DEBUG")
+        appendSyntheticDiagnostic(context, warningMarker, "WARN")
+        appendSyntheticDiagnostic(context, captureRaw)
         val errorMarker = "structured-error-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(
             context,
@@ -376,6 +445,9 @@ class NativeUiInstrumentedTest {
             IllegalStateException("synthetic rendered-log error"),
         )
         waitForTextContaining(errorMarker)
+        waitForTextContaining(debugMarker)
+        waitForTextContaining(warningMarker)
+        waitForTextContaining("Stderr capture initialized")
         val view = connectionLogTextView()
         check(view.isTextSelectable) { "ANDROID_LOG_TEXT_NOT_SELECTABLE" }
         val content = view.text as? Spanned ?: error("ANDROID_LOG_TEXT_NOT_SPANNED")
@@ -383,30 +455,145 @@ class NativeUiInstrumentedTest {
         val infoIndex = rendered.indexOf(marker)
         val errorIndex = rendered.indexOf(errorMarker)
         check(infoIndex >= 0 && errorIndex > infoIndex) { "ANDROID_LOG_FIELD_FIDELITY_OR_ORDER_FAILED" }
-        check(rendered.substring(0, infoIndex).contains("INFO · App · android-native")) {
+        check(rendered.substring(0, infoIndex).contains("INFO · Backend · android-native")) {
             "ANDROID_LOG_INFO_LABELS_MISSING"
         }
-        check(rendered.substring(0, errorIndex).contains("ERROR · App · android-native")) {
+        check(rendered.substring(0, errorIndex).contains("ERROR · Backend · android-native")) {
             "ANDROID_LOG_ERROR_LABELS_MISSING"
         }
+        check(rendered.contains("INFO · Backend · xray stderr\nStderr capture initialized")) {
+            "ANDROID_STDERR_CAPTURE_RENDERED_AS_ERROR_OR_LOST_SOURCE"
+        }
+        val debugIndex = rendered.indexOf(debugMarker)
+        val warningIndex = rendered.indexOf(warningMarker)
+        check(debugIndex >= 0 && warningIndex >= 0) { "ANDROID_LOG_DEBUG_OR_WARNING_MISSING" }
+        val darkTheme = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val expectedWarning = if (darkTheme) android.graphics.Color.rgb(255, 208, 132)
+            else android.graphics.Color.rgb(138, 90, 0)
+        val expectedError = if (darkTheme) android.graphics.Color.rgb(242, 184, 181)
+            else android.graphics.Color.rgb(179, 38, 30)
         val severity = content.getSpans(errorIndex, errorIndex + errorMarker.length, ForegroundColorSpan::class.java)
             .firstOrNull() ?: error("ANDROID_LOG_ERROR_SEVERITY_SPAN_MISSING")
-        check(severity.foregroundColor == android.graphics.Color.rgb(220, 65, 65)) {
+        check(severity.foregroundColor == expectedError) {
             "ANDROID_LOG_ERROR_SEVERITY_COLOR_MISSING"
         }
         val details = content.getSpans(0, content.length, android.text.style.ClickableSpan::class.java)
         check(details.isNotEmpty()) { "ANDROID_LOG_RAW_DETAILS_NOT_CLICKABLE" }
         val normal = content.getSpans(infoIndex, infoIndex + marker.length, ForegroundColorSpan::class.java)
             .firstOrNull() ?: error("ANDROID_LOG_THEME_COLOR_MISSING")
-        check(normal.foregroundColor != severity.foregroundColor) { "ANDROID_LOG_LEVEL_COLORS_COLLAPSED" }
+        val debug = content.getSpans(debugIndex, debugIndex + debugMarker.length, ForegroundColorSpan::class.java)
+            .firstOrNull() ?: error("ANDROID_LOG_DEBUG_COLOR_MISSING")
+        val warning = content.getSpans(warningIndex, warningIndex + warningMarker.length, ForegroundColorSpan::class.java)
+            .firstOrNull() ?: error("ANDROID_LOG_WARNING_COLOR_MISSING")
+        check(normal.foregroundColor != severity.foregroundColor
+                && debug.foregroundColor != normal.foregroundColor
+                && warning.foregroundColor == expectedWarning) {
+            "ANDROID_LOG_LEVEL_COLORS_COLLAPSED"
+        }
+        paletteMarkers = listOf(marker, debugMarker, warningMarker, errorMarker)
         val errorDetails = details.minByOrNull { content.getSpanStart(it).takeIf { start -> start >= errorIndex } ?: Int.MAX_VALUE }
             ?.takeIf { content.getSpanStart(it) >= errorIndex }
             ?: error("ANDROID_LOG_ERROR_DETAILS_NOT_FOUND")
         instrumentation.runOnMainSync { errorDetails.onClick(view) }
         device.waitForIdle()
-        check(connectionLogTextView().text.toString().contains("synthetic rendered-log error")) {
-            "ANDROID_LOG_RAW_DETAILS_NOT_EXPANDED"
+        val rawError = File(context.filesDir, "diagnostics/native_logs.jsonl")
+            .readLines().last { it.contains(errorMarker) }
+        val record = JSONObject(rawError)
+        check(record.getString("message") == errorMarker && record.getString("level") == "ERROR"
+                && record.getString("source") == "android-native" && record.has("error_detail")) {
+            "ANDROID_LOG_STRUCTURED_RECORD_FIELDS_MISSING"
         }
+        check(connectionLogTextView().text.toString().contains(rawError)) {
+            "ANDROID_LOG_ORIGINAL_RECORD_NOT_EXPANDED"
+        }
+    }
+
+    private fun appendSyntheticDiagnostic(context: android.content.Context, message: String, level: String) {
+        val raw = JSONObject()
+            .put("timestamp", Instant.now().toString())
+            .put("level", level)
+            .put("source", "android-native")
+            .put("message", message)
+            .put("event", "ui.test.palette")
+            .put("fixture_extra", "palette-detail")
+            .toString()
+        appendSyntheticDiagnostic(context, raw)
+    }
+
+    private fun appendSyntheticDiagnostic(context: android.content.Context, raw: String) {
+        val destination = File(context.filesDir, "diagnostics/native_logs.jsonl")
+        NativeVpnBridge.storeNativeDiagnostic({ destination }, raw) { _, failure ->
+            throw AssertionError("ANDROID_SYNTHETIC_LOG_WRITE_FAILED", failure)
+        }
+    }
+
+    private fun verifyLogThemeColors() {
+        val context = instrumentation.targetContext
+        val modeManager = context.getSystemService(UiModeManager::class.java)
+        val originalDark = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        val modes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            listOf(UiModeManager.MODE_NIGHT_NO, UiModeManager.MODE_NIGHT_YES)
+        } else {
+            listOf(if (originalDark) UiModeManager.MODE_NIGHT_YES else UiModeManager.MODE_NIGHT_NO)
+        }
+        val restoreMode = if (originalDark) UiModeManager.MODE_NIGHT_YES else UiModeManager.MODE_NIGHT_NO
+        val markers = paletteMarkers
+        check(markers.size == 4) { "ANDROID_LOG_THEME_MARKERS_MISSING" }
+        try {
+            for (mode in modes) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) modeManager.setApplicationNightMode(mode)
+                val dark = mode == UiModeManager.MODE_NIGHT_YES
+                val expected = listOf(
+                    if (dark) android.graphics.Color.rgb(230, 225, 229) else android.graphics.Color.rgb(28, 27, 31),
+                    if (dark) android.graphics.Color.rgb(202, 196, 208) else android.graphics.Color.rgb(73, 69, 79),
+                    if (dark) android.graphics.Color.rgb(255, 208, 132) else android.graphics.Color.rgb(138, 90, 0),
+                    if (dark) android.graphics.Color.rgb(242, 184, 181) else android.graphics.Color.rgb(179, 38, 30),
+                )
+                markers.zip(expected).forEach { (marker, color) -> waitForRenderedLogColor(marker, color) }
+                val surface = if (dark) android.graphics.Color.rgb(20, 18, 24)
+                    else android.graphics.Color.rgb(255, 251, 254)
+                expected.forEach { color -> check(contrastRatio(color, surface) >= 4.5) {
+                    "ANDROID_LOG_THEME_COLOR_NOT_READABLE dark=$dark color=$color"
+                } }
+            }
+        } finally {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                modeManager.setApplicationNightMode(restoreMode)
+            }
+        }
+    }
+
+    private fun waitForRenderedLogColor(marker: String, expected: Int) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            val content = runCatching { connectionLogTextView().text as? Spanned }.getOrNull()
+            val start = content?.toString()?.indexOf(marker) ?: -1
+            if (start >= 0) {
+                val actual = content?.getSpans(start, start + marker.length, ForegroundColorSpan::class.java)
+                    ?.firstOrNull()?.foregroundColor
+                if (actual == expected) return
+            }
+            Thread.sleep(50)
+        }
+        throw AssertionError("ANDROID_LOG_THEME_COLOR_TIMEOUT marker=$marker expected=$expected")
+    }
+
+    private fun contrastRatio(foreground: Int, background: Int): Double {
+        fun luminance(color: Int): Double {
+            fun channel(value: Int): Double {
+                val normalized = value / 255.0
+                return if (normalized <= 0.04045) normalized / 12.92
+                    else Math.pow((normalized + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(android.graphics.Color.red(color))
+                + 0.7152 * channel(android.graphics.Color.green(color))
+                + 0.0722 * channel(android.graphics.Color.blue(color))
+        }
+        val first = luminance(foreground)
+        val second = luminance(background)
+        return (maxOf(first, second) + 0.05) / (minOf(first, second) + 0.05)
     }
 
     private fun connectionLogTextView(): TextView {
@@ -431,11 +618,25 @@ class NativeUiInstrumentedTest {
         check(viewport.scroll(androidx.test.uiautomator.Direction.UP, 1f)) { "ANDROID_LOG_SCROLL_UP_FAILED" }
         device.waitForIdle()
         val frozen = requireObject("Connection logs").text
+        val frozenScrollY = logScrollY()
+        check(frozenScrollY > 0) { "ANDROID_LOG_FREEZE_POSITION_NOT_CAPTURED " + logGeometry() }
         val pending = "$prefix-pending"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.scroll.pending", pending)
         // Two foreground refresh intervals must not change a frozen reader.
         Thread.sleep(1_600)
-        check(requireObject("Connection logs").text == frozen) { "ANDROID_LOG_SCROLL_POSITION_NOT_FROZEN" }
+        check(requireObject("Connection logs").text == frozen
+                && kotlin.math.abs(logScrollY() - frozenScrollY) <= 2) {
+            "ANDROID_LOG_SCROLL_POSITION_NOT_FROZEN " + logGeometry()
+        }
+
+        instrumentation.runOnMainSync { MainActivity.current?.recreate() }
+        waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)
+        waitForTextContaining("$prefix-79")
+        val restored = requireObject("Connection logs").text.orEmpty()
+        check(restored == frozen && !restored.contains(pending) && logScrollY() > 0
+                && logScrollY() <= frozenScrollY + 32) {
+            "ANDROID_LOG_FROZEN_VIEW_DID_NOT_SURVIVE_ACTIVITY_RECREATION " + logGeometry()
+        }
         val deadline = System.currentTimeMillis() + 10_000
         while (!requireObject("Connection logs").text.orEmpty().contains(pending) && System.currentTimeMillis() < deadline) {
             requireObject("Connection logs").parent.scroll(androidx.test.uiautomator.Direction.DOWN, 1f)
@@ -444,6 +645,11 @@ class NativeUiInstrumentedTest {
         check(requireObject("Connection logs").text.orEmpty().contains(pending)) {
             "ANDROID_LOG_FOLLOW_NOT_RESUMED " + logGeometry()
         }
+        check(!logCanScrollDown()) { "ANDROID_LOG_FOLLOW_DID_NOT_REACH_BOTTOM " + logGeometry() }
+        check(requireObject("Connection logs").parent.scroll(androidx.test.uiautomator.Direction.UP, 1f)) {
+            "ANDROID_LOG_CLEAR_FREEZE_FAILED"
+        }
+        device.waitForIdle()
         tapStable("Clear")
         val clearDeadline = System.currentTimeMillis() + 10_000
         while (requireObject("Connection logs").text.orEmpty().contains(prefix) && System.currentTimeMillis() < clearDeadline) Thread.sleep(100)
@@ -451,6 +657,9 @@ class NativeUiInstrumentedTest {
         val afterClear = "$prefix-after-clear"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.after.clear", afterClear)
         waitForTextContaining(afterClear)
+        val followDeadline = System.currentTimeMillis() + 5_000
+        while (logCanScrollDown() && System.currentTimeMillis() < followDeadline) Thread.sleep(100)
+        check(!logCanScrollDown()) { "ANDROID_CLEAR_DID_NOT_RESTORE_LOG_FOLLOW " + logGeometry() }
 
         finishCurrentActivity()
         launch()
@@ -459,6 +668,34 @@ class NativeUiInstrumentedTest {
         check(!reopened.contains("$prefix-0") && reopened.contains(afterClear)) {
             "ANDROID_CLEAR_BOUNDARY_DID_NOT_SURVIVE_ACTIVITY_REOPEN"
         }
+    }
+
+    private fun logScrollY(): Int {
+        var result = -1
+        instrumentation.runOnMainSync {
+            fun inspect(view: View) {
+                if (view.contentDescription == "Connection logs") {
+                    result = (view.parent as? View)?.scrollY ?: -1
+                }
+                if (view is ViewGroup) repeat(view.childCount) { inspect(view.getChildAt(it)) }
+            }
+            MainActivity.current?.window?.decorView?.let(::inspect)
+        }
+        return result
+    }
+
+    private fun logCanScrollDown(): Boolean {
+        var result = false
+        instrumentation.runOnMainSync {
+            fun inspect(view: View) {
+                if (view.contentDescription == "Connection logs") {
+                    result = (view.parent as? View)?.canScrollVertically(1) == true
+                }
+                if (view is ViewGroup) repeat(view.childCount) { inspect(view.getChildAt(it)) }
+            }
+            MainActivity.current?.window?.decorView?.let(::inspect)
+        }
+        return result
     }
 
     private fun logGeometry(): String {
@@ -607,6 +844,7 @@ class NativeUiInstrumentedTest {
         val invalid = listOf(
             "dobbyvpn://import?url=http%3A%2F%2Fexample.invalid%2Fsubscription" to "HTTPS subscription URL with a host",
             "dobbyvpn://import" to "Use dobbyvpn://import?url=",
+            "dobbyvpn://import?url=" to "Use dobbyvpn://import?url=",
             "dobbyvpn://import?url=https%3A%2F%2F" to "HTTPS subscription URL with a host",
             "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fa&url=https%3A%2F%2Fexample.invalid%2Fb" to "Use dobbyvpn://import?url=",
             "dobbyvpn://import?url=%ZZ" to "Use dobbyvpn://import?url=",

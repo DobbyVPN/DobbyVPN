@@ -72,6 +72,95 @@ internal static class Program
                $"name=\"{current.Name}\" patterns[invoke={invoke},selectionItem={selection},value={value}]";
     }
 
+    private static AutomationElement? ByAutomationId(AutomationElement root, string id)
+    {
+        var matches = root.FindAll(TreeScope.Subtree, new AndCondition(
+            new PropertyCondition(AutomationElement.AutomationIdProperty, id),
+            new PropertyCondition(AutomationElement.IsControlElementProperty, true)));
+        if (matches.Count > 1)
+            throw new InvalidOperationException($"Expected one control with AutomationId {id}, found {matches.Count}");
+        return matches.Count == 0 ? null : matches[0];
+    }
+
+    private static void WaitFor(Func<bool> condition, string message, double seconds = 15)
+    {
+        var limit = Stopwatch.StartNew();
+        do
+        {
+            try { if (condition()) return; }
+            catch (ElementNotAvailableException) { }
+            Thread.Sleep(50);
+        } while (limit.Elapsed.TotalSeconds < seconds);
+        throw new TimeoutException(message);
+    }
+
+    private static void VerifyNarrowWindow(AutomationElement root, IntPtr window, int processId, string sourcePath)
+    {
+        var fixtureDirectory = Path.GetDirectoryName(Path.GetFullPath(sourcePath))
+            ?? throw new InvalidOperationException("Subscription fixture source path has no directory");
+        var marker = Path.Combine(fixtureDirectory, ".windows-narrow-window-rendered-passed");
+        if (File.Exists(marker)) return;
+
+        var originalBounds = new Rect();
+        if (!GetWindowRect(window, out originalBounds))
+            throw new InvalidOperationException("Could not capture the original window bounds for narrow-window test");
+        var windowElement = AutomationElement.FromHandle(window);
+        if (!windowElement.TryGetCurrentPattern(WindowPattern.Pattern, out var windowPattern) ||
+            !((WindowPattern)windowPattern).Current.CanResize)
+            throw new InvalidOperationException("Native window does not expose a resizable WindowPattern");
+
+        var screenshot = Path.Combine(Path.GetTempPath(), "dobby-narrow-window-" + Guid.NewGuid().ToString("N") + ".png");
+        Exception? operationFailure = null;
+        try
+        {
+            WaitFor(() =>
+            {
+                var first = ByAutomationId(root, "Profile 1 action");
+                var second = ByAutomationId(root, "Profile 2 action");
+                return first is not null && second is not null && !first.Current.IsOffscreen && !second.Current.IsOffscreen;
+            }, "Two profile actions did not render before the narrow-window check");
+
+            var display = Forms.Screen.FromHandle(window).WorkingArea;
+            if (display.Width < 680 || display.Height < 680)
+                throw new InvalidOperationException($"Display is too small for the narrow-window interaction: {display.Width}x{display.Height}");
+            if (!SetWindowPos(window, IntPtr.Zero, display.Left + 20, display.Top + 20, 640, 640, 0x0004 | 0x0010))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not resize the native window to the narrow test size");
+            WaitFor(() => GetWindowRect(window, out var bounds) && bounds.Right - bounds.Left <= 660 && bounds.Bottom - bounds.Top <= 660,
+                "Native window did not render at the narrow test size");
+
+            foreach (var id in new[] { "Connection configuration", "VPN connection action", "Profile 1 action", "Profile 2 action", "Backend logs" })
+            {
+                var element = ByAutomationId(root, id);
+                if (element is null || element.Current.IsOffscreen)
+                    throw new InvalidOperationException($"Native control was not rendered in the narrow window: {id}");
+            }
+            if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate the native window for narrow capture");
+            Capture(window, processId, screenshot);
+        }
+        catch (Exception error) { operationFailure = error; throw; }
+        finally
+        {
+            var cleanupFailures = new List<Exception>();
+            try
+            {
+                if (!SetWindowPos(window, IntPtr.Zero, originalBounds.Left, originalBounds.Top,
+                        originalBounds.Right - originalBounds.Left, originalBounds.Bottom - originalBounds.Top, 0x0004 | 0x0010))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not restore native window bounds after narrow-window test");
+            }
+            catch (Exception error) { cleanupFailures.Add(error); }
+            try { if (File.Exists(screenshot)) File.Delete(screenshot); }
+            catch (Exception error) { cleanupFailures.Add(error); }
+            if (cleanupFailures.Count > 0)
+            {
+                if (operationFailure is not null) cleanupFailures.Insert(0, operationFailure);
+                throw new AggregateException("Narrow-window interaction or cleanup failed", cleanupFailures);
+            }
+        }
+        File.WriteAllText(marker, "rendered narrow-window two-profile interaction passed\n", Encoding.ASCII);
+        Console.Error.WriteLine("Windows narrow-window rendered two-profile interaction passed");
+        Console.Error.Flush();
+    }
+
     private static Rectangle ClientScreenBounds(IntPtr window, Rectangle target)
     {
         if (!GetClientRect(window, out var client) || client.Right <= client.Left || client.Bottom <= client.Top)
@@ -502,25 +591,55 @@ internal static class Program
                     Exception? pasteFailure = null;
                     try
                     {
+                        bool PasteAvailable()
+                        {
+                            var matches = root.FindAll(TreeScope.Subtree, new AndCondition(
+                                new PropertyCondition(AutomationElement.NameProperty, "Paste"),
+                                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                                new PropertyCondition(AutomationElement.IsControlElementProperty, true),
+                                new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
+                                new PropertyCondition(AutomationElement.IsEnabledProperty, true),
+                                new PropertyCondition(AutomationElement.IsInvokePatternAvailableProperty, true)));
+                            return matches.Count == 1;
+                        }
+                        void WaitForPasteAvailability(bool expected, string clipboardDescription)
+                        {
+                            var availabilityWait = Stopwatch.StartNew();
+                            while (PasteAvailable() != expected)
+                            {
+                                if (availabilityWait.Elapsed.TotalSeconds >= 5)
+                                    throw new TimeoutException($"Native Paste availability did not match {clipboardDescription} clipboard content");
+                                Thread.Sleep(50);
+                            }
+                        }
+                        void RequireEditorUnchanged(string stage)
+                        {
+                            var observed = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
+                            if (NormalizeLineEndings(observed) != NormalizeLineEndings(fieldBeforeClipboard))
+                                throw new InvalidOperationException($"Clipboard {stage} changed the subscription field before Paste was tapped");
+                        }
+
+                        TracePhase("paste-clear-clipboard");
+                        Forms.Clipboard.Clear();
+                        WaitForPasteAvailability(false, "empty");
+                        RequireEditorUnchanged("empty availability check");
+
+                        TracePhase("paste-set-bitmap-only-clipboard");
+                        using (var bitmap = new Bitmap(2, 2))
+                        {
+                            var nonText = new Forms.DataObject();
+                            nonText.SetData(Forms.DataFormats.Bitmap, false, bitmap);
+                            Forms.Clipboard.SetDataObject(nonText, true);
+                        }
+                        WaitForPasteAvailability(false, "non-text");
+                        RequireEditorUnchanged("non-text availability check");
+
                         TracePhase("paste-set-clipboard-text");
                         Forms.Clipboard.SetText(pasteValue, Forms.TextDataFormat.UnicodeText);
                         TracePhase("paste-wait-for-button");
-                        var buttonWait = Stopwatch.StartNew();
+                        WaitForPasteAvailability(true, "text");
                         AutomationElement pasteButton;
-                        while (true)
-                        {
-                            try
-                            {
-                                pasteButton = Find("Paste", actionable: true);
-                                break;
-                            }
-                            catch (InvalidOperationException) when (buttonWait.Elapsed.TotalSeconds < 5)
-                            {
-                                Thread.Sleep(50);
-                            }
-                            if (buttonWait.Elapsed.TotalSeconds >= 5)
-                                throw new TimeoutException("Native Paste button did not appear for clipboard text");
-                        }
+                        pasteButton = Find("Paste", actionable: true);
                         var fieldAtAvailability = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
                         if (NormalizeLineEndings(fieldAtAvailability) != NormalizeLineEndings(fieldBeforeClipboard))
                             throw new InvalidOperationException("Clipboard availability inspection changed the configuration before Paste was tapped");
@@ -539,6 +658,9 @@ internal static class Program
                         } while (valueWait.Elapsed.TotalSeconds < 5);
                         if (NormalizeLineEndings(pasteObserved).Trim() != NormalizeLineEndings(pasteValue))
                             throw new InvalidOperationException("Native Paste did not place clipboard text in the subscription field");
+
+                        TracePhase("paste-verify-narrow-window-layout");
+                        VerifyNarrowWindow(root, window, process.Id, Text("source"));
                     }
                     catch (Exception error) { pasteFailure = error; throw; }
                     finally

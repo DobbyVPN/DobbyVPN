@@ -8,6 +8,8 @@ import unittest
 
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[4]
+WINDOWS_PROGRAM = PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/Program.cs"
+WINDOWS_NATIVE_UI = PRODUCT_ROOT / "torturer/native_ui/windows/Program.cs"
 MIGRATION_PATH = PRODUCT_ROOT / ".github/scripts/desktop/installer_migration.py"
 SPEC = importlib.util.spec_from_file_location("dobbyvpn_installer_migration_test", MIGRATION_PATH)
 if SPEC is None or SPEC.loader is None:
@@ -27,6 +29,26 @@ class _RecordingRunner:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_secondary_instance_awaits_activation_redirection_without_blocking_sta(self) -> None:
+        source = WINDOWS_PROGRAM.read_text(encoding="utf-8")
+
+        self.assertIn("public static async Task Main(string[] args)", source)
+        self.assertIn("await instance.RedirectActivationToAsync(activation);", source)
+        self.assertNotIn("GetAwaiter().GetResult()", source)
+
+    def test_native_ui_helper_checks_narrow_render_and_clipboard_availability(self) -> None:
+        source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
+
+        for assertion in (
+            'VerifyNarrowWindow(root, window, process.Id, Text("source"));',
+            'WaitForPasteAvailability(false, "empty");',
+            'WaitForPasteAvailability(false, "non-text");',
+            'WaitForPasteAvailability(true, "text");',
+            'new[] { "Connection configuration", "VPN connection action", "Profile 1 action", "Profile 2 action", "Backend logs" }',
+        ):
+            with self.subTest(assertion=assertion):
+                self.assertIn(assertion, source)
+
     def test_msi_lifecycle_probes_registration_command_and_removal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

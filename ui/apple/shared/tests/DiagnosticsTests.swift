@@ -55,6 +55,63 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     @MainActor
+    func testLiveViewKeepsItsClearBoundaryAcrossRotationAndModelReplacement() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let backend = directory.appendingPathComponent("backend.jsonl")
+        let boundary = directory.appendingPathComponent("ui.jsonl.view")
+        try appendDiagnostic("before clear", to: backend)
+        let client = DiagnosticClient(paths: [backend])
+        var model: DobbySessionViewModel? = DobbySessionViewModel(client: client)
+
+        let initial = expectation(description: "initial record is visible")
+        let initialSubscription = model?.$logEntries.first { $0.contains { $0.message == "before clear" } }
+            .sink { _ in initial.fulfill() }
+        model?.setLogsVisible(true)
+        await fulfillment(of: [initial], timeout: 5)
+        initialSubscription?.cancel()
+
+        let cleared = expectation(description: "clear boundary hides the old record")
+        let clearSubscription = model?.$logEntries.dropFirst().first { $0.isEmpty }
+            .sink { _ in cleared.fulfill() }
+        model?.clearLogs()
+        await fulfillment(of: [cleared], timeout: 5)
+        clearSubscription?.cancel()
+
+        try appendDiagnostic("after clear", to: backend)
+        let afterClear = expectation(description: "following displays a new record")
+        let afterClearSubscription = model?.$logEntries.first { $0.contains { $0.message == "after clear" } }
+            .sink { _ in afterClear.fulfill() }
+        model?.refreshLogs()
+        await fulfillment(of: [afterClear], timeout: 5)
+        afterClearSubscription?.cancel()
+
+        try FileManager.default.moveItem(at: backend, to: URL(fileURLWithPath: backend.path + ".previous"))
+        try appendDiagnostic("after rotation", to: backend)
+        let afterRotation = expectation(description: "live view merges the retained and current files")
+        let rotationSubscription = model?.$logEntries.first {
+            $0.contains { $0.message == "after clear" } && $0.contains { $0.message == "after rotation" }
+        }.sink { _ in afterRotation.fulfill() }
+        model?.refreshLogs()
+        await fulfillment(of: [afterRotation], timeout: 5)
+        rotationSubscription?.cancel()
+        XCTAssertFalse(model?.logEntries.contains { $0.message == "before clear" } ?? true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: boundary.path))
+
+        model = nil
+        let reopened = DobbySessionViewModel(client: client)
+        let restored = expectation(description: "recreated view keeps the clear boundary after rotation")
+        let restoredSubscription = reopened.$logEntries.first {
+            $0.contains { $0.message == "after clear" } && $0.contains { $0.message == "after rotation" }
+        }.sink { _ in restored.fulfill() }
+        reopened.setLogsVisible(true)
+        await fulfillment(of: [restored], timeout: 5)
+        restoredSubscription.cancel()
+        XCTAssertFalse(reopened.logEntries.contains { $0.message == "before clear" })
+    }
+
+    @MainActor
     func testExportReadsFreshCompleteFilesAndMetadata() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -210,6 +267,19 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertTrue(preview.entries.map(\.message).joined().contains("error-99:"))
     }
 
+}
+
+private func appendDiagnostic(_ message: String, to path: URL) throws {
+    let record = #"{"timestamp":"2026-10-05T10:00:00Z","level":"INFO","source":"test","message":"\#(message)"}"#
+    let data = Data((record + "\n").utf8)
+    if FileManager.default.fileExists(atPath: path.path) {
+        let file = try FileHandle(forWritingTo: path)
+        try file.seekToEnd()
+        try file.write(contentsOf: data)
+        try file.close()
+    } else {
+        try data.write(to: path)
+    }
 }
 
 private func readGzipChunk(_ reader: gzFile, count: Int) throws -> Data {
