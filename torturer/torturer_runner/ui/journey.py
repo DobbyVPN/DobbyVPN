@@ -427,8 +427,10 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     def switch_profile(previous: dict, index: int, competing_index: int) -> dict:
         target = f"Profile {index + 1} action"
         competing = f"Profile {competing_index + 1} action"
-        ui.activate_profile(index)
         deadline = time.monotonic() + timeout
+        # Begin observing immediately after invoking Connect. A full UI tree
+        # snapshot here could hide a short but real pending-target interval.
+        ui.activate_profile(index)
         transition_seen = False
         while time.monotonic() < deadline:
             current = base._snapshot(min(30, max(0.1, deadline - time.monotonic())), "NATIVE_SELECTION_STATUS_FAILED")

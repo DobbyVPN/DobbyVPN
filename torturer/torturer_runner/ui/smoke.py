@@ -306,9 +306,8 @@ class NativeUIController:
         self.activate_profile(index)
         return self.wait_status("Connected")
 
-    def activate_profile(self, index: int) -> dict:
+    def activate_profile(self, index: int) -> None:
         self._click(f"Profile {index + 1} action")
-        return self.snapshot()
 
     def open_deep_link(self, link: str) -> dict:
         self._open_link(link)
