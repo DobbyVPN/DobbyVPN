@@ -308,12 +308,6 @@ Server = "second.example.invalid"
 Port = 443
 Password = "second-synthetic-password"
 `
-	const replacementConfig = `[[Outline]]
-Description = "replacement profile"
-Server = "replacement.example.invalid"
-Port = 443
-Password = "replacement-synthetic-password"
-`
 	runtime := &gatedSwitchRuntime{
 		starts:      make(chan sessionapi.RuntimeProfile, 4),
 		stopEntered: make(chan struct{}),
@@ -328,6 +322,14 @@ Password = "replacement-synthetic-password"
 		_ = binding.StopAndWait(context.Background())
 	})
 	initial := decodeBindingSnapshot(t, binding, "")
+	connected := prepareManualSelectionForReopen(t, binding, runtime, initial, originalConfig)
+	reopened, loaded := reopenWithReplacementInventory(t, manager, binding, connected, initial.SessionID)
+	startReplacementAndCheckPending(t, manager, runtime, reopened, initial.SessionID, connected, loaded)
+	shutdownReopenedBinding(t, reopened, runtime, release, initial.SessionID, connected)
+}
+
+func prepareManualSelectionForReopen(t *testing.T, binding *Binding, runtime *gatedSwitchRuntime, initial wire.Snapshot, originalConfig string) wire.Snapshot {
+	t.Helper()
 	configured := binding.Configure(initial.SessionID, int64(initial.Sequence), []byte(originalConfig))
 	var configuredResponse wire.Response[wire.Configuration]
 	if err := json.Unmarshal([]byte(configured), &configuredResponse); err != nil || !configuredResponse.OK {
@@ -346,8 +348,19 @@ Password = "replacement-synthetic-password"
 		connected.ActiveIndex != 1 || connected.ActiveProfile == nil || connected.ActiveProfile.Description != "active manual profile" {
 		t.Fatalf("connected Snapshot lost manual selection identity: %#v", connected)
 	}
+	return connected
+}
 
-	configured = binding.Configure(initial.SessionID, int64(connected.Sequence), []byte(replacementConfig))
+func reopenWithReplacementInventory(t *testing.T, manager *sessionapi.Manager, binding *Binding, connected wire.Snapshot, sessionID string) (*Binding, wire.Snapshot) {
+	t.Helper()
+	const replacementConfig = `[[Outline]]
+Description = "replacement profile"
+Server = "replacement.example.invalid"
+Port = 443
+Password = "replacement-synthetic-password"
+`
+	configured := binding.Configure(sessionID, int64(connected.Sequence), []byte(replacementConfig))
+	var configuredResponse wire.Response[wire.Configuration]
 	if err := json.Unmarshal([]byte(configured), &configuredResponse); err != nil || !configuredResponse.OK {
 		t.Fatalf("configure replacement inventory: response=%s error=%v", configured, err)
 	}
@@ -356,15 +369,19 @@ Password = "replacement-synthetic-password"
 	}
 	// A new binding represents a native UI reopening against the same process owner.
 	reopened := NewForDesktop(manager)
-	loaded := decodeBindingSnapshot(t, reopened, initial.SessionID)
+	loaded := decodeBindingSnapshot(t, reopened, sessionID)
 	if loaded.Digest != configuredResponse.Result.Digest || loaded.ActiveDigest != connected.ActiveDigest ||
 		loaded.ActiveMode != string(sessionapi.ProfileIndex) || loaded.ActiveIndex != 1 ||
 		loaded.ActiveProfile == nil || loaded.ActiveProfile.Description != "active manual profile" ||
 		!loaded.CanSwitch || loaded.PrimaryAction != "STOP" {
 		t.Fatalf("reopened Snapshot lost active identity or controls after inventory load: %#v", loaded)
 	}
+	return reopened, loaded
+}
 
-	pendingResult := reopened.StartSelection(initial.SessionID, int64(loaded.Sequence), string(sessionapi.ProfileIndex), 0, loaded.Digest, true)
+func startReplacementAndCheckPending(t *testing.T, manager *sessionapi.Manager, runtime *gatedSwitchRuntime, reopened *Binding, sessionID string, connected, loaded wire.Snapshot) {
+	t.Helper()
+	pendingResult := reopened.StartSelection(sessionID, int64(loaded.Sequence), string(sessionapi.ProfileIndex), 0, loaded.Digest, true)
 	var pendingStart wire.Response[wire.Generation]
 	if err := json.Unmarshal([]byte(pendingResult), &pendingStart); err != nil || !pendingStart.OK {
 		t.Fatalf("start replacement profile: response=%s error=%v", pendingResult, err)
@@ -374,19 +391,45 @@ Password = "replacement-synthetic-password"
 	case <-time.After(time.Second):
 		t.Fatal("replacement did not wait for the active lease cleanup")
 	}
-	pending := decodeBindingSnapshot(t, NewForDesktop(manager), initial.SessionID)
+	pending := decodeBindingSnapshot(t, NewForDesktop(manager), sessionID)
 	if pending.ActiveDigest != connected.ActiveDigest || pending.ActiveMode != string(sessionapi.ProfileIndex) || pending.ActiveIndex != 1 ||
 		pending.PendingTarget == nil || pending.PendingTarget.Digest != loaded.Digest ||
 		pending.PendingTarget.Mode != string(sessionapi.ProfileIndex) || pending.PendingTarget.Index != 0 ||
 		pending.CanSwitch || pending.PrimaryAction != "STOP" {
 		t.Fatalf("reopened pending Snapshot lost selection metadata or controls: %#v", pending)
 	}
+}
 
+func shutdownReopenedBinding(t *testing.T, reopened *Binding, runtime *gatedSwitchRuntime, release func(), sessionID string, connected wire.Snapshot) {
+	t.Helper()
 	shutdownDone := make(chan error, 1)
 	go func() { shutdownDone <- reopened.StopAndWait(context.Background()) }()
+	waitForReopenedShutdownCancellation(t, reopened, sessionID, shutdownDone)
+	release()
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown owner failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown owner did not finish after cleanup")
+	}
+	idle := waitBindingSnapshot(t, reopened, sessionID, string(sessionapi.StateIdle))
+	if idle.PendingTarget != nil || idle.Generation != connected.Generation || idle.PrimaryAction != "START" {
+		t.Fatalf("shutdown restarted a canceled replacement: %#v", idle)
+	}
+	select {
+	case profile := <-runtime.starts:
+		t.Fatalf("replacement profile started after shutdown cancellation: %#v", profile.Summary)
+	default:
+	}
+}
+
+func waitForReopenedShutdownCancellation(t *testing.T, reopened *Binding, sessionID string, shutdownDone <-chan error) {
+	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for {
-		current := decodeBindingSnapshot(t, reopened, initial.SessionID)
+		current := decodeBindingSnapshot(t, reopened, sessionID)
 		if current.PendingTarget == nil {
 			if current.State != string(sessionapi.StateStopping) || current.PrimaryAction != "NONE" {
 				t.Fatalf("shutdown owner exposed an invalid stopping snapshot: %#v", current)
@@ -401,24 +444,6 @@ Password = "replacement-synthetic-password"
 	select {
 	case err := <-shutdownDone:
 		t.Fatalf("shutdown returned before active lease cleanup: %v", err)
-	default:
-	}
-	release()
-	select {
-	case err := <-shutdownDone:
-		if err != nil {
-			t.Fatalf("shutdown owner failed: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("shutdown owner did not finish after cleanup")
-	}
-	idle := waitBindingSnapshot(t, reopened, initial.SessionID, string(sessionapi.StateIdle))
-	if idle.PendingTarget != nil || idle.Generation != connected.Generation || idle.PrimaryAction != "START" {
-		t.Fatalf("shutdown restarted a canceled replacement: %#v", idle)
-	}
-	select {
-	case profile := <-runtime.starts:
-		t.Fatalf("replacement profile started after shutdown cancellation: %#v", profile.Summary)
 	default:
 	}
 }

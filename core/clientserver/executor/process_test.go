@@ -60,18 +60,6 @@ func waitExecutorState(t *testing.T, binding *mobilebinding.Binding, sessionID, 
 }
 
 func TestDesktopShutdownOwnerCancelsPendingSwitch(t *testing.T) {
-	const config = `[[Outline]]
-Description = "active profile"
-Server = "active.example.invalid"
-Port = 443
-Password = "active-synthetic-password"
-
-[[Outline]]
-Description = "pending profile"
-Server = "pending.example.invalid"
-Port = 443
-Password = "pending-synthetic-password"
-`
 	runtime := &shutdownTestRuntime{
 		starts:      make(chan sessionapi.RuntimeProfile, 4),
 		stopEntered: make(chan struct{}),
@@ -87,6 +75,33 @@ Password = "pending-synthetic-password"
 		}
 	})
 
+	sessionID, connected, digest := prepareDesktopShutdownSwitch(t, binding, runtime)
+	pending := requestDesktopShutdownSwitch(t, binding, runtime, sessionID, connected, digest)
+	if pending.State != string(sessionapi.StateStopping) || pending.PendingTarget == nil || pending.PendingTarget.Index != 1 {
+		t.Fatalf("pending switch Snapshot = %#v", pending)
+	}
+
+	shutdownDone := beginDesktopShutdown(t, binding)
+	waitForDesktopShutdownCancellation(t, binding, sessionID)
+	assertDesktopShutdownWaitsForLease(t, shutdownDone)
+	release()
+	finishDesktopShutdown(t, binding, runtime, shutdownDone, sessionID, connected)
+}
+
+func prepareDesktopShutdownSwitch(t *testing.T, binding *mobilebinding.Binding, runtime *shutdownTestRuntime) (string, wire.Snapshot, string) {
+	t.Helper()
+	const config = `[[Outline]]
+Description = "active profile"
+Server = "active.example.invalid"
+Port = 443
+Password = "active-synthetic-password"
+
+[[Outline]]
+Description = "pending profile"
+Server = "pending.example.invalid"
+Port = 443
+Password = "pending-synthetic-password"
+`
 	initial := executorSnapshot(t, binding, "")
 	configured := binding.Configure(initial.SessionID, int64(initial.Sequence), []byte(config))
 	var configuration wire.Response[wire.Configuration]
@@ -102,8 +117,12 @@ Password = "pending-synthetic-password"
 	if profile := <-runtime.starts; profile.Summary.Description != "active profile" {
 		t.Fatalf("active profile start = %#v", profile.Summary)
 	}
+	return initial.SessionID, connected, configuration.Result.Digest
+}
 
-	switching := binding.StartSelection(initial.SessionID, int64(connected.Sequence), string(sessionapi.ProfileIndex), 1, configuration.Result.Digest, true)
+func requestDesktopShutdownSwitch(t *testing.T, binding *mobilebinding.Binding, runtime *shutdownTestRuntime, sessionID string, connected wire.Snapshot, digest string) wire.Snapshot {
+	t.Helper()
+	switching := binding.StartSelection(sessionID, int64(connected.Sequence), string(sessionapi.ProfileIndex), 1, digest, true)
 	var switchStart wire.Response[wire.Generation]
 	if err := json.Unmarshal([]byte(switching), &switchStart); err != nil || !switchStart.OK {
 		t.Fatalf("request pending profile switch: response=%s error=%v", switching, err)
@@ -113,11 +132,11 @@ Password = "pending-synthetic-password"
 	case <-time.After(time.Second):
 		t.Fatal("pending switch did not begin active lease cleanup")
 	}
-	pending := executorSnapshot(t, binding, initial.SessionID)
-	if pending.State != string(sessionapi.StateStopping) || pending.PendingTarget == nil || pending.PendingTarget.Index != 1 {
-		t.Fatalf("pending switch Snapshot = %#v", pending)
-	}
+	return executorSnapshot(t, binding, sessionID)
+}
 
+func beginDesktopShutdown(t *testing.T, binding *mobilebinding.Binding) <-chan error {
+	t.Helper()
 	controlClosed := make(chan struct{}, 1)
 	shutdownDone := make(chan error, 1)
 	go func() {
@@ -131,9 +150,14 @@ Password = "pending-synthetic-password"
 	case <-time.After(time.Second):
 		t.Fatal("desktop shutdown callback did not close its control endpoint")
 	}
+	return shutdownDone
+}
+
+func waitForDesktopShutdownCancellation(t *testing.T, binding *mobilebinding.Binding, sessionID string) {
+	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for {
-		current := executorSnapshot(t, binding, initial.SessionID)
+		current := executorSnapshot(t, binding, sessionID)
 		if current.PendingTarget == nil {
 			if current.State != string(sessionapi.StateStopping) || current.PrimaryAction != "NONE" {
 				t.Fatalf("desktop shutdown callback exposed an invalid stopping Snapshot: %#v", current)
@@ -145,12 +169,19 @@ Password = "pending-synthetic-password"
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+func assertDesktopShutdownWaitsForLease(t *testing.T, shutdownDone <-chan error) {
+	t.Helper()
 	select {
 	case err := <-shutdownDone:
 		t.Fatalf("desktop shutdown callback returned before lease cleanup: %v", err)
 	default:
 	}
-	release()
+}
+
+func finishDesktopShutdown(t *testing.T, binding *mobilebinding.Binding, runtime *shutdownTestRuntime, shutdownDone <-chan error, sessionID string, connected wire.Snapshot) {
+	t.Helper()
 	select {
 	case err := <-shutdownDone:
 		if err != nil {
@@ -159,7 +190,7 @@ Password = "pending-synthetic-password"
 	case <-time.After(time.Second):
 		t.Fatal("desktop shutdown callback did not finish after lease cleanup")
 	}
-	idle := waitExecutorState(t, binding, initial.SessionID, string(sessionapi.StateIdle))
+	idle := waitExecutorState(t, binding, sessionID, string(sessionapi.StateIdle))
 	if idle.PendingTarget != nil || idle.Generation != connected.Generation {
 		t.Fatalf("desktop shutdown restarted the pending profile: %#v", idle)
 	}
