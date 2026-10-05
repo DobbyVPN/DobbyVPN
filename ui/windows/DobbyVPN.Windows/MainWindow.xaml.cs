@@ -25,6 +25,7 @@ public sealed partial class MainWindow : Window
     // TextBox may report a programmatic Text assignment after SetSourceText returns.
     private string? _programmaticSourceText;
     private bool _busy;
+    private bool _stopInFlight;
     private bool _snapshotInFlight;
     private string? _acceptedInThisWindow;
     private string? _renderedSource;
@@ -129,7 +130,7 @@ public sealed partial class MainWindow : Window
             };
             AutomationProperties.SetAutomationId(StatusText, StatusText.Text);
             RenderActions();
-            var progressing = _busy || result.State is "PROBING" or "PREPARING" or "STOPPING";
+            var progressing = _busy || _stopInFlight || result.State is "PROBING" or "PREPARING" or "STOPPING";
             ConnectionProgress.IsActive = progressing;
             ConnectionProgress.Visibility = progressing ? Visibility.Visible : Visibility.Collapsed;
             ProfileText.Text = result.ActiveProfile is null
@@ -211,8 +212,13 @@ public sealed partial class MainWindow : Window
         return s.ActiveDigest == s.Digest && (s.State == "CONNECTED" ? s.ActiveProfile?.Index == index : s.ActiveMode == "PROFILE_INDEX" && s.ActiveIndex == index);
     }
 
-    private bool CanAct(int? index) => !_busy && _snapshot is { } s &&
-        (IsStopTarget(index) || (!_sourceDirty && !_loading && _loadError.Length == 0 && s.Sequence >= _acceptedSequence && s.Configured && (s.PrimaryAction == "START" || s.CanSwitch)));
+    private bool CanAct(int? index)
+    {
+        if (_snapshot is not { } s) return false;
+        if (IsStopTarget(index)) return !_stopInFlight;
+        return !_busy && !_stopInFlight && !_sourceDirty && !_loading && _loadError.Length == 0 &&
+            s.Sequence >= _acceptedSequence && s.Configured && (s.PrimaryAction == "START" || s.CanSwitch);
+    }
 
     private string ActionTitle(int? index) => IsStopTarget(index)
         ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")
@@ -223,13 +229,13 @@ public sealed partial class MainWindow : Window
         SetConnectionAction(ActionTitle(null));
         ConnectionButton.IsEnabled = CanAct(null);
         if (_snapshot is not { } current) return;
-        var actionsKey = JsonSerializer.Serialize(new { current.Sequence, _busy, _sourceDirty, _loading, _loadError });
+        var actionsKey = JsonSerializer.Serialize(new { current.Sequence, _busy, _stopInFlight, _sourceDirty, _loading, _loadError });
         if (actionsKey == _actionsKey) return;
         _actionsKey = actionsKey;
         ProfileList.Children.Clear();
         ActiveStopButton.Visibility = current.PrimaryAction == "STOP" && !IsStopTarget(null) && !current.Profiles.Any(profile => IsStopTarget(profile.Index)) ? Visibility.Visible : Visibility.Collapsed;
         ActiveStopButton.Content = current.State == "CONNECTED" ? "Disconnect" : "Stop";
-        ActiveStopButton.IsEnabled = !_busy;
+        ActiveStopButton.IsEnabled = !_stopInFlight;
         foreach (var profile in current.Profiles)
         {
             var row = new Grid { ColumnSpacing = 12 };
@@ -250,20 +256,32 @@ public sealed partial class MainWindow : Window
 
     private async Task PerformActionAsync(int? index, bool forceStop = false)
     {
-        if (_busy || _snapshot is not { } current || (!forceStop && !CanAct(index))) return;
+        if (_snapshot is not { } current) return;
+        if (forceStop || IsStopTarget(index))
+        {
+            if (_stopInFlight || current.PrimaryAction != "STOP") return;
+            _stopInFlight = true;
+            RenderActions();
+            ErrorText.Text = "";
+            try
+            {
+                await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation });
+            }
+            catch (Exception error) { ShowError(error.ToString(), error.Message); }
+            finally { _stopInFlight = false; await RefreshSnapshotAsync(); RenderActions(); }
+            return;
+        }
+        if (_busy || !CanAct(index)) return;
         _busy = true;
         RenderActions();
         ErrorText.Text = "";
         try
         {
-            if (forceStop || IsStopTarget(index))
-                await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation });
-            else
-                await CallAsync<JsonElement>("Start", new {
-                    session_id = current.SessionId, expected_sequence = current.Sequence,
-                    mode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX", index = index ?? 0,
-                    digest = current.Digest, replace_current = true
-                });
+            await CallAsync<JsonElement>("Start", new {
+                session_id = current.SessionId, expected_sequence = current.Sequence,
+                mode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX", index = index ?? 0,
+                digest = current.Digest, replace_current = true
+            });
         }
         catch (Exception error) { ShowError(error.ToString(), error.Message); }
         finally { _busy = false; await RefreshSnapshotAsync(); RenderActions(); }

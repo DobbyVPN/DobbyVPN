@@ -412,14 +412,46 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
 
     def selected(previous: dict, index: int | None) -> dict:
         deadline = time.monotonic() + timeout
+        mode = "AUTO_SELECT" if index is None else "PROFILE_INDEX"
+        target_index = index
+        transition_seen = False
+        next_ui_check = 0.0
         while time.monotonic() < deadline:
             current = base._snapshot(min(30, max(0.1, deadline - time.monotonic())), "NATIVE_SELECTION_STATUS_FAILED")
             if current.get("state") == "FAILED":
                 raise NativeUIJourneyError(f"Native profile selection failed: {current}")
-            mode = "AUTO_SELECT" if index is None else "PROFILE_INDEX"
+            pending = current.get("pending_target")
+            pending_matches = (
+                isinstance(pending, dict)
+                and pending.get("mode") == mode
+                and (target_index is None or pending.get("index") == target_index)
+            )
+            selected_is_starting = (
+                current.get("state") in {"PROBING", "PREPARING"}
+                and current.get("active_mode") == mode
+                and (target_index is None or current.get("active_index") == target_index)
+                and current.get("active_digest") == current.get("digest")
+            )
+            if (pending_matches or selected_is_starting) and time.monotonic() >= next_ui_check:
+                view = ui.snapshot()
+                labels = set(view.get("labels", []))
+                enabled = set(view.get("enabled_controls", []))
+                if "Stop" in labels and "Stop" in enabled:
+                    competing_actions = {
+                        f"Profile {profile.get('index', offset) + 1} action"
+                        for offset, profile in enumerate(current.get("profiles", []))
+                        if index is None or profile.get("index") != index
+                    }
+                    if competing_actions & enabled:
+                        raise NativeUIJourneyError("a competing profile Connect action remained enabled during Auto selection")
+                    transition_seen = True
+                next_ui_check = time.monotonic() + 0.15
             if (current.get("state") == "CONNECTED" and current.get("generation", 0) > previous.get("generation", 0)
                     and current.get("active_mode") == mode
                     and (index is None or current.get("active_profile", {}).get("index") == index)):
+                if not transition_seen:
+                    action = "Auto" if index is None else f"Profile {index + 1}"
+                    raise NativeUIJourneyError(f"{action} selection did not expose its enabled Stop action while connecting")
                 return current
             time.sleep(0.1)
         raise NativeUIJourneyError("Native selection did not reach its requested generation and profile")
@@ -428,22 +460,34 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         target = f"Profile {index + 1} action"
         competing = f"Profile {competing_index + 1} action"
         deadline = time.monotonic() + timeout
-        # Begin observing immediately after invoking Connect. A full UI tree
-        # snapshot here could hide a short but real pending-target interval.
+        # Begin polling immediately after invoking Connect, but allow the
+        # frontend's in-flight Start response and snapshot refresh to render.
         ui.activate_profile(index)
         transition_seen = False
+        next_ui_check = 0.0
         while time.monotonic() < deadline:
             current = base._snapshot(min(30, max(0.1, deadline - time.monotonic())), "NATIVE_SELECTION_STATUS_FAILED")
             pending = current.get("pending_target")
-            if isinstance(pending, dict) and pending.get("mode") == "PROFILE_INDEX" and pending.get("index") == index:
+            pending_matches = (
+                isinstance(pending, dict)
+                and pending.get("mode") == "PROFILE_INDEX"
+                and pending.get("index") == index
+            )
+            selected_is_starting = (
+                current.get("state") in {"PROBING", "PREPARING"}
+                and current.get("active_mode") == "PROFILE_INDEX"
+                and current.get("active_index") == index
+                and current.get("active_digest") == current.get("digest")
+            )
+            if (pending_matches or selected_is_starting) and time.monotonic() >= next_ui_check:
                 view = ui.snapshot()
-                labels = view.get("labels", [])
-                enabled = view.get("enabled_controls", [])
-                if "Stop" not in labels or target not in enabled:
-                    raise NativeUIJourneyError("the selected profile did not expose its enabled Stop action during switching")
-                if competing in enabled:
-                    raise NativeUIJourneyError("a competing profile Connect action remained enabled during switching")
-                transition_seen = True
+                labels = set(view.get("labels", []))
+                enabled = set(view.get("enabled_controls", []))
+                if "Stop" in labels and target in enabled:
+                    if competing in enabled:
+                        raise NativeUIJourneyError("a competing profile Connect action remained enabled during switching")
+                    transition_seen = True
+                next_ui_check = time.monotonic() + 0.15
             if (current.get("state") == "CONNECTED" and current.get("generation", 0) > previous.get("generation", 0)
                     and current.get("active_mode") == "PROFILE_INDEX"
                     and current.get("active_profile", {}).get("index") == index):
@@ -455,8 +499,55 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
             time.sleep(0.05)
         raise NativeUIJourneyError("Native profile switch did not reach its requested profile")
 
+    def cancel_switch_profile(previous: dict, index: int, competing_index: int) -> dict:
+        target = f"Profile {index + 1} action"
+        competing = f"Profile {competing_index + 1} action"
+        deadline = time.monotonic() + timeout
+        ui.activate_profile(index)
+        next_ui_check = 0.0
+        while time.monotonic() < deadline:
+            current = base._snapshot(min(30, max(0.1, deadline - time.monotonic())), "NATIVE_SELECTION_STATUS_FAILED")
+            pending = current.get("pending_target")
+            pending_matches = (
+                isinstance(pending, dict)
+                and pending.get("mode") == "PROFILE_INDEX"
+                and pending.get("index") == index
+            )
+            selected_is_starting = (
+                current.get("state") in {"PROBING", "PREPARING"}
+                and current.get("active_mode") == "PROFILE_INDEX"
+                and current.get("active_index") == index
+                and current.get("active_digest") == current.get("digest")
+            )
+            if (pending_matches or selected_is_starting) and time.monotonic() >= next_ui_check:
+                view = ui.snapshot()
+                labels = set(view.get("labels", []))
+                enabled = set(view.get("enabled_controls", []))
+                if "Stop" in labels and target in enabled:
+                    if competing in enabled:
+                        raise NativeUIJourneyError("a competing profile Connect action remained enabled during a cancellable switch")
+                    ui._click(target)
+                    canceled = wait_for_snapshot(
+                        lambda value: value.get("state") in {"IDLE", "CONFIGURED"}
+                        and value.get("pending_target") is None
+                        and value.get("active_profile") is None,
+                        "Stop did not cancel the selected profile switch",
+                    )
+                    if canceled.get("generation", 0) < previous.get("generation", 0):
+                        raise NativeUIJourneyError("canceled profile switch moved the session to an older generation")
+                    return canceled
+                next_ui_check = time.monotonic() + 0.15
+            if current.get("state") == "FAILED":
+                raise NativeUIJourneyError(f"Native profile switch failed before Stop was available: {current}")
+            if current.get("state") == "CONNECTED" and current.get("generation", 0) > previous.get("generation", 0):
+                raise NativeUIJourneyError("profile switch completed before its Stop action could cancel it")
+            time.sleep(0.05)
+        raise NativeUIJourneyError("the selected profile never exposed a cancellable Stop action")
+
     first = 1 if initial["active_profile"]["index"] == 0 else 0
-    manual = switch_profile(initial, first, 0 if first == 1 else 1)
+    canceled = cancel_switch_profile(initial, first, 0 if first == 1 else 1)
+    ui.activate_profile(first)
+    manual = selected(canceled, first)
     second = 0 if first == 1 else 1
     switched = switch_profile(manual, second, first)
     checks["profile_switch_transition_controls"] = True
@@ -598,7 +689,9 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     labels = latest_ui.get("labels", [])
     first_row = next((index for index, label in enumerate(labels) if "Profile 1" in str(label)), None)
     second_row = next((index for index, label in enumerate(labels) if "Latest second profile" in str(label)), None)
-    if first_row is None or second_row is None or first_row >= second_row or not any("Outline" in str(label) for label in labels):
+    if first_row is None or second_row is None or first_row >= second_row or not any(
+        "outline" in str(label).casefold() for label in labels
+    ):
         raise NativeUIJourneyError("rendered profile rows lost source order, protocol, or the empty-description fallback")
     if not {"Profile 1 action", "Profile 2 action"}.issubset(set(labels)):
         raise NativeUIJourneyError("rendered profile rows did not expose both manual Connect controls")
