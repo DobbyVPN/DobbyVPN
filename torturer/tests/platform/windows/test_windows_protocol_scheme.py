@@ -111,6 +111,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             '[DllImport("user32.dll", SetLastError = true)]\n    private static extern bool SetWindowPos(',
             '[DllImport("user32.dll")]\n    private static extern bool EnumThreadWindows(',
             'private static string[] DescribeProcessWindows(Process process)',
+            '[DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);',
+            'uia-findall-probe-activation hwnd=0x',
             'TracePhase("tree-uia-root-complete")',
             'TracePhase("tree-uia-walk-start")',
             'foreach (var element in Walk(root, trace: TracePhase))',

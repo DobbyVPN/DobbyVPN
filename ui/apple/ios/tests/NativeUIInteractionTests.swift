@@ -55,10 +55,13 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(fullCommit.label.hasPrefix(commitPrefix))
         let commit = String(fullCommit.label.dropFirst(commitPrefix.count))
         XCTAssertNotNil(commit.range(of: "^[0-9a-fA-F]{40}$", options: .regularExpression))
+        let testBundle = Bundle(for: NativeUIInteractionTests.self)
         let expectedCommit = try XCTUnwrap(
-            Bundle(for: NativeUIInteractionTests.self)
-                .object(forInfoDictionaryKey: "DobbyTestSourceCommit") as? String,
-            "The XCTest bundle should contain the selected product revision"
+            testBundle.object(forInfoDictionaryKey: "DobbyTestSourceCommit") as? String,
+            "The XCTest bundle should contain the selected product revision; " +
+                "bundle=\(testBundle.bundleURL.path) " +
+                "identifier=\(testBundle.bundleIdentifier ?? "nil") " +
+                "keys=\((testBundle.infoDictionary?.keys.sorted().joined(separator: ",")) ?? "none")"
         )
         XCTAssertEqual(commit, expectedCommit, "About should display the exact revision tested by this lane")
         XCTAssertTrue(app.staticTexts["Commit: \(commit.prefix(12))"].exists)
@@ -542,7 +545,7 @@ final class NativeUIInteractionTests: XCTestCase {
             .allElementsBoundByIndex
         for (index, element) in details.enumerated() where element.label == "Details" && element.isHittable {
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
-            guard (0.12...0.26).contains(relativeY),
+            guard (0.15...0.38).contains(relativeY),
                   let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { continue }
             return RenderedLogAnchor(detailIndex: index, record: record, element: element)
         }

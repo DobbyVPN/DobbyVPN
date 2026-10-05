@@ -46,6 +46,14 @@ private const val COMPOSE_LAYOUT_TRACE_EXTRA = "dobbyvpn.traceComposeLayout"
 private object ComposeLayoutTrace {
     private val lastMeasurements = mutableMapOf<String, String>()
 
+    @Volatile
+    var enabled = false
+
+    fun configure(intent: Intent) {
+        enabled = intent.getBooleanExtra(COMPOSE_LAYOUT_TRACE_EXTRA, false)
+        if (enabled) android.util.Log.i("DobbyComposeLayout", "trace-enabled=true")
+    }
+
     @Synchronized
     fun record(name: String, measurement: String) {
         if (lastMeasurements.put(name, measurement) != measurement) {
@@ -56,7 +64,7 @@ private object ComposeLayoutTrace {
 
 private fun Modifier.traceComposeConstraints(name: String): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
-    if (MainActivity.current?.intent?.getBooleanExtra(COMPOSE_LAYOUT_TRACE_EXTRA, false) == true) {
+    if (ComposeLayoutTrace.enabled) {
         ComposeLayoutTrace.record(
             name,
             "incoming=$constraints boundedHeight=${constraints.hasBoundedHeight} " +
@@ -86,6 +94,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         current = this
+        ComposeLayoutTrace.configure(intent)
         NativeGoSession.attach(this)
         controller = SessionController(this, savedInstanceState?.getBundle(LOG_VIEW_STATE))
         if (intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
@@ -108,6 +117,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        ComposeLayoutTrace.configure(intent)
         if (intent.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
     }
 

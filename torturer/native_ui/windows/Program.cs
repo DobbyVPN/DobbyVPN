@@ -24,6 +24,7 @@ internal static class Program
     private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
@@ -368,6 +369,7 @@ internal static class Program
             {
                 string[] lastWindows = Array.Empty<string>();
                 string lastTitle = "unavailable";
+                IntPtr activationRequestedFor = IntPtr.Zero;
                 try
                 {
                     WaitFor(() =>
@@ -375,14 +377,23 @@ internal static class Program
                         process.Refresh();
                         window = process.MainWindowHandle;
                         GetWindowThreadProcessId(window, out var ownerPid);
-                        if (window == IntPtr.Zero || ownerPid != process.Id ||
-                            !IsWindowVisible(window) || IsIconic(window))
+                        if (window == IntPtr.Zero || ownerPid != process.Id)
                         {
                             window = EnumerateProcessWindows(process).FirstOrDefault(candidate =>
                             {
                                 GetWindowThreadProcessId(candidate, out var candidatePid);
                                 return candidatePid == process.Id && IsWindowVisible(candidate) && !IsIconic(candidate);
                             });
+                        }
+                        if (window != IntPtr.Zero && !IsWindowVisible(window) && window != activationRequestedFor)
+                        {
+                            activationRequestedFor = window;
+                            var showCommand = IsIconic(window) ? 9 : 5; // SW_RESTORE or SW_SHOW
+                            var showQueued = ShowWindowAsync(window, showCommand);
+                            var foregroundRequested = SetForegroundWindow(window);
+                            TracePhase(
+                                $"uia-findall-probe-activation hwnd=0x{window.ToInt64():X} " +
+                                $"showCommand={showCommand} showQueued={showQueued} foregroundRequested={foregroundRequested}");
                         }
                         lastWindows = DescribeProcessWindows(process);
                         lastTitle = process.MainWindowTitle;

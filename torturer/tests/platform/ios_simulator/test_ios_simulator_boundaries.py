@@ -241,9 +241,12 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             Path(__file__).parents[4]
             / "ui/apple/ios/tests/NativeUIInteractionTests.swift"
         ).read_text(encoding="utf-8")
-        self.assertEqual(project.count(
-            'INFOPLIST_KEY_DobbyTestSourceCommit = "$(DOBBY_SOURCE_COMMIT)";'
-        ), 2)
+        self.assertEqual(project.count("INFOPLIST_FILE = tests/Info.plist;"), 2)
+        test_info = (
+            Path(__file__).parents[4] / "ui/apple/ios/tests/Info.plist"
+        ).read_text(encoding="utf-8")
+        self.assertIn("<key>DobbyTestSourceCommit</key>", test_info)
+        self.assertIn("$(DOBBY_SOURCE_COMMIT)", test_info)
         self.assertIn('object(forInfoDictionaryKey: "DobbyTestSourceCommit")', ui_test)
 
     def test_install_timeout_reports_elapsed_time_and_preserves_cleanup_window(self) -> None:

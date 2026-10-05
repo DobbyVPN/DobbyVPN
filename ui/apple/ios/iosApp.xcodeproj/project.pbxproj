@@ -87,6 +87,7 @@
 		A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = IOSIntegration.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB3632DC29227652001CCB65 /* Config.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 		E00000000000000000000001 /* NativeUIInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeUIInteractionTests.swift; sourceTree = "<group>"; };
+		E0000000000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		E00000000000000000000003 /* iosAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0000000000000000000000B /* NativeRendererInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRendererInteractionTests.swift; sourceTree = "<group>"; };
 		E0000000000000000000000C /* NativeRendererTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRendererTestSupport.swift; sourceTree = "<group>"; };
@@ -267,6 +268,7 @@
 		E00000000000000000000004 /* iosAppUITests */ = {
 			isa = PBXGroup;
 			children = (
+				E0000000000000000000000F /* Info.plist */,
 				E00000000000000000000001 /* NativeUIInteractionTests.swift */,
 				E0000000000000000000000B /* NativeRendererInteractionTests.swift */,
 				E0000000000000000000000C /* NativeRendererTestSupport.swift */,
@@ -965,7 +967,7 @@
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_DobbyTestSourceCommit = "$(DOBBY_SOURCE_COMMIT)";
+				INFOPLIST_FILE = tests/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app.uitests;
 				PRODUCT_NAME = iosAppUITests;
@@ -984,7 +986,7 @@
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_DobbyTestSourceCommit = "$(DOBBY_SOURCE_COMMIT)";
+				INFOPLIST_FILE = tests/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app.uitests;
 				PRODUCT_NAME = iosAppUITests;

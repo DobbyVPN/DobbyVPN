@@ -1,6 +1,7 @@
 package com.dobby
 
 import android.app.Instrumentation
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.graphics.Rect
@@ -84,8 +85,15 @@ class NativeUiSmallScreenLogViewportTest {
                 ?: throw AssertionError("ANDROID_ACTIVITY_MISSING_BEFORE_SMALL_SCREEN_RESIZE")
             device.executeShellCommand("wm size 360x640")
             waitForActivityReplacement(before, 10_000)
+            check(MainActivity.current?.intent?.getBooleanExtra("dobbyvpn.traceComposeLayout", false) == true) {
+                "ANDROID_LAYOUT_TRACE_EXTRA_LOST_AFTER_CONFIGURATION_CHANGE"
+            }
             check(device.displayWidth <= 360 && device.displayHeight <= 640) {
                 "ANDROID_SMALL_SCREEN_OVERRIDE_NOT_APPLIED ${device.displayWidth}x${device.displayHeight}"
+            }
+            val layoutTrace = device.executeShellCommand("logcat -d -s DobbyComposeLayout:I")
+            check(layoutTrace.contains("logs-android-view incoming=")) {
+                "ANDROID_LAYOUT_TRACE_MEASUREMENTS_MISSING trace=$layoutTrace"
             }
             assertLogPaneUsable()
             captureScreenshot("small-screen-log-viewport")
@@ -100,12 +108,12 @@ class NativeUiSmallScreenLogViewportTest {
     }
 
     private fun launch() {
-        val output = device.executeShellCommand(
-            "am start -W -n $packageName/com.dobby.ui.MainActivity " +
-                "--ez dobbyvpn.traceComposeLayout true",
-        )
-        check(output.contains("Status: ok") && output.contains("Complete")) {
-            "ANDROID_LAUNCH_ACTIVITY_FAILED"
+        val intent = Intent(instrumentation.targetContext, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            .putExtra("dobbyvpn.traceComposeLayout", true)
+        val launched = instrumentation.startActivitySync(intent)
+        check(launched.intent.getBooleanExtra("dobbyvpn.traceComposeLayout", false)) {
+            "ANDROID_LAYOUT_TRACE_EXTRA_NOT_DELIVERED_TO_ACTIVITY"
         }
         val deadline = System.currentTimeMillis() + 10_000
         while (System.currentTimeMillis() < deadline) {
@@ -115,7 +123,10 @@ class NativeUiSmallScreenLogViewportTest {
             }
             Thread.sleep(100)
         }
-        throw AssertionError("ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT launch_output=$output")
+        throw AssertionError(
+            "ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT extra=" +
+                launched.intent.getBooleanExtra("dobbyvpn.traceComposeLayout", false),
+        )
     }
 
     private fun waitForOneOf(labels: Array<String>, timeoutMillis: Long) {
