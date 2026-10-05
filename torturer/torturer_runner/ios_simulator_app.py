@@ -31,6 +31,7 @@ from torturer_runner.ios_simulator import (
     simctl_get_app_container_command,
     simctl_install_command,
     simctl_terminate_command,
+    ui_test_selection,
     xcodebuild_ui_test_without_building_command,
 )
 from torturer_runner.screenshot_artifacts import (
@@ -372,6 +373,7 @@ class IOSSimulatorAppEvidence:
     # The app's complete native runtime log is retained separately from the
     # XCTest result bundle. XCTest attachments never replace this stream.
     native_log: Path | None = None
+    selected_tests: tuple[str, ...] = ()
 
 
 def select_available_iphone(
@@ -1124,6 +1126,8 @@ def run_ios_simulator_app_contract(
     runner: CommandRunner,
     contract: IOSSimulatorAppContract = PUBLIC_IOS_SIMULATOR_APP_CONTRACT,
     budget: RunBudget | None = None,
+    native_cases: Sequence[str] | None = None,
+    source_sha: str | None = None,
 ) -> IOSSimulatorAppEvidence:
     """Run the native SwiftUI Simulator mini contract.
 
@@ -1132,6 +1136,7 @@ def run_ios_simulator_app_contract(
     packet-tunnel success.
     """
     budget = budget or RunBudget()
+    selected_tests = ui_test_selection(native_cases)
     work_dir.mkdir(parents=True, exist_ok=True)
     simulator: AvailableSimulator | None = None
     app_installed = False
@@ -1255,6 +1260,8 @@ def run_ios_simulator_app_contract(
                     work_dir / "derived-data",
                     result_bundle=result_bundle,
                     architecture=contract.architecture,
+                    native_cases=native_cases,
+                    source_sha=source_sha,
                 ),
                 "xctest-ui",
                 cwd=candidate_root,
@@ -1363,6 +1370,7 @@ def run_ios_simulator_app_contract(
         ),
         result_bundle=retained_result_bundle,
         native_log=retained_native_log,
+        selected_tests=selected_tests,
     )
 
 

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_runner import ios_simulator_app, local_vm, local_vm_ios
+from torturer_runner.native_cases import IOS_LOGS_FREEZE_RESUME_CASE, IOS_RENDERER_SEVERITY_CASE
 
 
 class IOSSimulatorBoundaryTests(unittest.TestCase):
@@ -91,6 +92,15 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         self.assertEqual(build[1:3], ["scripts/package_ios_app.sh", "iossimulator"])
         self.assertEqual(build[3], str(contract.app_path(work_dir)))
         self.assertEqual(run[-1], "test-without-building")
+        self.assertIn(
+            "-only-testing:iosAppUITests/NativeUIInteractionTests",
+            run,
+        )
+        self.assertIn(
+            "-only-testing:iosAppUITests/NativeRendererInteractionTests/"
+            "testSeverityColorsResolveForLightAndDarkAppearances",
+            run,
+        )
         self.assertEqual(
             run[run.index("-destination") + 1],
             f"platform=iOS Simulator,id={udid.upper()},arch=arm64",
@@ -104,6 +114,38 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         self.assertEqual(run[run.index("-derivedDataPath") + 1], str(derived_data))
         self.assertEqual(
             run[run.index("-resultBundlePath") + 1], str(result_bundle)
+        )
+
+    def test_ios_native_case_selectors_filter_to_one_exact_test_and_pass_source_sha(self) -> None:
+        udid = "01234567-89ab-cdef-0123-456789abcdef"
+        sha = "a" * 40
+        command = ios_simulator_app.xcodebuild_ui_test_without_building_command(
+            udid,
+            Path("candidate/iosApp.xcodeproj"),
+            Path("work/derived-data"),
+            architecture="arm64",
+            native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
+            source_sha=sha,
+        )
+        self.assertEqual(command[:4], [
+            "/usr/bin/env", f"SOURCE_COMMIT={sha}", f"GITHUB_SHA={sha}", "xcodebuild",
+        ])
+        filters = [argument for argument in command if argument.startswith("-only-testing:")]
+        self.assertEqual(filters, [
+            "-only-testing:iosAppUITests/NativeUIInteractionTests/"
+            "testLogsFreezeAndResumeAtBottom",
+        ])
+        severity = ios_simulator_app.xcodebuild_ui_test_without_building_command(
+            udid,
+            Path("candidate/iosApp.xcodeproj"),
+            Path("work/derived-data"),
+            architecture="arm64",
+            native_cases=[IOS_RENDERER_SEVERITY_CASE],
+        )
+        self.assertEqual(
+            [argument for argument in severity if argument.startswith("-only-testing:")],
+            ["-only-testing:iosAppUITests/NativeRendererInteractionTests/"
+             "testSeverityColorsResolveForLightAndDarkAppearances"],
         )
 
     def test_install_timeout_reports_elapsed_time_and_preserves_cleanup_window(self) -> None:

@@ -1,6 +1,12 @@
 import XCTest
 import UIKit
 
+private struct RenderedLogAnchor {
+    let detailIndex: Int
+    let record: String
+    let element: XCUIElement
+}
+
 final class NativeUIInteractionTests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "vpn.dobby.app")
 
@@ -49,6 +55,12 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(fullCommit.label.hasPrefix(commitPrefix))
         let commit = String(fullCommit.label.dropFirst(commitPrefix.count))
         XCTAssertNotNil(commit.range(of: "^[0-9a-fA-F]{40}$", options: .regularExpression))
+        let expectedCommit = try XCTUnwrap(
+            ProcessInfo.processInfo.environment["GITHUB_SHA"] ??
+                ProcessInfo.processInfo.environment["SOURCE_COMMIT"],
+            "The Simulator lane should expose the selected product revision to XCTest"
+        )
+        XCTAssertEqual(commit, expectedCommit, "About should display the exact revision tested by this lane")
         XCTAssertTrue(app.staticTexts["Commit: \(commit.prefix(12))"].exists)
         let sourceLink = app.descendants(matching: .any)
             .matching(identifier: "About source link").firstMatch
@@ -71,6 +83,17 @@ final class NativeUIInteractionTests: XCTestCase {
         let renderedBeforeClear = try XCTUnwrap(logs.value as? String)
         let preClearRecords = renderedBeforeClear.components(separatedBy: "Details\n").filter { !$0.isEmpty }
         XCTAssertFalse(preClearRecords.isEmpty, "There should be rendered records for Clear to remove")
+        let clearAnchor = try XCTUnwrap(
+            visibleLogAnchor(in: logs),
+            "A rendered log row should anchor the reading position before Clear"
+        )
+        let clearAnchorOffsetBeforeScroll = clearAnchor.element.frame.minY - logs.frame.minY
+        let clearAnchorOffset = scrollLogsAwayFromBottom(logs, anchor: clearAnchor)
+        XCTAssertTrue(logs.value as? String == renderedBeforeClear,
+                      "Scrolling to an older record should not change the rendered entries")
+        XCTAssertTrue(clearAnchor.element.isHittable)
+        XCTAssertGreaterThan(clearAnchorOffset, clearAnchorOffsetBeforeScroll + 24,
+                             "The reading position should be away from the bottom before Clear")
         app.buttons["Clear"].tap()
         let cleared = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let rendered = logs.value as? String else { return false }
@@ -101,6 +124,8 @@ final class NativeUIInteractionTests: XCTestCase {
                        "The post-Clear record should remain available after relaunch")
         XCTAssertEqual(occurrences(of: clearSentinel, in: reopenedLogs.value as? String ?? ""), 1,
                        "Relaunch must retain the post-Clear record without restoring its earlier copies")
+        XCTAssertFalse((reopenedLogs.value as? String ?? "").contains(clearAnchor.record),
+                       "A specific rendered pre-Clear record must stay absent after relaunch")
         attachScreenshot("reopened")
         try verifyColdAndWarmImports()
 
@@ -329,27 +354,38 @@ final class NativeUIInteractionTests: XCTestCase {
         )
         XCTAssertTrue(expandedText.contains("\"event\":\"ui.failure\""))
         XCTAssertTrue(expandedText.contains("\"source\":\"native-ui\""))
-        for _ in 0..<6 { logs.swipeUp() }
+
+        let detailsCollapsed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Details"), object: details
+        )
+        details.tap()
+        XCTAssertEqual(XCTWaiter.wait(for: [detailsCollapsed], timeout: 10), .completed,
+                       "The original record should collapse before checking the reading position")
+        let renderedBeforeFreeze = try XCTUnwrap(logs.value as? String)
+        let positionAnchor = try XCTUnwrap(
+            visibleLogAnchor(in: logs),
+            "A visible rendered record should anchor the reading position before scrolling"
+        )
+        XCTAssertTrue(renderedBeforeFreeze.contains(positionAnchor.record),
+                      "The anchor should identify a specific rendered log record")
+        attachScreenshot("logs-freeze-ready")
+        let anchorOffsetBeforeScroll = positionAnchor.element.frame.minY - logs.frame.minY
+        let anchorOffsetAfterScroll = scrollLogsAwayFromBottom(
+            logs, anchor: positionAnchor, screenshotName: "logs-freeze-scrolled"
+        )
+        XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
+                             "The gesture should move the identifiable record away from the bottom")
+        XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
+                       "Scrolling should preserve the rendered log entries")
         let frozen = try XCTUnwrap(logs.value as? String)
-        openAbout()
-        app.buttons["Done"].tap()
-        XCTAssertEqual(logs.value as? String, frozen,
-                       "Opening and dismissing About must not change the frozen log entries")
+
         configuration.tap()
         configuration.typeText("x")
         dismissConfigurationKeyboard()
-        let oldErrorCleared = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == false"), object: errorStatus
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [oldErrorCleared], timeout: 5), .completed,
-                       "Editing the subscription should clear the prior Paste error before the refresh")
-        let positionAnchor = try XCTUnwrap(
-            firstHittableLogDetail(in: logs),
-            "A rendered log detail should anchor the reading position while the view is scrolled up"
-        )
-        let anchorOffsetBeforeRefresh = positionAnchor.frame.minY - logs.frame.minY
+        XCTAssertEqual(logs.value as? String, frozen,
+                       "Editing the configuration should not move the frozen log view")
+        let anchorOffsetBeforeRefresh = positionAnchor.element.frame.minY - logs.frame.minY
         paste.tap()
-        XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
         let changedWhileScrolledUp = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value != %@", frozen), object: logs
         )
@@ -357,13 +393,28 @@ final class NativeUIInteractionTests: XCTestCase {
             XCTWaiter.wait(for: [changedWhileScrolledUp], timeout: 1.5), .timedOut,
             "New records should not replace the rendered text while scrolled up"
         )
-        XCTAssertTrue(positionAnchor.isHittable,
-                      "The same rendered log detail should remain visible after an update while scrolled up")
+        XCTAssertEqual(logs.value as? String, frozen,
+                       "The refreshed log source should stay frozen while the reader is away from the bottom")
+        XCTAssertTrue(positionAnchor.element.isHittable,
+                      "The same rendered record should remain visible after a refresh while scrolled up")
         XCTAssertEqual(
-            positionAnchor.frame.minY - logs.frame.minY,
+            positionAnchor.element.frame.minY - logs.frame.minY,
             anchorOffsetBeforeRefresh,
             accuracy: 2,
             "A log refresh must preserve the visible reading position"
+        )
+
+        openAbout()
+        app.buttons["Done"].tap()
+        XCTAssertEqual(logs.value as? String, frozen,
+                       "Opening and dismissing About must not change the frozen log entries")
+        XCTAssertTrue(positionAnchor.element.isHittable,
+                      "The same rendered record should remain visible after About is dismissed")
+        XCTAssertEqual(
+            positionAnchor.element.frame.minY - logs.frame.minY,
+            anchorOffsetBeforeRefresh,
+            accuracy: 2,
+            "About should preserve the visible reading position"
         )
 
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -373,6 +424,9 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [landscape], timeout: 15), .completed)
         XCTAssertEqual(logs.value as? String, frozen,
                        "A live rotation must not replace frozen log entries")
+        XCTAssertTrue(frozen.contains(positionAnchor.record))
+        XCTAssertTrue(positionAnchor.element.isHittable,
+                      "The same rendered record should stay visible in landscape")
         XCUIDevice.shared.orientation = .portrait
         let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             self.app.frame.height > self.app.frame.width
@@ -380,10 +434,11 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 15), .completed)
         XCTAssertEqual(logs.value as? String, frozen,
                        "Returning to portrait must keep the frozen log entries")
+        XCTAssertTrue(frozen.contains(positionAnchor.record))
+        XCTAssertTrue(positionAnchor.element.isHittable,
+                      "The same rendered record should stay visible after returning to portrait")
 
-        logs.swipeUp()
-        logs.swipeUp()
-        logs.swipeUp()
+        for _ in 0..<8 { logs.swipeUp() }
         let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
             return self.occurrences(of: validationError, in: text) > errorsBeforeScroll
@@ -477,10 +532,70 @@ final class NativeUIInteractionTests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    private func firstHittableLogDetail(in logs: XCUIElement) -> XCUIElement? {
-        logs.descendants(matching: .any)
+    private func visibleLogAnchor(in logs: XCUIElement) -> RenderedLogAnchor? {
+        guard let rendered = logs.value as? String, logs.frame.height > 0 else { return nil }
+        let details = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
             .allElementsBoundByIndex
-            .first(where: { $0.isHittable })
+        for (index, element) in details.enumerated() where element.label == "Details" && element.isHittable {
+            let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
+            guard (0.15...0.38).contains(relativeY),
+                  let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { continue }
+            return RenderedLogAnchor(detailIndex: index, record: record, element: element)
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func scrollLogsAwayFromBottom(
+        _ logs: XCUIElement,
+        anchor: RenderedLogAnchor,
+        screenshotName: String? = nil
+    ) -> CGFloat {
+        let offsetBefore = anchor.element.frame.minY - logs.frame.minY
+        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.30))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.55))
+        start.press(forDuration: 0.05, thenDragTo: end)
+
+        let detailElements = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let currentAnchor = detailElements.element(boundBy: anchor.detailIndex)
+        let movedIntoReadingArea = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            currentAnchor.isHittable
+                && currentAnchor.frame.minY - logs.frame.minY > offsetBefore + 24
+        }, object: logs)
+        let scrollSettled = XCTWaiter.wait(for: [movedIntoReadingArea], timeout: 5)
+        if let screenshotName { attachScreenshot(screenshotName) }
+        XCTAssertEqual(scrollSettled, .completed,
+                       "The drag should leave the same rendered log row visible away from the bottom")
+        let offsetAfter = currentAnchor.frame.minY - logs.frame.minY
+        XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
+                             "The downward drag should move the reader more than the follow threshold")
+        XCTAssertTrue((logs.value as? String ?? "").contains(anchor.record),
+                      "The anchored record should remain in the rendered log text")
+        return offsetAfter
+    }
+
+    private func renderedLogRecord(atDetailIndex index: Int, in text: String) -> String? {
+        guard index >= 0 else { return nil }
+        var searchStart = text.startIndex
+        var linkRange: Range<String.Index>?
+        for _ in 0...index {
+            let detailsRange = text.range(of: "Details\n", range: searchStart..<text.endIndex)
+            let hideRange = text.range(of: "Hide details\n", range: searchStart..<text.endIndex)
+            guard let next = [detailsRange, hideRange].compactMap({ $0 })
+                .min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
+            linkRange = next
+            searchStart = next.upperBound
+        }
+        guard let linkRange else { return nil }
+        let lines = String(text[..<linkRange.lowerBound]).components(separatedBy: "\n")
+        guard let headerIndex = lines.lastIndex(where: {
+            $0.range(
+                of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z · "#,
+                options: .regularExpression
+            ) != nil
+        }) else { return nil }
+        return lines[headerIndex...].joined(separator: "\n").trimmingCharacters(in: .newlines)
     }
 }

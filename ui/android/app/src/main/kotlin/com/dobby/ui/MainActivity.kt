@@ -714,19 +714,23 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         else androidx.compose.ui.graphics.Color(0xFF8A5A00)).toArgb()
     val errorColor = colors.error.toArgb()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Logs", modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically), style = MaterialTheme.typography.titleMedium)
-            TextButton(onClick = controller::clearLogs) { Text("Clear") }
-            TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
+        Column(Modifier.fillMaxWidth()) {
+            Text("Logs", style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = controller::clearLogs) { Text("Clear") }
+                TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
+            }
         }
         if (state.logsError.isNotEmpty()) {
             Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
         }
-        AndroidView(
-            factory = { controller.createLogView(it) },
-            modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
-            update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
-        )
+        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+            AndroidView(
+                factory = { controller.createLogView(it) },
+                modifier = Modifier.fillMaxSize(),
+                update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
+            )
+        }
     }
 }
 

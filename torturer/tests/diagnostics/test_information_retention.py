@@ -62,6 +62,7 @@ def _native_ui_journey_args():
             network_interface=None,
             routing_firewall_helper=None,
             timeout=5,
+            native_cases=None,
         )
         yield root, args
 

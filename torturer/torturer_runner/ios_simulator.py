@@ -3,16 +3,47 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from pathlib import Path
 import re
+
+from .native_cases import IOS_LOGS_FREEZE_RESUME_CASE, IOS_RENDERER_SEVERITY_CASE
 
 
 _UDID = re.compile(r"[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}\Z")
 _BUNDLE_ID = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\Z")
+_DEFAULT_UI_TEST_SELECTION = (
+    "iosAppUITests/NativeUIInteractionTests",
+    "iosAppUITests/NativeRendererInteractionTests/"
+    "testSeverityColorsResolveForLightAndDarkAppearances",
+)
+_NATIVE_CASE_TEST_SELECTIONS = {
+    IOS_LOGS_FREEZE_RESUME_CASE:
+        "iosAppUITests/NativeUIInteractionTests/testLogsFreezeAndResumeAtBottom",
+    IOS_RENDERER_SEVERITY_CASE: _DEFAULT_UI_TEST_SELECTION[1],
+}
+_SOURCE_SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
 class IOSSimulatorContractError(ValueError):
     """A Simulator command argument is outside the supported shape."""
+
+
+def ui_test_selection(native_cases: Sequence[str] | None = None) -> tuple[str, ...]:
+    """Return exact XCTest filters for a default or explicitly selected run."""
+    if native_cases is None:
+        return _DEFAULT_UI_TEST_SELECTION
+    selected = tuple(native_cases)
+    if not selected:
+        raise IOSSimulatorContractError("at least one native XCTest case is required")
+    if len(set(selected)) != len(selected):
+        raise IOSSimulatorContractError("native XCTest cases must be unique")
+    try:
+        return tuple(_NATIVE_CASE_TEST_SELECTIONS[case] for case in selected)
+    except KeyError as error:
+        raise IOSSimulatorContractError(
+            f"unsupported iOS Simulator native case: {error.args[0]}"
+        ) from error
 
 
 @dataclass(frozen=True)
@@ -79,6 +110,8 @@ def xcodebuild_ui_test_without_building_command(
     result_bundle: str | Path | None = None,
     *,
     architecture: str,
+    native_cases: Sequence[str] | None = None,
+    source_sha: str | None = None,
 ) -> list[str]:
     """Run prepared XCTest products and retain their result bundle."""
     app_project = Path(project)
@@ -97,8 +130,11 @@ def xcodebuild_ui_test_without_building_command(
             "iOS UI test result bundle must end in .xcresult"
         )
     udid = _validate_udid(device_udid)
+    if source_sha is not None and not _SOURCE_SHA.fullmatch(source_sha):
+        raise IOSSimulatorContractError("iOS XCTest source commit must be a full lowercase SHA")
     simulator_architecture = "x86_64" if architecture == "amd64" else architecture
-    return [
+    selection = ui_test_selection(native_cases)
+    command = [
         "xcodebuild",
         "-project", str(app_project),
         "-scheme", "iosAppUITests",
@@ -109,7 +145,7 @@ def xcodebuild_ui_test_without_building_command(
         "-derivedDataPath", str(data_path),
         "-resultBundlePath", str(result_path),
         "-parallel-testing-enabled", "NO",
-        "-only-testing:iosAppUITests/NativeUIInteractionTests",
+        *[f"-only-testing:{test}" for test in selection],
         # Simulator XCTest runners need an installable code signature, but
         # ``-`` is the ad-hoc identity and does not require an Apple
         # Development certificate or provisioning profile.
@@ -118,6 +154,14 @@ def xcodebuild_ui_test_without_building_command(
         "CODE_SIGN_IDENTITY=-",
         "test-without-building",
     ]
+    if source_sha is not None:
+        return [
+            "/usr/bin/env",
+            f"SOURCE_COMMIT={source_sha}",
+            f"GITHUB_SHA={source_sha}",
+            *command,
+        ]
+    return command
 
 
 def _validate_bundle_identifier(value: str) -> None:

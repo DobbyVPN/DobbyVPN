@@ -38,6 +38,13 @@ import traceback
 from typing import Any
 
 from .diagnostics import collect_installed_backend_logs, output_text
+from .native_cases import (
+    ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
+    IOS_RENDERER_SEVERITY_CASE,
+    NATIVE_CASE_SUITES,
+    WINDOWS_FINDALL_PROBE_CASE,
+    validate_native_cases,
+)
 
 PLATFORMS = ("linux", "windows", "macos", "android", "ios-simulator")
 SUITES = ("mini", "full")
@@ -109,8 +116,6 @@ def _native_ui_environment(platform: str, runtime: dict[str, Any]) -> dict[str, 
         for name in _NATIVE_UI_HOST_ENVIRONMENT
         if isinstance((value := os.environ.get(name)), str)
     }
-    if platform == "windows" and os.environ.get("DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE") == "1":
-        environment["DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE"] = "1"
     runtime_environment = runtime.get("environment")
     if isinstance(runtime_environment, dict):
         environment.update({
@@ -211,6 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--suite", choices=SUITES, default="mini")
         if action == "run":
             command.add_argument("--scenario", action="append", dest="scenarios")
+            command.add_argument("--native-case", action="append", dest="native_cases")
         if action == "prepare":
             command.add_argument("--architecture")
             command.add_argument("--skip-deps", action="store_true")
@@ -1544,9 +1550,10 @@ def _start_ios(
     descriptor: dict[str, Any],
     logs: Path,
     timeout: float,
+    native_cases: list[str] | None = None,
 ) -> dict[str, Any]:
     from .local_vm_ios import run
-    return run(run_dir, descriptor, logs, timeout)
+    return run(run_dir, descriptor, logs, timeout, native_cases=native_cases)
 
 
 def _prepare_ios(
@@ -1637,6 +1644,7 @@ def _native_ui_command(
     platform: str,
     timeout: float,
     ui_helper: Path,
+    native_cases: tuple[str, ...] | None = None,
 ) -> list[str]:
     """Build the real-window journey command for desktop full guests."""
     if platform not in {"windows", "macos"}:
@@ -1685,6 +1693,8 @@ def _native_ui_command(
     if platform == "macos":
         helper = ROUTING_HELPERS / "macos.sh"
         command.extend(("--routing-firewall-helper", str(helper)))
+    for native_case in native_cases or ():
+        command.extend(("--native-case", native_case))
     return command
 
 
@@ -1772,7 +1782,12 @@ def _refresh_desktop_runtime_after_headless(
     return runtime
 
 
-def _validate_suite(platform: str, suite: str, scenarios: list[str] | None) -> None:
+def _validate_suite(
+    platform: str,
+    suite: str,
+    scenarios: list[str] | None,
+    native_cases: list[str] | None = None,
+) -> None:
     if suite == "full" and platform not in {"windows", "macos"}:
         raise LocalVMError(
             f"{platform} full is unsupported: local full adds a native desktop window only"
@@ -1781,6 +1796,13 @@ def _validate_suite(platform: str, suite: str, scenarios: list[str] | None) -> N
         raise LocalVMError(
             "full qualification cannot select focused scenarios; run diagnostics with --suite mini"
         )
+    if native_cases is not None:
+        if scenarios:
+            raise LocalVMError("native cases cannot be combined with functional scenarios")
+        try:
+            validate_native_cases(platform, suite, native_cases)
+        except ValueError as error:
+            raise LocalVMError(str(error)) from error
 
 
 def prepare(args: argparse.Namespace) -> int:
@@ -1951,7 +1973,7 @@ def run(args: argparse.Namespace) -> int:
     source = _required_input(run_dir, "source", directory=True)
     if args.platform != "ios-simulator":
         _required_input(run_dir, "profile")
-    _validate_suite(args.platform, args.suite, args.scenarios)
+    _validate_suite(args.platform, args.suite, args.scenarios, args.native_cases)
     state = _read_state(run_dir)
     if state is None or state.get("status") != "candidate-prepared":
         raise LocalVMError("run requires a successfully prepared candidate")
@@ -1963,13 +1985,47 @@ def run(args: argparse.Namespace) -> int:
     _candidate_mode(descriptor)
     logs = run_dir / "logs"
     (run_dir / "output").mkdir(parents=True, exist_ok=True)
+    native_cases = tuple(args.native_cases) if args.native_cases is not None else None
+    state["coverage"] = {
+        "platform": args.platform,
+        "suite": args.suite,
+        "kind": "native-cases" if native_cases is not None else "suite",
+    }
+    if native_cases is not None:
+        state["coverage"].update(
+            native_cases=list(native_cases), native_case_selection="explicit",
+        )
+    elif args.platform == "ios-simulator":
+        state["coverage"].update(
+            native_cases=["NativeUIInteractionTests", IOS_RENDERER_SEVERITY_CASE],
+            native_case_selection="suite-default",
+            xctest_filters=[
+                "iosAppUITests/NativeUIInteractionTests",
+                "iosAppUITests/NativeRendererInteractionTests/"
+                "testSeverityColorsResolveForLightAndDarkAppearances",
+            ],
+        )
+    elif args.platform == "android":
+        state["coverage"].update(
+            instrumentation_filters=(
+                ["com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable"]
+                if native_cases is not None else [
+                    "com.dobby.NativeUiInstrumentedTest",
+                    "com.dobby.NativeDiagnosticRetentionTest",
+                ]
+            ),
+        )
+    _write_json(run_dir / "platform.json", state)
     try:
         if args.platform == "ios-simulator":
             state["status"] = "running"
             _write_json(run_dir / "platform.json", state)
             runtime = _timed_call(
                 "ios-simulator-app-contract",
-                lambda: _start_ios(run_dir, descriptor, logs, args.timeout),
+                lambda: _start_ios(
+                    run_dir, descriptor, logs, args.timeout,
+                    native_cases=list(native_cases) if native_cases is not None else None,
+                ),
                 platform=args.platform,
             )
             state["runtime"] = runtime
@@ -2055,7 +2111,10 @@ def run(args: argparse.Namespace) -> int:
 
             native_result = _timed_call(
                 "android-native-ui",
-                lambda: run_android_ui(run_dir, runtime, logs, args.timeout),
+                lambda: run_android_ui(
+                    run_dir, runtime, logs, args.timeout,
+                    native_cases=list(native_cases) if native_cases is not None else None,
+                ),
                 platform=args.platform,
             )
             state["native_ui_exit_code"] = native_result.returncode
@@ -2066,51 +2125,59 @@ def run(args: argparse.Namespace) -> int:
             state["native_ui_status"] = "passed"
             _write_json(run_dir / "platform.json", state)
 
-        # Full desktop qualification keeps the canonical mini suite, then runs
-        # the real-window journey with the helper built during preparation.
-        functional_suite = "mini" if args.suite == "full" else args.suite
-        command = _functional_command(
-            run_dir, {**descriptor, "runtime": runtime}, args.platform,
-            args.timeout, args.scenarios, functional_suite,
-        )
-        functional_environment = {
-            **os.environ,
-            "PYTHONPATH": str(source / "torturer"),
-            "DOBBYVPN_SSH_RUN": run_dir.name,
-        }
-        if args.platform == "linux":
-            functional_environment.update({
-                "DOBBYVPN_SUPERVISED_REQUEST": "1",
-                "DOBBYVPN_REQUEST_ROOT": str(run_dir),
-            })
-        runtime_environment = runtime.get("environment")
-        if isinstance(runtime_environment, dict):
-            functional_environment.update({
-                str(key): str(value)
-                for key, value in runtime_environment.items()
-                if isinstance(key, str) and isinstance(value, str)
-            })
-        result = _timed_call(
-            "functional-suite",
-            lambda: _run_logged(
-                command, cwd=source / "torturer", logs=logs,
-                label="functional", timeout=args.timeout,
-                environment=functional_environment, check=False,
-            ),
-            platform=args.platform,
-            suite=functional_suite,
-        )
-        state["functional_exit_code"] = result.returncode
-        state["status"] = "functional-complete" if result.returncode == 0 else "functional-failed"
-        _write_json(run_dir / "platform.json", state)
-        if result.returncode != 0:
-            return result.returncode
+        if native_cases is None:
+            # Full desktop qualification keeps the canonical mini suite, then
+            # runs the real-window journey with the prepared UI helper.
+            functional_suite = "mini" if args.suite == "full" else args.suite
+            command = _functional_command(
+                run_dir, {**descriptor, "runtime": runtime}, args.platform,
+                args.timeout, args.scenarios, functional_suite,
+            )
+            functional_environment = {
+                **os.environ,
+                "PYTHONPATH": str(source / "torturer"),
+                "DOBBYVPN_SSH_RUN": run_dir.name,
+            }
+            if args.platform == "linux":
+                functional_environment.update({
+                    "DOBBYVPN_SUPERVISED_REQUEST": "1",
+                    "DOBBYVPN_REQUEST_ROOT": str(run_dir),
+                })
+            runtime_environment = runtime.get("environment")
+            if isinstance(runtime_environment, dict):
+                functional_environment.update({
+                    str(key): str(value)
+                    for key, value in runtime_environment.items()
+                    if isinstance(key, str) and isinstance(value, str)
+                })
+            result = _timed_call(
+                "functional-suite",
+                lambda: _run_logged(
+                    command, cwd=source / "torturer", logs=logs,
+                    label="functional", timeout=args.timeout,
+                    environment=functional_environment, check=False,
+                ),
+                platform=args.platform,
+                suite=functional_suite,
+            )
+            state["functional_exit_code"] = result.returncode
+            state["status"] = "functional-complete" if result.returncode == 0 else "functional-failed"
+            _write_json(run_dir / "platform.json", state)
+            if result.returncode != 0:
+                return result.returncode
+        else:
+            state["functional_suite_skipped"] = "native-case-only"
+            _write_json(run_dir / "platform.json", state)
 
         if args.suite == "full" and args.platform in {"windows", "macos"}:
-            if args.platform == "windows":
-                runtime = _start_windows(run_dir, descriptor, logs, args.timeout)
-            else:
-                runtime = _refresh_desktop_runtime_after_headless(runtime)
+            if native_cases is None:
+                # The functional mini suite stops and may recover the backend.
+                # Case-only diagnostics skip it, so keep the service started
+                # above and its tracked PID for the UI journey and cleanup.
+                if args.platform == "windows":
+                    runtime = _start_windows(run_dir, descriptor, logs, args.timeout)
+                else:
+                    runtime = _refresh_desktop_runtime_after_headless(runtime)
             runtime_environment = runtime.get("environment")
             runtime_environment = dict(runtime_environment) if isinstance(runtime_environment, dict) else {}
             runtime_environment["HOME"] = _prepare_desktop_ui_home(run_dir)
@@ -2138,6 +2205,7 @@ def run(args: argparse.Namespace) -> int:
                         _native_ui_command(
                             run_dir, native_descriptor, runtime, args.platform,
                             native_task_timeout, ui_helper,
+                            native_cases=native_cases,
                         ),
                         platform=args.platform,
                         run_dir=run_dir,

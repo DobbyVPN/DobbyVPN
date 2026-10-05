@@ -385,12 +385,27 @@ class NativeUiInstrumentedTest {
 
     private fun assertLogPaneUsable(message: String) {
         val view = connectionLogTextView()
-        val visible = Rect()
+        val textVisible = Rect()
         val viewport = view.parent as? View
-        check(view.getGlobalVisibleRect(visible) && visible.height() >= 24 && view.height >= 24
-                && (viewport?.height ?: 0) >= 24) {
-            "$message visible=$visible text_height=${view.height} viewport_height=${viewport?.height}"
+        val viewportVisible = Rect()
+        check(view.getGlobalVisibleRect(textVisible) && textVisible.height() >= 24
+                && view.height >= 24 && viewport != null && viewport.height >= 24
+                && viewport.getGlobalVisibleRect(viewportVisible) && viewportVisible.height() >= 24) {
+            "$message text_visible=$textVisible viewport_visible=$viewportVisible " +
+                "text_height=${view.height} viewport_height=${viewport?.height} " +
+                "ancestors=${viewAncestorDimensions(view)}"
         }
+    }
+
+    private fun viewAncestorDimensions(view: View): String {
+        val dimensions = mutableListOf<String>()
+        var current: View? = view
+        while (current != null && dimensions.size < 8) {
+            dimensions += "${current.javaClass.simpleName}=" +
+                "${current.width}x${current.height}(measured=${current.measuredWidth}x${current.measuredHeight})"
+            current = current.parent as? View
+        }
+        return dimensions.joinToString("->")
     }
 
     private fun verifyClipboardHandling() {

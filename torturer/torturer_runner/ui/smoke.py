@@ -17,6 +17,7 @@ import time
 _TORTURER_ROOT = Path(__file__).resolve().parents[2]
 if str(_TORTURER_ROOT) not in sys.path:
     sys.path.insert(0, str(_TORTURER_ROOT))
+from torturer_runner.native_cases import WINDOWS_FINDALL_PROBE_CASE
 from torturer_runner.diagnostics import add_exception_notes, add_stream_notes, emit_streams
 from torturer_runner.process_capture import run_finite_capture
 from torturer_runner.screenshot_artifacts import nonblank_png_dimensions
@@ -99,12 +100,15 @@ def _native_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[byt
 
 class NativeUIController:
     def __init__(self, platform: str, binary: Path, profile: Path, timeout: float,
-                 *, helper: Path, screenshot_dir: Path) -> None:
+                 *, helper: Path, screenshot_dir: Path,
+                 native_cases: tuple[str, ...] = ()) -> None:
         if platform not in {"macos", "windows"} or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("native UI requires a desktop platform and a finite positive timeout")
         if not helper.is_file():
             raise NativeUISmokeError(f"prepared native helper is missing: {helper}")
         self.platform, self.binary, self.profile, self.helper = platform, binary, profile, helper
+        self.native_cases = frozenset(native_cases)
+        self.native_case_results: dict[str, dict[str, object]] = {}
         self.executable = (binary / "Contents/MacOS/DobbyVPNMacApp" if platform == "macos" else binary).resolve()
         self.screenshot_dir = screenshot_dir
         screenshot_dir.mkdir(parents=True, exist_ok=True)
@@ -231,11 +235,11 @@ class NativeUIController:
 
             self._wait(identified, "native UI process identity unavailable")
             # Keep the diagnostic opt-in and ahead of the first acceptance tree snapshot.
-            if (
-                self.launch_count == 1
-                and os.environ.get("DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE") == "1"
-            ):
-                self._call("findall-probe")
+            if self.launch_count == 1 and WINDOWS_FINDALL_PROBE_CASE in self.native_cases:
+                result = self._call("findall-probe")
+                if result.get("ready") is not True:
+                    raise NativeUISmokeError("Windows UI Automation FindAll probe could not inspect the visible control")
+                self.native_case_results[WINDOWS_FINDALL_PROBE_CASE] = result
 
         def ready():
             code = None if self.process is None else self.process.poll()

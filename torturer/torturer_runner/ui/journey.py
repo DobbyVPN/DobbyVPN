@@ -22,6 +22,13 @@ import traceback
 from typing import Any
 
 from torturer_contract.scenarios import ScenarioStep
+from torturer_runner.native_cases import (
+    MACOS_CONFIGURE_STARTUP_CASE,
+    NATIVE_CASE_SUITES,
+    WINDOWS_CONFIGURE_TREE_CASE,
+    WINDOWS_FINDALL_PROBE_CASE,
+    validate_native_cases,
+)
 
 from ..adapters.cli import SubprocessRunner, _ensure_directory
 from ..adapters.factory import adapter_for_platform
@@ -1131,6 +1138,123 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
     return {"platform": args.platform, "checks": checks, "complete": True}
 
 
+def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
+    """Run only selected diagnostic UI cases within the interactive app setup."""
+    try:
+        selected = validate_native_cases(args.platform, "full", args.native_cases)
+    except ValueError as error:
+        raise NativeUIJourneyError(str(error)) from error
+    if selected not in {
+        (WINDOWS_FINDALL_PROBE_CASE,),
+        (WINDOWS_CONFIGURE_TREE_CASE,),
+        (MACOS_CONFIGURE_STARTUP_CASE,),
+    }:
+        raise NativeUIJourneyError("unsupported desktop native case selection")
+
+    _ensure_directory(args.raw_log_dir)
+    previous_log_directory = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
+    os.environ["DOBBYVPN_NATIVE_UI_LOG_DIR"] = str(args.raw_log_dir)
+    ui: smoke.NativeUIController | None = None
+    subscription = None
+    primary: BaseException | None = None
+    try:
+        profile = args.profile
+        if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
+            from torturer_runner.subscription_fixture import SubscriptionFixture
+
+            subscription = SubscriptionFixture(
+                args.profile,
+                args.profile.parent / "native-subscription-fixture",
+                args.platform,
+                certificate_helper=args.ui_helper,
+            )
+            url = subscription.start()
+            profile = subscription.directory / "source.url"
+            profile.write_text(url, encoding="utf-8")
+        ui = smoke.NativeUIController(
+            args.platform,
+            args.ui,
+            profile,
+            _smoke_timeout(args.timeout),
+            helper=args.ui_helper,
+            screenshot_dir=args.raw_log_dir / "screenshots",
+            native_cases=selected,
+        )
+        with ui.bounded_by(_smoke_timeout(args.timeout)):
+            startup = ui.start()
+        if selected == (WINDOWS_FINDALL_PROBE_CASE,):
+            result = ui.native_case_results.get(WINDOWS_FINDALL_PROBE_CASE)
+            if not isinstance(result, dict):
+                raise NativeUIJourneyError("Windows UI Automation FindAll probe produced no result")
+            case_result: dict[str, object] = result
+        elif selected == (MACOS_CONFIGURE_STARTUP_CASE,):
+            configured = ui.configure()
+            if configured.get("input_verified") is not True:
+                raise NativeUIJourneyError("macOS rendered Configure did not verify pasted input")
+            if subscription is None:
+                raise NativeUIJourneyError("macOS Configure case has no disposable subscription fixture")
+            fixture_stats = subscription.control_stats()
+            if (
+                fixture_stats.get("subscription_gets") != 1
+                or fixture_stats.get("in_flight_gets") != 0
+                or fixture_stats.get("max_in_flight_gets") != 1
+            ):
+                raise NativeUIJourneyError(
+                    "macOS rendered Configure did not complete exactly one fixture request"
+                )
+            case_result = {
+                "startup_tree": startup,
+                "configure": configured,
+                "fixture_requests": fixture_stats,
+            }
+        else:
+            case_result = {"configure_tree": startup}
+        return {
+            "platform": args.platform,
+            "native_cases": list(selected),
+            "coverage": {
+                "platform": args.platform,
+                "suite": "full",
+                "kind": "native-cases",
+                "native_cases": list(selected),
+                "native_case_selection": "explicit",
+            },
+            "checks": {selected[0]: case_result},
+            "complete": True,
+        }
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        cleanup_errors: list[str] = []
+        if ui is not None:
+            try:
+                with ui.bounded_by(min(args.timeout, 15.0)):
+                    ui.close_for_cleanup()
+            except BaseException as error:
+                cleanup_errors.append(f"native-ui: {_exception_details(error)}")
+            try:
+                ui.collect_diagnostics()
+            except BaseException as error:
+                cleanup_errors.append(f"native-ui-diagnostics: {_exception_details(error)}")
+        if subscription is not None:
+            try:
+                subscription.close()
+            except BaseException as error:
+                cleanup_errors.append(f"subscription-fixture: {_exception_details(error)}")
+        if previous_log_directory is None:
+            os.environ.pop("DOBBYVPN_NATIVE_UI_LOG_DIR", None)
+        else:
+            os.environ["DOBBYVPN_NATIVE_UI_LOG_DIR"] = previous_log_directory
+        if cleanup_errors and primary is not None:
+            for value in cleanup_errors:
+                primary.add_note(value)
+        elif cleanup_errors:
+            raise NativeUIJourneyError(
+                "native case cleanup failed: " + "; ".join(cleanup_errors)
+            )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("windows", "macos"), required=True)
@@ -1141,6 +1265,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-log-dir", type=_path, required=True)
     parser.add_argument("--output", type=_path)
     parser.add_argument("--timeout", type=_timeout, default=900.0)
+    parser.add_argument("--native-case", action="append", dest="native_cases")
     parser.add_argument("--service-pid", type=int, required=True)
     parser.add_argument("--service-binary", type=_path, required=True)
     parser.add_argument("--service-socket", type=str)
@@ -1154,7 +1279,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.native_cases is not None:
+        try:
+            validate_native_cases(args.platform, "full", args.native_cases)
+        except ValueError as error:
+            parser.error(str(error))
     if (args.platform == "windows" and (args.service_pipe != "DobbyVPN.Control" or args.service_socket)) or (
         args.platform == "macos" and (not args.service_socket or args.service_pipe)
     ):
@@ -1167,20 +1298,29 @@ def main(argv: list[str] | None = None) -> int:
     ):
         raise SystemExit("native UI journey requires a CLI, launchable UI, prepared helper, and profile")
     try:
-        result = run_journey(args)
+        result = run_native_cases(args) if args.native_cases is not None else run_journey(args)
     except Exception as error:
         rendered_error = _exception_details(error)
         if args.output is not None:
             operation = getattr(error, "operation", None)
             stage = getattr(error, "stage", None)
             failure = {
-                "suite": "full",
+                "suite": "native-case" if args.native_cases is not None else "full",
                 "action_driver": "native-window",
                 "platform": args.platform,
                 "complete": False,
                 "error": rendered_error,
                 "notes": list(getattr(error, "__notes__", ())),
             }
+            if args.native_cases is not None:
+                failure["native_cases"] = args.native_cases
+                failure["coverage"] = {
+                    "platform": args.platform,
+                    "suite": "full",
+                    "kind": "native-cases",
+                    "native_cases": args.native_cases,
+                    "native_case_selection": "explicit",
+                }
             checks = getattr(error, "native_ui_checks", None)
             if isinstance(checks, dict):
                 failure["checks"] = checks
@@ -1204,7 +1344,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 1
     result = {
-        "suite": "full",
+        "suite": "native-case" if args.native_cases is not None else "full",
         "action_driver": "native-window",
         **result,
     }

@@ -107,6 +107,37 @@ class LocalVMLifecycleTests(unittest.TestCase):
             self.assertIn("original I/O failure", diagnostic.getvalue())
             self.assertEqual(json.loads((run_dir / "platform.json").read_text())["status"], "cleanup-failed")
 
+    def test_windows_case_only_full_run_reuses_the_tracked_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "source").mkdir()
+            (run_dir / "profile").write_text("synthetic profile\n", encoding="utf-8")
+            local_vm._write_json(run_dir / "platform.json", {
+                "platform": "windows",
+                "suite": "full",
+                "status": "candidate-prepared",
+                "candidate": {"mode": "local-build", "ui_helper": str(run_dir / "helper.exe")},
+            })
+            args = local_vm.build_parser().parse_args([
+                "run", "--platform", "windows", "--run-dir", str(run_dir),
+                "--timeout", "30", "--suite", "full", "--native-case", "configure-tree",
+            ])
+            runtime = {"pid": 12345, "binary": str(run_dir / "backend.exe"), "environment": {}}
+            with (
+                mock.patch.object(local_vm, "_start_windows", return_value=runtime) as start,
+                mock.patch.object(local_vm, "_prepare_desktop_ui_home", return_value=str(run_dir)),
+                mock.patch.object(local_vm, "_native_ui_environment", return_value={}),
+                mock.patch.object(local_vm, "_candidate_path", return_value=run_dir / "helper.exe"),
+                mock.patch.object(local_vm, "_native_ui_command", return_value=["native-ui"]),
+                mock.patch.object(local_vm, "_run_native_ui", return_value=mock.Mock(returncode=0)),
+                mock.patch.object(local_vm, "_timed_call", side_effect=lambda _name, operation, **_kw: operation()),
+            ):
+                self.assertEqual(local_vm.run(args), 0)
+            start.assert_called_once()
+            state = json.loads((run_dir / "platform.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["runtime"]["pid"], runtime["pid"])
+            self.assertEqual(state["native_ui_status"], "passed")
+
     def test_prepare_parser_reaches_setup_and_keeps_failure_cleanup_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary) / "run"

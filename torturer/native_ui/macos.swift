@@ -105,12 +105,39 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
 
 func names(_ element: AXUIElement) throws -> [String] {
     var values = [String]()
+    let role = try label(element, kAXRoleAttribute)
     let axIdentifier = try identifier(element)
-    let title = try label(element, kAXTitleAttribute)
+    let title: String
+    do {
+        title = try label(element, kAXTitleAttribute)
+    } catch let error as AccessibilityReadError
+        where error.attribute == kAXTitleAttribute && error.code == .illegalArgument {
+        let rereadRole: String
+        let rereadIdentifier: String
+        do {
+            rereadRole = try label(element, kAXRoleAttribute)
+            rereadIdentifier = try identifier(element)
+        } catch {
+            throw HelperError(
+                "AXTitle illegalArgument could not verify AX element stability; " +
+                    "initial role=\(role) identifier=\(axIdentifier); reread failed: \(error)"
+            )
+        }
+        try require(
+            role == rereadRole && axIdentifier == rereadIdentifier,
+            "AXTitle illegalArgument on unstable AX element; " +
+                "initial role=\(role) identifier=\(axIdentifier); " +
+                "reread role=\(rereadRole) identifier=\(rereadIdentifier)"
+        )
+        FileHandle.standardError.write(Data((
+            "AXTitle illegalArgument on stable AX element; treating title as unsupported: " +
+                "role=\(role) identifier=\(axIdentifier) errorCode=\(error.code.rawValue)\n"
+        ).utf8))
+        title = ""
+    }
     if !axIdentifier.isEmpty { values.append(axIdentifier) }
     if !title.isEmpty { values.append(title) }
     // Text fields are verified by type, not copied into every tree response.
-    let role = try label(element, kAXRoleAttribute)
     if role != kAXTextAreaRole && role != kAXTextFieldRole {
         let value = try label(element, kAXValueAttribute)
         if !value.isEmpty { values.append(value) }

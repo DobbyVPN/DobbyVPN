@@ -46,6 +46,7 @@ import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
 
 import com.dobby.nativebridge.NativeGoSession;
+import com.dobby.nativebridge.DobbyVpnService;
 import com.dobby.nativebridge.NativeVpnBridge;
 import com.dobby.ui.MainActivity;
 
@@ -350,7 +351,11 @@ public final class NativeUiHostedProfileTest {
                                 consentHandled = verifyManualConsent(operationTimeout(operation));
                                 consentHandled |= connectThroughRenderedUI(operationTimeout(operation));
                                 assertRenderedSourceRetained(2_000L);
-                                verifySubscriptionControls(command.getString("subscription_url"), operationTimeout(operation));
+                                boolean nativeShutdownVerified = verifySubscriptionControls(
+                                        command.getString("subscription_url"),
+                                        operationTimeout(operation));
+                                observation.put("native_os_shutdown_cancels_pending_switch",
+                                        nativeShutdownVerified);
                                 ensureRenderedDisconnected(
                                         operationTimeout(operation));
                                 boolean noVpn = awaitVpnNetwork(
@@ -606,6 +611,7 @@ public final class NativeUiHostedProfileTest {
         output.put("coverage_lane", lane);
         output.put("connections", new JSONArray());
         output.put("gui_auto_verified", false);
+        output.put("native_os_shutdown_cancels_pending_switch", false);
         output.put("ui_reopen_verified", false);
         output.put("vpn_consent_handled", false);
         output.put("configured", false);
@@ -1174,12 +1180,13 @@ public final class NativeUiHostedProfileTest {
         return true;
     }
 
-    private void verifySubscriptionControls(String subscriptionURL, long timeout) throws Exception {
+    private boolean verifySubscriptionControls(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + timeout;
         JSONObject initial = snapshotResult("");
         verifyAcceptedInventoryAfterActivityReopen(subscriptionURL, deadline);
         initial = snapshotResult("");
         int count = initial.getJSONArray("profiles").length();
+        boolean nativeShutdownVerified = false;
         int first = count > 1 && initial.getJSONObject("active_profile").getInt("index") == 0 ? 1 : 0;
         if (count > 1) {
             verifyRenderedStopCancelsPendingSwitch(first, deadline);
@@ -1195,6 +1202,8 @@ public final class NativeUiHostedProfileTest {
             tapEnabledControl("Profile " + (second + 1) + " action", deadline);
             verifyPendingProfileTransition(second, first, subscriptionURL, deadline);
             manual = awaitSelection(manual.getLong("generation"), "PROFILE_INDEX", second, deadline);
+            manual = verifyNativeRevokeCancelsPendingSwitch(manual, deadline);
+            nativeShutdownVerified = true;
         }
         tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         int beforeFailedLoad = subscriptionFixtureState().getInt("subscription_gets");
@@ -1290,6 +1299,7 @@ public final class NativeUiHostedProfileTest {
         verifyReplacementInventoryWhileOldProfileIsActive(subscriptionURL, deadline);
         verifyLongListAndValidPaste(subscriptionURL, deadline);
         markProgress("configure", "manual-switch-failed-load-import-clear", "completed");
+        return nativeShutdownVerified;
     }
 
     private void verifyAcceptedInventoryAfterActivityReopen(String subscriptionURL, long deadline)
@@ -1489,6 +1499,84 @@ public final class NativeUiHostedProfileTest {
             Thread.sleep(POLL_MILLIS);
         }
         throw new AssertionError("Profile switch did not expose a pending target for Stop cancellation");
+    }
+
+    private JSONObject verifyNativeRevokeCancelsPendingSwitch(JSONObject connected, long deadline)
+            throws Exception {
+        if (!"CONNECTED".equals(connected.optString("state"))) {
+            throw new AssertionError("Native revoke scenario did not start connected: " + connected);
+        }
+        int activeIndex = connected.getJSONObject("active_profile").getInt("index");
+        int targetIndex = activeIndex == 0 ? 1 : 0;
+        String digest = connected.optString("digest");
+        JSONObject pendingState = null;
+        Object service = currentNativeVpnService();
+        // The real service's synchronized release callback holds cleanup at the
+        // pending-target boundary until the OS lifecycle callback has fenced it.
+        synchronized (service) {
+            tapEnabledControl("Profile " + (targetIndex + 1) + " action", deadline);
+            while (System.currentTimeMillis() < deadline) {
+                JSONObject current = snapshotResult("");
+                JSONObject pending = current.optJSONObject("pending_target");
+                if (pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
+                        && pending.optInt("index", -1) == targetIndex
+                        && digest.equals(pending.optString("digest"))) {
+                    pendingState = current;
+                    break;
+                }
+                Thread.sleep(10L);
+            }
+            if (pendingState == null) {
+                throw new AssertionError("Profile switch did not expose a pending target before native revoke");
+            }
+            // Invoke the same callback body while holding the service monitor;
+            // the owner then cancels before the held release can let a new
+            // profile attempt proceed.
+            ((DobbyVpnService) service).onRevoke();
+        }
+
+        JSONObject cancelled = null;
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject current = snapshotResult("");
+            if ("FAILED".equals(current.optString("state"))) {
+                throw new AssertionError("Native revoke failed while cancelling the pending switch: " + current);
+            }
+            if ("IDLE".equals(current.optString("state"))
+                    && current.optJSONObject("pending_target") == null) {
+                cancelled = current;
+                break;
+            }
+            Thread.sleep(POLL_MILLIS);
+        }
+        if (cancelled == null || cancelled.getLong("generation") <= connected.getLong("generation")) {
+            throw new AssertionError("Native revoke did not clear the pending switch: " + snapshotResult(""));
+        }
+        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_NATIVE_REVOKE_TIMEOUT"));
+        SystemClock.sleep(300L);
+        JSONObject settled = snapshotResult("");
+        if (!"IDLE".equals(settled.optString("state"))
+                || settled.optJSONObject("pending_target") != null
+                || settled.getLong("generation") != cancelled.getLong("generation")
+                || awaitVpnNetwork(false, remainingTimeout(deadline, "ANDROID_NATIVE_REVOKE_TIMEOUT")) != null) {
+            throw new AssertionError("Canceled replacement started after native revoke: " + settled);
+        }
+
+        tapEnabledControl("Profile " + (activeIndex + 1) + " action", deadline);
+        JSONObject resumed = awaitSelection(
+                settled.getLong("generation"), "PROFILE_INDEX", activeIndex, deadline);
+        markProgress("configure", "native-revoke-canceled-pending-switch", "completed");
+        return resumed;
+    }
+
+    private Object currentNativeVpnService() throws Exception {
+        Object bridge = NativeVpnBridge.class.getField("INSTANCE").get(null);
+        java.lang.reflect.Field field = NativeVpnBridge.class.getDeclaredField("service");
+        field.setAccessible(true);
+        Object service = field.get(bridge);
+        if (!(service instanceof DobbyVpnService)) {
+            throw new AssertionError("ANDROID_NATIVE_REVOKE_SERVICE_UNAVAILABLE");
+        }
+        return service;
     }
 
     private void verifyReplacementInventoryWhileOldProfileIsActive(String subscriptionURL,

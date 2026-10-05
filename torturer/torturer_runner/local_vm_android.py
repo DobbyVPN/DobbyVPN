@@ -22,6 +22,7 @@ from .android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
 )
+from .native_cases import ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE, validate_native_cases
 from .screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
@@ -56,6 +57,10 @@ _LOCAL_REQUIRED_SCREENSHOT_LABELS = (
     "startup", "about-metadata", "landscape-large-font", "failure-state", "reopened",
 )
 _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT = "small-screen-scroll-failure"
+_SMALL_SCREEN_CASE_SCREENSHOT = "small-screen-log-viewport"
+_SMALL_SCREEN_CASE_INSTRUMENTATION_FILTER = (
+    "com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable"
+)
 
 
 def _error(message: str) -> Exception:
@@ -187,8 +192,15 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
 
 
 def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
-           timeout: float) -> subprocess.CompletedProcess[bytes]:
+           timeout: float,
+           native_cases: list[str] | None = None) -> subprocess.CompletedProcess[bytes]:
     """Drive the installed release UI through Android's real input path."""
+    try:
+        selected_cases = validate_native_cases("android", "mini", native_cases)
+    except ValueError as error:
+        raise _error(str(error)) from error
+    if selected_cases and selected_cases != (ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,):
+        raise _error("unsupported Android native case selection")
     adb_value = runtime.get("adb")
     serial = runtime.get("serial")
     if not isinstance(adb_value, str) or not isinstance(serial, str):
@@ -229,19 +241,24 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     if b"Status: ok" not in app_start.stdout or b"Complete" not in app_start.stdout:
         raise _error("Android native UI did not resolve a cold bare-link foreground launch")
     try:
+        instrumentation_filter = (
+            _SMALL_SCREEN_CASE_INSTRUMENTATION_FILTER
+            if selected_cases else
+            "com.dobby.NativeUiInstrumentedTest,com.dobby.NativeDiagnosticRetentionTest"
+        )
         result = _adb_call(
             adb_value,
             serial,
             [
                 "shell", "am", "instrument", "-w", "-r",
-                "-e", "class", "com.dobby.NativeUiInstrumentedTest,com.dobby.NativeDiagnosticRetentionTest",
+                "-e", "class", instrumentation_filter,
                 "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
             ],
             run_dir=run_dir,
             logs=logs,
             label="android-native-ui",
             # Match the hosted budget for 20 lifecycle cycles plus log export.
-            timeout=min(timeout, 420),
+            timeout=min(timeout, 180 if selected_cases else 420),
             environment=environment,
             check=False,
         )
@@ -279,6 +296,7 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
             serial,
             result.stdout,
             succeeded=parsed.succeeded,
+            native_cases=list(selected_cases),
             run_dir=run_dir,
             logs=logs,
             timeout=min(timeout, 30),
@@ -288,21 +306,22 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         collection_errors.append(
             _render_collection_error("ANDROID_UI_SCREENSHOT_COLLECTION_FAILED", error)
         )
-    try:
-        _collect_launcher_artwork(
-            adb_value,
-            serial,
-            result.stdout,
-            succeeded=parsed.succeeded,
-            run_dir=run_dir,
-            logs=logs,
-            timeout=min(timeout, 30),
-            environment=environment,
-        )
-    except Exception as error:
-        collection_errors.append(
-            _render_collection_error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED", error)
-        )
+    if not selected_cases:
+        try:
+            _collect_launcher_artwork(
+                adb_value,
+                serial,
+                result.stdout,
+                succeeded=parsed.succeeded,
+                run_dir=run_dir,
+                logs=logs,
+                timeout=min(timeout, 30),
+                environment=environment,
+            )
+        except Exception as error:
+            collection_errors.append(
+                _render_collection_error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED", error)
+            )
     collection_errors.extend(
         _collect_android_diagnostics(
             adb_value,
@@ -434,6 +453,7 @@ def _collect_rendered_screenshots(
     instrumentation_stdout: bytes,
     *,
     succeeded: bool = True,
+    native_cases: list[str] | None = None,
     run_dir: Path,
     logs: Path,
     timeout: float,
@@ -449,11 +469,16 @@ def _collect_rendered_screenshots(
     destination = logs / "screenshots" / "android"
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
     labels = [match.group(1).decode("ascii") for match in matches]
+    focused_case = native_cases == [ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE]
     if succeeded:
-        if tuple(labels) != _LOCAL_REQUIRED_SCREENSHOT_LABELS:
+        expected_labels = (
+            (_SMALL_SCREEN_CASE_SCREENSHOT,)
+            if focused_case else _LOCAL_REQUIRED_SCREENSHOT_LABELS
+        )
+        if tuple(labels) != expected_labels:
             raise _error(
-                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: required local "
-                "milestones must be startup, failure-state, reopened in order"
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: required local milestones "
+                f"must be {', '.join(expected_labels)} in order"
             )
     else:
         # TestWatcher adds one final failure frame. It may run before any
@@ -465,28 +490,38 @@ def _collect_rendered_screenshots(
                 "must end with exactly one failure milestone"
             )
         prior_labels = labels[:-1]
-        diagnostic_count = prior_labels.count(_LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT)
-        if diagnostic_count > 1:
-            raise _error(
-                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate small-screen diagnostic frame"
+        if focused_case:
+            if prior_labels not in ([], [_SMALL_SCREEN_CASE_SCREENSHOT]):
+                raise _error(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: focused small-screen "
+                    "failure markers are invalid"
+                )
+            prior_labels = []
+        if focused_case:
+            pass
+        else:
+            diagnostic_count = prior_labels.count(_LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT)
+            if diagnostic_count > 1:
+                raise _error(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate small-screen diagnostic frame"
+                )
+            milestones = tuple(
+                label for label in prior_labels
+                if label != _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT
             )
-        milestones = tuple(
-            label for label in prior_labels
-            if label != _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT
-        )
-        if milestones != _LOCAL_REQUIRED_SCREENSHOT_LABELS[: len(milestones)]:
-            raise _error(
-                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: local failure "
-                "milestones are out of order"
-            )
-        if diagnostic_count and tuple(prior_labels) != (
-            *_LOCAL_REQUIRED_SCREENSHOT_LABELS[:3],
-            _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT,
-        ):
-            raise _error(
-                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: small-screen diagnostic frame "
-                "must follow the large-font layout frame"
-            )
+            if milestones != _LOCAL_REQUIRED_SCREENSHOT_LABELS[: len(milestones)]:
+                raise _error(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: local failure "
+                    "milestones are out of order"
+                )
+            if diagnostic_count and tuple(prior_labels) != (
+                *_LOCAL_REQUIRED_SCREENSHOT_LABELS[:3],
+                _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT,
+            ):
+                raise _error(
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: small-screen diagnostic frame "
+                    "must follow the large-font layout frame"
+                )
     seen: dict[str, tuple[str, int, str, int, int]] = {}
     for match in matches:
         label = match.group(1).decode("ascii")

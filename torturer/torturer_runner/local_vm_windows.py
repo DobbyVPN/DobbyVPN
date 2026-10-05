@@ -35,7 +35,6 @@ _NATIVE_UI_ENVIRONMENT = frozenset({
     "DOBBY_LOG_ROOT",
     "DOBBY_LOG_PRECREATED",
     "GODEBUG",
-    "DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE",
     # The native UI smoke driver resolves PowerShell through shutil.which() for
     # clipboard and UI Automation operations.  The scheduled task runs with
     # the interactive account's environment, but ProcessStartInfo receives a

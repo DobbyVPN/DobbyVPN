@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -25,7 +26,12 @@ TORTURER_ROOT = PRODUCT_ROOT / "torturer"
 if str(TORTURER_ROOT) not in sys.path:
     sys.path.insert(0, str(TORTURER_ROOT))
 from torturer_runner import local_vm, local_vm_windows  # noqa: E402
-from torturer_runner.ui import smoke  # noqa: E402
+from torturer_runner.ui import journey, smoke  # noqa: E402
+from torturer_runner.native_cases import (  # noqa: E402
+    MACOS_CONFIGURE_STARTUP_CASE,
+    WINDOWS_CONFIGURE_TREE_CASE,
+    WINDOWS_FINDALL_PROBE_CASE,
+)
 
 SPEC = importlib.util.spec_from_file_location("dobbyvpn_installer_migration_test", MIGRATION_PATH)
 if SPEC is None or SPEC.loader is None:
@@ -197,6 +203,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 30,
                 helper=helper,
                 screenshot_dir=root / "screenshots",
+                native_cases=(WINDOWS_FINDALL_PROBE_CASE,),
             )
             controller._alive = mock.Mock(return_value=False)
 
@@ -206,6 +213,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                     controller.pid = 42
                     controller.identity = "candidate-ui-instance"
                     return {"alive": True, "pid": 42, "identity": controller.identity}
+                if operation == "findall-probe":
+                    return {"ready": True, "findAllCount": 1}
                 return {}
 
             controller._call = call  # type: ignore[method-assign]
@@ -219,42 +228,40 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             launcher = mock.Mock(pid=42)
             launcher.poll.return_value = None
 
-            with (
-                mock.patch.dict(os.environ, {"DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE": "1"}),
-                mock.patch.object(smoke.subprocess, "Popen", return_value=launcher),
-            ):
+            with mock.patch.object(smoke.subprocess, "Popen", return_value=launcher):
                 controller.start()
 
         self.assertEqual(calls, ["probe", "findall-probe", "snapshot", "focus", "snapshot"])
         self.assertEqual(controller.snapshot.call_count, 2)
 
-    def test_windows_uia_findall_probe_flag_requires_explicit_configuration(self) -> None:
+    def test_windows_native_cases_are_command_selectors_and_probe_is_not_an_env_flag(self) -> None:
         flag = "DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE"
-        with mock.patch.dict(os.environ, {}, clear=True):
-            environment = local_vm._native_ui_environment("windows", {})
-            macos_environment = local_vm._native_ui_environment("macos", {})
-        self.assertNotIn(flag, environment)
-        self.assertNotIn(flag, macos_environment)
-
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            cwd = root / "cwd"
-            cwd.mkdir()
-            with mock.patch.dict(os.environ, {flag: "1"}, clear=True):
-                environment = local_vm._native_ui_environment("windows", {})
-            self.assertEqual(environment, {flag: "1"})
-            wrapper = local_vm_windows._native_ui_wrapper(
-                [sys.executable, "-m", "torturer_runner.ui.journey"],
-                cwd=cwd,
-                environment=environment,
-                stdout=root / "stdout.log",
-                stderr=root / "stderr.log",
-                pid=root / "task.pid",
-                child_pid=root / "child.pid",
-                exit_code=root / "task.exit",
-            )
-        self.assertIn(f"$info.EnvironmentVariables['{flag}'] = '1'", wrapper)
-        self.assertIn(flag, local_vm_windows._NATIVE_UI_ENVIRONMENT)
+            run_dir = root / "run"
+            source = run_dir / "source" / "torturer" / "torturer_runner" / "ui"
+            source.mkdir(parents=True)
+            (source / "smoke.py").touch()
+            (source / "journey.py").touch()
+            helper = root / "NativeUI.exe"
+            helper.touch()
+            for selected in ("configure-tree", "findall-probe"):
+                command = local_vm._native_ui_command(
+                    run_dir,
+                    {"cli": "cli.exe", "ui": "ui.exe"},
+                    {"pid": 42, "binary": "service.exe", "pipe": "DobbyVPN.Control"},
+                    "windows",
+                    30,
+                    helper,
+                    native_cases=(selected,),
+                )
+                self.assertEqual(
+                    [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--native-case"],
+                    [selected],
+                )
+        self.assertNotIn(flag, local_vm_windows._NATIVE_UI_ENVIRONMENT)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertNotIn(flag, local_vm._native_ui_environment("windows", {}))
 
     def test_windows_uia_findall_probe_uses_the_existing_helper_timeout_cap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -285,6 +292,95 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout_seconds"], 10.0)
         request = json.loads(run.call_args.kwargs["input_bytes"])
         self.assertEqual(request["operation"], "findall-probe")
+
+    def test_native_case_driver_keeps_findall_separate_from_configure_tree_and_paste(self) -> None:
+        class FakeController:
+            def __init__(self, *_args, native_cases=(), **_kwargs):
+                self.native_cases = native_cases
+                self.operations: list[str] = []
+                self.native_case_results = {"findall-probe": {"ready": True, "findAllCount": 1}}
+
+            @staticmethod
+            def bounded_by(_timeout):
+                return mock.MagicMock(__enter__=mock.Mock(), __exit__=mock.Mock(return_value=False))
+
+            def start(self):
+                self.operations.append("start-tree")
+                return {"status": "Disconnected", "labels": ["Connection configuration"]}
+
+            def configure(self):
+                self.operations.append("rendered-configure")
+                return {"input_verified": True, "labels": ["Profile 1 action"]}
+
+            def close_for_cleanup(self):
+                self.operations.append("close")
+
+            def collect_diagnostics(self):
+                self.operations.append("collect")
+
+        class FakeSubscriptionFixture:
+            def __init__(self, profile, directory, platform, *, certificate_helper):
+                self.profile = profile
+                self.directory = directory
+                self.platform = platform
+                self.certificate_helper = certificate_helper
+
+            def start(self):
+                self.directory.mkdir(parents=True)
+                return "https://127.0.0.1:49152/subscription"
+
+            @staticmethod
+            def control_stats():
+                return {
+                    "subscription_gets": 1,
+                    "in_flight_gets": 0,
+                    "max_in_flight_gets": 1,
+                }
+
+            @staticmethod
+            def close():
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.write_bytes(b"disposable profile bytes")
+
+            def run_case(platform: str, case: str) -> tuple[dict, FakeController]:
+                constructed: list[FakeController] = []
+
+                def factory(*args, **kwargs):
+                    value = FakeController(*args, **kwargs)
+                    constructed.append(value)
+                    return value
+
+                with (
+                    mock.patch.object(journey.smoke, "NativeUIController", side_effect=factory),
+                    mock.patch(
+                        "torturer_runner.subscription_fixture.SubscriptionFixture",
+                        FakeSubscriptionFixture,
+                    ),
+                ):
+                    result = journey.run_native_cases(SimpleNamespace(
+                        platform=platform,
+                        native_cases=[case],
+                        raw_log_dir=root / "logs",
+                        ui=Path("app"),
+                        profile=profile,
+                        timeout=30,
+                        ui_helper=Path("helper"),
+                    ))
+                return result, constructed[0]
+
+            windows, windows_controller = run_case("windows", WINDOWS_CONFIGURE_TREE_CASE)
+            macos, macos_controller = run_case("macos", MACOS_CONFIGURE_STARTUP_CASE)
+            probe, probe_controller = run_case("windows", WINDOWS_FINDALL_PROBE_CASE)
+        self.assertEqual(windows["coverage"]["native_cases"], [WINDOWS_CONFIGURE_TREE_CASE])
+        self.assertEqual(windows_controller.operations, ["start-tree", "close", "collect"])
+        self.assertEqual(macos["checks"][MACOS_CONFIGURE_STARTUP_CASE]["configure"]["input_verified"], True)
+        self.assertEqual(macos_controller.operations, ["start-tree", "rendered-configure", "close", "collect"])
+        self.assertEqual(probe["checks"][WINDOWS_FINDALL_PROBE_CASE]["findAllCount"], 1)
+        self.assertEqual(probe_controller.operations, ["start-tree", "close", "collect"])
 
     def test_windows_native_ui_retains_window_readiness_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

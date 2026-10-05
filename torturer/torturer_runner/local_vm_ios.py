@@ -7,6 +7,7 @@ import platform
 import sys
 
 from . import ios_simulator_app as ios
+from .native_cases import IOS_RENDERER_SEVERITY_CASE
 
 
 def prepare(
@@ -39,6 +40,7 @@ def prepare(
         "mode": "ios-simulator",
         "app": str(contract.app_path(work)),
         "architecture": contract.architecture,
+        "source_sha": source_sha,
     }
 
 
@@ -47,6 +49,7 @@ def run(
     candidate: dict,
     logs: Path,
     timeout: float,
+    native_cases: list[str] | None = None,
 ) -> dict:
     from .local_vm import _read_state, _write_json
 
@@ -99,6 +102,12 @@ def run(
         evidence = ios.run_ios_simulator_app_contract(
             candidate_root=run_dir / "source", work_dir=work, runner=runner,
             contract=contract, budget=budget,
+            native_cases=native_cases,
+            source_sha=(
+                candidate.get("source_sha")
+                if isinstance(candidate.get("source_sha"), str)
+                else None
+            ),
         )
     except BaseException as error:
         # The contract retains artifacts before uninstall even when XCTest's
@@ -113,9 +122,23 @@ def run(
             )
         raise
     ios.retain_ios_diagnostics(work, logs / "ios-simulator")
+    selected_cases = native_cases or [
+        "NativeUIInteractionTests",
+        IOS_RENDERER_SEVERITY_CASE,
+    ]
     _write_json(logs / "simulator.json", {
         "scope": "ios-simulator-mini", "suite": "mini", "passed": True,
         "udid": evidence.simulator.udid, "architecture": contract.architecture,
+        "coverage": {
+            "platform": "ios-simulator",
+            "suite": "mini",
+            "kind": "native-cases" if native_cases is not None else "suite",
+            "native_case_selection": "explicit" if native_cases is not None else "suite-default",
+            "native_cases": selected_cases,
+            "xctest_filters": list(
+                getattr(evidence, "selected_tests", ios.ui_test_selection(native_cases))
+            ),
+        },
     })
     return _read_state(run_dir)["runtime"]
 

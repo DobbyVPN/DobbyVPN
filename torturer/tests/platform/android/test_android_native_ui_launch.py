@@ -13,7 +13,7 @@ from torturer_runner import local_vm_android
 
 class AndroidNativeUiColdLaunchTests(unittest.TestCase):
     def _run_ui(
-        self, start_output: bytes
+        self, start_output: bytes, native_cases: list[str] | None = None,
     ) -> tuple[
         subprocess.CompletedProcess[bytes] | None,
         Exception | None,
@@ -51,6 +51,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                         {"adb": "adb", "serial": "emulator-5554"},
                         logs,
                         timeout=30,
+                        native_cases=native_cases,
                     )
                 except Exception as error:
                     return None, error, calls
@@ -87,6 +88,20 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                     ],
                 ),
             ],
+        )
+
+    def test_small_screen_case_runs_only_its_exact_instrumentation_method(self) -> None:
+        result, error, calls = self._run_ui(
+            b"Starting: Intent\nStatus: ok\nLaunchState: COLD\nComplete\n",
+            ["small-screen-log-viewport"],
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(result.returncode, 0)
+        instrument = next(arguments for label, arguments in calls if label == "android-native-ui")
+        self.assertEqual(
+            instrument[instrument.index("-e") + 2],
+            "com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable",
         )
 
     def test_missing_foreground_marker_stops_before_instrumentation(self) -> None:
