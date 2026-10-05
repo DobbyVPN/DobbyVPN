@@ -25,6 +25,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate-root", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument("--source-sha", required=True)
     return parser.parse_args(argv)
 
 
@@ -42,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
             runner=runner,
             contract=contract,
             budget=budget,
+            source_sha=args.source_sha,
         )
         evidence = run_ios_simulator_app_contract(
             candidate_root=args.candidate_root,
@@ -49,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
             runner=runner,
             contract=contract,
             budget=budget,
+            source_sha=args.source_sha,
         )
     except IOSSimulatorAppContractError as error:
         try:

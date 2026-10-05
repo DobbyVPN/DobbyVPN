@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import io
 from pathlib import Path
+import contextlib
 import sys
 import subprocess
 import tempfile
@@ -12,8 +15,71 @@ from unittest import mock
 from torturer_runner import ios_simulator_app, local_vm, local_vm_ios
 from torturer_runner.native_cases import IOS_LOGS_FREEZE_RESUME_CASE, IOS_RENDERER_SEVERITY_CASE
 
+_ENTRYPOINT_PATH = Path(__file__).with_name("run_app_contract.py")
+_ENTRYPOINT_SPEC = importlib.util.spec_from_file_location(
+    "ios_simulator_run_app_contract", _ENTRYPOINT_PATH
+)
+assert _ENTRYPOINT_SPEC is not None and _ENTRYPOINT_SPEC.loader is not None
+IOS_RUNNER_ENTRYPOINT = importlib.util.module_from_spec(_ENTRYPOINT_SPEC)
+_ENTRYPOINT_SPEC.loader.exec_module(IOS_RUNNER_ENTRYPOINT)
+
 
 class IOSSimulatorBoundaryTests(unittest.TestCase):
+    def test_ci_entrypoint_passes_candidate_sha_into_build_and_ui_test(self) -> None:
+        source_sha = "a" * 40
+        contract = object()
+        runner = object()
+        budget = object()
+        evidence = SimpleNamespace(simulator=SimpleNamespace(name="iPhone", runtime="iOS 18"))
+        args = [
+            "--candidate-root", "candidate",
+            "--work-dir", "work",
+            "--source-sha", source_sha,
+        ]
+
+        with (
+            mock.patch.object(IOS_RUNNER_ENTRYPOINT, "public_ios_simulator_app_contract", return_value=contract),
+            mock.patch.object(IOS_RUNNER_ENTRYPOINT, "SubprocessCommandRunner", return_value=runner),
+            mock.patch.object(IOS_RUNNER_ENTRYPOINT, "RunBudget", return_value=budget),
+            mock.patch.object(IOS_RUNNER_ENTRYPOINT, "prepare_ios_simulator_candidate") as prepare,
+            mock.patch.object(IOS_RUNNER_ENTRYPOINT, "run_ios_simulator_app_contract", return_value=evidence) as run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(IOS_RUNNER_ENTRYPOINT.main(args), 0)
+
+        self.assertEqual(prepare.call_args.kwargs["source_sha"], source_sha)
+        self.assertEqual(run.call_args.kwargs["source_sha"], source_sha)
+        self.assertEqual(prepare.call_args.kwargs["contract"], contract)
+        workflow = (_ENTRYPOINT_PATH.parents[4] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        invocation = workflow.split("python3 torturer/tests/platform/ios_simulator/run_app_contract.py", 1)[1].split("\n\n", 1)[0]
+        self.assertIn('--source-sha "$GITHUB_SHA"', invocation)
+
+    def test_ci_entrypoint_retains_early_failure_in_uploaded_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            work_dir = Path(name) / "work"
+            failure = ios_simulator_app.IOSSimulatorStageError("package-ios-app", "xcodebuild failed")
+            stderr = io.StringIO()
+            args = [
+                "--candidate-root", str(Path(name) / "candidate"),
+                "--work-dir", str(work_dir),
+                "--source-sha", "b" * 40,
+            ]
+            with (
+                mock.patch.object(IOS_RUNNER_ENTRYPOINT, "prepare_ios_simulator_candidate", side_effect=failure),
+                mock.patch.object(IOS_RUNNER_ENTRYPOINT, "run_ios_simulator_app_contract") as run,
+                contextlib.redirect_stderr(stderr),
+            ):
+                self.assertEqual(IOS_RUNNER_ENTRYPOINT.main(args), 1)
+
+            report = work_dir / "diagnostics/ios-simulator/runner-failure.txt"
+            self.assertTrue(report.is_file())
+            self.assertIn("xcodebuild failed", report.read_text(encoding="utf-8"))
+            self.assertIn("xcodebuild failed", stderr.getvalue())
+            run.assert_not_called()
+            workflow = (_ENTRYPOINT_PATH.parents[4] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+            self.assertIn("if: always()", workflow)
+            self.assertIn("ios-simulator-mini-contract/diagnostics", workflow)
+
     def test_early_failure_report_is_nonempty_and_keeps_exception_notes(self) -> None:
         failure = ios_simulator_app.IOSSimulatorStageError("install", "simctl failed")
         failure.add_note("command_stdout:\ninstall stdout")

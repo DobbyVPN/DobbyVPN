@@ -359,8 +359,21 @@ internal static class Program
             var traceFindAllProbe = operation == "findall-probe";
             if (traceTree) TracePhase($"tree-window-discovery-start pid={process.Id}");
             if (traceFindAllProbe) TracePhase($"uia-findall-probe-window-discovery-start pid={process.Id}");
-            process.Refresh();
-            var window = process.MainWindowHandle;
+            IntPtr window = IntPtr.Zero;
+            if (traceFindAllProbe)
+            {
+                WaitFor(() =>
+                {
+                    process.Refresh();
+                    window = process.MainWindowHandle;
+                    return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);
+                }, "UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 7.0);
+            }
+            else
+            {
+                process.Refresh();
+                window = process.MainWindowHandle;
+            }
             if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
             if (traceFindAllProbe) TracePhase($"uia-findall-probe-window-discovery-complete hwnd=0x{window.ToInt64():X}");
             var visible = window != IntPtr.Zero && IsWindowVisible(window);

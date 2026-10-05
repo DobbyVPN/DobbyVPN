@@ -337,7 +337,8 @@ jobs:
           set -euo pipefail
           python3 torturer/tests/platform/ios_simulator/run_app_contract.py \
             --candidate-root "$GITHUB_WORKSPACE" \
-            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract"
+            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
+            --source-sha "$GITHUB_SHA"
 
       - name: Retain complete iOS Simulator diagnostics
         if: always()

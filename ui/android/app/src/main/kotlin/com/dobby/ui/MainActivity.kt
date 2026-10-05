@@ -678,7 +678,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     }
                 }
             }
-            LogsPane(controller, Modifier.weight(1f))
+            LogsPane(controller)
         }
     }
 }
@@ -706,7 +706,7 @@ private fun AboutScreen(controller: SessionController, modifier: Modifier) {
 }
 
 @Composable
-private fun LogsPane(controller: SessionController, modifier: Modifier) {
+private fun ColumnScope.LogsPane(controller: SessionController) {
     val state = controller.state
     val colors = MaterialTheme.colorScheme
     val normalColor = colors.onSurface.toArgb()
@@ -714,23 +714,21 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
     val warningColor = (if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFFFFD084)
         else androidx.compose.ui.graphics.Color(0xFF8A5A00)).toArgb()
     val errorColor = colors.error.toArgb()
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Column(Modifier.fillMaxWidth()) {
-            Text("Logs", style = MaterialTheme.typography.titleMedium)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = controller::clearLogs) { Text("Clear") }
-                TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
-            }
+    Column(Modifier.fillMaxWidth()) {
+        Text("Logs", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = controller::clearLogs) { Text("Clear") }
+            TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
         }
-        if (state.logsError.isNotEmpty()) {
-            Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
-        }
-        AndroidView(
-            factory = { controller.createLogView(it) },
-            modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
-            update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
-        )
     }
+    if (state.logsError.isNotEmpty()) {
+        Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
+    }
+    AndroidView(
+        factory = { controller.createLogView(it) },
+        modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
+        update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
+    )
 }
 
 private class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
