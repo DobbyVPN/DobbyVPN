@@ -20,6 +20,8 @@ internal static class Program
 {
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
@@ -106,8 +108,8 @@ internal static class Program
             throw new InvalidOperationException("Could not capture the original window bounds for narrow-window test");
         var windowElement = AutomationElement.FromHandle(window);
         if (!windowElement.TryGetCurrentPattern(WindowPattern.Pattern, out var windowPattern) ||
-            !((WindowPattern)windowPattern).Current.CanResize)
-            throw new InvalidOperationException("Native window does not expose a resizable WindowPattern");
+            !((WindowPattern)windowPattern).Current.CanMaximize)
+            throw new InvalidOperationException("Native window does not expose a maximizable WindowPattern");
 
         var screenshot = Path.Combine(Path.GetTempPath(), "dobby-narrow-window-" + Guid.NewGuid().ToString("N") + ".png");
         Exception? operationFailure = null;

@@ -202,43 +202,48 @@ func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, so
     }
     var primary: Error?
     do {
-        func verifyUnavailablePaste(_ reason: String) throws {
+        func refreshPasteAvailability(_ reason: String, expected: Bool) throws -> (editor: AXUIElement, button: AXUIElement?) {
             if let finder = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.finder" }) {
                 _ = finder.activate(options: [.activateAllWindows])
                 Thread.sleep(forTimeInterval: 0.1)
             }
             try require(app.activate(options: [.activateAllWindows]), "Could not refresh native Paste availability for \(reason) clipboard")
-            let nodes = try elements(window)
-            let currentEditor = try find(nodes, "Connection configuration", editor: true)
-            try require(try label(currentEditor, kAXValueAttribute) == fieldBeforeClipboard,
-                        "\(reason) clipboard availability changed the configuration before Paste was tapped")
-            let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
-            let pasteAvailable = try buttons.contains { try names($0).contains("Paste") }
-            try require(!pasteAvailable, "Native Paste button was available for a \(reason) clipboard")
+            let deadline = Date().addingTimeInterval(5)
+            var lastAvailabilityError: HelperError?
+            repeat {
+                let nodes = try elements(window)
+                let currentEditor = try find(nodes, "Connection configuration", editor: true)
+                try require(try label(currentEditor, kAXValueAttribute) == fieldBeforeClipboard,
+                            "\(reason) clipboard availability changed the configuration before Paste was tapped")
+                let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
+                if expected {
+                    do { return (currentEditor, try find(buttons, "Paste")) }
+                    catch let error as HelperError { lastAvailabilityError = error }
+                } else {
+                    let pasteAvailable = try buttons.contains { try names($0).contains("Paste") }
+                    if !pasteAvailable { return (currentEditor, nil) }
+                }
+                if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+            } while Date() < deadline
+            if expected, let lastAvailabilityError { throw lastAvailabilityError }
+            if expected { throw HelperError("Native Paste button did not become available for a \(reason) clipboard") }
+            throw HelperError("Native Paste button was available for a \(reason) clipboard")
         }
 
         board.clearContents()
-        try verifyUnavailablePaste("empty")
+        _ = try refreshPasteAvailability("empty", expected: false)
         try require(
             board.setData(Data("synthetic image payload".utf8), forType: NSPasteboard.PasteboardType("public.png")),
             "Could not write synthetic non-text clipboard item"
         )
-        try verifyUnavailablePaste("non-text")
+        _ = try refreshPasteAvailability("non-text", expected: false)
 
         board.clearContents()
         try require(board.setString(value, forType: .string), "Could not write native clipboard")
-        if let finder = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.finder" }) {
-            _ = finder.activate(options: [.activateAllWindows])
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-        try require(app.activate(options: [.activateAllWindows]), "Could not refresh native Paste availability")
-        let nodes = try elements(window)
-        let currentEditor = try find(nodes, "Connection configuration", editor: true)
-        let fieldAtAvailability = try label(currentEditor, kAXValueAttribute)
-        try require(fieldAtAvailability == fieldBeforeClipboard,
-                    "Clipboard availability inspection changed the configuration before Paste was tapped")
-        let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
-        try press(find(buttons, "Paste"))
+        let availability = try refreshPasteAvailability("text", expected: true)
+        let currentEditor = availability.editor
+        guard let pasteButton = availability.button else { throw HelperError("Native Paste button was not available for a text clipboard") }
+        try press(pasteButton)
         let deadline = Date().addingTimeInterval(5)
         var observed = ""
         repeat {

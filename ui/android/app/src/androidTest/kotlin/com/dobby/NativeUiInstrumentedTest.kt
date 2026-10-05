@@ -416,7 +416,12 @@ class NativeUiInstrumentedTest {
         }
         val remainingPaste = waitForObject("Paste", 100)
         check(remainingPaste == null) {
-            val types = clipboard.primaryClipDescription?.mimeTypes?.joinToString(",") ?: "<none>"
+            val description = clipboard.primaryClipDescription
+            val types = description?.let { clipDescription ->
+                (0 until clipDescription.getMimeTypeCount()).joinToString(",") { index ->
+                    clipDescription.getMimeType(index)
+                }
+            } ?: "<none>"
             "ANDROID_PASTE_REMAINS_WITHOUT_CLIP has_primary_clip=${clipboard.hasPrimaryClip()} " +
                 "advertised_mime_types=$types"
         }

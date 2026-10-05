@@ -45,9 +45,15 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'WaitForPasteAvailability(false, "non-text");',
             'WaitForPasteAvailability(true, "text");',
             'new[] { "Connection configuration", "VPN connection action", "Profile 1 action", "Profile 2 action", "Backend logs" }',
+            '[DllImport("user32.dll", SetLastError = true)]\n    private static extern bool SetWindowPos(',
+            '((WindowPattern)windowPattern).Current.CanMaximize',
+            '"Could not restore native window bounds after narrow-window test"',
+            'originalBounds.Right - originalBounds.Left',
+            'originalBounds.Bottom - originalBounds.Top',
         ):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
+        self.assertNotIn(".Current.CanResize", source)
 
     def test_msi_lifecycle_probes_registration_command_and_removal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

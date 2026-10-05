@@ -57,6 +57,11 @@ public struct DobbyRootView: View {
                 .onDisappear { view.model.setLogsVisible(false) }
                 .onChange(of: view.model.status) { status in view.announceStatus(status) }
                 .onChange(of: view.scenePhase) { phase in view.model.setLogsVisible(phase == .active); view.refreshClipboard() }
+#if os(macOS)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    view.refreshClipboard()
+                }
+#endif
                 .onOpenURL { view.model.importLink($0) }
                 .sheet(isPresented: view.$showingAbout) {
                     DobbyAboutView(model: view.model)

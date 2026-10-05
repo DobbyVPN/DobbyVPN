@@ -375,9 +375,9 @@ private class SessionController(
         }
         val available = runCatching {
             if (!clipboard.hasPrimaryClip()) false
-            else clipboard.primaryClipDescription?.mimeTypes?.any { type ->
-                type.equals(ClipDescription.MIMETYPE_TEXT_PLAIN, ignoreCase = true) ||
-                    type.equals(ClipDescription.MIMETYPE_TEXT_HTML, ignoreCase = true)
+            else clipboard.primaryClipDescription?.let { description ->
+                description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) ||
+                    description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)
             } == true
         }.getOrDefault(false)
         if (state.canPaste != available) state = state.copy(canPaste = available)
