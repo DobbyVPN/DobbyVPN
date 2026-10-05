@@ -332,8 +332,8 @@ internal static class Program
             var minimized = window != IntPtr.Zero && IsIconic(window);
             if (!visible || minimized)
             {
-                uint owner = 0;
-                if (window != IntPtr.Zero) GetWindowThreadProcessId(window, out owner);
+                uint windowOwnerPid = 0;
+                if (window != IntPtr.Zero) GetWindowThreadProcessId(window, out windowOwnerPid);
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
                     ready = false,
@@ -342,7 +342,7 @@ internal static class Program
                     windowHandle = $"0x{window.ToInt64():X}",
                     visible,
                     minimized,
-                    ownerPid = owner,
+                    ownerPid = windowOwnerPid,
                     candidateSessionId = process.SessionId,
                     helperSessionId = Process.GetCurrentProcess().SessionId,
                     mainWindowTitle = process.MainWindowTitle,

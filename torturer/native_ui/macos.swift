@@ -46,6 +46,34 @@ func label(_ element: AXUIElement, _ name: String) throws -> String {
     (try attribute(element, name)) as? String ?? ""
 }
 
+func visibleCharacterRange(_ element: AXUIElement) throws -> (range: CFRange, characterCount: Int) {
+    var lastRange = CFRange(location: -1, length: 0)
+    var lastCharacterCount = -1
+    for _ in 0..<10 {
+        guard let value = try axValue(element, kAXVisibleCharacterRangeAttribute),
+              let rawCount = try attribute(element, kAXNumberOfCharactersAttribute) as? NSNumber else {
+            Thread.sleep(forTimeInterval: 0.025)
+            continue
+        }
+        var range = CFRange(location: 0, length: 0)
+        try require(AXValueGetValue(value, .cfRange, &range), "Could not read native log visible character range")
+        let characterCount = rawCount.intValue
+        lastRange = range
+        lastCharacterCount = characterCount
+        if range.location >= 0 && range.length > 0 && range.location <= characterCount &&
+            range.length <= characterCount - range.location {
+            return (range, characterCount)
+        }
+        // SwiftUI can refresh the log text between these two AX reads.
+        Thread.sleep(forTimeInterval: 0.025)
+    }
+    throw HelperError(
+        "Native log viewer returned an invalid visible character range; " +
+            "range=(\(lastRange.location), \(lastRange.length)), " +
+            "characters=\(lastCharacterCount) after 10 retries"
+    )
+}
+
 func elements(_ window: AXUIElement) throws -> [AXUIElement] {
     var queue = [window]
     var index = 0
@@ -402,12 +430,7 @@ func run() throws -> [String: Any] {
     }
     if operation == "log-position" {
         let view = try find(nodes, "Connection logs", editor: true)
-        guard let rangeValue = try axValue(view, kAXVisibleCharacterRangeAttribute),
-              let rawCount = try attribute(view, kAXNumberOfCharactersAttribute) as? NSNumber else {
-            throw HelperError("Native log viewer does not expose its reading position")
-        }
-        var range = CFRange(location: 0, length: 0)
-        try require(AXValueGetValue(rangeValue, .cfRange, &range), "Could not read native log visible character range")
+        let sample = try visibleCharacterRange(view)
         var parent: AXUIElement? = view
         var scrollArea: AXUIElement?
         for _ in 0..<8 {
@@ -424,9 +447,9 @@ func run() throws -> [String: Any] {
               let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
             throw HelperError("Native log viewer has no readable vertical position")
         }
-        return ["ready": true, "visible_range_start": range.location,
-                "visible_range_end": range.location + range.length,
-                "character_count": rawCount.intValue, "scrollbar_position": value.doubleValue]
+        return ["ready": true, "visible_range_start": sample.range.location,
+                "visible_range_end": sample.range.location + sample.range.length,
+                "character_count": sample.characterCount, "scrollbar_position": value.doubleValue]
     }
     if operation == "select-log-text" {
         let view = try find(nodes, "Connection logs", editor: true)
@@ -474,24 +497,13 @@ func run() throws -> [String: Any] {
               let scrollbar = try axElement(area, kAXVerticalScrollBarAttribute) else {
             throw HelperError("Native log viewer does not expose a vertical scrollbar")
         }
-        func visibleRange() throws -> CFRange {
-            guard let value = try axValue(view, kAXVisibleCharacterRangeAttribute) else {
-                throw HelperError("Native log viewer has no visible character range")
-            }
-            var range = CFRange(location: 0, length: 0)
-            try require(AXValueGetValue(value, .cfRange, &range), "Could not read native log visible character range")
-            return range
-        }
-        guard let rawCharacterCount = try attribute(view, kAXNumberOfCharactersAttribute) as? NSNumber else {
-            throw HelperError("Native log viewer has no character count")
-        }
-        let characterCount = rawCharacterCount.intValue
+        var sample = try visibleCharacterRange(view)
+        var characterCount = sample.characterCount
         try require(characterCount > 0, "Native log viewer has no content to scroll")
         func checkedVisibleRange() throws -> CFRange {
-            let range = try visibleRange()
-            try require(range.location >= 0 && range.length > 0 && range.location + range.length <= characterCount,
-                        "Native log viewer returned an invalid visible character range")
-            return range
+            sample = try visibleCharacterRange(view)
+            characterCount = sample.characterCount
+            return sample.range
         }
         func distanceFromTarget(_ range: CFRange) -> Int {
             position == "top" ? range.location : characterCount - range.location - range.length
@@ -499,7 +511,7 @@ func run() throws -> [String: Any] {
         func isAtTarget(_ range: CFRange) -> Bool {
             distanceFromTarget(range) <= 1
         }
-        var range = try checkedVisibleRange()
+        var range = sample.range
         try require(range.length < characterCount, "Native log viewer does not overflow its viewport; freeze/resume cannot be tested")
         if !isAtTarget(range) {
             let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)

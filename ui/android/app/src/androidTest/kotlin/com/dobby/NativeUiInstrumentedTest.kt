@@ -851,7 +851,7 @@ class NativeUiInstrumentedTest {
         launchImport("dobbyvpn://", coldStart = true)
         waitForOneOf(arrayOf("Disconnected"), 10_000)
         assertDeliveredImport("dobbyvpn://")
-        waitForConfigurationText(persistedSource)
+        waitForConfigurationText(persistedSource, 10_000)
         check(device.findObject(By.text("Error").pkg(packageName)) == null) {
             "ANDROID_BARE_LINK_SHOWED_ERROR"
         }
