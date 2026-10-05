@@ -21,6 +21,40 @@ private final class DiagnosticClient: DobbySessionClient, @unchecked Sendable {
 
 final class DiagnosticsTests: XCTestCase {
     @MainActor
+    func testVisibleUIErrorsRefreshAndClearKeepsFollowing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let backend = directory.appendingPathComponent("backend.jsonl")
+        try Data("before clear\n".utf8).write(to: backend)
+        let model = DobbySessionViewModel(client: DiagnosticClient(paths: [backend]))
+
+        let initial = expectation(description: "initial records are visible")
+        let initialSubscription = model.$logEntries.first { entries in
+            entries.contains(where: { $0.message == "before clear" })
+        }.sink { _ in initial.fulfill() }
+        model.setLogsVisible(true)
+        await fulfillment(of: [initial], timeout: 5)
+        initialSubscription.cancel()
+
+        let hidden = expectation(description: "clear hides all prior records")
+        let clearSubscription = model.$logEntries.dropFirst().first { entries in
+            !entries.contains(where: { $0.message == "before clear" })
+        }.sink { _ in hidden.fulfill() }
+        model.clearLogs()
+        await fulfillment(of: [hidden], timeout: 5)
+        clearSubscription.cancel()
+
+        let resumed = expectation(description: "following displays new records")
+        let resumedSubscription = model.$logEntries.first { entries in
+            entries.contains(where: { $0.message == "Paste an HTTPS subscription URL with a host" })
+        }.sink { _ in resumed.fulfill() }
+        model.paste("http://example.invalid/after-clear")
+        await fulfillment(of: [resumed], timeout: 5)
+        resumedSubscription.cancel()
+    }
+
+    @MainActor
     func testExportReadsFreshCompleteFilesAndMetadata() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

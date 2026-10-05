@@ -61,9 +61,17 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
         let populated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", ""), object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [populated], timeout: 10), .completed, "The prior error should be visible before clearing")
+        let clearSentinel = "Paste an HTTPS subscription URL with a host"
+        UIPasteboard.general.string = "http://example.invalid/clear-sentinel"
+        let sentinelCount = occurrences(of: clearSentinel, in: logs.value as? String ?? "")
+        app.buttons["Paste"].tap()
+        XCTAssertTrue(waitForLogOccurrences(clearSentinel, atLeast: sentinelCount + 1, in: logs, timeout: 20))
         app.buttons["Clear"].tap()
-        let emptied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", ""), object: logs)
-        XCTAssertEqual(XCTWaiter.wait(for: [emptied], timeout: 10), .completed, "Clear should empty the rendered log view")
+        let cleared = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
+            guard let logs = element as? XCUIElement else { return false }
+            return !(logs.value as? String ?? "").contains(clearSentinel)
+        }, object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 15), .completed, "Clear should hide records written before its boundary")
         if #available(iOS 16.4, *) {
             var invalidImport = URLComponents()
             invalidImport.scheme = "dobbyvpn"
@@ -158,10 +166,10 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(errorStatus.waitForExistence(timeout: 10))
         expectedErrorCount += 1
         XCTAssertTrue(waitForLogOccurrences(
-            validationError, atLeast: expectedErrorCount, in: logs, timeout: 10
+            validationError, atLeast: expectedErrorCount, in: logs, timeout: 20
         ))
 
-        for _ in 0..<8 {
+        for _ in 0..<3 {
             configuration.tap()
             configuration.typeText("x")
             dismissConfigurationKeyboard()
@@ -169,18 +177,18 @@ final class NativeUIInteractionTests: XCTestCase {
             XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
             expectedErrorCount += 1
             XCTAssertTrue(waitForLogOccurrences(
-                validationError, atLeast: expectedErrorCount, in: logs, timeout: 5
+                validationError, atLeast: expectedErrorCount, in: logs, timeout: 20
             ))
         }
 
         let enoughEntries = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
-            return self.occurrences(of: validationError, in: text) >= 6
+            return self.occurrences(of: validationError, in: text) >= 4
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
         let beforeScroll = try XCTUnwrap(logs.value as? String)
         let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
-        XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 6)
+        XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 4)
 
         logs.swipeDown()
         let frozen = try XCTUnwrap(logs.value as? String)

@@ -36,6 +36,9 @@ public final class DobbySessionViewModel: ObservableObject {
     private var acceptedSource = ""
     private var logsVisible = false
     private var logsInFlight = false
+    private var logsRefreshPending = false
+    private var logsClearInFlight = false
+    private var logsRevision = 0
     private var lastFailure = ""
     private var diagnosticWriteError = ""
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
@@ -260,7 +263,13 @@ public final class DobbySessionViewModel: ObservableObject {
     private func recordError(_ message: String) {
         let path = client.uiDiagnosticPath
         logWorker.async { [weak self] in
-            do { try appendUIDiagnostic(message, to: path) } catch {
+            do {
+                try appendUIDiagnostic(message, to: path)
+                Task { @MainActor [weak self] in
+                    guard let self, self.logsVisible else { return }
+                    self.refreshLogs()
+                }
+            } catch {
                 var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
                 do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
                     failure += "\nStderr write failed: \(String(reflecting: error))"
@@ -274,8 +283,10 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func refreshLogs() {
-        guard !logsInFlight else { return }
+        guard !logsInFlight else { logsRefreshPending = true; return }
         logsInFlight = true
+        logsRefreshPending = false
+        let revision = logsRevision
         let paths = client.diagnosticPaths
         let boundary = client.uiDiagnosticPath.appendingPathExtension("view")
         logWorker.async { [weak self] in
@@ -283,26 +294,38 @@ public final class DobbySessionViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.logsInFlight = false
-                self.logEntries = result.entries
-                self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
+                if revision == self.logsRevision && !self.logsClearInFlight {
+                    self.logEntries = result.entries
+                    self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
+                } else {
+                    self.logsRefreshPending = true
+                }
+                if self.logsRefreshPending && !self.logsClearInFlight {
+                    self.refreshLogs()
+                }
             }
         }
     }
 
     public func clearLogs() {
+        logsRevision += 1
+        let revision = logsRevision
+        logsClearInFlight = true
+        logsRefreshPending = true
         let paths = client.diagnosticPaths
         let boundary = client.uiDiagnosticPath.appendingPathExtension("view")
         logWorker.async { [weak self] in
             let result = Result { try clearDiagnosticView(paths: paths, boundary: boundary) }
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, revision == self.logsRevision else { return }
+                self.logsClearInFlight = false
                 switch result {
                 case .success:
                     self.logEntries = []
                     self.clearRevision += 1
-                    self.refreshLogs()
                 case let .failure(error): self.reportLogsError(error.localizedDescription)
                 }
+                self.refreshLogs()
             }
         }
     }
