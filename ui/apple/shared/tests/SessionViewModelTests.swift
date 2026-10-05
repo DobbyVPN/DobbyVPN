@@ -164,6 +164,28 @@ final class SessionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testInvalidImportGuidanceSurvivesConnectionSnapshotError() async throws {
+        let fixture = try ViewModelFixture(initialSource: "https://example.invalid/original", inventoryConfigured: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let model = DobbySessionViewModel(client: fixture.client)
+        await waitForSnapshot(model) { $0.configured && $0.sourceURL == "https://example.invalid/original" }
+
+        model.importLink(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fa&url=duplicate")!)
+        let guidance = model.importError
+        XCTAssertTrue(guidance.contains("Use dobbyvpn://import?url="))
+        model.importLink(URL(string: "dobbyvpn://")!)
+        XCTAssertEqual(model.importError, guidance,
+                       "A bare link opens the app and must not clear guidance for the rejected import")
+
+        fixture.client.setSnapshotOverrides(["source_error": "Simulator provider IPC unavailable"])
+        model.refreshSnapshot()
+        let refreshed = await waitUntil(timeout: 2) { model.snapshot.sourceError == "Simulator provider IPC unavailable" }
+        XCTAssertTrue(refreshed)
+        XCTAssertEqual(model.importError, guidance,
+                       "A connection/provider snapshot error must not replace actionable invalid-link guidance")
+    }
+
+    @MainActor
     func testLinkImportWhileConnectingKeepsPendingTargetWithoutStartingOrStopping() async throws {
         let original = "https://example.invalid/original"
         let imported = "https://example.invalid/imported-while-connecting"

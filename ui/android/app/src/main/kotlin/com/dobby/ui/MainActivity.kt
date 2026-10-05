@@ -422,9 +422,9 @@ private class SessionController(
     }
 
     fun importLink(value: String) {
+        if (value.equals("dobbyvpn://", ignoreCase = true)) return
         try {
             val uri = java.net.URI(value)
-            if (uri.scheme.equals("dobbyvpn", true) && uri.rawSchemeSpecificPart == "//") return
             require(uri.scheme.equals("dobbyvpn", true) && uri.host == "import" && uri.rawPath.isNullOrEmpty() && uri.rawFragment == null && uri.rawUserInfo == null && uri.port == -1)
             val query = uri.rawQuery.orEmpty().split('&')
             require(query.size == 1)

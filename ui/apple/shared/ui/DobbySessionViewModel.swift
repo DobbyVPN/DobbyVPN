@@ -8,6 +8,7 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var error = "" {
         didSet { if !error.isEmpty && error != oldValue { recordError(error) } }
     }
+    @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
     @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
@@ -96,6 +97,7 @@ public final class DobbySessionViewModel: ObservableObject {
     public func sourceChanged(_ value: String, immediate: Bool = false) {
         sourceText = value
         sourceIsDirty = true
+        importError = ""
         error = ""
         loadError = ""
         loadRevision += 1
@@ -120,8 +122,17 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public func importLink(_ url: URL) {
         do {
-            if let source = try subscriptionFromLink(url.absoluteString) { paste(source) }
-        } catch { self.error = error.localizedDescription }
+            let source = try subscriptionFromLink(url.absoluteString)
+            guard let source else { return }
+            if !importError.isEmpty {
+                if error == importError { error = "" }
+                importError = ""
+            }
+            paste(source)
+        } catch {
+            importError = error.localizedDescription
+            self.error = error.localizedDescription
+        }
     }
 
     public func retryLoad() { sourceChanged(sourceText, immediate: true) }

@@ -26,6 +26,7 @@ import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.dobby.ui.MainActivity
+import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.vpn.BuildConfig
 import java.util.zip.GZIPInputStream
@@ -844,6 +845,35 @@ class NativeUiInstrumentedTest {
 
     private fun verifyInvalidImportOutcome() {
         assertConnectionDisabled("ANDROID_INVALID_URL_ENABLED_CONNECT")
+        val sourceSelector = By.clazz("android.widget.EditText").pkg(packageName)
+        val beforeBareLink = JSONObject(NativeGoSession.snapshot("")).getJSONObject("result")
+        val persistedSource = beforeBareLink.optString("source_url")
+        launchImport("dobbyvpn://", coldStart = true)
+        waitForOneOf(arrayOf("Disconnected"), 10_000)
+        assertDeliveredImport("dobbyvpn://")
+        waitForConfigurationText(persistedSource)
+        check(device.findObject(By.text("Error").pkg(packageName)) == null) {
+            "ANDROID_BARE_LINK_SHOWED_ERROR"
+        }
+        check(device.findObject(sourceSelector)?.text == persistedSource) {
+            "ANDROID_BARE_LINK_CHANGED_SUBSCRIPTION_SOURCE"
+        }
+        val afterColdBareLink = JSONObject(NativeGoSession.snapshot("")).getJSONObject("result")
+        assertBareLinkPreserved(beforeBareLink, afterColdBareLink, "cold")
+        check(!connectionLogTextView().text.toString().contains("Expected authority at index 11")) {
+            "ANDROID_BARE_LINK_REPORTED_URI_PARSE_ERROR"
+        }
+        launchImport("dobbyvpn://", coldStart = false)
+        waitForOneOf(arrayOf("Disconnected"), 10_000)
+        assertDeliveredImport("dobbyvpn://")
+        check(device.findObject(By.text("Error").pkg(packageName)) == null) {
+            "ANDROID_WARM_BARE_LINK_SHOWED_ERROR"
+        }
+        check(device.findObject(sourceSelector)?.text == persistedSource) {
+            "ANDROID_WARM_BARE_LINK_CHANGED_SUBSCRIPTION_SOURCE"
+        }
+        val afterWarmBareLink = JSONObject(NativeGoSession.snapshot("")).getJSONObject("result")
+        assertBareLinkPreserved(afterColdBareLink, afterWarmBareLink, "warm")
         val invalid = listOf(
             "dobbyvpn://import?url=http%3A%2F%2Fexample.invalid%2Fsubscription" to "HTTPS subscription URL with a host",
             "dobbyvpn://import" to "Use dobbyvpn://import?url=",
@@ -901,6 +931,17 @@ class NativeUiInstrumentedTest {
         throw AssertionError("ANDROID_IMPORT_INTENT_NOT_DELIVERED")
     }
 
+    private fun assertBareLinkPreserved(before: JSONObject, after: JSONObject, delivery: String) {
+        check(before.optString("session_id") == after.optString("session_id")
+                && before.optLong("sequence") == after.optLong("sequence")
+                && before.optLong("generation") == after.optLong("generation")
+                && before.optString("state") == after.optString("state")
+                && before.optString("source_url") == after.optString("source_url")
+                && before.optString("digest") == after.optString("digest")) {
+            "ANDROID_${delivery.uppercase()}_BARE_LINK_CHANGED_SESSION_OR_SOURCE"
+        }
+    }
+
     private fun tapAndWaitForVisible(control: String, outcome: String) {
         tapStable(control)
         if (waitForObject(outcome, 10_000) == null) {
@@ -925,9 +966,19 @@ class NativeUiInstrumentedTest {
     }
 
     private fun scrollControlsToConnectionAction() {
-        var controls: UiObject2? = requireObject("Subscription URL")
-        while (controls != null && !controls.isScrollable) controls = controls.parent
-        val viewport = controls ?: throw AssertionError("ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING")
+        val width = device.displayWidth
+        val height = device.displayHeight
+        var ancestor: UiObject2? = requireObject("Subscription URL")
+        val scrollableViewports = mutableListOf<UiObject2>()
+        while (ancestor != null) {
+            val bounds = ancestor.visibleBounds
+            if (ancestor.isScrollable && bounds.width() >= width * 8 / 10 && bounds.height() >= height / 5) {
+                scrollableViewports += ancestor
+            }
+            ancestor = ancestor.parent
+        }
+        val viewport = scrollableViewports.maxByOrNull { it.visibleBounds.height() }
+            ?: throw AssertionError("ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING ${width}x$height")
 
         var reachedStatus: UiObject2? = null
         var reachedAction: UiObject2? = null
@@ -936,9 +987,7 @@ class NativeUiInstrumentedTest {
             reachedAction = waitForObject(connectionActionLabel, 100)
             if (reachedStatus != null && reachedAction != null) break
             if (attempt == 8) break
-            if (!viewport.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)) {
-                throw AssertionError("ANDROID_CONTROLS_SCROLL_FAILED")
-            }
+            if (!viewport.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)) break
             device.waitForIdle()
         }
 

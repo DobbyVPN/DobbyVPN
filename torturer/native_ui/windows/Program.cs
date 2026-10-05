@@ -328,9 +328,26 @@ internal static class Program
             }
             process.Refresh();
             var window = process.MainWindowHandle;
-            if (window == IntPtr.Zero || !IsWindowVisible(window) || IsIconic(window))
+            var visible = window != IntPtr.Zero && IsWindowVisible(window);
+            var minimized = window != IntPtr.Zero && IsIconic(window);
+            if (!visible || minimized)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { ready = false, pid = process.Id, identity }));
+                uint owner = 0;
+                if (window != IntPtr.Zero) GetWindowThreadProcessId(window, out owner);
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    ready = false,
+                    pid = process.Id,
+                    identity,
+                    windowHandle = $"0x{window.ToInt64():X}",
+                    visible,
+                    minimized,
+                    ownerPid = owner,
+                    candidateSessionId = process.SessionId,
+                    helperSessionId = Process.GetCurrentProcess().SessionId,
+                    mainWindowTitle = process.MainWindowTitle,
+                    windowDescription = window == IntPtr.Zero ? "unavailable" : DescribeWindow(window),
+                }));
                 return 0;
             }
             GetWindowThreadProcessId(window, out var owner);

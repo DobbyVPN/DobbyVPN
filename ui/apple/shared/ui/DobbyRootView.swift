@@ -183,7 +183,12 @@ public struct DobbyRootView: View {
                 Button(model.snapshot.state == "CONNECTED" ? "Disconnect" : "Stop") { model.stop() }
                     .disabled(model.busy)
             }
-            if !model.error.isEmpty {
+            if !model.importError.isEmpty {
+                Text(model.importError)
+                    .font(.subheadline).foregroundStyle(.red)
+                    .accessibilityIdentifier("Deep link import guidance")
+            }
+            if !model.error.isEmpty && model.error != model.importError {
                 Text(model.error)
                     .font(.subheadline).foregroundStyle(.red)
             } else if model.snapshot.lastFailure != nil {

@@ -114,7 +114,10 @@ final class NativeUIInteractionTests: XCTestCase {
         if !paste.isHittable { controls.swipeDown() }
         XCTAssertTrue(paste.isHittable, "Paste should remain reachable at the largest accessibility text size")
         let connectionAction = app.buttons["VPN connection action"]
-        if !connectionAction.isHittable { controls.swipeUp() }
+        for _ in 0..<8 {
+            if connectionAction.isHittable { break }
+            controls.swipeUp()
+        }
         XCTAssertTrue(connectionAction.isHittable,
                       "The main connection action should remain reachable by scrolling at the largest accessibility text size")
         XCTAssertTrue(app.buttons["Clear"].isHittable)
@@ -273,9 +276,15 @@ final class NativeUIInteractionTests: XCTestCase {
         let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
         XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 4)
 
-        logs.swipeDown()
-        let details = app.links.matching(NSPredicate(format: "label == %@", "Details")).firstMatch
-        XCTAssertTrue(details.waitForExistence(timeout: 10), "Structured log records should expose expandable details")
+        for _ in 0..<6 { logs.swipeUp() }
+        let latestLogText = try XCTUnwrap(logs.value as? String)
+        XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
+        let detailElements = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Details"))
+        let details = detailElements.element(boundBy: max(0, detailElements.count - 1))
+        XCTAssertTrue(details.waitForExistence(timeout: 10),
+                      "The visible Details control should be exposed by the log text view")
+        XCTAssertTrue(details.isHittable, "The newest Details control should be reachable at the log tail")
         details.tap()
         let expandedRecord = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value CONTAINS %@", "\"schema\":\"dobby.log/v1\""),
@@ -362,11 +371,10 @@ final class NativeUIInteractionTests: XCTestCase {
         expectSource(warm)
         XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid&url=duplicate")))
         expectSource(warm)
-        let invalidImportFeedback = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "Use dobbyvpn://import?url=")
-        ).firstMatch
+        let invalidImportFeedback = app.staticTexts["Deep link import guidance"]
         XCTAssertTrue(invalidImportFeedback.waitForExistence(timeout: 10),
-                      "An invalid deep link should show actionable import guidance")
+                      "An invalid deep link should keep actionable import guidance visible despite connection errors")
+        XCTAssertTrue(invalidImportFeedback.label.contains("Use dobbyvpn://import?url="))
     }
 
     private func assertLogLayout() {
