@@ -3,16 +3,96 @@ import ssl
 import importlib.util
 import socket
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+import json
 from unittest.mock import patch
 
 from torturer_runner.subscription_fixture import SubscriptionFixture
 
 
 class SubscriptionFixtureTests(unittest.TestCase):
+    def test_test_control_counts_loads_replaces_payload_and_controls_responses(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            profile = root / "profile.toml"
+            initial = b"[[Outline]]\nDescription = \"before\"\n"
+            replacement = b"[[Outline]]\nDescription = \"after\"\n"
+            profile.write_bytes(initial)
+            fixture = SubscriptionFixture(profile, root / "fixture", "untrusted")
+            try:
+                url = fixture.start()
+                context = ssl.create_default_context(cafile=str(fixture.certificate))
+
+                def control(method="GET", suffix="", body=None, key=None):
+                    request = urllib.request.Request(
+                        fixture.control_url + suffix,
+                        data=body,
+                        method=method,
+                        headers={"X-DobbyVPN-Torturer-Key": key or fixture.control_key},
+                    )
+                    with urllib.request.urlopen(request, context=context, timeout=5) as response:
+                        return response.status, response.read()
+
+                with urllib.request.urlopen(url, context=context, timeout=5) as response:
+                    self.assertEqual(initial, response.read())
+                status, state = control()
+                self.assertEqual(200, status)
+                self.assertEqual({"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1}, json.loads(state))
+
+                with self.assertRaises(urllib.error.HTTPError) as denied:
+                    control(key="incorrect-test-key")
+                self.assertEqual(403, denied.exception.code)
+                control("POST", "/profile", replacement)
+                with urllib.request.urlopen(url + "?second=1", context=context, timeout=5) as response:
+                    self.assertEqual(replacement, response.read())
+
+                control("POST", "/fail-next")
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(url, context=context, timeout=5)
+                self.assertEqual(503, failure.exception.code)
+                with urllib.request.urlopen(url, context=context, timeout=5) as response:
+                    self.assertEqual(replacement, response.read())
+
+                control("POST", "/hold")
+                outcome = []
+
+                def held_get():
+                    try:
+                        with urllib.request.urlopen(url + "?slow=1", context=context, timeout=5) as response:
+                            outcome.append((response.status, response.read()))
+                    except BaseException as error:
+                        outcome.append(error)
+
+                thread = threading.Thread(target=held_get)
+                thread.start()
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    _, state = control()
+                    if json.loads(state)["in_flight_gets"] == 1:
+                        break
+                    time.sleep(0.01)
+                else:
+                    self.fail("held subscription GET did not become observable")
+                after_hold = b"[[Outline]]\nDescription = \"after hold\"\n"
+                fixture.replace_response(after_hold)
+                fixture.release_responses()
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive(), "released subscription GET remained blocked")
+                self.assertEqual([(200, replacement)], outcome)
+                with urllib.request.urlopen(url + "?after-hold=1", context=context, timeout=5) as response:
+                    self.assertEqual(after_hold, response.read())
+                self.assertEqual(
+                    {"subscription_gets": 6, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                    fixture.control_stats(),
+                )
+            finally:
+                fixture.close()
+
     def test_tcp_fixture_and_cleanup_without_unix_socket_support(self):
         import torturer_runner.subscription_fixture as source
         spec = importlib.util.spec_from_file_location('torturer_runner.fixture_without_unix', source.__file__)

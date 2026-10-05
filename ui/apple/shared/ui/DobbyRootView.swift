@@ -275,6 +275,8 @@ public struct DobbyAboutView: View {
             if model.client.sourceCommit.count == 40,
                let url = URL(string: "https://github.com/DobbyVPN/DobbyVPN/tree/\(model.client.sourceCommit)") {
                 Link("Source code", destination: url)
+                    .accessibilityIdentifier("About source link")
+                    .accessibilityValue(url.absoluteString)
             }
             Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
         }

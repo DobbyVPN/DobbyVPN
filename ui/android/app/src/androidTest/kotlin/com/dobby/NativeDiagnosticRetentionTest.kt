@@ -10,6 +10,8 @@ import java.io.File
 import java.io.IOException
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,9 +52,63 @@ class NativeDiagnosticRetentionTest {
             val capture = StructuredLogs.parse("""{"event":"stderr.capture","level":"ERROR"}""", "capture", "Tunnel stderr")
             assertEquals("INFO", capture.level)
             assertEquals("Stderr capture initialized", capture.message)
+            assertEquals("Tunnel stderr", capture.source)
         } finally {
             assertTrue(directory.deleteRecursively())
         }
+    }
+
+    @Test
+    fun structuredPreviewKeepsEqualTimestampOrderAndCapsBytes() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "structured-ties-${System.nanoTime()}")
+        assertTrue(directory.mkdir())
+        try {
+            val first = File(directory, "backend.jsonl")
+            val second = File(directory, "ui.jsonl")
+            val boundary = File(directory, "view.json")
+            val timestamp = "2026-03-04T05:06:07Z"
+            first.writeText(
+                """{"timestamp":"$timestamp","level":"INFO","source":"backend","message":"first tie"}""" + "\n",
+            )
+            second.writeText(
+                """{"timestamp":"$timestamp","level":"INFO","source":"native","message":"second tie"}""" + "\n",
+            )
+            val tieView = StructuredLogs(listOf(first.path, second.path), boundary)
+            val (tied, tieError) = tieView.read()
+            assertEquals("", tieError)
+            assertEquals(listOf("first tie", "second tie"), tied.map { it.message })
+            assertEquals("Backend · backend", tied[0].source)
+            assertEquals("App · native", tied[1].source)
+            assertEquals(timestamp, tied[0].timestamp)
+            assertEquals(timestamp, tied[1].timestamp)
+
+            val manyLines = buildString {
+                repeat(24_000) { index ->
+                    append("{\"message\":\"preview-").append(index).append("\"}\n")
+                }
+            }
+            first.writeText(manyLines)
+            val (preview, previewError) = StructuredLogs(listOf(first.path), boundary).read()
+            assertEquals("", previewError)
+            assertTrue(preview.isNotEmpty())
+            assertTrue(preview.last().message.startsWith("preview-"))
+            assertTrue(preview.sumOf { it.raw.toByteArray(Charsets.UTF_8).size } <= 131_072)
+            assertFalse(preview.any { it.raw.length > 131_072 })
+        } finally {
+            assertTrue(directory.deleteRecursively())
+        }
+    }
+
+    @Test
+    fun captureEventRetainsRawSourceAndStableDisplaySeverity() {
+        val raw = """{"timestamp":"2026-04-05T06:07:08Z","level":"ERROR","event":"stderr.capture","source":"xray stderr","message":"raw initialization"}"""
+        val capture = StructuredLogs.parse(raw, "capture", "Backend stderr")
+        assertEquals("INFO", capture.level)
+        assertEquals("Backend stderr · xray stderr", capture.source)
+        assertEquals("Stderr capture initialized", capture.message)
+        assertEquals(raw, capture.raw)
+        assertNotNull(capture.time)
     }
 
     @Test

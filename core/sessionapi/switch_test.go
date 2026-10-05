@@ -2,10 +2,16 @@ package sessionapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"core/log"
 )
 
 type switchingRuntime struct {
@@ -60,7 +66,7 @@ func TestLoadedInventoryDoesNotChangeActiveRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	current, _ := m.Snapshot(context.Background(), id)
-	if current.State != StateConnected || current.ActiveDigest != old.Digest || current.Digest != loaded.Digest || !current.CanSwitch {
+	if current.State != StateConnected || current.ActiveDigest != old.Digest || current.ActiveMode != AutoSelect || current.Digest != loaded.Digest || !current.CanSwitch {
 		t.Fatalf("load changed active session: %#v", current)
 	}
 	r.failures <- errors.New("synthetic outage")
@@ -79,6 +85,67 @@ func TestLoadedInventoryDoesNotChangeActiveRecovery(t *testing.T) {
 	if err := m.StopAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestConnectionLogCorrelationStaysOnActiveInventoryDuringLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backend.jsonl")
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.SetPath(path); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := log.Close(); err != nil {
+			t.Errorf("close test log: %v", err)
+		}
+	}()
+
+	m, id, _ := newSwitchingManager(t, false)
+	defer func() {
+		if err := m.StopAndWait(context.Background()); err != nil {
+			t.Errorf("stop test manager: %v", err)
+		}
+	}()
+	old, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	correlationConfig := []byte(strings.ReplaceAll(string(replacementConfig(t)), "replacement", "log-correlation"))
+	loaded, err := configureForTest(t, m, id, correlationConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StopAndWait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var record struct {
+			Category                  string `json:"category"`
+			Message                   string `json:"message"`
+			SessionID                 string `json:"session_id"`
+			Generation                uint64 `json:"generation"`
+			ConfigurationDigest       string `json:"configuration_digest"`
+			LoadedConfigurationDigest string `json:"loaded_configuration_digest"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode JSON log record: %v", err)
+		}
+		if record.Category == "CONFIGURATION" && record.Message == "[CONFIGURATION] profile inventory loaded" && record.LoadedConfigurationDigest == loaded.Digest {
+			if record.SessionID != old.SessionID || record.Generation != old.Generation || record.ConfigurationDigest != old.ActiveDigest || record.LoadedConfigurationDigest != loaded.Digest {
+				t.Fatalf("load record correlation = %#v; want session=%q generation=%d active_digest=%q loaded_digest=%q", record, old.SessionID, old.Generation, old.ActiveDigest, loaded.Digest)
+			}
+			return
+		}
+	}
+	t.Fatal("no profile inventory loaded event found in backend JSONL")
 }
 func TestSwitchWaitsForCleanupAndCapturesInventory(t *testing.T) {
 	m, id, r := newSwitchingManager(t, true)
@@ -101,7 +168,7 @@ func TestSwitchWaitsForCleanupAndCapturesInventory(t *testing.T) {
 	}
 	<-r.stopEntered
 	pending, _ := m.Snapshot(context.Background(), id)
-	if pending.PendingTarget == nil || pending.PendingTarget.Digest != current.Digest || pending.CanSwitch || pending.PrimaryAction != "STOP" {
+	if pending.PendingTarget == nil || pending.PendingTarget.Digest != current.Digest || pending.PendingTarget.Mode != ProfileIndex || pending.PendingTarget.Index != 0 || pending.CanSwitch || pending.PrimaryAction != "STOP" {
 		t.Fatalf("pending state: %#v", pending)
 	}
 	if _, err := startForTest(t, m, id, StartTarget{Mode: AutoSelect, ReplaceCurrent: true}); CodeOf(err) != FailureConflict {
@@ -246,5 +313,140 @@ func TestNewConfigureSupersedesBlockedDownload(t *testing.T) {
 	}
 	if err := <-second; err != nil {
 		t.Fatalf("newest load: %v", err)
+	}
+}
+
+type orderedConfigLoader struct {
+	entered  chan string
+	releases map[string]<-chan struct{}
+	configs  map[string][]byte
+}
+
+func (loader orderedConfigLoader) Load(ctx context.Context, source []byte) (LoadedConfig, error) {
+	key := string(source)
+	loader.entered <- key
+	select {
+	case <-ctx.Done():
+		return LoadedConfig{}, ctx.Err()
+	case <-loader.releases[key]:
+		return LoadedConfig{Raw: loader.configs[key], Kind: ConfigSourceInline}, nil
+	}
+}
+
+func TestNewConfigureCommitsBeforeOlderDownloadFinishes(t *testing.T) {
+	m := NewManager(ManagerOptions{})
+	id := configured(t, m)
+	firstSource, secondSource := []byte("older-request"), []byte("newer-request")
+	firstGate, secondGate := make(chan struct{}), make(chan struct{})
+	var firstOnce, secondOnce sync.Once
+	releaseFirst := func() { firstOnce.Do(func() { close(firstGate) }) }
+	releaseSecond := func() { secondOnce.Do(func() { close(secondGate) }) }
+	defer releaseFirst()
+	defer releaseSecond()
+
+	firstConfig := replacementConfig(t)
+	secondConfig := []byte(strings.ReplaceAll(string(firstConfig), "replacement", "newer"))
+	loader := orderedConfigLoader{
+		entered: make(chan string, 2),
+		releases: map[string]<-chan struct{}{
+			string(firstSource): firstGate, string(secondSource): secondGate,
+		},
+		configs: map[string][]byte{
+			string(firstSource): firstConfig, string(secondSource): secondConfig,
+		},
+	}
+	m.loader = loader
+	before, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstDone, secondDone := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := m.Configure(context.Background(), id, before.Sequence, firstSource)
+		firstDone <- err
+	}()
+	if got := <-loader.entered; got != string(firstSource) {
+		t.Fatalf("first loader source = %q", got)
+	}
+	go func() {
+		_, err := m.Configure(context.Background(), id, before.Sequence, secondSource)
+		secondDone <- err
+	}()
+	if got := <-loader.entered; got != string(secondSource) {
+		t.Fatalf("second loader source = %q", got)
+	}
+
+	// Commit the newest request while the earlier network response is still held.
+	releaseSecond()
+	if err := <-secondDone; err != nil {
+		t.Fatalf("newer configure: %v", err)
+	}
+	newest, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDigest, err := parseConfig(secondConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newest.Digest != wantDigest.digest {
+		t.Fatalf("newer configure digest = %q, want %q", newest.Digest, wantDigest.digest)
+	}
+
+	releaseFirst()
+	if err := <-firstDone; CodeOf(err) != FailureConflict {
+		t.Fatalf("superseded older configure = %v, want conflict", err)
+	}
+	after, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Digest != newest.Digest || after.Profiles[0].Description != "newer" {
+		t.Fatalf("older response overwrote accepted inventory: %#v", after)
+	}
+}
+
+func TestFailedReplacementDoesNotRestorePriorConnection(t *testing.T) {
+	m, id, runtime := newSwitchingManager(t, false)
+	old, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configureForTest(t, m, id, replacementConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Start(context.Background(), id, loaded.Sequence, StartTarget{
+		Mode: ProfileIndex, Index: 0, Digest: loaded.Digest, ReplaceCurrent: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := waitGenerationState(t, m, id, old.Generation+1, StateConnected)
+	if started.ActiveDigest != loaded.Digest || started.ActiveMode != ProfileIndex || started.ActiveIndex != 0 {
+		t.Fatalf("replacement did not become active: %#v", started)
+	}
+	select {
+	case profile := <-runtime.starts:
+		if profile.Summary.Description != "replacement" {
+			t.Fatalf("replacement started %q", profile.Summary.Description)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement runtime was not started")
+	}
+	runtime.failures <- errors.New("synthetic replacement health failure")
+	failed := waitGenerationState(t, m, id, old.Generation+1, StateFailed)
+	if failed.ActiveDigest != loaded.Digest || failed.LastFailure != FailureRuntime {
+		t.Fatalf("failed replacement state = %#v", failed)
+	}
+	select {
+	case profile := <-runtime.starts:
+		t.Fatalf("old connection or fallback profile restarted after replacement failure: %#v", profile.Summary)
+	default:
+	}
+	if err := m.StopAndWait(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

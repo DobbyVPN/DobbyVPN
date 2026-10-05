@@ -122,6 +122,9 @@ tunnel becomes ready. Selecting a profile explicitly uses only that profile,
 including during recovery. On desktop,
 `dobby-cli configure <file-or-https-url>` accepts a TOML file or HTTPS
 subscription URL and returns the ordered backend profile inventory as JSON.
+It also accepts a raw TOML value as its source argument; quote that argument
+using your shell's syntax and begin it with a `[[Outline]]`, `[[Xray]]`, or
+`[[TrustTunnel]]` profile table. All three forms are parsed and validated by Go.
 `dobby-cli start --profile <index> --session-id <id> --config-digest <digest>`
 starts one accepted profile; `stop --session-id <id> --generation <number>`
 ends that generation. Session commands always emit JSON.

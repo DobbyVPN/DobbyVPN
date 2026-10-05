@@ -70,6 +70,15 @@ func names(_ element: AXUIElement) throws -> [String] {
     return values
 }
 
+func linkURLs(_ nodes: [AXUIElement]) throws -> [String] {
+    try nodes.compactMap { element in
+        guard try label(element, kAXRoleAttribute) == "AXLink",
+              let value = try attribute(element, kAXURLAttribute) else { return nil }
+        if let url = value as? URL { return url.absoluteString }
+        return value as? String
+    }
+}
+
 func find(_ nodes: [AXUIElement], _ name: String, editor: Bool = false) throws -> AXUIElement {
     var matches = try nodes.filter { node in
         if editor {
@@ -156,6 +165,51 @@ func paste(_ editor: AXUIElement, source: String) throws {
             )
         }
         try require(observed == value, "Native pasted configuration does not match the source")
+    } catch { primary = error }
+    board.clearContents()
+    if !previous.isEmpty && !board.writeObjects(previous) {
+        throw HelperError("\(primary.map { String(describing: $0) } ?? "Paste completed"); clipboard restoration failed")
+    }
+    if let error = primary { throw error }
+}
+
+func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, source: String) throws {
+    let value = try String(contentsOfFile: source, encoding: .utf8)
+    let initialNodes = try elements(window)
+    let editor = try find(initialNodes, "Connection configuration", editor: true)
+    let fieldBeforeClipboard = try label(editor, kAXValueAttribute)
+    let board = NSPasteboard.general
+    let previous = (board.pasteboardItems ?? []).map { original in
+        let copy = NSPasteboardItem()
+        for type in original.types {
+            if let data = original.data(forType: type) { copy.setData(data, forType: type) }
+        }
+        return copy
+    }
+    var primary: Error?
+    do {
+        board.clearContents()
+        try require(board.setString(value, forType: .string), "Could not write native clipboard")
+        if let finder = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.finder" }) {
+            _ = finder.activate(options: [.activateAllWindows])
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        try require(app.activate(options: [.activateAllWindows]), "Could not refresh native Paste availability")
+        let nodes = try elements(window)
+        let currentEditor = try find(nodes, "Connection configuration", editor: true)
+        let fieldAtAvailability = try label(currentEditor, kAXValueAttribute)
+        try require(fieldAtAvailability == fieldBeforeClipboard,
+                    "Clipboard availability inspection changed the configuration before Paste was tapped")
+        let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
+        try press(find(buttons, "Paste"))
+        let deadline = Date().addingTimeInterval(5)
+        var observed = ""
+        repeat {
+            observed = try label(currentEditor, kAXValueAttribute)
+            if observed == value { break }
+            if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        } while Date() < deadline
+        try require(observed == value, "Native Paste button did not fill the subscription URL")
     } catch { primary = error }
     board.clearContents()
     if !previous.isEmpty && !board.writeObjects(previous) {
@@ -277,7 +331,7 @@ func run() throws -> [String: Any] {
             let enabled = try nodes.filter { (try attribute($0, kAXEnabledAttribute)) as? Bool == true }.flatMap(names)
             return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity,
                     "window_count": windows.count, "window_id": try label(window, kAXIdentifierAttribute),
-                    "labels": labels, "enabled_controls": enabled]
+                    "labels": labels, "enabled_controls": enabled, "link_urls": try linkURLs(nodes)]
         }
     } catch {
         if operation == "tree", let readError = error as? AccessibilityReadError,
@@ -294,6 +348,72 @@ func run() throws -> [String: Any] {
     if operation == "logs" {
         let view = try find(nodes, "Connection logs", editor: true)
         return ["ready": true, "text": try label(view, kAXValueAttribute)]
+    }
+    if operation == "scroll-logs" {
+        guard let position = request["position"] as? String, position == "top" || position == "bottom" else {
+            throw HelperError("Log scroll position must be top or bottom")
+        }
+        let view = try find(nodes, "Connection logs", editor: true)
+        guard let positionValue = try attribute(view, kAXPositionAttribute) as? AXValue,
+              let sizeValue = try attribute(view, kAXSizeAttribute) as? AXValue else {
+            throw HelperError("Native log viewer has no accessible bounds")
+        }
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        try require(AXValueGetValue(positionValue, .cgPoint, &origin), "Could not read native log position")
+        try require(AXValueGetValue(sizeValue, .cgSize, &size), "Could not read native log size")
+        try require(size.width > 0 && size.height > 0, "Native log viewer has empty bounds")
+
+        var parent: AXUIElement? = view
+        var scrollArea: AXUIElement?
+        for _ in 0..<8 {
+            guard let current = parent,
+                  let next = try attribute(current, kAXParentAttribute) as? AXUIElement else { break }
+            if try label(next, kAXRoleAttribute) == kAXScrollAreaRole {
+                scrollArea = next
+                break
+            }
+            parent = next
+        }
+        guard let area = scrollArea,
+              let scrollbar = try attribute(area, kAXVerticalScrollBarAttribute) as? AXUIElement else {
+            throw HelperError("Native log viewer does not expose a vertical scrollbar")
+        }
+        func scrollValue() throws -> Double {
+            guard let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
+                throw HelperError("Native log viewer scrollbar has no value")
+            }
+            return value.doubleValue
+        }
+        let target = position == "top" ? 0.0 : 1.0
+        let start = try scrollValue()
+        if abs(start - target) > 0.01 {
+            let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+            guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                      mouseCursorPosition: center, mouseButton: .left) else {
+                throw HelperError("Could not position the pointer over native logs")
+            }
+            moved.post(tap: .cghidEventTap)
+            var reached = false
+            for delta in [100, -100] {
+                for _ in 0..<8 {
+                    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line,
+                                              wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
+                        throw HelperError("Could not create native log scroll event")
+                    }
+                    event.location = center
+                    event.post(tap: .cghidEventTap)
+                    Thread.sleep(forTimeInterval: 0.05)
+                    if abs(try scrollValue() - target) <= 0.01 {
+                        reached = true
+                        break
+                    }
+                }
+                if reached { break }
+            }
+            try require(reached, "Native log viewer did not scroll to \(position)")
+        }
+        return ["ready": true, "position": try scrollValue()]
     }
     func activate() throws {
         try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")
@@ -315,6 +435,14 @@ func run() throws -> [String: Any] {
         guard let source = request["source"] as? String else { throw HelperError("Missing source path") }
         try activate()
         try paste(find(nodes, "Connection configuration", editor: true), source: source)
+    case "paste":
+        guard let source = request["source"] as? String else { throw HelperError("Missing source path") }
+        try activate()
+        guard let currentWindows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
+              let currentWindow = currentWindows.first else {
+            throw HelperError("Native application has no window for Paste")
+        }
+        try pasteWithNativeControl(app, window: currentWindow, source: source)
     case "capture":
         guard let path = request["path"] as? String else { throw HelperError("Missing screenshot path") }
         try capture(pid, path: path)

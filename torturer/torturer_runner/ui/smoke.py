@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import subprocess
@@ -116,6 +117,7 @@ class NativeUIController:
         self.window_id: str | None = None
         self.launch_count = self.capture_count = 0
         self.reconnecting_seen = False
+        self.cleared_record: str | None = None
 
     @property
     def timeout(self) -> float:
@@ -180,7 +182,7 @@ class NativeUIController:
                 time.sleep(min(0.1, self.timeout))
 
     def start(self, import_url: str | None = None) -> dict:
-        if self.process is not None:
+        if self.process is not None or self._alive():
             raise NativeUISmokeError("native UI is already running")
         if self.platform == "macos":
             self._call("preflight")
@@ -195,20 +197,30 @@ class NativeUIController:
             for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET", "DOBBY_LOG_PATH"):
                 if value := os.environ.get(name):
                     command.extend(("--env", f"{name}={value}"))
-            command.extend(("--stdout", str(prefix) + ".stdout.log", "--stderr", str(prefix) + ".stderr.log", str(self.binary)))
+        link = None
         if import_url is not None:
             from urllib.parse import quote
             link = "dobbyvpn://import?url=" + quote(import_url, safe="")
-            if self.platform == "macos":
-                command.insert(len(command) - 1, "-a")
-            command.append(link)
-        with Path(str(prefix) + ".launcher.stdout.log").open("xb") as stdout, Path(str(prefix) + ".launcher.stderr.log").open("xb") as stderr:
-            self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
+        if self.platform == "macos":
+            if link is None:
+                command.extend(("--stdout", str(prefix) + ".stdout.log", "--stderr", str(prefix) + ".stderr.log", str(self.binary)))
+            else:
+                command.append(link)
+            with Path(str(prefix) + ".launcher.stdout.log").open("xb") as stdout, Path(str(prefix) + ".launcher.stderr.log").open("xb") as stderr:
+                self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
+        elif self.platform == "windows" and link is not None:
+            os.startfile(link)  # type: ignore[attr-defined]
+            self.process = None
+            time.sleep(0.25)
+        else:
+            with Path(str(prefix) + ".launcher.stdout.log").open("xb") as stdout, Path(str(prefix) + ".launcher.stderr.log").open("xb") as stderr:
+                self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
         if self.platform == "windows":
-            self.pid = self.process.pid
+            if self.process is not None:
+                self.pid = self.process.pid
 
             def identified():
-                code = self.process.poll()
+                code = None if self.process is None else self.process.poll()
                 if code is not None:
                     raise NativeUISmokeError(f"native UI launcher exited {code}; streams: {prefix}")
                 response = self._call("probe")
@@ -217,7 +229,7 @@ class NativeUIController:
             self._wait(identified, "native UI process identity unavailable")
 
         def ready():
-            code = self.process.poll()
+            code = None if self.process is None else self.process.poll()
             if code is not None and (self.platform == "windows" or code != 0):
                 raise NativeUISmokeError(f"native UI launcher exited {code}; streams: {prefix}")
             state = self.snapshot()
@@ -226,6 +238,29 @@ class NativeUIController:
         self._wait(ready, "native UI did not expose its connection page")
         self._call("focus")
         self.capture("startup")
+        return self.snapshot()
+
+    def _open_link(self, link: str) -> None:
+        if self.platform == "windows":
+            os.startfile(link)  # type: ignore[attr-defined]
+            return
+        command = ["open"]
+        if self.platform == "macos":
+            for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET", "DOBBY_LOG_PATH"):
+                if value := os.environ.get(name):
+                    command.extend(("--env", f"{name}={value}"))
+        command.append(link)
+        result = _native_run(command, timeout_seconds=self.timeout)
+        if result.returncode:
+            raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+
+    def bare_link(self) -> dict:
+        before = self._call("probe")
+        self._open_link("dobbyvpn://")
+        time.sleep(0.25)
+        after = self._call("probe")
+        if after.get("pid") != before.get("pid") or after.get("identity") != before.get("identity"):
+            raise NativeUISmokeError("bare deep link did not reuse the existing UI process")
         return self.snapshot()
 
     def snapshot(self) -> dict:
@@ -240,56 +275,180 @@ class NativeUIController:
         labels = value.get("labels", [])
         status = next((name for name in ("Connected", "Connecting", "Reconnecting", "Disconnected", "Stopping", "Failed", "Error") if name in labels), "Unknown")
         self.reconnecting_seen |= status == "Reconnecting"
-        return {"status": status, "labels": labels, "enabled_controls": value.get("enabled_controls", []), "reconnecting_seen": self.reconnecting_seen}
+        return {
+            "status": status,
+            "labels": labels,
+            "enabled_controls": value.get("enabled_controls", []),
+            "help_texts": value.get("help_texts", []),
+            "link_urls": value.get("link_urls", []),
+            "reconnecting_seen": self.reconnecting_seen,
+        }
+
+    def paste_source(self) -> dict:
+        result = self._call("paste", source=str(self.profile))
+        if result.get("ready") is not True:
+            raise NativeUISmokeError("native Paste control is unavailable")
+        return self.snapshot()
 
     def configure(self) -> dict:
-        result = self._call("type", source=str(self.profile))
-        if result.get("ready") is not True:
-            raise NativeUISmokeError("configuration input is unavailable")
+        self.paste_source()
         self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "subscription profiles did not load automatically")
         return {"input_verified": True, **self.snapshot()}
 
+    def type_source(self, source: str) -> dict:
+        self.profile.write_text(source, encoding="utf-8")
+        result = self._call("type", source=str(self.profile))
+        if result.get("ready") is not True:
+            raise NativeUISmokeError("configuration input is unavailable")
+        return self.snapshot()
+
     def select_profile(self, index: int) -> dict:
-        self._click(f"Profile {index + 1} action")
+        self.activate_profile(index)
         return self.wait_status("Connected")
+
+    def activate_profile(self, index: int) -> dict:
+        self._click(f"Profile {index + 1} action")
+        return self.snapshot()
+
+    def open_deep_link(self, link: str) -> dict:
+        self._open_link(link)
+        return self.snapshot()
 
     def failing_subscription(self, url: str) -> dict:
         original = self.profile.read_bytes()
         try:
-            self.profile.write_text(url, encoding="utf-8")
-            result = self._call("type", source=str(self.profile))
-            if result.get("ready") is not True:
-                raise NativeUISmokeError("subscription input is unavailable")
+            self.type_source(url)
             self._wait(lambda: "Retry" in self.snapshot()["labels"], "failed subscription did not expose Retry")
             return self.snapshot()
         finally:
             self.profile.write_bytes(original)
 
+    def retry(self) -> dict:
+        self._click("Retry")
+        self._wait(
+            lambda: "Retry" not in self.snapshot()["labels"] and "Profile 1 action" in self.snapshot()["labels"],
+            "Retry did not load subscription profiles",
+        )
+        return self.snapshot()
+
     def import_link(self, url: str) -> dict:
         from urllib.parse import quote
         link = "dobbyvpn://import?url=" + quote(url, safe="")
-        command = ["open", link] if self.platform == "macos" else [str(self.binary), link]
+        self.profile.write_text(url, encoding="utf-8")
+        before = self._call("probe")
+        identity_before, pid_before = before.get("identity"), before.get("pid")
         for _ in range(2):
-            result = _native_run(command, timeout_seconds=self.timeout)
-            if result.returncode:
-                raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+            self._open_link(link)
+        time.sleep(0.25)
+        after = self._call("probe")
+        if after.get("pid") != pid_before or after.get("identity") != identity_before:
+            raise NativeUISmokeError("warm deep link did not reuse the existing UI process")
         self._wait(lambda: "Retry" not in self.snapshot()["labels"], "import did not replace failed subscription")
         self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "imported profiles are unavailable")
         return self.snapshot()
 
     def clear_logs(self) -> dict:
         previous = ""
+        initial_view: dict = {}
         def live_logs():
-            nonlocal previous
-            text = self._call("logs").get("text", "")
+            nonlocal previous, initial_view
+            initial_view = self._call("logs")
+            text = initial_view.get("text", "")
             previous = next((line for line in text.splitlines() if " · " in line), "")
             return bool(previous)
         self._wait(live_logs, "native log view did not show structured live records")
+        if self.platform == "windows":
+            rendered = initial_view.get("entries", [])
+            if not any(isinstance(entry, dict) and " · " in entry.get("text", "") for entry in rendered):
+                raise NativeUISmokeError("Windows log entries did not expose rendered structured text")
+            if not initial_view.get("expansion_verified"):
+                raise NativeUISmokeError("Windows structured log Details did not reveal the original record")
+            try:
+                original_record = json.loads(initial_view.get("expanded_record", ""))
+            except (json.JSONDecodeError, TypeError) as error:
+                raise NativeUISmokeError("Windows log Details did not preserve a JSON record") from error
+            if not isinstance(original_record, dict):
+                raise NativeUISmokeError("Windows log Details did not preserve a structured record")
+            selected = self._call("select-log-text").get("selected", "")
+            if " · " not in selected:
+                raise NativeUISmokeError("Windows native log text could not be selected")
+            palette: dict[str, int] = {}
+            for entry in rendered:
+                if not isinstance(entry, dict) or not isinstance(entry.get("foreground"), int):
+                    continue
+                line = entry.get("text", "").splitlines()[0]
+                fields = line.split(" · ")
+                if len(fields) >= 3 and fields[1] in {"DEBUG", "TRACE", "INFO", "WARN", "WARNING", "ERROR", "FATAL", "PANIC"}:
+                    palette.setdefault(fields[1], entry["foreground"])
+            if not palette:
+                raise NativeUISmokeError("Windows rendered log severity color was unavailable through native accessibility")
+            def color_orders(color: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+                return (
+                    (color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF),
+                    ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF),
+                )
+            for severity in ("ERROR", "FATAL", "PANIC"):
+                if severity in palette:
+                    if not any(red > green and red > blue for red, green, blue in color_orders(palette[severity])):
+                        raise NativeUISmokeError(f"Windows {severity} logs are not rendered in a red severity color")
+            for severity in ("WARN", "WARNING"):
+                if severity in palette:
+                    if not any(red >= green > blue for red, green, blue in color_orders(palette[severity])):
+                        raise NativeUISmokeError(f"Windows {severity} logs are not rendered in an amber severity color")
+            if "INFO" in palette:
+                for warning in ("WARN", "WARNING"):
+                    if warning in palette and palette[warning] == palette["INFO"]:
+                        raise NativeUISmokeError("Windows warning logs use the information text color")
+                for error_level in ("ERROR", "FATAL", "PANIC"):
+                    if error_level in palette and palette[error_level] == palette["INFO"]:
+                        raise NativeUISmokeError("Windows error logs use the information text color")
+                for quiet in ("DEBUG", "TRACE"):
+                    if quiet in palette and palette[quiet] == palette["INFO"]:
+                        raise NativeUISmokeError("Windows debug/trace logs are not visually muted")
+
+            self._call("scroll-logs", position="top")
+            frozen = self._call("logs").get("text", "")
+            original_url = self.profile.read_text(encoding="utf-8").strip()
+            failure_url = original_url.rsplit("/", 1)[0] + "/missing"
+            try:
+                self.failing_subscription(failure_url)
+            finally:
+                self.profile.write_text(original_url, encoding="utf-8")
+            if self._call("logs").get("text", "") != frozen:
+                raise NativeUISmokeError("Windows log entries changed while the view was scrolled up")
+            self._call("scroll-logs", position="bottom")
+            latest = ""
+            self._wait(
+                lambda: bool((latest := self._call("logs").get("text", ""))) and latest != frozen,
+                "Windows log following did not resume at the bottom",
+            )
+        elif self.platform == "macos":
+            self._call("scroll-logs", position="top")
+            frozen = self._call("logs").get("text", "")
+            original_url = self.profile.read_text(encoding="utf-8").strip()
+            failure_url = original_url.rsplit("/", 1)[0] + "/missing"
+            try:
+                self.failing_subscription(failure_url)
+            finally:
+                self.profile.write_text(original_url, encoding="utf-8")
+            if self._call("logs").get("text", "") != frozen:
+                raise NativeUISmokeError("macOS log entries changed while the view was scrolled up")
+            self._call("scroll-logs", position="bottom")
+            latest = ""
+            self._wait(
+                lambda: bool((latest := self._call("logs").get("text", ""))) and latest != frozen,
+                "macOS log following did not resume at the bottom",
+            )
+
         self._click("Clear")
         def cleared():
             view = self._call("logs")
-            return view.get("ready") is True and previous not in view.get("text", "")
-        self._wait(cleared, "Clear left the previous records visible")
+            if view.get("ready") is not True:
+                return False
+            text = view.get("text", "")
+            return not text.strip() if self.platform == "windows" else previous not in text
+        self._wait(cleared, "Clear did not empty the Windows log view" if self.platform == "windows" else "Clear left the previous records visible")
+        self.cleared_record = previous
         return self.snapshot()
 
     def wait_status(self, expected: str, *, allow_errors: bool = False) -> dict:
@@ -325,11 +484,47 @@ class NativeUIController:
 
     def about(self) -> dict:
         self._click("About")
+        candidate_metadata = None
+        if self.platform == "macos":
+            try:
+                with (self.binary / "Contents" / "Info.plist").open("rb") as stream:
+                    metadata = plistlib.load(stream)
+            except (OSError, plistlib.InvalidFileException, ValueError) as error:
+                raise NativeUISmokeError("candidate macOS About metadata is unavailable") from error
+            version = metadata.get("CFBundleShortVersionString") if isinstance(metadata, dict) else None
+            commit = metadata.get("DobbySourceCommit") if isinstance(metadata, dict) else None
+            if not isinstance(version, str) or not version or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+                raise NativeUISmokeError("candidate macOS About metadata is incomplete")
+            candidate_metadata = (version, commit)
+
         def metadata():
-            labels = self.snapshot()["labels"]
+            state = self.snapshot()
+            labels = state["labels"]
             if self.platform == "macos":
-                return all(name in labels for name in ("About version metadata", "About source commit metadata"))
-            return all(any(label.startswith(prefix) for label in labels) for prefix in ("Version:", "Source commit:"))
+                assert candidate_metadata is not None
+                version, commit = candidate_metadata
+                source_url = f"https://github.com/DobbyVPN/DobbyVPN/tree/{commit}"
+                return (
+                    "About version metadata" in labels
+                    and f"Version: {version}" in labels
+                    and f"Commit: {commit[:12]}" in labels
+                    and "About source commit metadata" in labels
+                    and f"Source commit: {commit}" in labels
+                    and source_url in state["link_urls"]
+                )
+            if self.platform != "windows":
+                return all(any(label.startswith(prefix) for label in labels) for prefix in ("Version:", "Source commit:"))
+            version = next((label.removeprefix("Version: ") for label in labels if label.startswith("Version: ")), "")
+            compact = next((label.removeprefix("Commit: ") for label in labels if label.startswith("Commit: ")), "")
+            commit = next((label.removeprefix("Source commit: ") for label in labels if label.startswith("Source commit: ")), "")
+            source_url = f"https://github.com/DobbyVPN/DobbyVPN/tree/{commit}"
+            return (
+                re.fullmatch(r"\d+\.\d+\.\d+", version) is not None
+                and re.fullmatch(r"[0-9a-fA-F]{40}", commit) is not None
+                and compact == commit[:12]
+                and source_url in state["help_texts"]
+                and "About source link" in labels
+            )
         self._wait(metadata, "About metadata unavailable")
         self.capture("about")
         self._click("Done")
@@ -342,7 +537,7 @@ class NativeUIController:
     def capture(self, milestone: str) -> dict:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}", milestone):
             raise ValueError("invalid screenshot milestone")
-        if self.process is None:
+        if self.process is None and not self._alive():
             return {"unavailable": "native window is closed"}
         self.capture_count += 1
         path = self.screenshot_dir / f"{self.capture_count:03d}-{milestone}.png"
@@ -364,7 +559,7 @@ class NativeUIController:
         self.identity = None
 
     def close(self) -> dict:
-        if self.process is not None:
+        if self.process is not None or self._alive():
             if self._alive():
                 self._call("close")
                 self._wait(lambda: not self._alive(), "native UI did not close")
@@ -395,7 +590,7 @@ class NativeUIController:
                 shutil.copyfileobj(source, destination)
 
     def close_for_cleanup(self) -> None:
-        if self.process is None:
+        if self.process is None and not self._alive():
             return
         try:
             with self.bounded_by(min(5, self.timeout / 2)):

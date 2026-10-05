@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"core/sessionapi/wire"
@@ -461,6 +462,21 @@ func failureError(failure *wire.Failure) error {
 }
 
 func readSource(source string) (data []byte, resultErr error) {
+	const limit = 1 << 20
+	cleanPath := filepath.Clean(source)
+	if isInlineTOMLSource(source) {
+		if _, statErr := os.Stat(cleanPath); statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) || errors.Is(statErr, syscall.ENAMETOOLONG) || strings.ContainsAny(source, "\r\n") {
+				if len(source) > limit {
+					return nil, errors.New("configuration exceeds the 1 MiB size limit")
+				}
+				return []byte(source), nil
+			}
+			return nil, fmt.Errorf("cannot read configuration file: %w", statErr)
+		}
+		return readSourceFile(cleanPath, limit)
+	}
+
 	sourceURL, isURL, err := parseSourceURL(source)
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration URL: %w", err)
@@ -468,14 +484,16 @@ func readSource(source string) (data []byte, resultErr error) {
 	if isURL {
 		return sourceURL, nil
 	}
-	cleanPath := filepath.Clean(source)
-	file, err := os.Open(cleanPath)
+	return readSourceFile(cleanPath, limit)
+}
+
+func readSourceFile(path string, limit int) (data []byte, resultErr error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	const limit = 1 << 20
-	data, err = io.ReadAll(io.LimitReader(file, limit+1))
+	data, err = io.ReadAll(io.LimitReader(file, int64(limit+1)))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
@@ -484,6 +502,17 @@ func readSource(source string) (data []byte, resultErr error) {
 	}
 
 	return data, nil
+}
+
+func isInlineTOMLSource(source string) bool {
+	for _, line := range strings.Split(source, "\n") {
+		candidate := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if candidate == "" || strings.HasPrefix(candidate, "#") {
+			continue
+		}
+		return strings.HasPrefix(candidate, "[")
+	}
+	return false
 }
 
 func parseSourceURL(source string) (urlSource []byte, isURL bool, err error) {

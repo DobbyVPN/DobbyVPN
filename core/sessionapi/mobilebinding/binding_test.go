@@ -209,6 +209,45 @@ func TestSnapshotCarriesAcceptedConfiguration(t *testing.T) {
 	}
 }
 
+type fixedSnapshotManager struct {
+	snapshot sessionapi.SnapshotResult
+}
+
+func (m fixedSnapshotManager) Configure(context.Context, string, uint64, []byte) (sessionapi.ConfigureResult, error) {
+	return sessionapi.ConfigureResult{}, nil
+}
+func (m fixedSnapshotManager) Start(context.Context, string, uint64, sessionapi.StartTarget) (sessionapi.StartResult, error) {
+	return sessionapi.StartResult{}, nil
+}
+func (m fixedSnapshotManager) Stop(context.Context, string, uint64) (sessionapi.StopResult, error) {
+	return sessionapi.StopResult{}, nil
+}
+func (m fixedSnapshotManager) Snapshot(context.Context, string) (sessionapi.SnapshotResult, error) {
+	return m.snapshot, nil
+}
+
+func TestCallJSONSnapshotPreservesActiveAndPendingSelectionIdentity(t *testing.T) {
+	binding := &Binding{manager: fixedSnapshotManager{snapshot: sessionapi.SnapshotResult{
+		SessionID: "session", Sequence: 9, Generation: 4, State: sessionapi.StateStopping,
+		Configured: true, Digest: "loaded-digest", ActiveDigest: "active-digest",
+		ActiveMode: sessionapi.ProfileIndex, ActiveIndex: 1, CanSwitch: false,
+		PendingTarget: &sessionapi.Selection{Digest: "target-digest", Mode: sessionapi.ProfileIndex, Index: 2},
+		PrimaryAction: "STOP",
+	}}}
+	response := binding.CallJSON(context.Background(), "Snapshot", json.RawMessage(`{"session_id":"session"}`))
+	var decoded wire.Response[wire.Snapshot]
+	if err := json.Unmarshal([]byte(response), &decoded); err != nil {
+		t.Fatalf("decode Snapshot: %v (%s)", err, response)
+	}
+	if !decoded.OK || decoded.Result.ActiveDigest != "active-digest" || decoded.Result.Digest != "loaded-digest" ||
+		decoded.Result.ActiveMode != string(sessionapi.ProfileIndex) || decoded.Result.ActiveIndex != 1 ||
+		decoded.Result.PendingTarget == nil || decoded.Result.PendingTarget.Digest != "target-digest" ||
+		decoded.Result.PendingTarget.Mode != string(sessionapi.ProfileIndex) || decoded.Result.PendingTarget.Index != 2 ||
+		decoded.Result.CanSwitch || decoded.Result.PrimaryAction != "STOP" {
+		t.Fatalf("native Snapshot JSON lost selection identity or action state: %#v", decoded.Result)
+	}
+}
+
 func TestBindingPreservesStaleStopAndIdempotentStop(t *testing.T) {
 	runtime := &blockingRuntime{}
 	binding := NewForDesktop(sessionapi.NewManager(sessionapi.ManagerOptions{Runtime: runtime}))

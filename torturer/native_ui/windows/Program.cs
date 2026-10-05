@@ -172,16 +172,45 @@ internal static class Program
             using var input = JsonDocument.Parse(Console.In.ReadToEnd());
             var request = input.RootElement;
             string Text(string key) => request.GetProperty(key).GetString()!;
-            Process found;
-            try { found = Process.GetProcessById(request.GetProperty("pid").GetInt32()); }
-            catch (ArgumentException) { Console.WriteLine("{\"ready\":false,\"alive\":false}"); return 0; }
+            var expected = Path.GetFullPath(Text("executable"));
+            Process? found = null;
+            if (request.TryGetProperty("pid", out var requestedPid))
+            {
+                try { found = Process.GetProcessById(requestedPid.GetInt32()); }
+                catch (ArgumentException) { Console.WriteLine("{\"ready\":false,\"alive\":false}"); return 0; }
+            }
+            else
+            {
+                foreach (var candidate in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(expected)))
+                {
+                    try
+                    {
+                        if (!string.Equals(candidate.MainModule?.FileName, expected, StringComparison.OrdinalIgnoreCase))
+                        {
+                            candidate.Dispose();
+                            continue;
+                        }
+                        if (found is not null)
+                        {
+                            candidate.Dispose();
+                            found.Dispose();
+                            throw new InvalidOperationException("More than one candidate UI process matches the executable");
+                        }
+                        found = candidate;
+                    }
+                    catch (ArgumentException)
+                    {
+                        candidate.Dispose();
+                    }
+                }
+            }
+            if (found is null) { Console.WriteLine("{\"ready\":false,\"alive\":false}"); return 0; }
             using var process = found;
             if (process.HasExited)
             {
                 Console.WriteLine("{\"ready\":false,\"alive\":false}");
                 return 0;
             }
-            var expected = Path.GetFullPath(Text("executable"));
             if (!string.Equals(process.MainModule!.FileName, expected, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("UI process executable changed");
             var identity = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
@@ -255,22 +284,106 @@ internal static class Program
             }
             if (operation == "logs")
             {
-                var entries = Walk(Find("Backend logs"), includeLogs: true)
+                var logRoot = Find("Backend logs");
+                var entries = Walk(logRoot, includeLogs: true)
                     .Where(element => element.Current.ControlType == ControlType.Text)
-                    .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
-                        ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name);
-                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, text = string.Join("\n", entries) }));
+                    .Select(element =>
+                    {
+                        var text = element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
+                            ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name;
+                        int? foreground = null;
+                        if (element.TryGetCurrentPattern(TextPattern.Pattern, out pattern))
+                        {
+                            var value = ((TextPattern)pattern).DocumentRange.GetAttributeValue(TextPattern.ForegroundColorAttribute);
+                            if (value is int color) foreground = color;
+                        }
+                        return new { text, foreground };
+                    })
+                    .Where(entry => entry.text.Length > 0)
+                    .ToArray();
+                string expandedRecord = "";
+                var expansionVerified = false;
+                var details = Walk(logRoot, includeLogs: true).FirstOrDefault(element =>
+                    element.Current.Name == "Details" &&
+                    element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _));
+                if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
+                {
+                    var control = (ExpandCollapsePattern)expand;
+                    var wasExpanded = control.Current.ExpandCollapseState == ExpandCollapseState.Expanded;
+                    try
+                    {
+                        if (!wasExpanded) control.Expand();
+                        expandedRecord = Walk(logRoot, includeLogs: true)
+                            .Where(element => element.Current.ControlType == ControlType.Text)
+                            .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
+                                ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
+                            .FirstOrDefault(value => value.TrimStart().StartsWith("{", StringComparison.Ordinal)) ?? "";
+                        expansionVerified = expandedRecord.Length > 0;
+                    }
+                    finally
+                    {
+                        if (!wasExpanded) control.Collapse();
+                    }
+                }
+                Console.WriteLine(JsonSerializer.Serialize(new {
+                    ready = true,
+                    text = string.Join("\n", entries.Select(entry => entry.text)),
+                    entries,
+                    expanded_record = expandedRecord,
+                    expansion_verified = expansionVerified
+                }));
+                return 0;
+            }
+            if (operation == "select-log-text")
+            {
+                var entry = Walk(Find("Backend logs"), includeLogs: true)
+                    .Where(element => element.Current.ControlType == ControlType.Text)
+                    .FirstOrDefault(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) &&
+                        ((TextPattern)pattern).DocumentRange.GetText(-1).Contains(" · ", StringComparison.Ordinal));
+                if (entry is null || !entry.TryGetCurrentPattern(TextPattern.Pattern, out var entryPattern))
+                    throw new InvalidOperationException("No structured log entry is available for text selection");
+                var range = ((TextPattern)entryPattern).DocumentRange;
+                range.Select();
+                var selected = ((TextPattern)entryPattern).GetSelection()
+                    .Select(selection => selection.GetText(-1)).FirstOrDefault() ?? "";
+                if (selected.Length == 0)
+                    throw new InvalidOperationException("Native log text selection returned no selected text");
+                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, selected }));
+                return 0;
+            }
+            if (operation == "scroll-logs")
+            {
+                var position = Text("position");
+                if (position is not ("top" or "bottom")) throw new ArgumentException("Log scroll position must be top or bottom");
+                var logRoot = Find("Backend logs");
+                if (!logRoot.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
+                    throw new InvalidOperationException("Native log viewer does not expose scrolling");
+                var scroll = (ScrollPattern)scrollPattern;
+                if (scroll.Current.VerticalScrollPercent < 0)
+                    throw new InvalidOperationException("Native log viewer does not expose a vertical scroll range");
+                if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI before log scrolling");
+                logRoot.SetFocus();
+                Forms.SendKeys.SendWait(position == "top" ? "{HOME}" : "{END}");
+                scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
+                Thread.Sleep(100);
+                var actual = scroll.Current.VerticalScrollPercent;
+                var atRequestedEnd = position == "top" ? actual <= 1 : actual >= 99;
+                if (!atRequestedEnd) throw new InvalidOperationException($"Log viewer did not scroll to {position}; position={actual}");
+                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, position = actual }));
                 return 0;
             }
             if (operation == "tree")
             {
                 string[] labels;
                 string[] enabled_controls;
+                string[] help_texts;
                 try
                 {
                     var elements = Walk(root).Where(e => !e.Current.IsOffscreen).ToList();
                     enabled_controls = elements.Where(e => e.Current.IsEnabled).SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray();
                     labels = elements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
+                        .Where(s => s.Length > 0).Distinct().ToArray();
+                    help_texts = elements.Select(e => e.Current.HelpText)
                         .Where(s => s.Length > 0).Distinct().ToArray();
                 }
                 catch (ElementNotAvailableException error)
@@ -283,7 +396,7 @@ internal static class Program
                     return 0;
                 }
                 Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true, pid = process.Id, identity, labels, enabled_controls
+                    ready = true, pid = process.Id, identity, labels, enabled_controls, help_texts
                 }));
                 return 0;
             }
@@ -368,6 +481,85 @@ internal static class Program
                         {
                             if (primary is null) throw;
                             throw new AggregateException(primary, cleanup);
+                        }
+                    }
+                    break;
+                case "paste":
+                    TracePhase("paste-find-editor");
+                    var pasteEditor = Find("Connection configuration", editor: true);
+                    var pasteValue = File.ReadAllText(Text("source")).Trim();
+                    var fieldBeforeClipboard = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
+                    TracePhase("paste-activate-window");
+                    if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
+                    TracePhase("paste-read-clipboard");
+                    var previousPaste = Forms.Clipboard.GetDataObject();
+                    var savedClipboard = new Forms.DataObject();
+                    if (previousPaste is not null)
+                    {
+                        foreach (var format in previousPaste.GetFormats(false))
+                            savedClipboard.SetData(format, false, previousPaste.GetData(format, false));
+                    }
+                    Exception? pasteFailure = null;
+                    try
+                    {
+                        TracePhase("paste-set-clipboard-text");
+                        Forms.Clipboard.SetText(pasteValue, Forms.TextDataFormat.UnicodeText);
+                        TracePhase("paste-wait-for-button");
+                        var buttonWait = Stopwatch.StartNew();
+                        AutomationElement pasteButton;
+                        while (true)
+                        {
+                            try
+                            {
+                                pasteButton = Find("Paste", actionable: true);
+                                break;
+                            }
+                            catch (InvalidOperationException) when (buttonWait.Elapsed.TotalSeconds < 5)
+                            {
+                                Thread.Sleep(50);
+                            }
+                            if (buttonWait.Elapsed.TotalSeconds >= 5)
+                                throw new TimeoutException("Native Paste button did not appear for clipboard text");
+                        }
+                        var fieldAtAvailability = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
+                        if (NormalizeLineEndings(fieldAtAvailability) != NormalizeLineEndings(fieldBeforeClipboard))
+                            throw new InvalidOperationException("Clipboard availability inspection changed the configuration before Paste was tapped");
+                        if (!pasteButton.TryGetCurrentPattern(InvokePattern.Pattern, out var pasteInvoke))
+                            throw new InvalidOperationException("Native Paste button has no invoke action");
+                        TracePhase("paste-invoke-button");
+                        ((InvokePattern)pasteInvoke).Invoke();
+                        TracePhase("paste-verify-field");
+                        var valueWait = Stopwatch.StartNew();
+                        string pasteObserved = "";
+                        do
+                        {
+                            pasteObserved = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
+                            if (NormalizeLineEndings(pasteObserved).Trim() == NormalizeLineEndings(pasteValue)) break;
+                            Thread.Sleep(50);
+                        } while (valueWait.Elapsed.TotalSeconds < 5);
+                        if (NormalizeLineEndings(pasteObserved).Trim() != NormalizeLineEndings(pasteValue))
+                            throw new InvalidOperationException("Native Paste did not place clipboard text in the subscription field");
+                    }
+                    catch (Exception error) { pasteFailure = error; throw; }
+                    finally
+                    {
+                        try
+                        {
+                            if (previousPaste is null)
+                            {
+                                TracePhase("paste-clear-clipboard");
+                                Forms.Clipboard.Clear();
+                            }
+                            else
+                            {
+                                TracePhase("paste-restore-clipboard");
+                                Forms.Clipboard.SetDataObject(savedClipboard, true);
+                            }
+                        }
+                        catch (Exception cleanup)
+                        {
+                            if (pasteFailure is null) throw;
+                            throw new AggregateException(pasteFailure, cleanup);
                         }
                     }
                     break;

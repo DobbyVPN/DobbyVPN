@@ -204,25 +204,97 @@ extension DiagnosticsTests {
         let backend = directory.appendingPathComponent("backend.jsonl")
         let stderr = directory.appendingPathComponent("tunnel.stderr")
         let boundary = directory.appendingPathComponent("view.json")
-        let late = #"{"timestamp":"2026-10-04T10:00:02Z","level":"WARN","message":"later","detail":"retained"}"#
-        let early = #"{"timestamp":"2026-10-04T10:00:01Z","event":"stderr.capture","message":"capture"}"#
+        let late = #"{"timestamp":"2026-10-04T10:00:02Z","level":"WARN","source":"subscription","message":"later","detail":"retained"}"#
+        let early = #"{"timestamp":"2026-10-04T10:00:01Z","event":"stderr.capture","level":"ERROR","source":"tunnel","message":"capture"}"#
         try Data((late + "\n{\"timestamp\":").utf8).write(to: backend)
-        try Data((early + "\nraw stack\n  frame\n").utf8).write(to: stderr)
+        try Data((early + "\nraw stack\n  frame\n{not-json}\n{\"unclosed\":").utf8).write(to: stderr)
         let preview = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
         XCTAssertTrue(preview.error.isEmpty)
-        XCTAssertEqual(preview.entries.map(\.message), ["raw stack", "  frame", "Stderr capture initialized", "later"])
-        XCTAssertEqual(preview.entries[3].raw, late)
-        XCTAssertTrue(preview.entries[2].source.contains("Tunnel stderr"))
+        XCTAssertEqual(preview.entries.map(\.message), ["raw stack", "  frame", "{not-json}", "Stderr capture initialized", "later"])
+        for rawEntry in preview.entries.prefix(3) {
+            XCTAssertEqual(rawEntry.timestamp, "")
+            XCTAssertNil(rawEntry.date)
+            XCTAssertEqual(rawEntry.level, "RAW")
+            XCTAssertEqual(rawEntry.source, "Tunnel stderr")
+        }
+        let capture = preview.entries[3]
+        XCTAssertEqual(capture.timestamp, "2026-10-04T10:00:01Z")
+        XCTAssertNotNil(capture.date)
+        XCTAssertEqual(capture.level, "INFO", "stderr.capture is informational even if its producer level is ERROR")
+        XCTAssertEqual(capture.source, "Tunnel stderr · tunnel")
+        XCTAssertEqual(capture.message, "Stderr capture initialized")
+        XCTAssertEqual(capture.raw, early)
+        let later = preview.entries[4]
+        XCTAssertEqual(later.timestamp, "2026-10-04T10:00:02Z")
+        XCTAssertNotNil(later.date)
+        XCTAssertEqual(later.level, "WARN")
+        XCTAssertEqual(later.source, "Backend · subscription")
+        XCTAssertEqual(later.message, "later")
+        XCTAssertEqual(later.raw, late)
         try DiagnosticFiles.clearView(paths: [backend, stderr], boundary: boundary)
         try FileManager.default.moveItem(at: backend, to: URL(fileURLWithPath: backend.path + ".previous"))
         try Data("new event\n".utf8).write(to: backend)
         let cleared = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
         XCTAssertTrue(cleared.error.isEmpty)
         XCTAssertEqual(cleared.entries.map(\.message), ["new event"])
-        try (Data("partial ".utf8) + Data([0xCE])).write(to: backend)
-        XCTAssertEqual(DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary).entries.map(\.message), ["partial "])
-        try Data("partial λ\n".utf8).write(to: backend)
-        XCTAssertEqual(DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary).entries.map(\.message), ["partial λ"])
-        XCTAssertEqual(try String(contentsOf: stderr, encoding: .utf8), early + "\nraw stack\n  frame\n")
+        XCTAssertEqual(try String(contentsOf: stderr, encoding: .utf8), early + "\nraw stack\n  frame\n{not-json}\n{\"unclosed\":")
+    }
+
+    func testStructuredTiedTimestampsKeepInputOrderAndStableIDs() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let backend = directory.appendingPathComponent("backend.jsonl")
+        let tunnel = directory.appendingPathComponent("tunnel.jsonl")
+        let boundary = directory.appendingPathComponent("view.json")
+        let timestamp = "2026-10-04T10:00:01Z"
+        let backendRecord = #"{"timestamp":"\#(timestamp)","level":"INFO","message":"backend"}"#
+        let tunnelRecord = #"{"timestamp":"\#(timestamp)","level":"INFO","message":"tunnel"}"#
+        try Data((backendRecord + "\n").utf8).write(to: backend)
+        try Data((tunnelRecord + "\n").utf8).write(to: tunnel)
+
+        let first = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary).entries
+        let second = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary).entries
+        XCTAssertEqual(first.map(\.message), ["backend", "tunnel"])
+        XCTAssertEqual(second.map(\.message), ["backend", "tunnel"])
+        XCTAssertEqual(first.map(\.id), second.map(\.id))
+
+        let append = try FileHandle(forWritingTo: backend)
+        try append.seekToEnd()
+        try append.write(contentsOf: Data((#"{"timestamp":"\#(timestamp)","level":"INFO","message":"backend second"}"# + "\n").utf8))
+        try append.close()
+        let afterAppend = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary).entries
+        XCTAssertEqual(afterAppend.map(\.message), ["backend", "backend second", "tunnel"])
+        XCTAssertEqual(afterAppend[0].id, first[0].id)
+        XCTAssertEqual(afterAppend[2].id, first[1].id)
+        XCTAssertNotEqual(afterAppend[1].id, first[0].id)
+    }
+
+    func testStructuredReaderCompletesPartialJSONAndUTF8OnSameStream() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("backend.jsonl")
+        let boundary = directory.appendingPathComponent("view.json")
+        let record = #"{"timestamp":"2026-10-04T10:00:01Z","level":"INFO","message":"completed record"}"#
+        try Data(String(record.dropLast()).utf8).write(to: file)
+        XCTAssertTrue(DiagnosticFiles.entries(paths: [file], boundary: boundary).entries.isEmpty)
+
+        let writer = try FileHandle(forWritingTo: file)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data((String(record.suffix(1)) + "\n").utf8))
+        try writer.write(contentsOf: Data("partial ".utf8) + Data([0xCE]))
+        try writer.close()
+        let partial = DiagnosticFiles.entries(paths: [file], boundary: boundary).entries
+        XCTAssertEqual(partial.map(\.message), ["completed record", "partial "])
+        let partialID = try XCTUnwrap(partial.last?.id)
+
+        let continuation = try FileHandle(forWritingTo: file)
+        try continuation.seekToEnd()
+        try continuation.write(contentsOf: Data([0xBB, 0x0A]))
+        try continuation.close()
+        let completed = DiagnosticFiles.entries(paths: [file], boundary: boundary).entries
+        XCTAssertEqual(completed.map(\.message), ["completed record", "partial λ"])
+        XCTAssertEqual(completed.last?.id, partialID)
     }
 }

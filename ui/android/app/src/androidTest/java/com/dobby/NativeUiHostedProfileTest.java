@@ -3,6 +3,8 @@ package com.dobby;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.app.UiAutomation;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ContentResolver;
@@ -213,7 +215,11 @@ public final class NativeUiHostedProfileTest {
     private final JSONArray consentDiagnosticFailures = new JSONArray();
     private String expectedRenderedSource = "";
     private String launchSubscriptionURL = "";
+    private String subscriptionControlURL = "";
+    private String subscriptionControlKey = "";
+    private int coldImportInitialGets = -1;
     private boolean coldImportStarted;
+    private boolean coldImportAttempted;
     private final File screenshotDirectory = new File(
             // Instrumentation executes in the target application's UID. The
             // instrumentation APK's cache is a different sandbox and is not
@@ -299,6 +305,11 @@ public final class NativeUiHostedProfileTest {
         boolean guiAuto = GUI_AUTO_MODE.equals(command.optString(
                 "ui_mode", command.optString("coverage_lane", "")));
         launchSubscriptionURL = guiAuto ? command.getString("subscription_url") : "";
+        subscriptionControlURL = guiAuto ? command.getString("subscription_control_url") : "";
+        subscriptionControlKey = guiAuto ? command.getString("subscription_control_key") : "";
+        if (guiAuto && (subscriptionControlURL.isEmpty() || subscriptionControlKey.isEmpty())) {
+            throw new IllegalArgumentException("ANDROID_SUBSCRIPTION_CONTROL_MISSING");
+        }
         if (guiAuto && command.has("profile_index")) {
             throw new IllegalArgumentException("ANDROID_GUI_AUTO_PROFILE_INDEX_FORBIDDEN");
         }
@@ -340,7 +351,7 @@ public final class NativeUiHostedProfileTest {
                                 consentHandled |= connectThroughRenderedUI(operationTimeout(operation));
                                 assertRenderedSourceRetained(2_000L);
                                 verifySubscriptionControls(command.getString("subscription_url"), operationTimeout(operation));
-                                disconnectThroughRenderedUI(
+                                ensureRenderedDisconnected(
                                         operationTimeout(operation));
                                 boolean noVpn = awaitVpnNetwork(
                                         false,
@@ -675,6 +686,7 @@ public final class NativeUiHostedProfileTest {
     private void configureThroughRenderedUI(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         markProgress("configure", "surface", "started");
+        if (!coldImportAttempted) launchColdSubscriptionImport(subscriptionURL);
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         foregroundActivity = ensureForegroundActivity();
         markProgress("configure", "surface", "completed");
@@ -682,8 +694,15 @@ public final class NativeUiHostedProfileTest {
             expectedRenderedSource = subscriptionURL;
             waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
             assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+            JSONObject coldCounts = waitForSubscriptionGets(coldImportInitialGets + 1,
+                    remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+            coldCounts = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+            if (coldCounts.getInt("subscription_gets") != coldImportInitialGets + 1) {
+                throw new AssertionError("Cold deep link loaded the same subscription more than once");
+            }
             JSONObject imported = snapshotResult("");
-            if (!"CONFIGURED".equals(imported.getString("state"))) {
+            if (!"CONFIGURED".equals(imported.getString("state"))
+                    || !subscriptionURL.equals(imported.optString("source_url"))) {
                 throw new AssertionError("Cold import did not remain configured and disconnected: " + imported);
             }
             coldImportStarted = false;
@@ -718,7 +737,110 @@ public final class NativeUiHostedProfileTest {
         assertRenderedSourceRetained(
                 Math.min(2_000L, remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT")));
         waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+        JSONObject unchanged = subscriptionFixtureState();
+        if (unchanged.getInt("subscription_gets") != coldImportInitialGets + 1) {
+            throw new AssertionError("Entering the already accepted URL triggered another fetch");
+        }
         markProgress("configure", "rendered-navigation", "completed");
+    }
+
+    private void launchColdSubscriptionImport(String subscriptionURL) throws Exception {
+        coldImportAttempted = true;
+        coldImportStarted = true;
+        expectedRenderedSource = subscriptionURL;
+        coldImportInitialGets = subscriptionFixtureState().getInt("subscription_gets");
+        Activity previous = MainActivity.current;
+        if (previous != null) {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(previous::finishAndRemoveTask);
+            long finishDeadline = System.currentTimeMillis() + 5_000L;
+            while (System.currentTimeMillis() < finishDeadline && MainActivity.current != null) {
+                SystemClock.sleep(25L);
+            }
+            if (MainActivity.current != null) {
+                throw new IllegalStateException("ANDROID_COLD_IMPORT_ACTIVITY_DID_NOT_FINISH");
+            }
+        }
+        String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
+        String output = uiDevice().executeShellCommand(
+                "am start -W -a android.intent.action.VIEW -d '" + link + "' " + context.getPackageName());
+        if (!output.contains("Status: ok")) {
+            throw new IllegalStateException("ANDROID_COLD_IMPORT_LAUNCH_FAILED");
+        }
+        markProgress("configure", "cold-deeplink-launched", "completed");
+    }
+
+    private HttpURLConnection subscriptionControl(String suffix, String method, byte[] body) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(subscriptionControlURL + suffix).openConnection();
+        connection.setConnectTimeout(5_000);
+        connection.setReadTimeout(5_000);
+        connection.setRequestMethod(method);
+        connection.setRequestProperty("X-DobbyVPN-Torturer-Key", subscriptionControlKey);
+        if (body != null) {
+            connection.setDoOutput(true);
+            connection.setFixedLengthStreamingMode(body.length);
+            connection.setRequestProperty("Content-Type", "application/octet-stream");
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+        }
+        return connection;
+    }
+
+    private JSONObject subscriptionFixtureState() throws Exception {
+        HttpURLConnection connection = subscriptionControl("", "GET", null);
+        try {
+            if (connection.getResponseCode() != 200) throw new IOException("ANDROID_FIXTURE_CONTROL_READ_FAILED");
+            try (InputStream input = connection.getInputStream()) {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                byte[] buffer = new byte[4_096];
+                int count;
+                while ((count = input.read(buffer)) >= 0) {
+                    if (count > 0) bytes.write(buffer, 0, count);
+                }
+                return new JSONObject(new String(bytes.toByteArray(), StandardCharsets.UTF_8));
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private void subscriptionFixturePost(String suffix, byte[] body) throws Exception {
+        HttpURLConnection connection = subscriptionControl(suffix, "POST", body);
+        try {
+            if (connection.getResponseCode() != 204) throw new IOException("ANDROID_FIXTURE_CONTROL_WRITE_FAILED");
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private JSONObject waitForSubscriptionGets(int count, long timeout) throws Exception {
+        long deadline = System.currentTimeMillis() + timeout;
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject state = subscriptionFixtureState();
+            if (state.optInt("subscription_gets") >= count) return state;
+            SystemClock.sleep(25L);
+        }
+        throw new IllegalStateException("ANDROID_FIXTURE_GET_COUNT_TIMEOUT");
+    }
+
+    private JSONObject waitForInFlightGets(int count, long timeout) throws Exception {
+        long deadline = System.currentTimeMillis() + timeout;
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject state = subscriptionFixtureState();
+            if (state.optInt("in_flight_gets") == count) return state;
+            SystemClock.sleep(25L);
+        }
+        throw new IllegalStateException("ANDROID_FIXTURE_IN_FLIGHT_TIMEOUT");
+    }
+
+    private JSONObject waitForSessionSource(String source, long timeout) throws Exception {
+        long deadline = System.currentTimeMillis() + timeout;
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject snapshot = snapshotResult("");
+            if (source.equals(snapshot.optString("source_url"))) return snapshot;
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException("ANDROID_SOURCE_ACCEPTANCE_TIMEOUT");
     }
 
     private boolean hasFollowingConnectionStart(JSONArray operations, int start)
@@ -828,7 +950,10 @@ public final class NativeUiHostedProfileTest {
         if (VpnService.prepare(context) == null) return false;
         long deadline = System.currentTimeMillis() + timeout;
         JSONObject initial = snapshotResult("");
-        tapEnabledControl("Profile 1 action", deadline);
+        int count = initial.getJSONArray("profiles").length();
+        int target = count > 1 ? 1 : 0;
+        String control = "Profile " + (target + 1) + " action";
+        tapEnabledControl(control, deadline);
         UiObject2 cancel = uiDevice().wait(androidx.test.uiautomator.Until.findObject(
                 By.res("android:id/button2")), remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"));
         if (cancel == null || !cancel.isEnabled()) throw new AssertionError("VPN consent cancel button unavailable");
@@ -836,15 +961,36 @@ public final class NativeUiHostedProfileTest {
         waitForUiControl("VPN permission was not granted", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject denied = snapshotResult("");
         if (VpnService.prepare(context) == null || denied.getLong("generation") != initial.getLong("generation")
-                || !initial.getString("state").equals(denied.getString("state"))) {
+                || !initial.getString("state").equals(denied.getString("state"))
+                || !initial.optString("active_digest").equals(denied.optString("active_digest"))) {
             throw new AssertionError("Denied consent started a connection: " + denied);
         }
-        tapEnabledControl("Profile 1 action", deadline);
+        tapEnabledControl(control, deadline);
+        Uri changedSource = Uri.parse(launchSubscriptionURL).buildUpon()
+                .appendQueryParameter("consent-currentness", "1").build();
+        Intent replacement = new Intent(Intent.ACTION_VIEW, new Uri.Builder().scheme("dobbyvpn")
+                .authority("import").appendQueryParameter("url", changedSource.toString()).build())
+                .setPackage(context.getPackageName());
+        Activity activity = MainActivity.current;
+        if (activity == null) throw new IllegalStateException("ANDROID_CONSENT_ACTIVITY_MISSING");
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> activity.onNewIntent(replacement));
         acceptVpnConsent(remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"), "manual-consent");
-        awaitSelection(initial.getLong("generation"), "PROFILE_INDEX", 0, deadline);
-        tapEnabledControl("Profile 1 action", deadline);
+        JSONObject current = waitForSessionSource(changedSource.toString(), remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (current.getLong("generation") != initial.getLong("generation")
+                || !initial.getString("state").equals(current.getString("state"))
+                || !initial.optString("active_digest").equals(current.optString("active_digest"))) {
+            throw new AssertionError("Stale consent target started after the imported source changed");
+        }
+        tapEnabledControl(control, deadline);
+        JSONObject selected = awaitSelection(current.getLong("generation"), "PROFILE_INDEX", target, deadline);
+        tapEnabledControl(control, deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        markProgress("configure", "manual-consent-denied-then-granted", "completed");
+        JSONObject stopped = snapshotResult("");
+        if (stopped.getLong("generation") != selected.getLong("generation")
+                || !"IDLE".equals(stopped.optString("state"))) {
+            throw new AssertionError("Nondefault consent target did not disconnect cleanly");
+        }
+        markProgress("configure", "manual-consent-denied-currentness-granted", "completed");
         return true;
     }
 
@@ -855,33 +1001,257 @@ public final class NativeUiHostedProfileTest {
         int first = count > 1 && initial.getJSONObject("active_profile").getInt("index") == 0 ? 1 : 0;
         if (count == 1) disconnectThroughRenderedUI(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         tapEnabledControl("Profile " + (first + 1) + " action", deadline);
+        if (count > 1) verifyPendingProfileTransition(first, first == 0 ? 1 : 0, deadline);
         JSONObject manual = awaitSelection(initial.getLong("generation"), "PROFILE_INDEX", first, deadline);
         if (count > 1) {
             int second = first == 0 ? 1 : 0;
             tapEnabledControl("Profile " + (second + 1) + " action", deadline);
+            verifyPendingProfileTransition(second, first, deadline);
             manual = awaitSelection(manual.getLong("generation"), "PROFILE_INDEX", second, deadline);
         }
         tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        waitForFocusedNativeInput(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT")).setText(
-                subscriptionURL.substring(0, subscriptionURL.lastIndexOf('/')) + "/failure");
+        int beforeFailedLoad = subscriptionFixtureState().getInt("subscription_gets");
+        subscriptionFixturePost("/fail-next", new byte[0]);
+        String failedURL = urlWithQuery(subscriptionURL, "android-retry", "1");
+        expectedRenderedSource = failedURL;
+        long debounceStarted = SystemClock.elapsedRealtime();
+        waitForFocusedNativeInput(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT")).setText(failedURL);
+        long debounceProbeDeadline = debounceStarted + 300L;
+        while (SystemClock.elapsedRealtime() < debounceProbeDeadline) {
+            JSONObject beforeDebounce = subscriptionFixtureState();
+            if (beforeDebounce.getInt("subscription_gets") != beforeFailedLoad) {
+                throw new AssertionError("Subscription text edit bypassed the 400 ms debounce");
+            }
+            SystemClock.sleep(20L);
+        }
         dismissNativeInputIfVisible();
         waitForUiControl("Retry", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject failedRequest = waitForSubscriptionGets(beforeFailedLoad + 1,
+                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        failedRequest = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (failedRequest.getInt("subscription_gets") != beforeFailedLoad + 1
+                || failedRequest.getInt("max_in_flight_gets") > 1
+                || SystemClock.elapsedRealtime() - debounceStarted < 350L) {
+            throw new AssertionError("Debounced subscription load was premature, duplicated, or overlapped");
+        }
         JSONObject failedLoad = snapshotResult("");
         if (!"CONNECTED".equals(failedLoad.getString("state"))
                 || failedLoad.getLong("generation") != manual.getLong("generation")
                 || !failedLoad.getString("active_digest").equals(manual.getString("active_digest"))) {
             throw new AssertionError("Failed subscription load interrupted the tunnel");
         }
-        String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
-        for (int delivery = 0; delivery < 2; delivery++) {
-            String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d " + link + " " + context.getPackageName());
-            if (!output.contains("Status: ok")) throw new AssertionError("Import activation failed: " + output);
+        long retryStarted = SystemClock.elapsedRealtime();
+        tapEnabledControl("Retry", deadline);
+        JSONObject retryResult = waitForSubscriptionGets(beforeFailedLoad + 2,
+                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (SystemClock.elapsedRealtime() - retryStarted >= 350L) {
+            throw new AssertionError("Retry waited for the text-field debounce");
         }
+        retryResult = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject retried = waitForSessionSource(failedURL, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (retryResult.getInt("subscription_gets") != beforeFailedLoad + 2
+                || !"CONNECTED".equals(retried.getString("state"))
+                || retried.getLong("generation") != manual.getLong("generation")
+                || !retried.getString("active_digest").equals(manual.getString("active_digest"))) {
+            throw new AssertionError("Immediate Retry did not recover while preserving the active connection");
+        }
+        SystemClock.sleep(600L);
+        if (subscriptionFixtureState().getInt("subscription_gets") != beforeFailedLoad + 2) {
+            throw new AssertionError("Successful Retry triggered an automatic subscription reload");
+        }
+        int beforeWarmLinks = retryResult.getInt("subscription_gets");
+        expectedRenderedSource = subscriptionURL;
+        long importStarted = SystemClock.elapsedRealtime();
+        deliverWarmImport(subscriptionURL);
+        JSONObject immediateImport = waitForSubscriptionGets(beforeWarmLinks + 1,
+                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (SystemClock.elapsedRealtime() - importStarted >= 350L) {
+            throw new AssertionError("Deep-link import waited for the text-field debounce");
+        }
+        deliverWarmImport(subscriptionURL);
         assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject warmCounts = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject warmSnapshot = waitForSessionSource(subscriptionURL,
+                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (immediateImport.getInt("subscription_gets") != beforeWarmLinks + 1
+                || warmCounts.getInt("subscription_gets") != beforeWarmLinks + 1
+                || !"CONNECTED".equals(warmSnapshot.getString("state"))
+                || warmSnapshot.getLong("generation") != manual.getLong("generation")
+                || !warmSnapshot.getString("active_digest").equals(manual.getString("active_digest"))) {
+            throw new AssertionError("Repeated warm links duplicated a load or changed the active connection");
+        }
         tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
-        awaitSelection(manual.getLong("generation"), "AUTO_SELECT", -1, deadline);
+        verifyPendingAutoTransition(deadline);
+        JSONObject auto = awaitSelection(manual.getLong("generation"), "AUTO_SELECT", -1, deadline);
         tapUiControl("Clear", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        verifyHeldLoadKeepsControlsResponsive(subscriptionURL, auto, deadline);
+        verifyReplacementInventoryWhileOldProfileIsActive(subscriptionURL, deadline);
+        verifyLongListAndValidPaste(subscriptionURL, deadline);
         markProgress("configure", "manual-switch-failed-load-import-clear", "completed");
+    }
+
+    private String urlWithQuery(String url, String key, String value) {
+        return Uri.parse(url).buildUpon().appendQueryParameter(key, value).build().toString();
+    }
+
+    private void deliverWarmImport(String subscriptionURL) throws Exception {
+        String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
+        String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d '"
+                + link + "' " + context.getPackageName());
+        if (!output.contains("Status: ok")) throw new AssertionError("ANDROID_IMPORT_ACTIVATION_FAILED");
+    }
+
+    private void verifyHeldLoadKeepsControlsResponsive(String subscriptionURL, JSONObject active,
+            long deadline) throws Exception {
+        int before = subscriptionFixtureState().getInt("subscription_gets");
+        subscriptionFixturePost("/hold", new byte[0]);
+        String heldURL = urlWithQuery(subscriptionURL, "android-held", "1");
+        String intermediateURL = urlWithQuery(subscriptionURL, "android-intermediate", "1");
+        String newestURL = urlWithQuery(subscriptionURL, "android-newest", "1");
+        expectedRenderedSource = newestURL;
+        deliverWarmImport(heldURL);
+        waitForSubscriptionGets(before + 1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject held = waitForInFlightGets(1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        deliverWarmImport(heldURL);
+        deliverWarmImport(intermediateURL);
+        deliverWarmImport(newestURL);
+        SystemClock.sleep(200L);
+        JSONObject whileHeld = subscriptionFixtureState();
+        if (whileHeld.getInt("subscription_gets") != before + 1
+                || whileHeld.getInt("in_flight_gets") != 1
+                || held.getInt("max_in_flight_gets") > 1) {
+            throw new AssertionError("Held request allowed a duplicate or concurrent subscription load");
+        }
+        assertOldConnectActionsDisabled(active);
+        String marker = "held-load-log-" + System.nanoTime();
+        NativeVpnBridge.recordDiagnostic(context, "ui.test.held.load", marker);
+        waitForUiControl(marker, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        tapEnabledControl(CONNECTION_ACTION_LABEL, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject stopped = snapshotResult("");
+        if (!"IDLE".equals(stopped.optString("state"))
+                || stopped.getLong("generation") <= active.getLong("generation")) {
+            throw new AssertionError("Stop did not complete while subscription loading was held");
+        }
+        subscriptionFixturePost("/release", new byte[0]);
+        waitForSubscriptionGets(before + 2, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject completed = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject latest = waitForSessionSource(newestURL,
+                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (completed.getInt("subscription_gets") != before + 2
+                || completed.getInt("max_in_flight_gets") != 1
+                || !"IDLE".equals(latest.optString("state"))
+                || latest.getLong("generation") != stopped.getLong("generation")) {
+            throw new AssertionError("Newest request did not win after the held response completed");
+        }
+    }
+
+    private void verifyReplacementInventoryWhileOldProfileIsActive(String subscriptionURL,
+            long deadline) throws Exception {
+        JSONObject before = snapshotResult("");
+        tapEnabledControl("Profile 1 action", deadline);
+        JSONObject active = awaitSelection(before.getLong("generation"), "PROFILE_INDEX", 0, deadline);
+        String oldDescription = active.getJSONObject("active_profile").optString("description");
+        byte[] replacement = syntheticOutlineInventory(1, "Replacement inventory only");
+        subscriptionFixturePost("/profile", replacement);
+        int requests = subscriptionFixtureState().getInt("subscription_gets");
+        String replacementURL = urlWithQuery(subscriptionURL, "android-inventory", "replacement");
+        expectedRenderedSource = replacementURL;
+        deliverWarmImport(replacementURL);
+        waitForSubscriptionGets(requests + 1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject changed = waitForSessionSource(replacementURL,
+                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONArray profiles = changed.getJSONArray("profiles");
+        if (!"CONNECTED".equals(changed.optString("state"))
+                || changed.getLong("generation") != active.getLong("generation")
+                || changed.getString("active_digest").equals(changed.getString("digest"))
+                || profiles.length() != 1
+                || !"Replacement inventory only".equals(profiles.getJSONObject(0).optString("description"))
+                || oldDescription.equals(profiles.getJSONObject(0).optString("description"))) {
+            throw new AssertionError("New inventory displaced or hid the still-active profile");
+        }
+        if (!oldDescription.isEmpty()) waitForUiControl(oldDescription, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForUiControl("Replacement inventory only", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        tapEnabledControl("Disconnect", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject stopped = snapshotResult("");
+        if (!"IDLE".equals(stopped.optString("state"))
+                || stopped.getLong("generation") <= active.getLong("generation")) {
+            throw new AssertionError("Visible Stop control could not end an absent-profile connection");
+        }
+    }
+
+    private void verifyLongListAndValidPaste(String subscriptionURL, long deadline) throws Exception {
+        byte[] longList = syntheticOutlineInventory(24, "long-list");
+        subscriptionFixturePost("/profile", longList);
+        String pastedURL = urlWithQuery(subscriptionURL, "android-paste", "valid");
+        expectedRenderedSource = pastedURL;
+        ClipboardManager clipboard = context.getSystemService(ClipboardManager.class);
+        try {
+            clipboard.setPrimaryClip(ClipData.newPlainText("subscription", pastedURL));
+            waitForUiControl("Paste", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+            int before = subscriptionFixtureState().getInt("subscription_gets");
+            long pasteStarted = SystemClock.elapsedRealtime();
+            tapUiControl("Paste", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+            JSONObject pasteRequest = waitForSubscriptionGets(before + 1,
+                    remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+            if (pasteRequest.getInt("subscription_gets") != before + 1
+                    || SystemClock.elapsedRealtime() - pasteStarted >= 350L) {
+                throw new AssertionError("Paste did not request its URL immediately");
+            }
+            waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+            JSONObject loaded = waitForSessionSource(pastedURL,
+                    remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+            JSONArray profiles = loaded.getJSONArray("profiles");
+            if (profiles.length() != 24 || !"Profile 2 long-list".equals(profiles.getJSONObject(1).optString("description"))
+                    || !"OUTLINE".equals(profiles.getJSONObject(0).optString("protocol"))
+                    || !"".equals(profiles.getJSONObject(0).optString("description"))
+                    || !"Profile 24 long-list".equals(profiles.getJSONObject(23).optString("description"))) {
+                throw new AssertionError("Ordered profile description, protocol, or fallback inventory was not retained");
+            }
+            String hierarchy = dumpUiHierarchy();
+            int first = hierarchy.indexOf("Profile 1");
+            int second = hierarchy.indexOf("Profile 2 long-list");
+            if (first < 0 || second <= first || hierarchy.indexOf("OUTLINE") < 0) {
+                throw new AssertionError("Rendered profile row order or protocol label is missing");
+            }
+            scrollControlsToLastProfile(deadline);
+            waitForUiControl("Profile 24 long-list", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+            waitForEnabledControl("Profile 24 action", deadline);
+        } finally {
+            clipboard.clearPrimaryClip();
+        }
+    }
+
+    private byte[] syntheticOutlineInventory(int count, String descriptionPrefix) {
+        StringBuilder profile = new StringBuilder();
+        for (int index = 0; index < count; index++) {
+            String description = index == 0 && count > 1 ? "" :
+                    (count == 1 ? descriptionPrefix : "Profile " + (index + 1) + " " + descriptionPrefix);
+            profile.append("[[Outline]]\nDescription = \"").append(description).append("\"\n")
+                    .append("Server = \"198.51.100.10\"\nPort = 443\nPassword = \"synthetic-password\"\n\n");
+        }
+        return profile.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private String dumpUiHierarchy() throws Exception {
+        ByteArrayOutputStream hierarchy = new ByteArrayOutputStream();
+        uiDevice().dumpWindowHierarchy(hierarchy);
+        return hierarchy.toString(StandardCharsets.UTF_8.name());
+    }
+
+    private void scrollControlsToLastProfile(long deadline) throws Exception {
+        UiDevice device = uiDevice();
+        int width = device.getDisplayWidth();
+        int height = device.getDisplayHeight();
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 last = findUiObject("Profile 24 action");
+            if (last != null && !last.getVisibleBounds().isEmpty()) return;
+            device.swipe(width / 2, height * 2 / 3, width / 2, height / 4, 12);
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException("ANDROID_PROFILE_LIST_SCROLL_TIMEOUT");
     }
 
     private void tapEnabledControl(String label, long deadline) throws Exception {
@@ -892,6 +1262,16 @@ public final class NativeUiHostedProfileTest {
                 tapUiControl(label, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
                 return;
             }
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new AssertionError("Control did not become enabled: " + label);
+    }
+
+    private UiObject2 waitForEnabledControl(String label, long deadline) throws Exception {
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 control = findUiObject(label);
+            while (control != null && !control.isClickable()) control = control.getParent();
+            if (control != null && control.isEnabled()) return control;
             SystemClock.sleep(POLL_MILLIS);
         }
         throw new AssertionError("Control did not become enabled: " + label);
@@ -910,6 +1290,81 @@ public final class NativeUiHostedProfileTest {
             SystemClock.sleep(POLL_MILLIS);
         }
         throw new AssertionError("Native selection did not reach the requested profile: " + mode + "/" + index);
+    }
+
+    private void verifyPendingProfileTransition(int targetIndex, int competingIndex, long deadline) throws Exception {
+        String targetLabel = "Profile " + (targetIndex + 1) + " action";
+        String competingLabel = "Profile " + (competingIndex + 1) + " action";
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject state = snapshotResult("");
+            JSONObject pending = state.optJSONObject("pending_target");
+            if (pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
+                    && pending.optInt("index", -1) == targetIndex
+                    && state.optString("digest").equals(pending.optString("digest"))) {
+                UiObject2 stop = findUiObject("Stop");
+                while (stop != null && !stop.isClickable()) stop = stop.getParent();
+                if (stop == null || !stop.isEnabled()) {
+                    throw new AssertionError("Pending profile selection did not retain an enabled Stop action");
+                }
+                UiObject2 target = findUiObject(targetLabel);
+                while (target != null && !target.isClickable()) target = target.getParent();
+                if (target == null || !target.isEnabled()) {
+                    throw new AssertionError("Pending profile target did not retain its Stop action");
+                }
+                UiObject2 competing = findUiObject(competingLabel);
+                while (competing != null && !competing.isClickable()) competing = competing.getParent();
+                if (competing == null || competing.isEnabled()) {
+                    throw new AssertionError("Competing profile Connect remained enabled during switching");
+                }
+                return;
+            }
+            SystemClock.sleep(20L);
+        }
+        throw new AssertionError("Pending profile transition was not rendered before selection completed");
+    }
+
+    private void verifyPendingAutoTransition(long deadline) throws Exception {
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject state = snapshotResult("");
+            JSONObject pending = state.optJSONObject("pending_target");
+            if (pending != null && "AUTO_SELECT".equals(pending.optString("mode"))
+                    && state.optString("digest").equals(pending.optString("digest"))) {
+                UiObject2 stop = findUiObject("Stop");
+                while (stop != null && !stop.isClickable()) stop = stop.getParent();
+                if (stop == null || !stop.isEnabled()) {
+                    throw new AssertionError("Auto selection did not expose its enabled Stop action");
+                }
+                for (int index = 0; index < state.getJSONArray("profiles").length(); index++) {
+                    UiObject2 profile = findUiObject("Profile " + (index + 1) + " action");
+                    while (profile != null && !profile.isClickable()) profile = profile.getParent();
+                    if (profile == null || profile.isEnabled()) {
+                        throw new AssertionError("Profile Connect remained enabled during Auto selection");
+                    }
+                }
+                return;
+            }
+            SystemClock.sleep(20L);
+        }
+        throw new AssertionError("Pending Auto selection was not rendered before connection completed");
+    }
+
+    private void assertOldConnectActionsDisabled(JSONObject active) throws Exception {
+        int activeIndex = active.getJSONObject("active_profile").getInt("index");
+        JSONArray profiles = active.getJSONArray("profiles");
+        for (int index = 0; index < profiles.length(); index++) {
+            UiObject2 button = findUiObject("Profile " + (index + 1) + " action");
+            while (button != null && !button.isClickable()) button = button.getParent();
+            if (button == null) throw new AssertionError("Old inventory action disappeared during loading");
+            if (index == activeIndex) {
+                UiObject2 disconnect = findUiObject("Disconnect");
+                while (disconnect != null && !disconnect.isClickable()) disconnect = disconnect.getParent();
+                if (!button.isEnabled() || disconnect == null || !disconnect.isEnabled()) {
+                    throw new AssertionError("Active old profile did not retain only its Disconnect action");
+                }
+            } else if (button.isEnabled()) {
+                throw new AssertionError("A stale old-inventory Connect action remained enabled during loading");
+            }
+        }
     }
 
     private void assertRenderedSourceRetained(long timeout) throws Exception {
@@ -1003,6 +1458,15 @@ public final class NativeUiHostedProfileTest {
                 "Disconnected",
                 remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
         markProgress("disconnect", "disconnected-state", "completed");
+    }
+
+    private void ensureRenderedDisconnected(long timeout) throws Exception {
+        JSONObject current = snapshotResult("");
+        if (!"IDLE".equals(current.optString("state"))) {
+            disconnectThroughRenderedUI(timeout);
+            return;
+        }
+        waitForUiState("Disconnected", timeout);
     }
 
     /**

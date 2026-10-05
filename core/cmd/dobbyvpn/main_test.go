@@ -31,14 +31,63 @@ func TestReadSourceAcceptsHTTPSURLAndExistingFile(t *testing.T) {
 	}
 }
 
-func TestReadSourceRejectsMissingFileAndInlineTOML(t *testing.T) {
+func TestReadSourceRejectsMissingFile(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing.toml")
 	if _, err := readSource(missingPath); err == nil || !strings.Contains(err.Error(), "cannot read configuration file") {
 		t.Fatalf("readSource(%q) error = %v", missingPath, err)
 	}
-	inlineTOML := "[[Xray]]\nName = \"inline\"\n"
-	if _, err := readSource(inlineTOML); err == nil {
-		t.Fatalf("readSource(%q) unexpectedly succeeded", inlineTOML)
+}
+
+func TestReadSourceAcceptsInlineTOMLWithLeadingCommentsAndWhitespace(t *testing.T) {
+	inlineTOML := " # synthetic profile\n\n [[Xray]]\nName = \"inline\"\n"
+	got, err := readSource(inlineTOML)
+	if err != nil || string(got) != inlineTOML {
+		t.Fatalf("readSource(inline TOML) = %q, %v", got, err)
+	}
+}
+
+func TestConfigureSendsInlineTOMLBytesToTheGoOwner(t *testing.T) {
+	const inlineTOML = "[[Xray]]\nName = \"inline\"\n"
+	var methods []string
+	var received string
+	client := testControlClient(t, func(request controljson.Request) any {
+		methods = append(methods, request.Method)
+		if request.Method == "Snapshot" {
+			return map[string]any{"session_id": "inline-session", "sequence": 8}
+		}
+		var parameters struct {
+			Source string `json:"source"`
+		}
+		if err := json.Unmarshal(request.Params, &parameters); err != nil {
+			t.Errorf("decode Configure parameters: %v", err)
+		}
+		received = parameters.Source
+		return map[string]any{"digest": "inline-digest", "sequence": 9, "profiles": []map[string]any{{"index": 0, "protocol": "Xray"}}}
+	})
+	if code := configureJSON(context.Background(), client, inlineTOML); code != exitOK {
+		t.Fatalf("configureJSON exit=%d", code)
+	}
+	if !reflect.DeepEqual(methods, []string{"Snapshot", "Configure"}) || received != inlineTOML {
+		t.Fatalf("methods=%v inline bytes=%q", methods, received)
+	}
+}
+
+func TestReadSourceUsesAnExistingTOMLLookingFilename(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "[[profile]]")
+	const content = "file contents\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readSource(path)
+	if err != nil || string(got) != content {
+		t.Fatalf("readSource(existing TOML-looking file) = %q, %v", got, err)
+	}
+}
+
+func TestReadSourceAppliesSizeLimitToInlineTOML(t *testing.T) {
+	inlineTOML := "[[Outline]]\n" + strings.Repeat("#", (1<<20)-len("[[Outline]]\n")+1)
+	if _, err := readSource(inlineTOML); err == nil || !strings.Contains(err.Error(), "1 MiB") {
+		t.Fatalf("oversized inline configuration error = %v", err)
 	}
 }
 

@@ -103,6 +103,42 @@ internal static class NativeDiagnosticsTests
             using var text = new StreamReader(uncompressed);
             var details = await text.ReadToEndAsync();
             Require(details.Contains(directory) && details.Contains("error-0:"), "read failure hid available logs");
+            // L1/L2/L4/L5: preserve structured fields and original records,
+            // keep equal-time records stable across streams, leave raw output
+            // untimed, and classify stderr capture as information.
+            var presentationBackend = Path.Combine(directory, "presentation.jsonl");
+            var presentationStderr = presentationBackend + ".stderr";
+            var presentationUI = Path.Combine(directory, "presentation-ui.jsonl");
+            const string tied = "2026-01-01T00:00:03Z";
+            const string backendTie = "{\"timestamp\":\"" + tied + "\",\"level\":\"INFO\",\"source\":\"backend-test\",\"message\":\"backend tie\",\"extra\":42}";
+            const string capture = "{\"timestamp\":\"" + tied + "\",\"level\":\"ERROR\",\"source\":\"stdio\",\"event\":\"stderr.capture\",\"message\":\"raw capture detail\"}";
+            const string uiTie = "{\"timestamp\":\"" + tied + "\",\"level\":\"WARN\",\"source\":\"ui-test\",\"message\":\"warning detail λ\",\"extra\":{\"attempt\":2}}";
+            const string jsonLikeRaw = "{\"timestamp\":not-json raw output";
+            File.WriteAllText(presentationBackend, backendTie + "\n" + jsonLikeRaw + "\ntrace line 1\ntrace line 2\n");
+            File.WriteAllText(presentationStderr, capture + "\n");
+            File.WriteAllText(presentationUI, uiTie + "\n");
+            var presentation = new NativeDiagnostics(presentationBackend, presentationUI);
+            var presented = await presentation.EntriesAsync();
+            Require(presented.Error == "", presented.Error);
+            var structuredEntry = presented.Entries.Single(entry => entry.Message == "warning detail λ");
+            Require(structuredEntry.Timestamp == tied && structuredEntry.Level == "WARN" &&
+                structuredEntry.Source == "App · ui-test" && structuredEntry.Raw == uiTie,
+                "structured timestamp, severity, source, message, or original record changed");
+            Require(structuredEntry.Raw.Contains("\"attempt\":2"), "extra structured fields were lost");
+            var ties = presented.Entries.Where(entry => entry.Time == DateTimeOffset.Parse(tied)).Select(entry => entry.Message).ToArray();
+            Require(ties.SequenceEqual(new[] { "backend tie", "Stderr capture initialized", "warning detail λ" }),
+                "equal-timestamp stream ordering was not stable");
+            var repeated = await presentation.EntriesAsync();
+            Require(repeated.Entries.Select(entry => entry.Id).SequenceEqual(presented.Entries.Select(entry => entry.Id)),
+                "repeated reads changed stable diagnostic ordering");
+            var rawEntries = presented.Entries.Where(entry => entry.Time is null).ToArray();
+            Require(rawEntries.Select(entry => entry.Message).SequenceEqual(new[] { jsonLikeRaw, "trace line 1", "trace line 2" }) &&
+                rawEntries.All(entry => entry.Timestamp == "" && entry.Level == "RAW" && entry.Source == "Backend" && entry.Raw == entry.Message),
+                "raw JSON-like output or multiline traces gained fabricated event metadata or changed order");
+            var captureEntry = presented.Entries.Single(entry => entry.Message == "Stderr capture initialized");
+            Require(captureEntry.Level == "INFO" && captureEntry.Source == "Backend stderr · stdio" &&
+                captureEntry.Timestamp == tied && captureEntry.Raw == capture,
+                "stderr.capture was presented as an error or lost its source record");
             var structured = Path.Combine(directory, "structured.jsonl");
             var structuredUI = Path.Combine(directory, "structured-ui.jsonl");
             const string earlier = "{\"timestamp\":\"2026-01-01T00:00:01Z\",\"level\":\"WARN\",\"message\":\"earlier λ\",\"extra\":42}\n";
@@ -114,19 +150,25 @@ internal static class NativeDiagnosticsTests
             Require(parsed.Error == "", parsed.Error);
             Require(parsed.Entries.Select(e => e.Message).SequenceEqual(new[] { "trace line 1", "trace line 2", "earlier λ", "later" }), "structured ordering or partial record failed");
             Require(parsed.Entries[2].Level == "WARN" && parsed.Entries[2].Raw.Contains("extra"), "structured details lost");
+            File.AppendAllText(structuredUI, " record\"}\n");
+            parsed = await view.EntriesAsync();
+            var completedJson = parsed.Entries.Single(entry => entry.Message == "incomplete record");
+            Require(completedJson.Timestamp == "" && completedJson.Source == "App" &&
+                completedJson.Raw == "{\"message\":\"incomplete record\"}",
+                "an incomplete JSON record did not become readable when completed on the same stream");
             await view.ClearViewAsync();
             File.Move(structured, structured + ".previous");
             File.WriteAllText(structured, "new after rotation\n");
-            File.AppendAllText(structuredUI, " record\"}\n");
             view = new NativeDiagnostics(structured, structuredUI);
             parsed = await view.EntriesAsync();
             Require(parsed.Error == "" && parsed.Entries.Select(e => e.Message).SequenceEqual(new[] { "new after rotation" }), "Clear did not survive rotation/restart or partial boundary");
             Require(File.ReadAllText(structured + ".previous").StartsWith(later), "Clear modified retained bytes");
             File.WriteAllBytes(structured, Encoding.UTF8.GetBytes("partial ").Concat(new byte[] { 0xCE }).ToArray());
             Require((await view.EntriesAsync()).Entries.Single().Message == "partial ", "Incomplete UTF-8 fabricated text");
-            File.WriteAllText(structured, "partial λ\n");
+            await using (var completed = new FileStream(structured, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                await completed.WriteAsync(new byte[] { 0xBB, (byte)'\n' });
             Require((await view.EntriesAsync()).Entries.Single().Message == "partial λ", "Completed UTF-8 was lost");
-            Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, input protection, and failure cleanup passed");
+            Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, structured ordering, raw streams, capture classification, same-stream incomplete record/UTF-8 completion, rotation, input protection, and failure cleanup passed");
         }
         finally { Directory.Delete(directory, recursive: true); }
     }

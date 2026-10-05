@@ -1,7 +1,6 @@
 package com.dobby.ui
 
 import android.content.ClipboardManager
-import android.content.ClipDescription
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -153,6 +152,8 @@ private class SessionController(private val activity: MainActivity) {
     private var loadInFlight = false
     private var loadRevision = 0
     private var pendingLoad: String? = null
+    private var scheduledSource: String? = null
+    private var inFlightSource: String? = null
     private var debounce: Runnable? = null
     private var restoredLoad = ""
     private var acceptedSequence = 0L
@@ -173,16 +174,43 @@ private class SessionController(private val activity: MainActivity) {
     }
 
     fun sourceChanged(value: String, immediate: Boolean = false) {
+        val source = value.trim()
+        val uri = runCatching { java.net.URI(source) }.getOrNull()
+        val alreadyAccepted = !immediate && uri?.scheme?.lowercase() == "https" &&
+            !uri.host.isNullOrEmpty() && latest.configured && latest.sourceUrl == source &&
+            !loadInFlight && inFlightSource == null
+        if (alreadyAccepted) {
+            permissionTarget = null
+            state = state.copy(
+                source = source,
+                sourceDirty = false,
+                loading = false,
+                loadError = "",
+                error = "",
+            )
+            loadRevision++
+            pendingLoad = null
+            scheduledSource = null
+            debounce?.let(main::removeCallbacks)
+            return
+        }
         if (permissionTarget != null) state = state.copy(busy = false)
         permissionTarget = null
         state = state.copy(source = value, sourceDirty = true, error = "", loadError = "")
         loadRevision++
         pendingLoad = null
+        scheduledSource = null
         debounce?.let(main::removeCallbacks)
-        val source = value.trim()
-        val uri = runCatching { java.net.URI(source) }.getOrNull()
         if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) return
-        debounce = Runnable { pendingLoad = source; loadNext() }.also { main.postDelayed(it, if (immediate) 0 else 400) }
+        val revision = loadRevision
+        scheduledSource = source
+        debounce = Runnable {
+            if (revision == loadRevision) {
+                scheduledSource = null
+                pendingLoad = source
+                loadNext()
+            }
+        }.also { main.postDelayed(it, if (immediate) 0 else 400) }
     }
 
     fun retryLoad() = sourceChanged(state.source, true)
@@ -192,6 +220,7 @@ private class SessionController(private val activity: MainActivity) {
         val source = pendingLoad ?: return
         pendingLoad = null
         loadInFlight = true
+        inFlightSource = source
         state = state.copy(loading = true)
         val revision = loadRevision
         loadWorker.execute {
@@ -205,6 +234,7 @@ private class SessionController(private val activity: MainActivity) {
             }
             main.post {
                 loadInFlight = false
+                inFlightSource = null
                 state = state.copy(loading = false)
                 if (revision == loadRevision) {
                     if (outcome.isSuccess) acceptedSequence = outcome.getOrThrow()
@@ -302,24 +332,50 @@ private class SessionController(private val activity: MainActivity) {
     fun setVisible(value: Boolean) { visible = value; if (value) refreshClipboard() }
 
     private fun refreshClipboard() {
-        state = state.copy(canPaste = clipboard.hasPrimaryClip() && clipboard.primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true)
+        val available = runCatching { clipboard.hasPrimaryClip() }.getOrDefault(false)
+        if (state.canPaste != available) state = state.copy(canPaste = available)
     }
 
     fun paste() {
-        val value = clipboard.primaryClip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
+        val clip = try {
+            if (clipboard.hasPrimaryClip()) clipboard.primaryClip else null
+        } catch (failure: Exception) {
+            report("Android could not read the clipboard", failure)
+            return
+        }
+        if (clip == null || clip.itemCount == 0) {
+            report("Clipboard is empty. Copy an HTTPS subscription URL first")
+            return
+        }
+        val value = try {
+            val item = clip.getItemAt(0)
+            (item.text ?: item.coerceToText(activity))?.toString()?.trim().orEmpty()
+        } catch (failure: Exception) {
+            report("Clipboard item could not be read. Copy an HTTPS subscription URL first", failure)
+            return
+        }
+        if (value.isEmpty()) {
+            report("Clipboard item has no text. Copy an HTTPS subscription URL first")
+            return
+        }
         importSubscription(value)
     }
 
     private fun importSubscription(value: String) {
         val uri = runCatching { java.net.URI(value) }.getOrNull()
         if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) { report("Paste an HTTPS subscription URL with a host"); return }
-        if (value == state.source && (state.loading || !state.sourceDirty && state.session.configured)) return
+        val source = value.trim()
+        if (source == state.source && (scheduledSource == source || pendingLoad == source || inFlightSource == source)) return
+        val noOutstandingLoad = !loadInFlight && scheduledSource == null && pendingLoad == null
+        if (noOutstandingLoad && state.loadError.isEmpty() && latest.configured && latest.sourceUrl == source) {
+            state = state.copy(source = source, sourceDirty = false, loadError = "", error = "")
+            return
+        }
         sourceChanged(value, true)
     }
 
     fun importLink(value: String) {
         try {
-            if (value.equals("dobbyvpn://", true)) return
             val uri = java.net.URI(value)
             require(uri.scheme.equals("dobbyvpn", true) && uri.host == "import" && uri.rawPath.isNullOrEmpty() && uri.rawFragment == null && uri.rawUserInfo == null && uri.port == -1)
             val query = uri.rawQuery.orEmpty().split('&')
@@ -360,10 +416,9 @@ private class SessionController(private val activity: MainActivity) {
     }
 
     fun openSourceCommit() {
-        val commit = BuildConfig.PROJECT_REPOSITORY_COMMIT
-        if (commit.isBlank() || commit == "N/A") return
-        val uri = Uri.parse("https://github.com/DobbyVPN/DobbyVPN/tree/$commit")
-        activity.startActivity(Intent(Intent.ACTION_VIEW, uri))
+        val link = BuildConfig.PROJECT_REPOSITORY_COMMIT_LINK
+        if (link.isBlank() || link.endsWith("/N/A")) return
+        activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
     }
 
     fun close() {
@@ -372,6 +427,7 @@ private class SessionController(private val activity: MainActivity) {
         logWorker.shutdownNow()
         loadWorker.shutdownNow()
         debounce?.let(main::removeCallbacks)
+        scheduledSource = null
     }
 
     private fun refreshSnapshot(clearBusy: Boolean = false) {
@@ -589,7 +645,13 @@ private fun AboutScreen(controller: SessionController, modifier: Modifier) {
                 Text("Source commit: ${BuildConfig.PROJECT_REPOSITORY_COMMIT}", modifier = Modifier.semantics { contentDescription = "Source commit" })
             }
         }
-        TextButton(onClick = controller::openSourceCommit) { Text("Source code") }
+        TextButton(
+            onClick = controller::openSourceCommit,
+            enabled = BuildConfig.PROJECT_REPOSITORY_COMMIT.isNotBlank() && BuildConfig.PROJECT_REPOSITORY_COMMIT != "N/A",
+            modifier = Modifier.semantics {
+                contentDescription = "Source code ${BuildConfig.PROJECT_REPOSITORY_COMMIT_LINK}"
+            },
+        ) { Text("Source code") }
         Button(onClick = { controller.show("connection") }) { Text("Back") }
     }
 }

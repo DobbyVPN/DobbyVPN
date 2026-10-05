@@ -1,12 +1,22 @@
 package com.dobby
 
 import android.app.Instrumentation
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Rect
+import android.graphics.drawable.AdaptiveIconDrawable
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
 import android.view.WindowInsets
+import android.view.View
+import android.view.ViewGroup
+import android.widget.TextView
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -15,6 +25,7 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.dobby.ui.MainActivity
 import com.dobby.nativebridge.NativeVpnBridge
+import com.dobby.vpn.BuildConfig
 import java.util.zip.GZIPInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -114,6 +125,9 @@ class NativeUiInstrumentedTest {
         waitForOneOf(arrayOf("Disconnected"), 30_000)
         requireObject(connectionActionLabel)
         captureScreenshot("startup")
+        captureInstalledLauncherArtwork()
+        verifyAboutMetadata()
+        verifyResponsiveLayout()
         assertConnectionDisabled("ANDROID_INITIAL_CONNECT_ENABLED")
 
         // Resolve the app-owned diagnostic paths so the controller can
@@ -122,6 +136,8 @@ class NativeUiInstrumentedTest {
         waitForTextContaining("Android diagnostic store resolved")
         waitForOneOf(arrayOf("Disconnected"), 10_000)
 
+        verifyClipboardHandling()
+
         tapStable("Subscription URL")
         val nativeInput = waitForFocusedNativeInput(10_000)
         nativeInput.setText("invalidprofile")
@@ -129,6 +145,7 @@ class NativeUiInstrumentedTest {
         val typingMarker = "log-update-while-typing-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(instrumentation.targetContext, "ui.test.typing", typingMarker)
         waitForTextContaining(typingMarker)
+        verifyStructuredLogDisplay(typingMarker)
         device.waitForIdle()
         check(device.findObject(By.clazz("android.widget.EditText").pkg(packageName))?.isFocused == true) {
             "ANDROID_LOG_UPDATE_STOLE_INPUT_FOCUS"
@@ -203,6 +220,9 @@ class NativeUiInstrumentedTest {
         val marker = "live-log-check-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.live", marker)
         waitForTextContaining(marker)
+        backgroundActivity()
+        launch()
+        waitForTextContaining(marker)
         val existing = context.cacheDir.listFiles().orEmpty().map { it.name }.toSet()
         val exportMarker = "fresh-export-${System.nanoTime()}"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.export", exportMarker)
@@ -232,6 +252,176 @@ class NativeUiInstrumentedTest {
         launch()
     }
 
+    private fun captureInstalledLauncherArtwork() {
+        val context = instrumentation.targetContext
+        val application = context.packageManager.getApplicationInfo(packageName, 0)
+        check(application.icon != 0) { "ANDROID_LAUNCHER_ICON_MISSING" }
+        check(context.resources.getResourceEntryName(application.icon) == "ic_launcher") {
+            "ANDROID_INSTALLED_LAUNCHER_ICON_RESOURCE_UNEXPECTED"
+        }
+        val icon = context.packageManager.getApplicationIcon(packageName)
+        check(icon is AdaptiveIconDrawable) { "ANDROID_INSTALLED_LAUNCHER_ICON_NOT_ADAPTIVE" }
+        val bitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
+        try {
+            icon.setBounds(0, 0, bitmap.width, bitmap.height)
+            icon.draw(Canvas(bitmap))
+            val colors = mutableSetOf<Int>()
+            for (y in 0 until bitmap.height step 8) {
+                for (x in 0 until bitmap.width step 8) colors.add(bitmap.getPixel(x, y))
+            }
+            check(colors.size > 2) { "ANDROID_INSTALLED_LAUNCHER_ARTWORK_BLANK" }
+            val output = File(screenshotDirectory, "installed-launcher-artwork.png")
+            FileOutputStream(output).use { stream ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                    "ANDROID_LAUNCHER_ARTWORK_PNG_ENCODE_FAILED"
+                }
+            }
+            check(output.isFile && output.length() > 8L) { "ANDROID_LAUNCHER_ARTWORK_PNG_INVALID" }
+            val marker = "DOBBY_INSTALLED_LAUNCHER_ARTWORK path=${output.absolutePath} " +
+                "bytes=${output.length()} sha256=${sha256(output)} width=${bitmap.width} " +
+                "height=${bitmap.height} sampled_colors=${colors.size}\n"
+            instrumentation.sendStatus(0, Bundle().apply {
+                putString(Instrumentation.REPORT_KEY_STREAMRESULT, marker)
+            })
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun verifyAboutMetadata() {
+        val context = instrumentation.targetContext
+        val installedVersion = context.packageManager.getPackageInfo(packageName, 0).versionName
+        check(installedVersion == BuildConfig.VERSION_NAME) { "ANDROID_ABOUT_VERSION_BUILD_MISMATCH" }
+        val commit = BuildConfig.PROJECT_REPOSITORY_COMMIT
+        val link = BuildConfig.PROJECT_REPOSITORY_COMMIT_LINK
+        check(commit.isNotBlank() && commit != "N/A" && link.endsWith("/$commit")) {
+            "ANDROID_ABOUT_SOURCE_METADATA_MISSING"
+        }
+        tapAndWaitForVisible("About", "Back")
+        waitForTextContaining("Version: ${BuildConfig.VERSION_NAME}")
+        waitForTextContaining("Source commit: $commit")
+        val source = requireObject("Source code $link")
+        var clickable = source
+        while (clickable != null && !clickable.isClickable) clickable = clickable.parent
+        check(clickable?.isEnabled == true) { "ANDROID_ABOUT_SOURCE_LINK_DISABLED" }
+        captureScreenshot("about-metadata")
+        tapStable("Back")
+        waitForOneOf(arrayOf("Disconnected"), 10_000)
+    }
+
+    private fun verifyResponsiveLayout() {
+        val originalScale = device.executeShellCommand("settings get system font_scale").trim()
+        check(originalScale.toFloatOrNull() != null) { "ANDROID_FONT_SCALE_UNAVAILABLE:$originalScale" }
+        try {
+            device.setOrientationLeft()
+            device.waitForIdle()
+            requireObject(connectionActionLabel)
+            requireObject("Connection logs")
+            device.executeShellCommand("settings put system font_scale 1.5")
+            instrumentation.runOnMainSync { MainActivity.current?.recreate() }
+            device.waitForIdle()
+            waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)
+            val connectionAction = requireObject(connectionActionLabel)
+            val landscapeWidth = device.displayWidth
+            val landscapeHeight = device.displayHeight
+            check(landscapeWidth > 0 && landscapeHeight > 0 && landscapeWidth > landscapeHeight
+                    && !connectionAction.visibleBounds.isEmpty) {
+                "ANDROID_LANDSCAPE_LAYOUT_NOT_USABLE"
+            }
+            requireObject("Connection logs")
+            captureScreenshot("landscape-large-font")
+        } finally {
+            device.executeShellCommand("settings put system font_scale $originalScale")
+            device.unfreezeRotation()
+            device.setOrientationNatural()
+            device.waitForIdle()
+        }
+    }
+
+    private fun verifyClipboardHandling() {
+        val clipboard = instrumentation.targetContext.getSystemService(ClipboardManager::class.java)
+        check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) { "ANDROID_CLIPBOARD_CLEAR_UNAVAILABLE" }
+        try {
+            clipboard.clearPrimaryClip()
+            check(waitForObject("Paste", 500) == null) { "ANDROID_PASTE_SHOWN_WITHOUT_CLIP" }
+
+            clipboard.setPrimaryClip(ClipData.newPlainText("empty", ""))
+            requireObject("Paste")
+            tapStable("Paste")
+            waitForTextContaining("Clipboard text is empty")
+
+            clipboard.setPrimaryClip(ClipData.newRawUri("non-text", Uri.parse("content://example.invalid/item")))
+            requireObject("Paste")
+            tapStable("Paste")
+            waitForOneOfTextContaining(
+                arrayOf("HTTPS subscription URL with a host", "Clipboard item could not be read"),
+            )
+
+            clipboard.setPrimaryClip(ClipData.newPlainText("invalid", "http://example.invalid/subscription"))
+            requireObject("Paste")
+            tapStable("Paste")
+            waitForTextContaining("HTTPS subscription URL with a host")
+        } finally {
+            clipboard.clearPrimaryClip()
+        }
+        check(waitForObject("Paste", 500) == null) { "ANDROID_PASTE_REMAINS_WITHOUT_CLIP" }
+    }
+
+    private fun verifyStructuredLogDisplay(marker: String) {
+        val context = instrumentation.targetContext
+        val errorMarker = "structured-error-${System.nanoTime()}"
+        NativeVpnBridge.recordDiagnostic(
+            context,
+            "ui.test.rendered.error",
+            errorMarker,
+            IllegalStateException("synthetic rendered-log error"),
+        )
+        waitForTextContaining(errorMarker)
+        val view = connectionLogTextView()
+        check(view.isTextSelectable) { "ANDROID_LOG_TEXT_NOT_SELECTABLE" }
+        val content = view.text as? Spanned ?: error("ANDROID_LOG_TEXT_NOT_SPANNED")
+        val rendered = content.toString()
+        val infoIndex = rendered.indexOf(marker)
+        val errorIndex = rendered.indexOf(errorMarker)
+        check(infoIndex >= 0 && errorIndex > infoIndex) { "ANDROID_LOG_FIELD_FIDELITY_OR_ORDER_FAILED" }
+        check(rendered.substring(0, infoIndex).contains("INFO · App · android-native")) {
+            "ANDROID_LOG_INFO_LABELS_MISSING"
+        }
+        check(rendered.substring(0, errorIndex).contains("ERROR · App · android-native")) {
+            "ANDROID_LOG_ERROR_LABELS_MISSING"
+        }
+        val severity = content.getSpans(errorIndex, errorIndex + errorMarker.length, ForegroundColorSpan::class.java)
+            .firstOrNull() ?: error("ANDROID_LOG_ERROR_SEVERITY_SPAN_MISSING")
+        check(severity.foregroundColor == android.graphics.Color.rgb(220, 65, 65)) {
+            "ANDROID_LOG_ERROR_SEVERITY_COLOR_MISSING"
+        }
+        val details = content.getSpans(0, content.length, android.text.style.ClickableSpan::class.java)
+        check(details.isNotEmpty()) { "ANDROID_LOG_RAW_DETAILS_NOT_CLICKABLE" }
+        val normal = content.getSpans(infoIndex, infoIndex + marker.length, ForegroundColorSpan::class.java)
+            .firstOrNull() ?: error("ANDROID_LOG_THEME_COLOR_MISSING")
+        check(normal.foregroundColor != severity.foregroundColor) { "ANDROID_LOG_LEVEL_COLORS_COLLAPSED" }
+        val errorDetails = details.minByOrNull { content.getSpanStart(it).takeIf { start -> start >= errorIndex } ?: Int.MAX_VALUE }
+            ?.takeIf { content.getSpanStart(it) >= errorIndex }
+            ?: error("ANDROID_LOG_ERROR_DETAILS_NOT_FOUND")
+        instrumentation.runOnMainSync { errorDetails.onClick(view) }
+        device.waitForIdle()
+        check(connectionLogTextView().text.toString().contains("synthetic rendered-log error")) {
+            "ANDROID_LOG_RAW_DETAILS_NOT_EXPANDED"
+        }
+    }
+
+    private fun connectionLogTextView(): TextView {
+        val found = arrayOfNulls<TextView>(1)
+        instrumentation.runOnMainSync {
+            fun visit(view: View) {
+                if (view.contentDescription == "Connection logs" && view is TextView) found[0] = view
+                if (view is ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            MainActivity.current?.window?.decorView?.let(::visit)
+        }
+        return checkNotNull(found[0]) { "ANDROID_LOG_VIEW_MISSING" }
+    }
+
     private fun verifyLogScrollingAndClear() {
         val context = instrumentation.targetContext
         val prefix = "scroll-check-${System.nanoTime()}"
@@ -259,8 +449,17 @@ class NativeUiInstrumentedTest {
         val clearDeadline = System.currentTimeMillis() + 10_000
         while (requireObject("Connection logs").text.orEmpty().contains(prefix) && System.currentTimeMillis() < clearDeadline) Thread.sleep(100)
         check(!requireObject("Connection logs").text.orEmpty().contains(prefix)) { "ANDROID_CLEAR_RESTORED_HISTORY" }
-        NativeVpnBridge.recordDiagnostic(context, "ui.test.after.clear", "$prefix-after-clear")
-        waitForTextContaining("$prefix-after-clear")
+        val afterClear = "$prefix-after-clear"
+        NativeVpnBridge.recordDiagnostic(context, "ui.test.after.clear", afterClear)
+        waitForTextContaining(afterClear)
+
+        finishCurrentActivity()
+        launch()
+        waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)
+        val reopened = requireObject("Connection logs").text.orEmpty()
+        check(!reopened.contains("$prefix-0") && reopened.contains(afterClear)) {
+            "ANDROID_CLEAR_BOUNDARY_DID_NOT_SURVIVE_ACTIVITY_REOPEN"
+        }
     }
 
     private fun logGeometry(): String {
@@ -406,13 +605,60 @@ class NativeUiInstrumentedTest {
 
     private fun verifyInvalidImportOutcome() {
         assertConnectionDisabled("ANDROID_INVALID_URL_ENABLED_CONNECT")
+        val invalid = listOf(
+            "dobbyvpn://import?url=http%3A%2F%2Fexample.invalid%2Fsubscription" to "HTTPS subscription URL with a host",
+            "dobbyvpn://import" to "Use dobbyvpn://import?url=",
+            "dobbyvpn://import?url=https%3A%2F%2F" to "HTTPS subscription URL with a host",
+            "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fa&url=https%3A%2F%2Fexample.invalid%2Fb" to "Use dobbyvpn://import?url=",
+            "dobbyvpn://import?url=%ZZ" to "Use dobbyvpn://import?url=",
+        )
+        val cold = invalid.first().first
+        launchImport(cold, coldStart = true)
+        waitForOneOf(arrayOf("Error"), 10_000)
+        waitForTextContaining("HTTPS subscription URL with a host")
+        assertDeliveredImport(cold)
+        assertConnectionDisabled("ANDROID_COLD_INVALID_IMPORT_ENABLED_CONNECT")
+
+        for ((data, actionableText) in invalid.drop(1)) {
+            launchImport(data, coldStart = false)
+            waitForOneOf(arrayOf("Error"), 10_000)
+            waitForTextContaining(actionableText)
+            assertDeliveredImport(data)
+            assertConnectionDisabled("ANDROID_INVALID_IMPORT_ENABLED_CONNECT")
+        }
+    }
+
+    private fun launchImport(data: String, coldStart: Boolean) {
+        if (coldStart) finishCurrentActivity()
         val output = device.executeShellCommand(
-            "am start -W -a android.intent.action.VIEW -d dobbyvpn://import?url=http%3A%2F%2Fexample.com $packageName",
+            "am start -W -a android.intent.action.VIEW -d '$data' $packageName",
         )
         check(output.contains("Status: ok")) { "ANDROID_IMPORT_ACTIVATION_FAILED:$output" }
-        waitForOneOf(arrayOf("Error"), 10_000)
-        waitForTextContaining("HTTPS subscription URL")
-        assertConnectionDisabled("ANDROID_INVALID_IMPORT_ENABLED_CONNECT")
+    }
+
+    private fun finishCurrentActivity() {
+        instrumentation.runOnMainSync { MainActivity.current?.finishAndRemoveTask() }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            val current = booleanArrayOf(false)
+            instrumentation.runOnMainSync { current[0] = MainActivity.current != null }
+            if (!current[0]) return
+            Thread.sleep(50)
+        }
+        throw AssertionError("ANDROID_ACTIVITY_DID_NOT_FINISH_FOR_COLD_IMPORT")
+    }
+
+    private fun assertDeliveredImport(expected: String) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            var delivered = false
+            instrumentation.runOnMainSync {
+                delivered = MainActivity.current?.intent?.dataString == expected
+            }
+            if (delivered) return
+            Thread.sleep(50)
+        }
+        throw AssertionError("ANDROID_IMPORT_INTENT_NOT_DELIVERED")
     }
 
     private fun tapAndWaitForVisible(control: String, outcome: String) {
@@ -446,6 +692,17 @@ class NativeUiInstrumentedTest {
             Thread.sleep(100)
         }
         throw AssertionError("ANDROID_UI_TEXT_TIMEOUT:$text")
+    }
+
+    private fun waitForOneOfTextContaining(texts: Array<String>, timeoutMillis: Long = 10_000) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            for (text in texts) {
+                if (device.findObject(By.textContains(text).pkg(packageName)) != null) return
+            }
+            Thread.sleep(100)
+        }
+        throw AssertionError("ANDROID_UI_TEXT_TIMEOUT:${texts.joinToString(" or ")}")
     }
 
     /** Capture a complete rendered frame as an extra, integrity-checked artifact. */

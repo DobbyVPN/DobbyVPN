@@ -423,11 +423,23 @@ public sealed partial class MainWindow : Window
     private async void About_Click(object sender, RoutedEventArgs e)
     {
         var details = new StackPanel { Spacing = 12 };
-        details.Children.Add(new TextBlock { Text = $"Version: {_version}", IsTextSelectionEnabled = true });
-        details.Children.Add(new TextBlock { Text = $"Commit: {_commit[..Math.Min(12, _commit.Length)]}" });
-        details.Children.Add(new TextBlock { Text = $"Source commit: {_commit}", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
-        if (_commit.Length == 40)
-            details.Children.Add(new HyperlinkButton { Content = "Source code", NavigateUri = new Uri($"https://github.com/DobbyVPN/DobbyVPN/tree/{_commit}") });
+        var version = new TextBlock { Text = $"Version: {_version}", IsTextSelectionEnabled = true };
+        AutomationProperties.SetAutomationId(version, "About version metadata");
+        details.Children.Add(version);
+        var compactCommit = new TextBlock { Text = $"Commit: {_commit[..Math.Min(12, _commit.Length)]}" };
+        AutomationProperties.SetAutomationId(compactCommit, "About compact commit metadata");
+        details.Children.Add(compactCommit);
+        var sourceCommit = new TextBlock { Text = $"Source commit: {_commit}", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
+        AutomationProperties.SetAutomationId(sourceCommit, "About source commit metadata");
+        details.Children.Add(sourceCommit);
+        if (_commit.Length == 40 && _commit.All(Uri.IsHexDigit))
+        {
+            var sourceUrl = $"https://github.com/DobbyVPN/DobbyVPN/tree/{_commit}";
+            var sourceLink = new HyperlinkButton { Content = "Source code", NavigateUri = new Uri(sourceUrl) };
+            AutomationProperties.SetAutomationId(sourceLink, "About source link");
+            AutomationProperties.SetHelpText(sourceLink, sourceUrl);
+            details.Children.Add(sourceLink);
+        }
         await new ContentDialog { Title = "About DobbyVPN", Content = details, CloseButtonText = "Done", XamlRoot = Root.XamlRoot }.ShowAsync();
     }
 

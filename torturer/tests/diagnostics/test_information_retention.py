@@ -258,7 +258,7 @@ class InformationRetentionTests(unittest.TestCase):
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
                 mock.patch.object(native_ui, "smoke", smoke),
-                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value={name: True for name in ("manual_selection_native", "profile_switch_native", "failed_load_preserves_tunnel", "warm_import_native", "clear_logs_native")}),
+                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value={name: True for name in native_ui._REQUIRED_TRUE_CHECKS}),
                 mock.patch("torturer_runner.subscription_fixture.SubscriptionFixture", return_value=mock.Mock(directory=args.profile.parent, start=mock.Mock(return_value="https://127.0.0.1:12345/subscription"))),
             ):
                 with self.assertRaises(native_ui.NativeUIJourneyError) as caught:
@@ -346,6 +346,12 @@ class InformationRetentionTests(unittest.TestCase):
                 "configured": True,
                 "profiles": [{"index": 0}],
                 "active_profile": {"index": 0},
+                "state": "CONNECTED",
+                "generation": 1,
+                "active_digest": "active-digest",
+                "active_mode": "AUTO_SELECT",
+                "active_index": 0,
+                "digest": "active-digest",
                 "source_url": "https://127.0.0.1:12345/subscription?cold=1",
             }
             base._connected.side_effect = [False, True, True, True, False]
@@ -360,6 +366,8 @@ class InformationRetentionTests(unittest.TestCase):
                 },
             }[step.operation]
             controller = mock.Mock()
+            controller.cleared_record = "synthetic cleared UI record"
+            controller._call.return_value = {"text": "new post-clear event"}
             controller.bounded_by.side_effect = lambda _timeout: nullcontext()
             controller.start.side_effect = lambda: controller.capture("startup")
             controller.configure.return_value = {"input_verified": True}
@@ -388,8 +396,19 @@ class InformationRetentionTests(unittest.TestCase):
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
                 mock.patch.object(native_ui, "smoke", smoke),
-                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value={name: True for name in ("manual_selection_native", "profile_switch_native", "failed_load_preserves_tunnel", "warm_import_native", "clear_logs_native")}),
-                mock.patch("torturer_runner.subscription_fixture.SubscriptionFixture", return_value=mock.Mock(directory=args.profile.parent, start=mock.Mock(return_value="https://127.0.0.1:12345/subscription"))),
+                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value={name: True for name in native_ui._REQUIRED_TRUE_CHECKS}),
+                mock.patch(
+                    "torturer_runner.subscription_fixture.SubscriptionFixture",
+                    return_value=mock.Mock(
+                        directory=args.profile.parent,
+                        start=mock.Mock(return_value="https://127.0.0.1:12345/subscription"),
+                        control_stats=mock.Mock(side_effect=[
+                            {"subscription_gets": 0, "in_flight_gets": 0, "max_in_flight_gets": 0},
+                            {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                            {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                        ]),
+                    ),
+                ),
             ):
                 result = native_ui.run_journey(args)
 

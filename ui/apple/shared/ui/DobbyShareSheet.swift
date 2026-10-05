@@ -73,7 +73,7 @@ struct DobbyLogView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
-        if clear != coordinator.lastClear { following = true; coordinator.expanded.removeAll() }
+        if clear != coordinator.lastClear { resetLogPresentationForClear(following: $following, expanded: &coordinator.expanded) }
         guard following else { return }
         coordinator.entries = entries
         let attributed = logText(entries, expanded: coordinator.expanded)
@@ -114,7 +114,10 @@ struct DobbyLogView: UIViewRepresentable {
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard !updating, scrollView.isDragging || scrollView.isDecelerating else { return }
-            let atBottom = scrollView.contentOffset.y + scrollView.bounds.height >= scrollView.contentSize.height - 24
+            let atBottom = shouldFollowLogUpdates(
+                viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height,
+                contentHeight: scrollView.contentSize.height
+            )
             if parent.following != atBottom { parent.following = atBottom }
         }
     }
@@ -130,14 +133,8 @@ struct DobbyLogView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
         guard let view = scroll.documentView as? NSTextView else { return scroll }
-        view.isEditable = false
-        view.isSelectable = true
-        view.isRichText = true
+        configureLogTextView(view)
         view.delegate = context.coordinator
-        view.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        view.textColor = .textColor
-        view.backgroundColor = .textBackgroundColor
-        view.setAccessibilityIdentifier("Connection logs")
         scroll.contentView.postsBoundsChangedNotifications = true
         let coordinator = context.coordinator
         coordinator.observers.append(NotificationCenter.default.addObserver(
@@ -150,7 +147,10 @@ struct DobbyLogView: NSViewRepresentable {
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak coordinator = context.coordinator, weak scroll] _ in
             guard let coordinator, let scroll, !coordinator.updating, coordinator.userScrolling else { return }
-            let atBottom = scroll.contentView.bounds.maxY >= (scroll.documentView?.bounds.height ?? 0) - 24
+            let atBottom = shouldFollowLogUpdates(
+                viewportBottom: scroll.contentView.bounds.maxY,
+                contentHeight: scroll.documentView?.bounds.height ?? 0
+            )
             if coordinator.parent.following != atBottom {
                 DispatchQueue.main.async { coordinator.parent.following = atBottom }
             }
@@ -162,7 +162,7 @@ struct DobbyLogView: NSViewRepresentable {
         guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage else { return }
         let coordinator = context.coordinator
         coordinator.parent = self
-        if clear != coordinator.lastClear { following = true; coordinator.expanded.removeAll() }
+        if clear != coordinator.lastClear { resetLogPresentationForClear(following: $following, expanded: &coordinator.expanded) }
         guard following else { return }
         coordinator.entries = entries
         let attributed = logText(entries, expanded: coordinator.expanded)
@@ -211,6 +211,27 @@ struct DobbyLogView: NSViewRepresentable {
 }
 #endif
 
+func resetLogPresentationForClear(following: Binding<Bool>, expanded: inout Set<String>) {
+    following.wrappedValue = true
+    expanded.removeAll()
+}
+
+func shouldFollowLogUpdates(viewportBottom: CGFloat, contentHeight: CGFloat) -> Bool {
+    viewportBottom >= contentHeight - 24
+}
+
+#if os(macOS)
+func configureLogTextView(_ view: NSTextView) {
+    view.isEditable = false
+    view.isSelectable = true
+    view.isRichText = true
+    view.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    view.textColor = .textColor
+    view.backgroundColor = .textBackgroundColor
+    view.setAccessibilityIdentifier("Connection logs")
+}
+#endif
+
 #if os(iOS)
 private typealias LogColor = UIColor
 private let logFont = UIFont.preferredFont(forTextStyle: .caption1)
@@ -223,7 +244,7 @@ private var normalLogColor: LogColor { .textColor }
 private var mutedLogColor: LogColor { .secondaryLabelColor }
 #endif
 
-private func logText(_ entries: [DobbyLogEntry], expanded: Set<String>) -> NSAttributedString {
+func logText(_ entries: [DobbyLogEntry], expanded: Set<String>) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
     for (index, entry) in entries.enumerated() {
         let color: LogColor

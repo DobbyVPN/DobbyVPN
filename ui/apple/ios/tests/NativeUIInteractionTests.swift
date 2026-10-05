@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class NativeUIInteractionTests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "vpn.dobby.app")
@@ -39,13 +40,38 @@ final class NativeUIInteractionTests: XCTestCase {
         let version = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Version:")).firstMatch
         openAbout()
         XCTAssertTrue(version.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Source commit:")).firstMatch.exists)
+        XCTAssertEqual(version.label, "Version: 1.5.4")
+        let fullCommit = app.staticTexts["About source commit metadata"]
+        XCTAssertTrue(fullCommit.exists)
+        let commitPrefix = "Source commit: "
+        XCTAssertTrue(fullCommit.label.hasPrefix(commitPrefix))
+        let commit = String(fullCommit.label.dropFirst(commitPrefix.count))
+        XCTAssertNotNil(commit.range(of: "^[0-9a-fA-F]{40}$", options: .regularExpression))
+        XCTAssertTrue(app.staticTexts["Commit: \(commit.prefix(12))"].exists)
+        let sourceLink = app.links["About source link"]
+        XCTAssertTrue(sourceLink.exists)
+        XCTAssertEqual(sourceLink.value as? String, "https://github.com/DobbyVPN/DobbyVPN/tree/\(commit)")
         app.buttons["Done"].tap()
         XCTAssertEqual(configuration.value as? String, editedConfiguration)
         XCTAssertTrue(app.staticTexts["Logs"].exists)
         XCTAssertTrue(app.buttons["Share logs"].exists)
         XCTAssertTrue(app.buttons["Clear"].exists)
+        let logs = app.textViews["Connection logs"]
+        XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let populated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", ""), object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [populated], timeout: 10), .completed, "The prior error should be visible before clearing")
         app.buttons["Clear"].tap()
+        let emptied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", ""), object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [emptied], timeout: 10), .completed, "Clear should empty the rendered log view")
+        if #available(iOS 16.4, *) {
+            var invalidImport = URLComponents()
+            invalidImport.scheme = "dobbyvpn"
+            invalidImport.host = "import"
+            invalidImport.queryItems = [URLQueryItem(name: "url", value: "http://example.invalid")]
+            XCUIDevice.shared.system.open(try XCTUnwrap(invalidImport.url))
+            let resumed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value CONTAINS %@", "INVALID_ARGUMENT"), object: logs)
+            XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 15), .completed, "A new error should appear after Clear resumes following")
+        }
         XCTAssertFalse(app.buttons["Use configuration text…"].exists)
         XCTAssertTrue(app.textFields["Connection configuration"].exists)
 
@@ -67,6 +93,95 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["VPN connection action"].exists)
         XCTAssertTrue(app.buttons["Clear"].isHittable)
         attachScreenshot("large-text")
+    }
+
+    func testPasteReadsClipboardOnlyAfterTapAndRejectsNonHTTPSInput() {
+        let clipboard = "http://example.invalid/not-a-subscription"
+        app.terminate()
+        UIPasteboard.general.string = clipboard
+        app.launch()
+
+        let configuration = app.textFields["Connection configuration"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        let paste = app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        XCTAssertNotEqual(configuration.value as? String, clipboard, "Clipboard availability must not read its contents")
+
+        paste.tap()
+        XCTAssertTrue(app.staticTexts["Paste an HTTPS subscription URL with a host"].waitForExistence(timeout: 10))
+        XCTAssertNotEqual(configuration.value as? String, clipboard, "Non-HTTPS clipboard text must be rejected")
+    }
+
+    func testValidNativePasteAcceptedOnTap() {
+        let clipboard = "https://example.invalid/native-paste"
+        app.terminate()
+        UIPasteboard.general.string = clipboard
+        app.launch()
+
+        let configuration = app.textFields["Connection configuration"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        let paste = app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        paste.tap()
+        let pasted = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", clipboard), object: configuration)
+        XCTAssertEqual(XCTWaiter.wait(for: [pasted], timeout: 10), .completed, "A valid HTTPS clipboard value should be accepted on tap")
+        XCTAssertFalse(app.buttons["VPN connection action"].isEnabled)
+    }
+
+    func testLogsFreezeAndResumeAtBottom() throws {
+        let clipboard = "http://example.invalid/repeat-error"
+        let validationError = "Paste an HTTPS subscription URL with a host"
+        app.terminate()
+        UIPasteboard.general.string = clipboard
+        app.launch()
+
+        let configuration = app.textFields["Connection configuration"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        let paste = app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        paste.tap()
+        XCTAssertTrue(app.staticTexts[validationError].waitForExistence(timeout: 10))
+
+        for _ in 0..<8 {
+            configuration.tap()
+            configuration.typeText("x")
+            dismissConfigurationKeyboard()
+            XCTAssertTrue(app.staticTexts[validationError].waitForNonExistence(timeout: 5))
+            paste.tap()
+            XCTAssertTrue(app.staticTexts[validationError].waitForExistence(timeout: 5))
+        }
+
+        let logs = app.textViews["Connection logs"]
+        XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let enoughEntries = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
+            guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
+            return self.occurrences(of: validationError, in: text) >= 6
+        }, object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
+        let beforeScroll = try XCTUnwrap(logs.value as? String)
+        XCTAssertGreaterThanOrEqual(occurrences(of: validationError, in: beforeScroll), 6)
+
+        logs.swipeDown()
+        let frozen = try XCTUnwrap(logs.value as? String)
+        configuration.tap()
+        configuration.typeText("x")
+        dismissConfigurationKeyboard()
+        XCTAssertTrue(app.staticTexts[validationError].waitForNonExistence(timeout: 5))
+        paste.tap()
+        XCTAssertTrue(app.staticTexts[validationError].waitForExistence(timeout: 5))
+        let changedWhileScrolledUp = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value != %@", frozen), object: logs
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [changedWhileScrolledUp], timeout: 1.5), .timedOut,
+            "New records should not replace the rendered text while scrolled up"
+        )
+
+        logs.swipeUp()
+        logs.swipeUp()
+        logs.swipeUp()
+        let resumed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", frozen), object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed, "Returning to the bottom should resume new log entries")
     }
 
     private func verifyColdAndWarmImports() throws {
@@ -130,5 +245,9 @@ final class NativeUIInteractionTests: XCTestCase {
         attachment.name = "dobbyvpn-ui-\(name)"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func occurrences(of needle: String, in text: String) -> Int {
+        text.components(separatedBy: needle).count - 1
     }
 }

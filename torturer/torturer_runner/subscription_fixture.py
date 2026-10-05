@@ -6,6 +6,7 @@ clients still fetch and validate HTTPS through their ordinary Go loader.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import http.server
 from pathlib import Path
@@ -18,6 +19,7 @@ import tempfile
 import threading
 import uuid
 from urllib.parse import urlsplit
+import urllib.request
 
 from .diagnostics import emit_streams
 from .process_capture import exception_output, run_finite_capture
@@ -64,9 +66,19 @@ class SubscriptionFixture:
         self.key = directory / "key.pem"
         self.fingerprint = ""
         self.android_directory = "/data/local/tmp/dobbyvpn-subscription-" + uuid.uuid4().hex
+        self.control_key = secrets.token_hex(32)
+        self.control_path = "/__torturer__/" + uuid.uuid4().hex
+        self.profile_bytes = b""
+        self.control_condition = threading.Condition()
+        self.subscription_gets = 0
+        self.in_flight_gets = 0
+        self.max_in_flight_gets = 0
+        self.fail_next_gets = 0
+        self.hold_gets = False
 
     def start(self) -> str:
         self.directory.mkdir(parents=True, exist_ok=False)
+        self.profile_bytes = self.profile.read_bytes()
         if self.platform == "windows":
             if self.certificate_helper is None:
                 raise RuntimeError("Windows subscription fixture requires the prepared native test helper")
@@ -85,15 +97,20 @@ class SubscriptionFixture:
                 if path == "/failure":
                     self.send_error(503, "Synthetic subscription failure")
                     return
+                if path == fixture.control_path:
+                    fixture._serve_control(self)
+                    return
                 if path != "/subscription":
                     self.send_error(404)
                     return
-                content = fixture.profile.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
+                fixture._serve_subscription(self)
+
+            def do_POST(self):
+                path = urlsplit(self.path).path
+                if path != fixture.control_path and not path.startswith(fixture.control_path + "/"):
+                    self.send_error(404)
+                    return
+                fixture._serve_control(self)
 
         if self.platform == "android":
             # Keep this below AF_UNIX's path limit even in a long run directory.
@@ -137,6 +154,123 @@ class SubscriptionFixture:
         self.url = f"https://127.0.0.1:{self.port}/subscription"
         return self.url
 
+    @property
+    def control_url(self) -> str:
+        if not self.url:
+            raise RuntimeError("subscription fixture is not running")
+        return f"https://127.0.0.1:{self.port}{self.control_path}"
+
+    def _serve_subscription(self, request: http.server.BaseHTTPRequestHandler) -> None:
+        with self.control_condition:
+            self.subscription_gets += 1
+            self.in_flight_gets += 1
+            self.max_in_flight_gets = max(self.max_in_flight_gets, self.in_flight_gets)
+            content = self.profile_bytes
+            while self.hold_gets:
+                self.control_condition.wait()
+            failed = self.fail_next_gets > 0
+            if failed:
+                self.fail_next_gets -= 1
+        try:
+            if failed:
+                request.send_error(503, "Synthetic subscription failure")
+                return
+            request.send_response(200)
+            request.send_header("Content-Type", "text/plain; charset=utf-8")
+            request.send_header("Content-Length", str(len(content)))
+            request.end_headers()
+            request.wfile.write(content)
+        finally:
+            with self.control_condition:
+                self.in_flight_gets -= 1
+                self.control_condition.notify_all()
+
+    def _serve_control(self, request: http.server.BaseHTTPRequestHandler) -> None:
+        supplied = request.headers.get("X-DobbyVPN-Torturer-Key", "")
+        if not hmac.compare_digest(supplied, self.control_key):
+            request.send_error(403, "Fixture test control key rejected")
+            return
+        path = urlsplit(request.path).path
+        if request.command == "GET" and path == self.control_path:
+            with self.control_condition:
+                state = {
+                    "subscription_gets": self.subscription_gets,
+                    "in_flight_gets": self.in_flight_gets,
+                    "max_in_flight_gets": self.max_in_flight_gets,
+                }
+            body = json.dumps(state, sort_keys=True).encode("ascii")
+            request.send_response(200)
+            request.send_header("Content-Type", "application/json")
+            request.send_header("Content-Length", str(len(body)))
+            request.end_headers()
+            request.wfile.write(body)
+            return
+        if request.command != "POST" or path not in {
+            self.control_path + "/profile",
+            self.control_path + "/hold",
+            self.control_path + "/release",
+            self.control_path + "/fail-next",
+        }:
+            request.send_error(404)
+            return
+        if path == self.control_path + "/profile":
+            length = int(request.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 1 << 20:
+                request.send_error(400, "Fixture profile size is invalid")
+                return
+            body = request.rfile.read(length)
+            if len(body) != length:
+                request.send_error(400, "Fixture profile body is incomplete")
+                return
+        else:
+            body = b""
+            if request.headers.get("Content-Length", "0") != "0":
+                request.send_error(400, "Fixture control request must be empty")
+                return
+        with self.control_condition:
+            if path == self.control_path + "/profile":
+                self.profile_bytes = body
+            elif path == self.control_path + "/hold":
+                self.hold_gets = True
+            elif path == self.control_path + "/release":
+                self.hold_gets = False
+                self.control_condition.notify_all()
+            else:
+                self.fail_next_gets += 1
+        request.send_response(204)
+        request.send_header("Content-Length", "0")
+        request.end_headers()
+
+    def _control_request(self, suffix: str = "", *, body: bytes | None = None) -> bytes:
+        if not self.url:
+            raise RuntimeError("subscription fixture is not running")
+        request = urllib.request.Request(
+            self.control_url + suffix,
+            data=body,
+            method="GET" if body is None else "POST",
+            headers={"X-DobbyVPN-Torturer-Key": self.control_key},
+        )
+        context = ssl.create_default_context(cafile=str(self.certificate))
+        with urllib.request.urlopen(request, context=context, timeout=5) as response:
+            return response.read()
+
+    def control_stats(self) -> dict[str, int]:
+        return json.loads(self._control_request())
+
+    def replace_response(self, content: bytes) -> None:
+        if not content or len(content) > 1 << 20:
+            raise ValueError("fixture response must contain 1 byte through 1 MiB")
+        self._control_request("/profile", body=content)
+
+    def hold_responses(self) -> None:
+        self._control_request("/hold", body=b"")
+
+    def release_responses(self) -> None:
+        self._control_request("/release", body=b"")
+
+    def fail_next_response(self) -> None:
+        self._control_request("/fail-next", body=b"")
+
     def _generate_certificate(self) -> None:
         openssl = shutil.which("openssl")
         if not openssl:
@@ -157,6 +291,8 @@ class SubscriptionFixture:
             "trusted": self.trusted, "forwarded": self.forwarded, "port": self.port,
             "android_directory": self.android_directory, "android_staged": self.android_staged,
             "socket_path": self.socket_path,
+            "control_key": self.control_key,
+            "control_path": self.control_path,
         }), encoding="utf-8")
 
     @classmethod
@@ -173,10 +309,15 @@ class SubscriptionFixture:
         fixture.android_directory = state["android_directory"]
         fixture.android_staged = state["android_staged"]
         fixture.socket_path = state.get("socket_path", "")
+        fixture.control_key = state.get("control_key", "")
+        fixture.control_path = state.get("control_path", "")
         fixture.close()
 
     def close(self) -> None:
         errors: list[BaseException] = []
+        with self.control_condition:
+            self.hold_gets = False
+            self.control_condition.notify_all()
         if self.server is not None:
             if self.thread is not None:
                 self.server.shutdown()

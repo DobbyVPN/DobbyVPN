@@ -2160,14 +2160,20 @@ class AndroidAdapter:
                 )
             operations.append(item)
         subscription_url = None
+        subscription_control_url = None
+        subscription_control_key = None
         if self.ui_mode == "gui-auto":
             if self._subscription_fixture is None:
                 from torturer_runner.subscription_fixture import SubscriptionFixture
                 self._subscription_fixture = SubscriptionFixture(self.profile, self.profile.parent / "android-subscription-fixture", "android", adb=[str(self.adb)])
                 self._subscription_fixture.start()
             subscription_url = self._subscription_fixture.url
+            subscription_control_url = self._subscription_fixture.control_url
+            subscription_control_key = self._subscription_fixture.control_key
         command = {
             "subscription_url": subscription_url,
+            "subscription_control_url": subscription_control_url,
+            "subscription_control_key": subscription_control_key,
             "output_file": output_name,
             "progress_file": progress_name,
             "coverage_lane": self.coverage_lane,
