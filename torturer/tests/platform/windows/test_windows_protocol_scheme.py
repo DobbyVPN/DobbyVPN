@@ -72,6 +72,10 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'WaitForPasteAvailability(true, "text");',
             'new[] { "Connection configuration", "VPN connection action", "Profile 1 action", "Profile 2 action", "Backend logs" }',
             '[DllImport("user32.dll", SetLastError = true)]\n    private static extern bool SetWindowPos(',
+            '[DllImport("user32.dll")]\n    private static extern bool EnumThreadWindows(',
+            'private static string[] DescribeProcessWindows(Process process)',
+            'TracePhase("tree-uia-root-complete")',
+            'TracePhase("tree-uia-walk-start")',
             '((WindowPattern)windowPattern).Current.CanMaximize',
             '"Could not restore native window bounds after narrow-window test"',
             'originalBounds.Right - originalBounds.Left',
@@ -118,6 +122,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 "helperSessionId": 1,
                 "mainWindowTitle": "",
                 "windowDescription": "unavailable",
+                "processTopLevelWindows": [],
             }
             completed = subprocess.CompletedProcess(
                 [str(helper)], 0, json.dumps(response).encode("utf-8"), b""

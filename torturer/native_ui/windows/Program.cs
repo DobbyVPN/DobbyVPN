@@ -34,6 +34,9 @@ internal static class Program
     private static extern int GetWindowTextLength(IntPtr window);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maxCount);
+    private delegate bool EnumThreadWindowsCallback(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern bool EnumThreadWindows(uint threadId, EnumThreadWindowsCallback callback, IntPtr parameter);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
@@ -62,6 +65,32 @@ internal static class Program
         var classText = classLength > 0 ? classBuffer.ToString() : "unavailable";
         var windowText = textLength > 0 ? textBuffer.ToString() : "unavailable";
         return $"HWND=0x{window.ToInt64():X} PID={pid} bounds=[{boundsText}] class=\"{classText}\" text=\"{windowText}\"";
+    }
+
+    private static string[] DescribeProcessWindows(Process process)
+    {
+        var windows = new List<string>();
+        EnumThreadWindowsCallback callback = (window, _) =>
+        {
+            GetWindowThreadProcessId(window, out var ownerPid);
+            if (ownerPid == process.Id)
+            {
+                windows.Add(DescribeWindow(window) +
+                    $" visible={IsWindowVisible(window)} minimized={IsIconic(window)}");
+            }
+            return true;
+        };
+        try
+        {
+            foreach (ProcessThread thread in process.Threads)
+                EnumThreadWindows(unchecked((uint)thread.Id), callback, IntPtr.Zero);
+        }
+        catch (InvalidOperationException)
+        {
+            windows.Add("thread list changed during enumeration");
+        }
+        GC.KeepAlive(callback);
+        return windows.ToArray();
     }
 
     private static string DescribeElement(AutomationElement element)
@@ -326,8 +355,11 @@ internal static class Program
                 Console.WriteLine("{}");
                 return 0;
             }
+            var traceTree = operation == "tree";
+            if (traceTree) TracePhase($"tree-window-discovery-start pid={process.Id}");
             process.Refresh();
             var window = process.MainWindowHandle;
+            if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
             var visible = window != IntPtr.Zero && IsWindowVisible(window);
             var minimized = window != IntPtr.Zero && IsIconic(window);
             if (!visible || minimized)
@@ -347,12 +379,15 @@ internal static class Program
                     helperSessionId = Process.GetCurrentProcess().SessionId,
                     mainWindowTitle = process.MainWindowTitle,
                     windowDescription = window == IntPtr.Zero ? "unavailable" : DescribeWindow(window),
+                    processTopLevelWindows = DescribeProcessWindows(process),
                 }));
                 return 0;
             }
             GetWindowThreadProcessId(window, out var owner);
             if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
+            if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
             var root = AutomationElement.FromHandle(window);
+            if (traceTree) TracePhase("tree-uia-root-complete");
             AutomationElement Find(string name, bool editor = false, bool actionable = false)
             {
                 AutomationElementCollection FindBy(AutomationProperty property)
@@ -487,7 +522,9 @@ internal static class Program
                 string[] help_texts;
                 try
                 {
+                    TracePhase("tree-uia-walk-start");
                     var elements = Walk(root).Where(e => !e.Current.IsOffscreen).ToList();
+                    TracePhase($"tree-uia-walk-complete elements={elements.Count}");
                     enabled_controls = elements.Where(e => e.Current.IsEnabled).SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray();
                     labels = elements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
                         .Where(s => s.Length > 0).Distinct().ToArray();

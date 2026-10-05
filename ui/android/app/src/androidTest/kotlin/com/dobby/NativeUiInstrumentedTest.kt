@@ -357,12 +357,16 @@ class NativeUiInstrumentedTest {
             captureScreenshot("landscape-large-font")
 
             device.setOrientationNatural()
-            device.executeShellCommand("wm size 360x640")
             device.waitForIdle()
-            instrumentation.runOnMainSync { MainActivity.current?.recreate() }
+            val activityBeforeSmallScreenChange = currentMainActivity()
+                ?: throw AssertionError("ANDROID_ACTIVITY_MISSING_BEFORE_SMALL_SCREEN_RESIZE")
+            device.executeShellCommand("wm size 360x640")
+            waitForActivityReplacement(activityBeforeSmallScreenChange, 10_000)
             check(device.displayWidth <= 360 && device.displayHeight <= 640) {
                 "ANDROID_SMALL_SCREEN_OVERRIDE_NOT_APPLIED ${device.displayWidth}x${device.displayHeight}"
             }
+            // Resolve the controls viewport from the replacement Activity after
+            // Android has applied the display-size configuration change.
             scrollControlsToConnectionAction()
             assertLogPaneUsable("ANDROID_LOGS_NOT_VISIBLE_ON_SMALL_SCREEN")
         } finally {
@@ -963,6 +967,25 @@ class NativeUiInstrumentedTest {
     private fun waitForOneOf(labels: Array<String>, timeoutMillis: Long): UiObject2 {
         waitForOneOfOrNull(labels, timeoutMillis)?.let { return it }
         throw AssertionError("ANDROID_UI_STATE_TIMEOUT")
+    }
+
+    private fun currentMainActivity(): MainActivity? {
+        var activity: MainActivity? = null
+        instrumentation.runOnMainSync { activity = MainActivity.current }
+        return activity
+    }
+
+    private fun waitForActivityReplacement(previous: MainActivity, timeoutMillis: Long) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            val current = currentMainActivity()
+            if (current != null && current !== previous) {
+                device.waitForIdle()
+                return
+            }
+            Thread.sleep(50)
+        }
+        throw AssertionError("ANDROID_CONFIGURATION_RELAUNCH_TIMEOUT")
     }
 
     private fun scrollControlsToConnectionAction() {

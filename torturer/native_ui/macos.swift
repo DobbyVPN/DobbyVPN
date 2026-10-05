@@ -511,52 +511,100 @@ func run() throws -> [String: Any] {
         func isAtTarget(_ range: CFRange) -> Bool {
             distanceFromTarget(range) <= 1
         }
+        func rangeDescription(_ range: CFRange) -> String {
+            "\(range.location)..<\(range.location + range.length)"
+        }
+        func scrollbarValueDescription() -> String {
+            do {
+                guard let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
+                    return "unavailable"
+                }
+                return value.stringValue
+            } catch {
+                return "read-error: \(error)"
+            }
+        }
         var range = sample.range
         try require(range.length < characterCount, "Native log viewer does not overflow its viewport; freeze/resume cannot be tested")
         if !isAtTarget(range) {
+            FileHandle.standardError.write(Data((
+                "scroll-logs target=\(position) start-range=\(rangeDescription(range)) " +
+                    "characters=\(characterCount) scrollbar=\(scrollbarValueDescription())\n"
+            ).utf8))
             let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
             guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                                       mouseCursorPosition: center, mouseButton: .left) else {
                 throw HelperError("Could not position the pointer over native logs")
             }
             moved.post(tap: .cghidEventTap)
+            let maximumScrollEvents = 64
+            var totalScrollEvents = 0
             var reached = false
             for delta in [100, -100] {
                 var unchanged = 0
-                for _ in 0..<16 {
-                    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line,
-                                              wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
-                        throw HelperError("Could not create native log scroll event")
-                    }
-                    event.location = center
-                    event.post(tap: .cghidEventTap)
-                    Thread.sleep(forTimeInterval: 0.05)
-                    let updated = try checkedVisibleRange()
-                    if isAtTarget(updated) {
-                        reached = true
+                var directionEventCount = 0
+                var madeProgress = false
+                var stopReason = "event-cap"
+                while totalScrollEvents < maximumScrollEvents {
+                    var batchEvents = 0
+                    while batchEvents < 16 && totalScrollEvents < maximumScrollEvents {
+                        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line,
+                                                  wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
+                            throw HelperError("Could not create native log scroll event")
+                        }
+                        event.location = center
+                        event.post(tap: .cghidEventTap)
+                        directionEventCount += 1
+                        totalScrollEvents += 1
+                        batchEvents += 1
+                        Thread.sleep(forTimeInterval: 0.05)
+                        let updated = try checkedVisibleRange()
+                        if isAtTarget(updated) {
+                            reached = true
+                            range = updated
+                            stopReason = "target"
+                            break
+                        }
+                        let previousDistance = distanceFromTarget(range)
+                        let updatedDistance = distanceFromTarget(updated)
+                        if updatedDistance > previousDistance {
+                            range = updated
+                            stopReason = "moved-away"
+                            break
+                        }
+                        if updatedDistance < previousDistance {
+                            madeProgress = true
+                            unchanged = 0
+                        } else {
+                            unchanged += 1
+                        }
                         range = updated
+                        if unchanged >= 2 {
+                            stopReason = "stalled"
+                            break
+                        }
+                    }
+                    if reached || stopReason == "moved-away" || stopReason == "stalled" {
                         break
                     }
-                    let previousDistance = distanceFromTarget(range)
-                    let updatedDistance = distanceFromTarget(updated)
-                    if updatedDistance > previousDistance {
-                        range = updated
+                    if totalScrollEvents >= maximumScrollEvents {
+                        stopReason = "event-cap"
                         break
                     }
-                    if updatedDistance == previousDistance {
-                        unchanged += 1
-                        if unchanged >= 2 { break }
-                    } else {
-                        unchanged = 0
-                    }
-                    range = updated
                 }
-                if reached { break }
+                FileHandle.standardError.write(Data((
+                    "scroll-logs delta=\(delta) events=\(directionEventCount) total=\(totalScrollEvents) " +
+                        "progress=\(madeProgress) stop=\(stopReason) reached=\(reached) " +
+                        "range=\(rangeDescription(range)) " +
+                        "characters=\(characterCount) scrollbar=\(scrollbarValueDescription())\n"
+                ).utf8))
+                // Continue a helpful direction across batches. Try its opposite only
+                // after observed movement away or repeated samples with no movement.
+                if reached || stopReason == "event-cap" { break }
             }
-            let visibleRangeDescription = "\(range.location)..<\(range.location + range.length)"
             try require(reached,
                         "Native log viewer did not scroll to \(position); " +
-                            "visible range=\(visibleRangeDescription), characters=\(characterCount)")
+                            "visible range=\(rangeDescription(range)), characters=\(characterCount)")
         }
         guard let rawScrollbarPosition = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
             throw HelperError("Native log viewer scrollbar has no value")

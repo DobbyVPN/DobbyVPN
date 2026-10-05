@@ -285,6 +285,7 @@ class NativeUIController:
                 "helperSessionId",
                 "mainWindowTitle",
                 "windowDescription",
+                "processTopLevelWindows",
             )
             self.last_window_readiness = {
                 key: value[key] for key in diagnostic_keys if key in value

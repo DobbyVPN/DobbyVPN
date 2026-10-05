@@ -280,12 +280,19 @@ final class NativeUIInteractionTests: XCTestCase {
         let latestLogText = try XCTUnwrap(logs.value as? String)
         XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
         let detailElements = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Details"))
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
         let details = detailElements.element(boundBy: max(0, detailElements.count - 1))
         XCTAssertTrue(details.waitForExistence(timeout: 10),
                       "The visible Details control should be exposed by the log text view")
+        XCTAssertEqual(details.label, "Details", "The newest log record should be collapsed before tapping")
         XCTAssertTrue(details.isHittable, "The newest Details control should be reachable at the log tail")
         details.tap()
+        let detailsExpanded = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Hide details"),
+            object: details
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [detailsExpanded], timeout: 10), .completed,
+                       "Tapping the newest Details control should expand that record")
         let expandedRecord = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value CONTAINS %@", "\"schema\":\"dobby.log/v1\""),
             object: logs
