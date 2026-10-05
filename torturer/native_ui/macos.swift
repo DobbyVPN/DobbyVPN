@@ -359,6 +359,16 @@ func run() throws -> [String: Any] {
         return [:]
     }
     try require(AXIsProcessTrusted(), "Accessibility permission unavailable")
+    let pid = app.processIdentifier
+    func activate() throws {
+        try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")
+        let deadline = Date().addingTimeInterval(2)
+        while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, "Native app did not become foreground")
+    }
+    if operation == "scroll-logs" { try activate() }
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 1)
     let nodes: [AXUIElement]
@@ -545,14 +555,6 @@ func run() throws -> [String: Any] {
                 "visible_range_start": range.location,
                 "visible_range_end": range.location + range.length,
                 "character_count": characterCount]
-    }
-    func activate() throws {
-        try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")
-        let deadline = Date().addingTimeInterval(2)
-        while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, "Native app did not become foreground")
     }
     switch operation {
     case "focus": try activate()
