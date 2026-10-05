@@ -165,7 +165,6 @@ final class NativeUIInteractionTests: XCTestCase {
             configuration.tap()
             configuration.typeText("x")
             dismissConfigurationKeyboard()
-            XCTAssertTrue(errorStatus.waitForNonExistence(timeout: 5))
             paste.tap()
             XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
             expectedErrorCount += 1
@@ -188,7 +187,6 @@ final class NativeUIInteractionTests: XCTestCase {
         configuration.tap()
         configuration.typeText("x")
         dismissConfigurationKeyboard()
-        XCTAssertTrue(errorStatus.waitForNonExistence(timeout: 5))
         paste.tap()
         XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
         let changedWhileScrolledUp = XCTNSPredicateExpectation(

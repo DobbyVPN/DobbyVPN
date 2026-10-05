@@ -22,6 +22,8 @@ public sealed partial class MainWindow : Window
     private Snapshot? _snapshot;
     private bool _sourceDirty;
     private bool _updatingSource;
+    // TextBox may report a programmatic Text assignment after SetSourceText returns.
+    private string? _programmaticSourceText;
     private bool _busy;
     private bool _snapshotInFlight;
     private string? _acceptedInThisWindow;
@@ -75,10 +77,9 @@ public sealed partial class MainWindow : Window
         _commit = commit ?? "N/A";
         SourceEditor.TextChanged += (_, _) =>
         {
-            if (!_updatingSource)
-            {
-                SourceChanged();
-            }
+            if (_updatingSource || SourceEditor.Text == _programmaticSourceText) return;
+            _programmaticSourceText = null;
+            SourceChanged();
         };
         Closed += (_, _) =>
         {
@@ -396,6 +397,7 @@ public sealed partial class MainWindow : Window
     private void SetSourceText(string value)
     {
         _updatingSource = true;
+        _programmaticSourceText = value;
         try
         {
             SourceEditor.Text = value;

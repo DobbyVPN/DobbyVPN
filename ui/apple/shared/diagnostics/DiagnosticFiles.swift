@@ -250,15 +250,14 @@ public enum DiagnosticFiles {
                 }
             } catch { issues.append("\(input.path.path): \(String(reflecting: error))") }
         }
-        let sorted = entries.enumerated().sorted { lhs, rhs in
-            switch (lhs.element.date, rhs.element.date) {
-            case let (left?, right?): return left == right ? lhs.offset < rhs.offset : left < right
-            case (_?, nil): return false
-            case (nil, _?): return true
-            default: return lhs.offset < rhs.offset
-            }
+        let datedPositions = entries.indices.filter { entries[$0].date != nil }
+        let datedEntries = datedPositions.map { entries[$0] }.enumerated().sorted { lhs, rhs in
+            guard let left = lhs.element.date, let right = rhs.element.date else { return lhs.offset < rhs.offset }
+            return left == right ? lhs.offset < rhs.offset : left < right
         }.map(\.element)
-        return (sorted, issues.joined(separator: "\n"))
+        var ordered = entries
+        for (position, entry) in zip(datedPositions, datedEntries) { ordered[position] = entry }
+        return (ordered, issues.joined(separator: "\n"))
     }
 
     public static func friendlyStream(_ name: String) -> String {

@@ -210,21 +210,21 @@ extension DiagnosticsTests {
         try Data((early + "\nraw stack\n  frame\n{not-json}\n{\"unclosed\":").utf8).write(to: stderr)
         let preview = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
         XCTAssertTrue(preview.error.isEmpty)
-        XCTAssertEqual(preview.entries.map(\.message), ["raw stack", "  frame", "{not-json}", "Stderr capture initialized", "later"])
-        for rawEntry in preview.entries.prefix(3) {
+        XCTAssertEqual(preview.entries.map(\.message), ["Stderr capture initialized", "later", "raw stack", "  frame", "{not-json}"])
+        for rawEntry in preview.entries.suffix(3) {
             XCTAssertEqual(rawEntry.timestamp, "")
             XCTAssertNil(rawEntry.date)
             XCTAssertEqual(rawEntry.level, "RAW")
             XCTAssertEqual(rawEntry.source, "Tunnel stderr")
         }
-        let capture = preview.entries[3]
+        let capture = preview.entries[0]
         XCTAssertEqual(capture.timestamp, "2026-10-04T10:00:01Z")
         XCTAssertNotNil(capture.date)
         XCTAssertEqual(capture.level, "INFO", "stderr.capture is informational even if its producer level is ERROR")
         XCTAssertEqual(capture.source, "Tunnel stderr · tunnel")
         XCTAssertEqual(capture.message, "Stderr capture initialized")
         XCTAssertEqual(capture.raw, early)
-        let later = preview.entries[4]
+        let later = preview.entries[1]
         XCTAssertEqual(later.timestamp, "2026-10-04T10:00:02Z")
         XCTAssertNotNil(later.date)
         XCTAssertEqual(later.level, "WARN")

@@ -148,8 +148,8 @@ internal static class NativeDiagnosticsTests
             var view = new NativeDiagnostics(structured, structuredUI);
             var parsed = await view.EntriesAsync();
             Require(parsed.Error == "", parsed.Error);
-            Require(parsed.Entries.Select(e => e.Message).SequenceEqual(new[] { "trace line 1", "trace line 2", "earlier λ", "later" }), "structured ordering or partial record failed");
-            Require(parsed.Entries[2].Level == "WARN" && parsed.Entries[2].Raw.Contains("extra"), "structured details lost");
+            Require(parsed.Entries.Select(e => e.Message).SequenceEqual(new[] { "earlier λ", "trace line 1", "trace line 2", "later" }), "structured ordering or partial record failed");
+            Require(parsed.Entries[0].Level == "WARN" && parsed.Entries[0].Raw.Contains("extra"), "structured details lost");
             File.AppendAllText(structuredUI, " record\"}\n");
             parsed = await view.EntriesAsync();
             var completedJson = parsed.Entries.Single(entry => entry.Message == "incomplete record");

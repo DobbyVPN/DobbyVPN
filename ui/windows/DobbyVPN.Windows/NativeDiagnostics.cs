@@ -181,7 +181,11 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
             catch (Exception error) { issues.Add($"{path}: {error}"); }
         }
         if (WriteFailure.Length > 0) issues.Add(WriteFailure);
-        return (entries.OrderBy(entry => entry.Time is not null).ThenBy(entry => entry.Time).ToList(), string.Join("\n", issues));
+        var datedPositions = entries.Select((entry, index) => (entry, index)).Where(item => item.entry.Time is not null).ToArray();
+        var datedEntries = datedPositions.OrderBy(item => item.entry.Time).ThenBy(item => item.index).Select(item => item.entry).ToArray();
+        var ordered = entries.ToArray();
+        for (var index = 0; index < datedPositions.Length; index++) ordered[datedPositions[index].index] = datedEntries[index];
+        return (ordered.ToList(), string.Join("\n", issues));
     });
 
     internal static Entry ParseEntry(string raw, string id, string stream)

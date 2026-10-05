@@ -403,7 +403,9 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     original_profile = fixture.profile_bytes
     initial_requests = stats()["subscription_gets"]
     if initial_requests != 1:
-        raise NativeUIJourneyError("native Paste did not load the disposable subscription exactly once")
+        raise NativeUIJourneyError(
+            f"native Paste did not load the disposable subscription exactly once (observed {initial_requests} GETs)"
+        )
     if "Retry" in ui.snapshot().get("labels", []):
         raise NativeUIJourneyError("Retry appeared before any subscription failure")
     checks: dict[str, bool] = {"native_paste_immediate": True}
