@@ -786,8 +786,12 @@ internal static class Program
             {
                 trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-start");
                 var automationId = element.Current.AutomationId;
-                trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-complete");
+                trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-complete id={automationId}");
                 if (automationId == "Backend logs") continue;
+
+                trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-start");
+                var controlType = element.Current.ControlType.ProgrammaticName;
+                trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-complete type={controlType}");
             }
 
             trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-start");

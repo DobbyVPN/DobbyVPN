@@ -281,18 +281,25 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
         let detailElements = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
-        let details = detailElements.element(boundBy: max(0, detailElements.count - 1))
+        let targetError = try XCTUnwrap(
+            latestLogText.range(of: validationError, options: .backwards),
+            "The latest Paste validation record should remain in the frozen log view"
+        )
+        let textBeforeTarget = String(latestLogText[..<targetError.lowerBound])
+        let targetDetailIndex = occurrences(of: "Details\n", in: textBeforeTarget) +
+            occurrences(of: "Hide details\n", in: textBeforeTarget)
+        let details = detailElements.element(boundBy: targetDetailIndex)
         XCTAssertTrue(details.waitForExistence(timeout: 10),
-                      "The visible Details control should be exposed by the log text view")
-        XCTAssertEqual(details.label, "Details", "The newest log record should be collapsed before tapping")
-        XCTAssertTrue(details.isHittable, "The newest Details control should be reachable at the log tail")
+                      "The Paste validation record's Details control should be exposed by the log text view")
+        XCTAssertEqual(details.label, "Details", "The Paste validation record should be collapsed before tapping")
+        XCTAssertTrue(details.isHittable, "The Paste validation Details control should be reachable at the log tail")
         details.tap()
         let detailsExpanded = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label == %@", "Hide details"),
             object: details
         )
         XCTAssertEqual(XCTWaiter.wait(for: [detailsExpanded], timeout: 10), .completed,
-                       "Tapping the newest Details control should expand that record")
+                       "Tapping the Paste validation Details control should expand that record")
         let expandedRecord = XCTNSPredicateExpectation(
             predicate: NSPredicate(
                 format: "value CONTAINS %@ OR value CONTAINS %@",
@@ -304,6 +311,10 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [expandedRecord], timeout: 10), .completed,
                        "Expanding a log entry should show its original structured record")
         let expandedText = try XCTUnwrap(logs.value as? String)
+        XCTAssertTrue(
+            expandedText.contains("\"message\":\"\(validationError)\""),
+            "The expanded original record must belong to the selected Paste validation message"
+        )
         XCTAssertTrue(expandedText.contains("\"event\":\"ui.failure\""))
         XCTAssertTrue(expandedText.contains("\"source\":\"native-ui\""))
         let frozen = try XCTUnwrap(logs.value as? String)

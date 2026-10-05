@@ -22,6 +22,7 @@ import android.text.style.ForegroundColorSpan
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
@@ -998,15 +999,36 @@ class NativeUiInstrumentedTest {
 
         var reachedStatus: UiObject2? = null
         var reachedAction: UiObject2? = null
+        val scrollAttempts = mutableListOf<String>()
         for (attempt in 0..8) {
             reachedStatus = waitForOneOfOrNull(arrayOf("Disconnected", "Error"), 100)
             reachedAction = waitForObject(connectionActionLabel, 100)
             if (reachedStatus != null && reachedAction != null) break
             if (attempt == 8) break
-            if (!viewport.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)) break
+            val scrolled = viewport.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)
             device.waitForIdle()
+            var swiped = false
+            if (!scrolled) {
+                // Compose can move on touch without UiAutomator observing its
+                // scroll-finished accessibility event. Try the same drag a
+                // user can make, then re-read the rendered nodes.
+                val bounds = runCatching { viewport.visibleBounds }.getOrNull()
+                if (bounds != null && bounds.height() > 24) {
+                    swiped = device.swipe(
+                        bounds.centerX(), bounds.bottom - 12,
+                        bounds.centerX(), bounds.top + 12,
+                        12,
+                    )
+                    device.waitForIdle()
+                }
+            }
+            val viewportBounds = runCatching { viewport.visibleBounds.toString() }
+                .getOrElse { "unavailable(${it.javaClass.simpleName})" }
+            scrollAttempts += "attempt=$attempt ui_scroll=$scrolled " +
+                "coordinate_swipe=$swiped viewport=$viewportBounds"
         }
 
+        val scrollDetails = scrollAttempts.joinToString("; ")
         var button = reachedAction
         while (button != null && !button.isClickable) button = button.parent
         if (reachedStatus?.visibleBounds?.isEmpty != false) {
@@ -1016,6 +1038,7 @@ class NativeUiInstrumentedTest {
                 reachedStatus,
                 reachedAction,
                 button,
+                scrollDetails,
             )
         }
         if (button?.let { it.isClickable && !it.visibleBounds.isEmpty } != true) {
@@ -1025,6 +1048,7 @@ class NativeUiInstrumentedTest {
                 reachedStatus,
                 reachedAction,
                 button,
+                scrollDetails,
             )
         }
     }
@@ -1051,6 +1075,7 @@ class NativeUiInstrumentedTest {
         status: UiObject2?,
         action: UiObject2?,
         clickableAction: UiObject2?,
+        scrollDetails: String,
     ): Nothing {
         fun bounds(node: UiObject2?): String {
             if (node == null) return "missing"
@@ -1064,10 +1089,25 @@ class NativeUiInstrumentedTest {
         val screenshotDiagnostic = screenshotFailure?.let {
             " screenshot_error=${it.javaClass.simpleName}:${it.message}"
         }.orEmpty()
+        val statusCandidates = arrayOf("Disconnected", "Error").joinToString(";") { debugNodeBounds(it) }
         throw AssertionError(
             "$reason viewport=${bounds(viewport)} status=${bounds(status)} " +
-                "action=${bounds(action)} clickable_action=${bounds(clickableAction)}$screenshotDiagnostic"
+                "action=${bounds(action)} clickable_action=${bounds(clickableAction)} " +
+                "$scrollDetails status_candidates=[$statusCandidates] " +
+                "action_candidates=[${debugNodeBounds(connectionActionLabel)}]$screenshotDiagnostic"
         )
+    }
+
+    private fun debugNodeBounds(label: String): String {
+        fun candidates(selector: BySelector): String = runCatching {
+            device.findObjects(selector).joinToString(",") { node ->
+                runCatching { node.visibleBounds.toString() }
+                    .getOrElse { "unavailable(${it.javaClass.simpleName})" }
+            }
+        }.getOrElse { "query-error(${it.javaClass.simpleName})" }
+
+        return "$label{text=${candidates(By.text(label).pkg(packageName))}," +
+            "desc=${candidates(By.desc(label).pkg(packageName))}}"
     }
 
     private fun waitForTextContaining(text: String, timeoutMillis: Long = 10_000) {
