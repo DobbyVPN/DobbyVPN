@@ -235,6 +235,76 @@ func TestPendingSwitchCanceledByStopOrShutdown(t *testing.T) {
 		})
 	}
 }
+
+func TestStopFromSwitchOriginAfterReplacementConnectsStopsCurrentGeneration(t *testing.T) {
+	m, id, runtime := newSwitchingManager(t, true)
+	defer func() {
+		if err := m.StopAndWait(context.Background()); err != nil {
+			t.Errorf("stop test manager: %v", err)
+		}
+	}()
+
+	origin, err := m.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = startForTest(t, m, id, StartTarget{
+		Mode: ProfileIndex, Index: 1, ReplaceCurrent: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.stopEntered
+	close(runtime.releaseStop)
+
+	connected := waitGenerationState(t, m, id, origin.Generation+1, StateConnected)
+	<-runtime.starts
+	stopped, err := m.Stop(context.Background(), id, origin.Generation)
+	if err != nil {
+		t.Fatalf("stop from the switch-origin generation after connect: %v", err)
+	}
+	if stopped.Generation != connected.Generation {
+		t.Fatalf("stop generation = %d; want current connected generation %d", stopped.Generation, connected.Generation)
+	}
+
+	idle := waitGenerationState(t, m, id, connected.Generation, StateIdle)
+	if idle.PendingTarget != nil || idle.ActiveProfile != nil {
+		t.Fatalf("late switch-origin stop left connection active: %#v", idle)
+	}
+}
+
+func TestStopFromEarlierSwitchOriginCannotStopLaterReplacement(t *testing.T) {
+	m, id, runtime := newSwitchingManager(t, false)
+	defer func() {
+		if err := m.StopAndWait(context.Background()); err != nil {
+			t.Errorf("stop test manager: %v", err)
+		}
+	}()
+
+	origin, _ := m.Snapshot(context.Background(), id)
+	if _, err := startForTest(t, m, id, StartTarget{
+		Mode: ProfileIndex, Index: 1, ReplaceCurrent: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := waitGenerationState(t, m, id, origin.Generation+1, StateConnected)
+	<-runtime.starts
+	if _, err := startForTest(t, m, id, StartTarget{
+		Mode: ProfileIndex, Index: 0, ReplaceCurrent: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second := waitGenerationState(t, m, id, first.Generation+1, StateConnected)
+	<-runtime.starts
+
+	if _, err := m.Stop(context.Background(), id, origin.Generation); CodeOf(err) != FailureStaleGeneration {
+		t.Fatalf("stop from the earlier switch origin returned %v; want stale generation", err)
+	}
+	if _, err := m.Stop(context.Background(), id, first.Generation); err != nil {
+		t.Fatalf("stop from the latest switch origin: %v", err)
+	}
+	waitGenerationState(t, m, id, second.Generation, StateIdle)
+}
+
 func TestSwitchCleanupFailureBlocksReplacement(t *testing.T) {
 	m, id, r := newSwitchingManager(t, true)
 	r.cleanupErr = errors.New("synthetic cleanup failure")

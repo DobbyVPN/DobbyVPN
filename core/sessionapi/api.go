@@ -546,6 +546,10 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 		return result, nil
 	}
 	s.activeProfiles, s.activeDigest = s.profiles, s.digest
+	// A new direct Start supersedes any stop intent from an earlier completed
+	// switch. While that switch is active, Stop accepts its origin generation
+	// so a UI action racing connection completion still stops the current target.
+	s.switchOriginGeneration = 0
 	retainPolicy(s.activeDigest, s.activeProfiles)
 	s.generation++
 	generation := s.generation
@@ -924,7 +928,6 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 	}
 	s.state, s.active = state, cloneSummaryPtr(profile)
 	if state == StateConnected {
-		s.switchOriginGeneration = 0
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
 		s.lastFailure, s.lastFailureMessage = "", ""
