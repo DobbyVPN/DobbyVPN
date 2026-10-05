@@ -260,7 +260,7 @@ class AndroidScreenshotCollectionTests(unittest.TestCase):
                     return subprocess.CompletedProcess(("adb",), 44, b"", b"")
                 if label == "android-native-ui":
                     raise primary
-                if label == "android-native-ui-app-start":
+                if label == "android-native-ui-cold-bare-link-start":
                     return subprocess.CompletedProcess(("adb",), 0, b"Complete\nStatus: ok\n", b"")
                 if label == "android-native-diagnostics":
                     return subprocess.CompletedProcess(("adb",), 0, native, b"")

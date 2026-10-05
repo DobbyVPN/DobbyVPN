@@ -68,8 +68,29 @@ final class LogRenderingTests: XCTestCase {
     func testMacLogTextViewAllowsSelectionWithoutEditing() {
         let view = NSTextView(frame: .zero)
         configureLogTextView(view)
+        view.string = "selected diagnostic text"
         XCTAssertFalse(view.isEditable)
         XCTAssertTrue(view.isSelectable)
+        view.setSelectedRange(NSRange(location: 0, length: 8))
+        XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "selected")
+    }
+
+    @MainActor
+    func testMacLogDetailsInteractionExpandsAndCollapsesOriginalRecord() {
+        let raw = #"{"schema":"dobby.log/v1","timestamp":"2026-10-04T10:00:04Z","level":"ERROR","source":"transport","message":"failed","detail":"socket closed"}"#
+        let entry = entry(id: "error", timestamp: "10:00:04", level: "ERROR", source: "Backend · transport", message: "failed", raw: raw)
+        let logView = DobbyLogView(entries: [entry], following: .constant(true), clear: 0)
+        let coordinator = logView.makeCoordinator()
+        coordinator.entries = [entry]
+        let textView = NSTextView(frame: .zero)
+        configureLogTextView(textView)
+
+        XCTAssertTrue(coordinator.textView(textView, clickedOnLink: URL(string: "dobbylog://record/0")!, at: 0))
+        XCTAssertTrue(textView.string.contains(raw), "Details should reveal the complete source record")
+        XCTAssertTrue(coordinator.expanded.contains("error"))
+        XCTAssertTrue(coordinator.textView(textView, clickedOnLink: URL(string: "dobbylog://record/0")!, at: 0))
+        XCTAssertFalse(textView.string.contains(raw), "Hide details should collapse the source record")
+        XCTAssertFalse(coordinator.expanded.contains("error"))
     }
 
     @MainActor

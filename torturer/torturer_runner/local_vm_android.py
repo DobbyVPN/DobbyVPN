@@ -32,7 +32,6 @@ from .local_vm import _run_logged, _save_state
 _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
 COMPANION_PACKAGE = "com.dobby.vpn.test"
-_MAIN_ACTIVITY = "com.dobby.ui.MainActivity"
 _DIAGNOSTICS_DIRECTORY = f"/data/user/0/{APP_PACKAGE}/files/diagnostics"
 _NATIVE_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/native_logs.jsonl"
 _GO_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/go_app_logs.jsonl"
@@ -216,15 +215,18 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     app_start = _adb_call(
         adb_value,
         serial,
-        ["shell", "am", "start", "-W", "-n", f"{APP_PACKAGE}/{_MAIN_ACTIVITY}"],
+        [
+            "shell", "am", "start", "-W", "-a", "android.intent.action.VIEW",
+            "-d", "dobbyvpn://",
+        ],
         run_dir=run_dir,
         logs=logs,
-        label="android-native-ui-app-start",
+        label="android-native-ui-cold-bare-link-start",
         timeout=min(timeout, 30),
         environment=environment,
     )
     if b"Status: ok" not in app_start.stdout or b"Complete" not in app_start.stdout:
-        raise _error("Android native UI app did not start in the foreground")
+        raise _error("Android native UI did not resolve a cold bare-link foreground launch")
     try:
         result = _adb_call(
             adb_value,

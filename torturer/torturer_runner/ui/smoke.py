@@ -136,11 +136,11 @@ class NativeUIController:
         finally:
             self._deadline = previous
 
-    def _call(self, operation: str, **fields) -> dict:
+    def _call(self, operation: str, *, unbound: bool = False, **fields) -> dict:
         request = {"operation": operation, "executable": str(self.executable), **fields}
-        if self.pid is not None:
+        if self.pid is not None and not unbound:
             request["pid"] = self.pid
-        if self.identity is not None:
+        if self.identity is not None and not unbound:
             request["identity"] = self.identity
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
@@ -339,7 +339,9 @@ class NativeUIController:
         for _ in range(2):
             self._open_link(link)
         time.sleep(0.25)
-        after = self._call("probe")
+        # Windows' helper rejects duplicate matching processes when it probes
+        # without a PID, then returns the existing process identity.
+        after = self._call("probe", unbound=self.platform == "windows")
         if after.get("pid") != pid_before or after.get("identity") != identity_before:
             raise NativeUISmokeError("warm deep link did not reuse the existing UI process")
         self._wait(lambda: "Retry" not in self.snapshot()["labels"], "import did not replace failed subscription")
@@ -422,7 +424,11 @@ class NativeUIController:
                 "Windows log following did not resume at the bottom",
             )
         elif self.platform == "macos":
+            selected = self._call("select-log-text").get("selected", "")
+            if " · " not in selected:
+                raise NativeUISmokeError("macOS native log text could not be selected")
             self._call("scroll-logs", position="top")
+            frozen_position = self._call("log-position")
             frozen = self._call("logs").get("text", "")
             original_url = self.profile.read_text(encoding="utf-8").strip()
             failure_url = original_url.rsplit("/", 1)[0] + "/missing"
@@ -432,6 +438,12 @@ class NativeUIController:
                 self.profile.write_text(original_url, encoding="utf-8")
             if self._call("logs").get("text", "") != frozen:
                 raise NativeUISmokeError("macOS log entries changed while the view was scrolled up")
+            current_position = self._call("log-position")
+            if current_position.get("visible_range_start") != frozen_position.get("visible_range_start"):
+                raise NativeUISmokeError(
+                    "macOS reading position changed while log following was frozen: "
+                    f"before={frozen_position} after={current_position}"
+                )
             self._call("scroll-logs", position="bottom")
             latest = ""
             self._wait(

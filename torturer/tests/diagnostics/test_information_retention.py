@@ -526,6 +526,51 @@ class InformationRetentionTests(unittest.TestCase):
                 controller.collect_diagnostics()
             self.assertEqual((controller.logs / source.name).read_bytes(), source.read_bytes())
 
+    def test_macos_clear_checks_selectable_logs_and_preserved_reading_position(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            profile = root / "profile.txt"
+            profile.write_text("https://example.invalid/subscription", encoding="utf-8")
+            controller = object.__new__(native_ui_smoke.NativeUIController)
+            controller.platform = "macos"
+            controller.profile = profile
+            controller.cleared_record = None
+            initial = "2026 · INFO · Backend\nready\nDetails\n"
+            log_texts = iter((initial, initial, initial, initial + "new record\n", ""))
+            positions = iter((
+                {"visible_range_start": 0},
+                {"visible_range_start": 0},
+            ))
+            operations: list[str] = []
+
+            def call(operation: str, **fields: object) -> dict:
+                operations.append(operation)
+                if operation == "logs":
+                    return {"ready": True, "text": next(log_texts)}
+                if operation == "select-log-text":
+                    return {"ready": True, "selected": initial}
+                if operation == "log-position":
+                    return {"ready": True, **next(positions)}
+                return {"ready": True}
+
+            def wait(predicate, message: str) -> None:
+                if not predicate():
+                    raise AssertionError(message)
+
+            controller._call = call
+            controller._wait = wait
+            controller._click = lambda _name: None
+            controller.failing_subscription = lambda _url: {}
+            controller.snapshot = lambda: {"status": "Disconnected"}
+
+            result = controller.clear_logs()
+
+            self.assertEqual(result, {"status": "Disconnected"})
+            self.assertEqual(controller.cleared_record, "2026 · INFO · Backend")
+            self.assertIn("select-log-text", operations)
+            self.assertIn("log-position", operations)
+            self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
+
     def test_native_windows_helper_uses_existing_job_boundary(self) -> None:
         process = mock.Mock()
         completed = subprocess.CompletedProcess(

@@ -112,6 +112,7 @@ public struct DobbyRootView: View {
                     })
                 }
                 .frame(height: min(controlsHeight, geometry.size.height * controlsFraction))
+                .accessibilityIdentifier("Connection controls")
                 .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
                 logs.frame(maxHeight: .infinity)
             }

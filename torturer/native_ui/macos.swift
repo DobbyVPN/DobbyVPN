@@ -391,6 +391,50 @@ func run() throws -> [String: Any] {
         let view = try find(nodes, "Connection logs", editor: true)
         return ["ready": true, "text": try label(view, kAXValueAttribute)]
     }
+    if operation == "log-position" {
+        let view = try find(nodes, "Connection logs", editor: true)
+        guard let rangeValue = try axValue(view, kAXVisibleCharacterRangeAttribute),
+              let rawCount = try attribute(view, kAXNumberOfCharactersAttribute) as? NSNumber else {
+            throw HelperError("Native log viewer does not expose its reading position")
+        }
+        var range = CFRange(location: 0, length: 0)
+        try require(AXValueGetValue(rangeValue, .cfRange, &range), "Could not read native log visible character range")
+        var parent: AXUIElement? = view
+        var scrollArea: AXUIElement?
+        for _ in 0..<8 {
+            guard let current = parent,
+                  let next = try axElement(current, kAXParentAttribute) else { break }
+            if try label(next, kAXRoleAttribute) == kAXScrollAreaRole {
+                scrollArea = next
+                break
+            }
+            parent = next
+        }
+        guard let area = scrollArea,
+              let scrollbar = try axElement(area, kAXVerticalScrollBarAttribute),
+              let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
+            throw HelperError("Native log viewer has no readable vertical position")
+        }
+        return ["ready": true, "visible_range_start": range.location,
+                "visible_range_end": range.location + range.length,
+                "character_count": rawCount.intValue, "scrollbar_position": value.doubleValue]
+    }
+    if operation == "select-log-text" {
+        let view = try find(nodes, "Connection logs", editor: true)
+        guard let rawCount = try attribute(view, kAXNumberOfCharactersAttribute) as? NSNumber,
+              rawCount.intValue > 0 else {
+            throw HelperError("Native log viewer has no selectable text")
+        }
+        var range = CFRange(location: 0, length: rawCount.intValue)
+        guard let selectedRange = AXValueCreate(.cfRange, &range) else {
+            throw HelperError("Could not create native selected text range")
+        }
+        try require(AXUIElementSetAttributeValue(view, kAXSelectedTextRangeAttribute as CFString, selectedRange) == .success,
+                    "Native log viewer rejected text selection")
+        let selected = try label(view, kAXSelectedTextAttribute)
+        try require(!selected.isEmpty, "Native log viewer returned no selected text")
+        return ["ready": true, "selected": selected]
+    }
     if operation == "scroll-logs" {
         guard let position = request["position"] as? String, position == "top" || position == "bottom" else {
             throw HelperError("Log scroll position must be top or bottom")

@@ -359,12 +359,10 @@ class NativeUiInstrumentedTest {
             device.executeShellCommand("wm size 360x640")
             device.waitForIdle()
             instrumentation.runOnMainSync { MainActivity.current?.recreate() }
-            waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)
             check(device.displayWidth <= 360 && device.displayHeight <= 640) {
                 "ANDROID_SMALL_SCREEN_OVERRIDE_NOT_APPLIED ${device.displayWidth}x${device.displayHeight}"
             }
-            requireObject("Subscription URL")
-            requireObject(connectionActionLabel)
+            scrollControlsToConnectionAction()
             assertLogPaneUsable("ANDROID_LOGS_NOT_VISIBLE_ON_SMALL_SCREEN")
         } finally {
             device.executeShellCommand("settings put system font_scale $originalScale")
@@ -924,6 +922,32 @@ class NativeUiInstrumentedTest {
     private fun waitForOneOf(labels: Array<String>, timeoutMillis: Long): UiObject2 {
         waitForOneOfOrNull(labels, timeoutMillis)?.let { return it }
         throw AssertionError("ANDROID_UI_STATE_TIMEOUT")
+    }
+
+    private fun scrollControlsToConnectionAction() {
+        var controls: UiObject2? = requireObject("Subscription URL")
+        while (controls != null && !controls.isScrollable) controls = controls.parent
+        val viewport = controls ?: throw AssertionError("ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING")
+
+        var reachedStatus = false
+        var reachedAction: UiObject2? = null
+        for (attempt in 0..8) {
+            reachedStatus = waitForOneOfOrNull(arrayOf("Disconnected", "Error"), 100) != null
+            reachedAction = waitForObject(connectionActionLabel, 100)
+            if (reachedStatus && reachedAction != null) break
+            if (attempt == 8) break
+            if (!viewport.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)) {
+                throw AssertionError("ANDROID_CONTROLS_SCROLL_FAILED")
+            }
+            device.waitForIdle()
+        }
+
+        check(reachedStatus) { "ANDROID_SMALL_SCREEN_STATUS_NOT_REACHABLE_AFTER_SCROLL" }
+        var button = reachedAction
+        while (button != null && !button.isClickable) button = button.parent
+        check(button != null && !button.visibleBounds.isEmpty && button.visibleBounds == button.bounds) {
+            "ANDROID_SMALL_SCREEN_CONNECTION_ACTION_NOT_REACHABLE"
+        }
     }
 
     private fun waitForTextContaining(text: String, timeoutMillis: Long = 10_000) {

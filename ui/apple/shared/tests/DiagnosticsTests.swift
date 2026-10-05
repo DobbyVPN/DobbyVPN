@@ -112,6 +112,45 @@ final class DiagnosticsTests: XCTestCase {
     }
 
     @MainActor
+    func testVisibleLogRefreshPollsWhileForegroundedAndPausesWhenHidden() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let backend = directory.appendingPathComponent("backend.jsonl")
+        try appendDiagnostic("initial", to: backend)
+        let model = DobbySessionViewModel(client: DiagnosticClient(paths: [backend]))
+
+        let initial = expectation(description: "initial record is visible")
+        let initialSubscription = model.$logEntries.first { $0.contains { $0.message == "initial" } }
+            .sink { _ in initial.fulfill() }
+        model.setLogsVisible(true)
+        await fulfillment(of: [initial], timeout: 5)
+        initialSubscription.cancel()
+
+        let foregroundRefresh = expectation(description: "visible log polling reads a new record")
+        let foregroundSubscription = model.$logEntries.first { $0.contains { $0.message == "foreground update" } }
+            .sink { _ in foregroundRefresh.fulfill() }
+        let foregroundStarted = Date()
+        try appendDiagnostic("foreground update", to: backend)
+        await fulfillment(of: [foregroundRefresh], timeout: 1.5)
+        XCTAssertLessThan(Date().timeIntervalSince(foregroundStarted), 1.5)
+        foregroundSubscription.cancel()
+
+        model.setLogsVisible(false)
+        try appendDiagnostic("background update", to: backend)
+        try await Task.sleep(nanoseconds: 900_000_000)
+        XCTAssertFalse(model.logEntries.contains { $0.message == "background update" },
+                       "Hidden logs should not poll the diagnostic files")
+
+        let resumed = expectation(description: "foregrounding logs refreshes immediately")
+        let resumedSubscription = model.$logEntries.first { $0.contains { $0.message == "background update" } }
+            .sink { _ in resumed.fulfill() }
+        model.setLogsVisible(true)
+        await fulfillment(of: [resumed], timeout: 1)
+        resumedSubscription.cancel()
+    }
+
+    @MainActor
     func testExportReadsFreshCompleteFilesAndMetadata() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -310,16 +349,18 @@ extension DiagnosticsTests {
         let boundary = directory.appendingPathComponent("view.json")
         let late = #"{"timestamp":"2026-10-04T10:00:02Z","level":"WARN","source":"subscription","message":"later","detail":"retained"}"#
         let early = #"{"timestamp":"2026-10-04T10:00:01Z","event":"stderr.capture","level":"ERROR","source":"tunnel","message":"capture"}"#
+        let rawJSON = #"{"stdout":"raw JSON-looking output"}"#
         try Data((late + "\n{\"timestamp\":").utf8).write(to: backend)
-        try Data((early + "\nraw stack\n  frame\n{not-json}\n{\"unclosed\":").utf8).write(to: stderr)
+        try Data((early + "\nraw stack\n  frame\n{not-json}\n" + rawJSON + "\n{\"unclosed\":").utf8).write(to: stderr)
         let preview = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
         XCTAssertTrue(preview.error.isEmpty)
-        XCTAssertEqual(preview.entries.map(\.message), ["Stderr capture initialized", "later", "raw stack", "  frame", "{not-json}"])
-        for rawEntry in preview.entries.suffix(3) {
+        XCTAssertEqual(preview.entries.map(\.message), ["Stderr capture initialized", "later", "raw stack", "  frame", "{not-json}", rawJSON])
+        for rawEntry in preview.entries.suffix(4) {
             XCTAssertEqual(rawEntry.timestamp, "")
             XCTAssertNil(rawEntry.date)
             XCTAssertEqual(rawEntry.level, "RAW")
             XCTAssertEqual(rawEntry.source, "Tunnel stderr")
+            XCTAssertEqual(rawEntry.raw, rawEntry.message)
         }
         let capture = preview.entries[0]
         XCTAssertEqual(capture.timestamp, "2026-10-04T10:00:01Z")
@@ -341,7 +382,7 @@ extension DiagnosticsTests {
         let cleared = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
         XCTAssertTrue(cleared.error.isEmpty)
         XCTAssertEqual(cleared.entries.map(\.message), ["new event"])
-        XCTAssertEqual(try String(contentsOf: stderr, encoding: .utf8), early + "\nraw stack\n  frame\n{not-json}\n{\"unclosed\":")
+        XCTAssertEqual(try String(contentsOf: stderr, encoding: .utf8), early + "\nraw stack\n  frame\n{not-json}\n" + rawJSON + "\n{\"unclosed\":")
     }
 
     func testStructuredTiedTimestampsKeepInputOrderAndStableIDs() throws {

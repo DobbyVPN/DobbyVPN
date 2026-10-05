@@ -686,7 +686,7 @@ public final class NativeUiHostedProfileTest {
     private void configureThroughRenderedUI(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         markProgress("configure", "surface", "started");
-        if (!coldImportAttempted) launchColdSubscriptionImport(subscriptionURL);
+        if (!coldImportAttempted) launchActivityColdSubscriptionImport(subscriptionURL);
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         foregroundActivity = ensureForegroundActivity();
         markProgress("configure", "surface", "completed");
@@ -744,7 +744,7 @@ public final class NativeUiHostedProfileTest {
         markProgress("configure", "rendered-navigation", "completed");
     }
 
-    private void launchColdSubscriptionImport(String subscriptionURL) throws Exception {
+    private void launchActivityColdSubscriptionImport(String subscriptionURL) throws Exception {
         coldImportAttempted = true;
         coldImportStarted = true;
         expectedRenderedSource = subscriptionURL;
@@ -1088,7 +1088,7 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Repeated warm deep link replaced the existing Activity");
         }
         tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
-        verifyPendingAutoTransition(deadline);
+        verifyPendingAutoTransition(subscriptionURL, deadline);
         JSONObject auto = awaitSelection(manual.getLong("generation"), "AUTO_SELECT", -1, deadline);
         tapUiControl("Clear", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         verifyHeldLoadKeepsControlsResponsive(subscriptionURL, auto, deadline);
@@ -1258,17 +1258,12 @@ public final class NativeUiHostedProfileTest {
                     || !"Profile 24 long-list".equals(profiles.getJSONObject(23).optString("description"))) {
                 throw new AssertionError("Ordered profile description, protocol, or fallback inventory was not retained");
             }
-            String hierarchy = dumpUiHierarchy();
-            int first = hierarchy.indexOf("Profile 1");
-            int second = hierarchy.indexOf("Profile 2 long-list");
-            if (first < 0 || second <= first || hierarchy.indexOf("OUTLINE") < 0) {
-                throw new AssertionError("Rendered profile row order or protocol label is missing");
-            }
+            assertRenderedProfileInventory(profiles);
+            verifyBareLinkPreservesSource(deadline);
             scrollControlsToLastProfile(deadline);
             waitForUiControl("Profile 24 long-list", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             waitForEnabledControl("Profile 24 action", deadline);
             assertLongListLeavesLogsUsable(deadline);
-            verifyBareLinkPreservesSource(deadline);
         } finally {
             clipboard.clearPrimaryClip();
         }
@@ -1290,10 +1285,10 @@ public final class NativeUiHostedProfileTest {
     private void verifyBareLinkPreservesSource(long deadline) throws Exception {
         JSONObject before = snapshotResult("");
         expectedRenderedSource = before.optString("source_url");
+        int requestsBefore = subscriptionFixtureState().getInt("subscription_gets");
         Activity activity = MainActivity.current;
         if (activity == null) throw new AssertionError("Android Activity missing before bare-link delivery");
-        String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d 'dobbyvpn://' "
-                + context.getPackageName());
+        String output = launchBareLink();
         if (!output.contains("Status: ok")) {
             throw new AssertionError("Bare deep-link activation failed: " + output);
         }
@@ -1310,6 +1305,147 @@ public final class NativeUiHostedProfileTest {
         }
         if (findUiObject("Error") != null) {
             throw new AssertionError("Bare deep link showed an import error");
+        }
+
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finishAndRemoveTask);
+        long closeDeadline = Math.min(deadline, System.currentTimeMillis() + 5_000L);
+        while (MainActivity.current != null && System.currentTimeMillis() < closeDeadline) {
+            SystemClock.sleep(25L);
+        }
+        if (MainActivity.current != null) {
+            throw new AssertionError("Activity did not close before cold bare-link delivery");
+        }
+        output = launchBareLink();
+        if (!output.contains("Status: ok")) {
+            throw new AssertionError("Cold bare deep-link activation failed: " + output);
+        }
+        foregroundActivity = ensureForegroundActivity();
+        ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        Activity reopened = MainActivity.current;
+        if (reopened == null || reopened == activity) {
+            throw new AssertionError("Cold bare deep link did not open a new Activity");
+        }
+        assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        SystemClock.sleep(1_100L);
+        JSONObject coldAfter = snapshotResult("");
+        int requestsAfter = subscriptionFixtureState().getInt("subscription_gets");
+        if (!before.optString("source_url").equals(coldAfter.optString("source_url"))
+                || !before.optString("digest").equals(coldAfter.optString("digest"))
+                || before.optLong("generation") != coldAfter.optLong("generation")
+                || !before.optString("state").equals(coldAfter.optString("state"))
+                || requestsBefore != requestsAfter
+                || findUiObject("Error") != null) {
+            throw new AssertionError("Cold bare deep link changed the source/session or triggered an import");
+        }
+    }
+
+    private String launchBareLink() throws Exception {
+        return uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d 'dobbyvpn://' "
+                + context.getPackageName());
+    }
+
+    private void assertRenderedProfileInventory(JSONArray profiles) throws Exception {
+        ArrayList<String> renderedTexts = new ArrayList<>();
+        ArrayList<String> renderedDescriptions = new ArrayList<>();
+        AtomicReference<String> failure = new AtomicReference<>();
+        String lastName = profiles.getJSONObject(profiles.length() - 1).optString("description");
+        String lastAction = "Profile " + profiles.length() + " action";
+        long deadline = System.currentTimeMillis() + 5_000L;
+        while (System.currentTimeMillis() < deadline) {
+            renderedTexts.clear();
+            renderedDescriptions.clear();
+            failure.set(null);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                Activity activity = MainActivity.current;
+                View content = activity == null ? null : activity.findViewById(android.R.id.content);
+                SemanticsNode root = content == null ? null : findComposeRootSemantics(content);
+                if (root == null) {
+                    failure.set("Compose semantics tree is unavailable");
+                    return;
+                }
+                collectRenderedSemantics(root, renderedTexts, renderedDescriptions);
+            });
+            if (failure.get() == null
+                    && renderedTexts.contains(lastName)
+                    && renderedDescriptions.contains(lastAction)) {
+                break;
+            }
+            Thread.sleep(POLL_MILLIS);
+        }
+        if (failure.get() != null || !renderedTexts.contains(lastName)
+                || !renderedDescriptions.contains(lastAction)) {
+            throw new AssertionError("Rendered profile inventory could not be inspected: "
+                    + (failure.get() == null ? "last row did not appear" : failure.get()));
+        }
+
+        int textCursor = 0;
+        int actionCursor = 0;
+        int connectLabels = 0;
+        for (int index = 0; index < profiles.length(); index++) {
+            JSONObject profile = profiles.getJSONObject(index);
+            String description = profile.optString("description");
+            String expectedDescription = index == 0 ? "" : "Profile " + (index + 1) + " long-list";
+            String expectedName = description.isEmpty() ? "Profile " + (index + 1) : description;
+            if (profile.optInt("index", -1) != index
+                    || !expectedDescription.equals(description)
+                    || !"OUTLINE".equals(profile.optString("protocol"))) {
+                throw new AssertionError("Synthetic profile metadata/order changed at index " + index);
+            }
+            textCursor = requireRenderedValue(
+                    renderedTexts, expectedName, textCursor, "profile name/order");
+            textCursor = requireRenderedValue(
+                    renderedTexts, profile.optString("protocol"), textCursor, "profile protocol/order");
+            actionCursor = requireRenderedValue(
+                    renderedDescriptions, "Profile " + (index + 1) + " action", actionCursor,
+                    "numbered profile action/order");
+        }
+        for (String text : renderedTexts) {
+            if ("Connect".equals(text)) connectLabels++;
+        }
+        if (connectLabels != profiles.length()) {
+            throw new AssertionError("Rendered Connect actions missing: expected "
+                    + profiles.length() + " labels, found " + connectLabels);
+        }
+    }
+
+    private int requireRenderedValue(List<String> values, String expected, int start, String field) {
+        for (int index = start; index < values.size(); index++) {
+            if (expected.equals(values.get(index))) return index + 1;
+        }
+        throw new AssertionError("Rendered " + field + " missing or out of source order: " + expected);
+    }
+
+    private static SemanticsNode findComposeRootSemantics(View view) {
+        if (view instanceof ViewRootForTest) {
+            return ((ViewRootForTest) view)
+                    .getSemanticsOwner()
+                    .getUnmergedRootSemanticsNode();
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                SemanticsNode root = findComposeRootSemantics(group.getChildAt(index));
+                if (root != null) return root;
+            }
+        }
+        return null;
+    }
+
+    private static void collectRenderedSemantics(
+            SemanticsNode node, List<String> texts, List<String> descriptions) {
+        SemanticsPropertyKey<List<AnnotatedString>> textKey = SemanticsProperties.INSTANCE.getText();
+        if (node.getConfig().contains(textKey)) {
+            for (AnnotatedString text : node.getConfig().get(textKey)) {
+                texts.add(text.getText());
+            }
+        }
+        SemanticsPropertyKey<List<String>> descriptionKey =
+                SemanticsProperties.INSTANCE.getContentDescription();
+        if (node.getConfig().contains(descriptionKey)) {
+            descriptions.addAll(node.getConfig().get(descriptionKey));
+        }
+        for (SemanticsNode child : node.getChildren()) {
+            collectRenderedSemantics(child, texts, descriptions);
         }
     }
 
@@ -1449,7 +1585,7 @@ public final class NativeUiHostedProfileTest {
                 && selected != null && selected.optInt("index", -1) == targetIndex;
     }
 
-    private void verifyPendingAutoTransition(long deadline) throws Exception {
+    private void verifyPendingAutoTransition(String subscriptionURL, long deadline) throws Exception {
         while (System.currentTimeMillis() < deadline) {
             JSONObject state = snapshotResult("");
             JSONObject pending = state.optJSONObject("pending_target");
@@ -1467,11 +1603,54 @@ public final class NativeUiHostedProfileTest {
                         throw new AssertionError("Profile Connect remained enabled during Auto selection");
                     }
                 }
+
+                int requests = subscriptionFixtureState().getInt("subscription_gets");
+                String importedURL = urlWithQuery(subscriptionURL, "android-pending-auto", "1");
+                expectedRenderedSource = importedURL;
+                subscriptionFixturePost("/hold", new byte[0]);
+                long generationDuringLoad = state.optLong("generation");
+                try {
+                    deliverWarmImport(importedURL);
+                    waitForSubscriptionGets(requests + 1,
+                            remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                    JSONObject heldRequest = waitForInFlightGets(1,
+                            remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                    JSONObject duringLoad = snapshotResult("");
+                    generationDuringLoad = duringLoad.optLong("generation");
+                    if (!autoSelectionRemainsAuthoritative(duringLoad, state.optString("digest"))
+                            || heldRequest.getInt("subscription_gets") != requests + 1
+                            || heldRequest.getInt("max_in_flight_gets") > 1) {
+                        throw new AssertionError("Import changed the pending Auto selection or duplicated its load");
+                    }
+                } finally {
+                    subscriptionFixturePost("/release", new byte[0]);
+                }
+                JSONObject completed = waitForInFlightGets(0,
+                        remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                JSONObject afterLoad = waitForSessionSource(importedURL,
+                        remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                if (completed.getInt("subscription_gets") != requests + 1
+                        || generationDuringLoad != afterLoad.optLong("generation")
+                        || !autoSelectionRemainsAuthoritative(afterLoad, state.optString("digest"))) {
+                    throw new AssertionError("Import interrupted or replaced the authoritative Auto connection");
+                }
                 return;
             }
             SystemClock.sleep(20L);
         }
         throw new AssertionError("Pending Auto selection was not rendered before connection completed");
+    }
+
+    private boolean autoSelectionRemainsAuthoritative(JSONObject snapshot, String digest)
+            throws Exception {
+        if (!digest.equals(snapshot.optString("digest"))) return false;
+        JSONObject pending = snapshot.optJSONObject("pending_target");
+        if (pending != null) {
+            return "AUTO_SELECT".equals(pending.optString("mode"))
+                    && digest.equals(pending.optString("digest"));
+        }
+        return "CONNECTED".equals(snapshot.optString("state"))
+                && "AUTO_SELECT".equals(snapshot.optString("active_mode"));
     }
 
     private void assertOldConnectActionsDisabled(JSONObject active) throws Exception {

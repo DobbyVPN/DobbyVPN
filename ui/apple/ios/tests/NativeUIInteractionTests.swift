@@ -108,7 +108,8 @@ final class NativeUIInteractionTests: XCTestCase {
         app.launchArguments = []
         XCTAssertTrue(app.textFields["Connection configuration"].waitForExistence(timeout: 30))
         assertLogLayout()
-        let controls = app.scrollViews.firstMatch
+        let controls = app.scrollViews["Connection controls"]
+        XCTAssertTrue(controls.waitForExistence(timeout: 10), "The connection controls should have a scrollable viewport")
         let paste = app.buttons["Paste"]
         if !paste.isHittable { controls.swipeDown() }
         XCTAssertTrue(paste.isHittable, "Paste should remain reachable at the largest accessibility text size")
@@ -138,7 +139,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
         let action = app.buttons["VPN connection action"]
         if !action.isHittable {
-            let controls = app.scrollViews.firstMatch
+            let controls = app.scrollViews["Connection controls"]
             XCTAssertTrue(controls.exists, "The controls should remain in a scrollable viewport on a short screen")
             controls.swipeUp()
         }
@@ -229,6 +230,7 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testLogsFreezeAndResumeAtBottom() throws {
+        defer { XCUIDevice.shared.orientation = .portrait }
         let clipboard = "http://example.invalid/repeat-error"
         let validationError = "Paste an HTTPS subscription URL with a host"
         app.terminate()
@@ -272,6 +274,18 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 4)
 
         logs.swipeDown()
+        let details = app.links.matching(NSPredicate(format: "label == %@", "Details")).firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 10), "Structured log records should expose expandable details")
+        details.tap()
+        let expandedRecord = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "\"schema\":\"dobby.log/v1\""),
+            object: logs
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [expandedRecord], timeout: 10), .completed,
+                       "Expanding a log entry should show its original structured record")
+        let expandedText = try XCTUnwrap(logs.value as? String)
+        XCTAssertTrue(expandedText.contains("\"event\":\"ui.failure\""))
+        XCTAssertTrue(expandedText.contains("\"source\":\"native-ui\""))
         let frozen = try XCTUnwrap(logs.value as? String)
         openAbout()
         app.buttons["Done"].tap()
@@ -289,6 +303,21 @@ final class NativeUIInteractionTests: XCTestCase {
             XCTWaiter.wait(for: [changedWhileScrolledUp], timeout: 1.5), .timedOut,
             "New records should not replace the rendered text while scrolled up"
         )
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.frame.width > self.app.frame.height
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [landscape], timeout: 15), .completed)
+        XCTAssertEqual(logs.value as? String, frozen,
+                       "A live rotation must not replace frozen log entries")
+        XCUIDevice.shared.orientation = .portrait
+        let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.frame.height > self.app.frame.width
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 15), .completed)
+        XCTAssertEqual(logs.value as? String, frozen,
+                       "Returning to portrait must keep the frozen log entries")
 
         logs.swipeUp()
         logs.swipeUp()
@@ -323,14 +352,24 @@ final class NativeUIInteractionTests: XCTestCase {
         app.terminate()
         app.open(try link(cold))
         expectSource(cold)
+        let coldProcess = app.processIdentifier
         XCUIDevice.shared.system.open(try link(warm))
         expectSource(warm)
+        XCTAssertEqual(app.processIdentifier, coldProcess,
+                       "A warm import should reuse the existing app process")
         XCUIDevice.shared.system.open(try link(warm))
         expectSource(warm)
+        XCTAssertEqual(app.processIdentifier, coldProcess,
+                       "Repeated warm imports should keep using the same app process")
         XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://")))
         expectSource(warm)
         XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid&url=duplicate")))
         expectSource(warm)
+        let invalidImportFeedback = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "Use dobbyvpn://import?url=")
+        ).firstMatch
+        XCTAssertTrue(invalidImportFeedback.waitForExistence(timeout: 10),
+                      "An invalid deep link should show actionable import guidance")
     }
 
     private func assertLogLayout() {

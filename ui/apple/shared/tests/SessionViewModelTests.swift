@@ -164,6 +164,34 @@ final class SessionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLinkImportWhileConnectingKeepsPendingTargetWithoutStartingOrStopping() async throws {
+        let original = "https://example.invalid/original"
+        let imported = "https://example.invalid/imported-while-connecting"
+        let fixture = try ViewModelFixture(initialSource: original, inventoryConfigured: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        fixture.client.setSnapshotOverrides([
+            "state": "PROBING",
+            "primary_action": "STOP",
+            "pending_target": ["digest": "digest", "mode": "PROFILE_INDEX", "index": 1],
+            "can_switch": false,
+        ])
+        let model = DobbySessionViewModel(client: fixture.client)
+        await waitForSnapshot(model) { $0.configured && $0.sourceURL == original && $0.state == "PROBING" }
+        let generation = model.snapshot.generation
+
+        model.importLink(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fimported-while-connecting")!)
+        await waitForSnapshot(model) {
+            $0.sourceURL == imported && $0.pendingTarget?.mode == "PROFILE_INDEX" && $0.pendingTarget?.index == 1
+        }
+
+        XCTAssertEqual(model.snapshot.state, "PROBING")
+        XCTAssertEqual(model.snapshot.generation, generation)
+        XCTAssertEqual(fixture.client.startedConfigureSources, [imported])
+        XCTAssertEqual(fixture.client.startCount, 0)
+        XCTAssertEqual(fixture.client.stopCount, 0)
+    }
+
+    @MainActor
     func testPendingProfileSelectionShowsStopAndRejectsCompetingActions() async throws {
         let fixture = try ViewModelFixture(initialSource: "https://example.invalid/profiles")
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

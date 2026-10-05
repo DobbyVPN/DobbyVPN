@@ -269,7 +269,13 @@ public enum DiagnosticFiles {
     }
 
     public static func parseEntry(_ raw: String, id: String, stream: String) -> Entry {
-        guard let data = raw.data(using: .utf8), let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = raw.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return Entry(id: id, timestamp: "", level: "RAW", source: stream, message: raw, raw: raw, date: nil)
+        }
+        let hasTimestamp = !(value["timestamp"] as? String ?? "").isEmpty
+        let hasStructuredMessage = value["message"] is String || value["event"] is String
+        guard hasTimestamp && hasStructuredMessage else {
             return Entry(id: id, timestamp: "", level: "RAW", source: stream, message: raw, raw: raw, date: nil)
         }
         let timestamp = value["timestamp"] as? String ?? ""
