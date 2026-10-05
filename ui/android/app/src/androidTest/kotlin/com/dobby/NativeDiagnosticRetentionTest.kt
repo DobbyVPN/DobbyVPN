@@ -31,7 +31,7 @@ class NativeDiagnosticRetentionTest {
             val earlierRaw = """{"timestamp":"2026-01-01T00:00:01Z","level":"WARN","message":"earlier λ","extra":42}"""
             backend.writeText(later + "trace line 1\ntrace line 2\n")
             native.writeText(earlierRaw + "\n" + """{"message":"incomplete""")
-            var view = StructuredLogs(listOf(backend.path, native.path), boundary)
+            val view = StructuredLogs(listOf(backend.path, native.path), boundary)
             val (entries, error) = view.read()
             assertEquals("", error)
             assertEquals(listOf("earlier λ", "trace line 1", "trace line 2", "later"), entries.map { it.message })
@@ -54,7 +54,6 @@ class NativeDiagnosticRetentionTest {
             view.clear()
             assertTrue(backend.renameTo(File(backend.path + ".previous")))
             backend.writeText("new after rotation\n")
-            view = StructuredLogs(listOf(backend.path, native.path), boundary)
             val (after, failure) = view.read()
             assertEquals("", failure)
             assertEquals(listOf("new after rotation"), after.map { it.message })

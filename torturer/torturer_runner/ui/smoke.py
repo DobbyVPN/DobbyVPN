@@ -116,6 +116,7 @@ class NativeUIController:
         self.identity: str | None = None
         self.window_id: str | None = None
         self.last_window_readiness: dict[str, object] | None = None
+        self.last_paste_invoked_at_unix_ms: int | None = None
         self.launch_count = self.capture_count = 0
         self.reconnecting_seen = False
         self.cleared_record: str | None = None
@@ -229,6 +230,12 @@ class NativeUIController:
                 return response.get("alive") is True and self.identity is not None
 
             self._wait(identified, "native UI process identity unavailable")
+            # Keep the diagnostic opt-in and ahead of the first acceptance tree snapshot.
+            if (
+                self.launch_count == 1
+                and os.environ.get("DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE") == "1"
+            ):
+                self._call("findall-probe")
 
         def ready():
             code = None if self.process is None else self.process.poll()
@@ -315,12 +322,20 @@ class NativeUIController:
         result = self._call("paste", source=str(self.profile))
         if result.get("ready") is not True:
             raise NativeUISmokeError("native Paste control is unavailable")
+        paste_invoked_at = result.get("paste_invoked_at_unix_ms")
+        if self.platform == "windows":
+            if type(paste_invoked_at) is not int:
+                raise NativeUISmokeError("Windows Paste helper did not report its button-invocation time")
+            self.last_paste_invoked_at_unix_ms = paste_invoked_at
         return self.snapshot()
 
     def configure(self) -> dict:
         self.paste_source()
         self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "subscription profiles did not load automatically")
-        return {"input_verified": True, **self.snapshot()}
+        result = {"input_verified": True, **self.snapshot()}
+        if self.last_paste_invoked_at_unix_ms is not None:
+            result["paste_invoked_at_unix_ms"] = self.last_paste_invoked_at_unix_ms
+        return result
 
     def type_source(self, source: str) -> dict:
         self.profile.write_text(source, encoding="utf-8")
@@ -339,6 +354,26 @@ class NativeUIController:
     def open_deep_link(self, link: str) -> dict:
         self._open_link(link)
         return self.snapshot()
+
+    def cold_deep_link(self, url: str) -> dict:
+        if self.platform not in {"macos", "windows"}:
+            raise NativeUISmokeError("cold external-scheme launch is only available on desktop platforms")
+        if self.process is not None or self._alive():
+            raise NativeUISmokeError("native UI must be stopped before a cold external-scheme launch")
+        from urllib.parse import quote
+
+        if self.platform == "macos":
+            self._call("preflight")
+        self.launch_count += 1
+        self.window_id = None
+        self.last_window_readiness = None
+        link = "dobbyvpn://import?url=" + quote(url, safe="")
+        self._open_link(link)
+        self._wait(
+            lambda: "Connection configuration" in self.snapshot()["labels"],
+            "cold external-scheme launch did not open the native connection page",
+        )
+        return self.wait_status("Connected")
 
     def failing_subscription(self, url: str) -> dict:
         original = self.profile.read_bytes()
@@ -435,6 +470,7 @@ class NativeUIController:
                         raise NativeUISmokeError("Windows debug/trace logs are not visually muted")
 
             self._call("scroll-logs", position="top")
+            frozen_position = self._call("log-position")
             frozen = self._call("logs").get("text", "")
             original_url = self.profile.read_text(encoding="utf-8").strip()
             failure_url = original_url.rsplit("/", 1)[0] + "/missing"
@@ -444,6 +480,16 @@ class NativeUIController:
                 self.profile.write_text(original_url, encoding="utf-8")
             if self._call("logs").get("text", "") != frozen:
                 raise NativeUISmokeError("Windows log entries changed while the view was scrolled up")
+            current_position = self._call("log-position")
+            before_percent = frozen_position.get("vertical_scroll_percent")
+            after_percent = current_position.get("vertical_scroll_percent")
+            if (not isinstance(before_percent, (int, float)) or isinstance(before_percent, bool)
+                    or not isinstance(after_percent, (int, float)) or isinstance(after_percent, bool)
+                    or abs(float(after_percent) - float(before_percent)) > 1.0):
+                raise NativeUISmokeError(
+                    "Windows reading position changed while log following was frozen: "
+                    f"before={frozen_position} after={current_position}"
+                )
             self._call("scroll-logs", position="bottom")
             latest = ""
             self._wait(
@@ -466,7 +512,8 @@ class NativeUIController:
             if self._call("logs").get("text", "") != frozen:
                 raise NativeUISmokeError("macOS log entries changed while the view was scrolled up")
             current_position = self._call("log-position")
-            if current_position.get("visible_range_start") != frozen_position.get("visible_range_start"):
+            if any(current_position.get(key) != frozen_position.get(key)
+                   for key in ("visible_range_start", "visible_range_end")):
                 raise NativeUISmokeError(
                     "macOS reading position changed while log following was frozen: "
                     f"before={frozen_position} after={current_position}"

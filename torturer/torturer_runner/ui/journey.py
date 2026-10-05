@@ -96,6 +96,7 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "inventory_reused_after_reopen",
     "close_window",
     "reopen_connected",
+    "cold_os_scheme_launch",
     "cold_import_native",
     "process_loss_verified",
     "ui_process_loss_recovered",
@@ -340,7 +341,10 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
 
     def stats() -> dict[str, int]:
         value = fixture.control_stats()
-        if not all(type(value.get(name)) is int for name in ("subscription_gets", "in_flight_gets", "max_in_flight_gets")):
+        if not all(type(value.get(name)) is int for name in (
+            "subscription_gets", "last_subscription_get_started_at_unix_ms",
+            "in_flight_gets", "max_in_flight_gets",
+        )):
             raise NativeUIJourneyError("subscription fixture returned incomplete request counts")
         return value
 
@@ -401,11 +405,22 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError(message)
 
     original_profile = fixture.profile_bytes
-    initial_requests = stats()["subscription_gets"]
+    initial_stats = stats()
+    initial_requests = initial_stats["subscription_gets"]
     if initial_requests != 1:
         raise NativeUIJourneyError(
             f"native Paste did not load the disposable subscription exactly once (observed {initial_requests} GETs)"
         )
+    if ui.platform == "windows":
+        paste_invoked_at = getattr(ui, "last_paste_invoked_at_unix_ms", None)
+        get_started_at = initial_stats["last_subscription_get_started_at_unix_ms"]
+        if type(paste_invoked_at) is not int or get_started_at < paste_invoked_at:
+            raise NativeUIJourneyError("Windows Paste request timing was unavailable or preceded the button invocation")
+        paste_delay_ms = get_started_at - paste_invoked_at
+        if paste_delay_ms >= 400:
+            raise NativeUIJourneyError(
+                f"Windows Paste waited for the typed debounce before requesting the subscription ({paste_delay_ms} ms)"
+            )
     if "Retry" in ui.snapshot().get("labels", []):
         raise NativeUIJourneyError("Retry appeared before any subscription failure")
     checks: dict[str, bool] = {"native_paste_immediate": True}
@@ -619,9 +634,18 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     checks["typed_debounce"] = True
 
     # Hold one URL response, then edit to the newest URL while it is in
-    # flight. The older request returns its captured real inventory; the
-    # queued latest request returns a different, never-connected inventory.
+    # flight. The stale response and latest response are held separately so
+    # the stale result can be inspected before the current response completes.
     before_coalesced = stats()["subscription_gets"]
+    stale_inventory = (
+        b'[[Outline]]\nDescription = "Stale intermediate profile"\nServer = "127.0.0.1"\n'
+        b'Port = 9\nPassword = "never-connect-stale"\n'
+    )
+    synthetic_inventory = (
+        b'[[Outline]]\nDescription = ""\nServer = "127.0.0.1"\nPort = 9\nPassword = "never-connect-one"\n\n'
+        b'[[Outline]]\nDescription = "Latest second profile"\nServer = "127.0.0.1"\nPort = 9\nPassword = "never-connect-two"\n'
+    )
+    fixture.replace_response(stale_inventory)
     fixture.hold_responses()
     older_url = url + "?coalesce=older"
     older_edit_at = time.monotonic()
@@ -650,10 +674,6 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         fixture.release_responses()
         raise NativeUIJourneyError("log refresh did not respond during subscription loading")
 
-    synthetic_inventory = (
-        b'[[Outline]]\nDescription = ""\nServer = "127.0.0.1"\nPort = 9\nPassword = "never-connect-one"\n\n'
-        b'[[Outline]]\nDescription = "Latest second profile"\nServer = "127.0.0.1"\nPort = 9\nPassword = "never-connect-two"\n'
-    )
     fixture.replace_response(synthetic_inventory)
     latest_url = url + "?coalesce=latest"
     ui.type_source(latest_url)
@@ -674,7 +694,35 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         fixture.release_responses()
         raise NativeUIJourneyError("a stale Connect action remained enabled while a replacement inventory was loading")
     checks["loading_disables_stale_actions"] = True
-    fixture.release_responses()
+    fixture.release_one_response()
+    deadline = time.monotonic() + timeout
+    stale_guard = {}
+    while time.monotonic() < deadline:
+        stale_response_stats = stats()
+        if (stale_response_stats["subscription_gets"] == before_coalesced + 2
+                and stale_response_stats["in_flight_gets"] == 1):
+            stale_guard = base._snapshot(
+                min(timeout, 30), "NATIVE_STALE_RESPONSE_STATUS_FAILED"
+            )
+            break
+        if stale_response_stats["subscription_gets"] > before_coalesced + 2:
+            fixture.release_responses()
+            raise NativeUIJourneyError("stale response gate observed an unexpected duplicate subscription request")
+        time.sleep(0.025)
+    else:
+        fixture.release_responses()
+        raise NativeUIJourneyError("latest subscription did not remain held after releasing only the stale response")
+    try:
+        require_active_generation(stale_guard, switched, "the stale subscription response changed the active tunnel")
+        if stale_guard.get("source_url") != typed_url or stale_guard.get("digest") != initial.get("digest"):
+            raise NativeUIJourneyError(
+                "the stale subscription response became the current backend inventory before the latest response completed"
+            )
+        stale_view = ui.snapshot()
+        if any("Stale intermediate profile" in str(label) for label in stale_view.get("labels", [])):
+            raise NativeUIJourneyError("the stale subscription response was rendered as the current profile inventory")
+    finally:
+        fixture.release_responses()
     latest = wait_for_snapshot(
         lambda value: value.get("source_url") == latest_url and value.get("digest") != initial.get("digest"),
         "the newest coalesced subscription was not accepted",
@@ -693,6 +741,16 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         "outline" in str(label).casefold() for label in labels
     ):
         raise NativeUIJourneyError("rendered profile rows lost source order, protocol, or the empty-description fallback")
+    if ui.platform == "windows":
+        expected_windows_rows = {
+            f"Profile 1 · {latest['profiles'][0].get('protocol', '')}",
+            f"Latest second profile · {latest['profiles'][1].get('protocol', '')}",
+        }
+        if not expected_windows_rows.issubset(set(labels)):
+            raise NativeUIJourneyError(
+                "a rendered Windows profile row did not retain its own protocol label: "
+                f"expected={sorted(expected_windows_rows)} labels={labels}"
+            )
     if not {"Profile 1 action", "Profile 2 action"}.issubset(set(labels)):
         raise NativeUIJourneyError("rendered profile rows did not expose both manual Connect controls")
     active_description = (switched.get("active_profile") or {}).get("description", "")
@@ -744,11 +802,24 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         )
         for link in invalid_links:
             before_invalid = base._snapshot(min(timeout, 30), "NATIVE_INVALID_IMPORT_STATUS_FAILED")
+            before_invalid_gets = stats()["subscription_gets"]
+            before_invalid_logs = ui._call("logs").get("text", "")
             ui.open_deep_link(link)
+            wait_for_logs(
+                lambda text: text != before_invalid_logs,
+                "invalid native deep link did not produce a new rendered diagnostic",
+            )
             ui._wait(
                 lambda: any("Use dobbyvpn://import?url=" in str(label) for label in ui.snapshot()["labels"]),
                 "invalid native deep link did not show actionable guidance",
             )
+            time.sleep(0.45)
+            after_invalid_stats = stats()
+            if (after_invalid_stats["subscription_gets"] != before_invalid_gets
+                    or after_invalid_stats["in_flight_gets"] != 0):
+                raise NativeUIJourneyError(
+                    f"invalid deep link started a subscription GET: {link}; stats={after_invalid_stats}"
+                )
             after_invalid = base._snapshot(min(timeout, 30), "NATIVE_INVALID_IMPORT_STATUS_FAILED")
             require_active_generation(after_invalid, before_invalid, "an invalid deep link changed the active connection")
             if after_invalid.get("source_url") != before_invalid.get("source_url") or after_invalid.get("digest") != before_invalid.get("digest"):
@@ -922,11 +993,13 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             ui.close,
         )
         checks["close_window"] = True
+        cold_url = url + "?cold=1"
         _native_ui_action(
-            ui, "reopen", "window-reopen", request_timeout,
-            ui.reopen, milestone="reopened",
+            ui, "cold-scheme-open", "cold-scheme-open", request_timeout,
+            lambda: ui.cold_deep_link(cold_url), milestone="reopened",
         )
         checks["reopen_connected"] = True
+        checks["cold_os_scheme_launch"] = True
         cleared_record = getattr(ui, "cleared_record", None)
         if not isinstance(cleared_record, str) or not cleared_record:
             raise NativeUIJourneyError("the native Clear action did not preserve an identifiable prior log record")
@@ -934,7 +1007,6 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if cleared_record in reopened_logs:
             raise NativeUIJourneyError("Clear restored a prior rendered record after frontend reopen")
         checks["clear_boundary_survives_reopen"] = True
-        cold_url = url + "?cold=1"
         deadline = time.monotonic() + request_timeout
         while time.monotonic() < deadline:
             reopened = base._snapshot(min(30.0, max(0.1, deadline - time.monotonic())), "NATIVE_IMPORT_STATUS_FAILED")

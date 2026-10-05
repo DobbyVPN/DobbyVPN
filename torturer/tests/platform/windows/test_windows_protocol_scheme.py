@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 import sys
@@ -23,6 +24,7 @@ DESKTOP_SHUTDOWN_TEST = PRODUCT_ROOT / "core/clientserver/executor/process_test.
 TORTURER_ROOT = PRODUCT_ROOT / "torturer"
 if str(TORTURER_ROOT) not in sys.path:
     sys.path.insert(0, str(TORTURER_ROOT))
+from torturer_runner import local_vm, local_vm_windows  # noqa: E402
 from torturer_runner.ui import smoke  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("dobbyvpn_installer_migration_test", MIGRATION_PATH)
@@ -43,6 +45,33 @@ class _RecordingRunner:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_cold_deep_link_uses_windows_shell_only_when_ui_is_stopped(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller.platform = "windows"
+        controller.process = None
+        controller.launch_count = 1
+        controller.window_id = "old-window"
+        controller.last_window_readiness = {"old": True}
+        controller._timeout = 10.0
+        controller._deadline = None
+        controller._alive = mock.Mock(return_value=False)
+        controller._call = mock.Mock(return_value={"ready": True})
+        controller._wait = mock.Mock(side_effect=lambda predicate, _message: self.assertTrue(predicate()))
+        controller.snapshot = mock.Mock(return_value={"labels": ["Connection configuration"]})
+        controller.wait_status = mock.Mock(return_value={"status": "Connected"})
+
+        with mock.patch("os.startfile", create=True) as startfile:
+            result = controller.cold_deep_link("https://example.invalid/subscription?source=one/two")
+
+        self.assertEqual(result, {"status": "Connected"})
+        startfile.assert_called_once_with(
+            "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fsubscription%3Fsource%3Done%2Ftwo"
+        )
+        controller._call.assert_not_called()
+        self.assertEqual(controller.launch_count, 2)
+        self.assertIsNone(controller.window_id)
+        self.assertIsNone(controller.last_window_readiness)
+
     def test_secondary_instance_awaits_activation_redirection_without_blocking_sta(self) -> None:
         source = WINDOWS_PROGRAM.read_text(encoding="utf-8")
 
@@ -70,6 +99,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'WaitForPasteAvailability(false, "empty");',
             'WaitForPasteAvailability(false, "non-text");',
             'WaitForPasteAvailability(true, "text");',
+            'pasteInvokedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();',
+            'paste_invoked_at_unix_ms = pasteInvokedAtUnixMs',
             'new[] { "Connection configuration", "VPN connection action", "Profile 1 action", "Profile 2 action", "Backend logs" }',
             '[DllImport("user32.dll", SetLastError = true)]\n    private static extern bool SetWindowPos(',
             '[DllImport("user32.dll")]\n    private static extern bool EnumThreadWindows(',
@@ -105,6 +136,155 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
         self.assertNotIn(".Current.CanResize", source)
+
+    def test_native_ui_helper_reports_log_scroll_position(self) -> None:
+        source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
+
+        for assertion in (
+            'if (operation == "log-position")',
+            'Find("Backend logs")',
+            'scroll.Current.VerticalScrollPercent',
+            'vertical_scroll_percent = position',
+        ):
+            with self.subTest(assertion=assertion):
+                self.assertIn(assertion, source)
+
+    def test_windows_paste_controller_retains_helper_invocation_time(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller.platform = "windows"
+        controller.profile = Path("C:/run/source.url")
+        controller._call = mock.Mock(return_value={
+            "ready": True,
+            "paste_invoked_at_unix_ms": 123456,
+        })
+        controller.snapshot = mock.Mock(return_value={"labels": ["Profile 1 action"]})
+
+        result = controller.paste_source()
+
+        self.assertEqual(result, {"labels": ["Profile 1 action"]})
+        self.assertEqual(controller.last_paste_invoked_at_unix_ms, 123456)
+        controller._call.assert_called_once_with("paste", source="C:/run/source.url")
+
+    def test_native_ui_findall_probe_targets_the_visible_control_and_flushes_markers(self) -> None:
+        source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
+
+        for assertion in (
+            'var traceFindAllProbe = operation == "findall-probe";',
+            'const string automationId = "Connection configuration";',
+            'TracePhase("uia-findall-probe-root-complete")',
+            'TracePhase("uia-findall-probe-start automationId=Connection configuration");',
+            'Console.Error.Flush();',
+            'root.FindAll(TreeScope.Subtree, new AndCondition(',
+            'new PropertyCondition(AutomationElement.AutomationIdProperty, automationId),',
+            'new PropertyCondition(AutomationElement.IsOffscreenProperty, false),',
+            'new PropertyCondition(AutomationElement.IsControlElementProperty, true)));',
+            'TracePhase($"uia-findall-probe-complete count={matches.Count}");',
+            'findAllCount = matches.Count',
+        ):
+            with self.subTest(assertion=assertion):
+                self.assertIn(assertion, source)
+
+    def test_windows_uia_findall_probe_is_opt_in_before_initial_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "NativeUI.exe"
+            helper.touch()
+            calls: list[str] = []
+            controller = smoke.NativeUIController(
+                "windows",
+                root / "DobbyVPN.exe",
+                root / "profile.txt",
+                30,
+                helper=helper,
+                screenshot_dir=root / "screenshots",
+            )
+            controller._alive = mock.Mock(return_value=False)
+
+            def call(operation: str, **_fields: object) -> dict[str, object]:
+                calls.append(operation)
+                if operation == "probe":
+                    controller.pid = 42
+                    controller.identity = "candidate-ui-instance"
+                    return {"alive": True, "pid": 42, "identity": controller.identity}
+                return {}
+
+            controller._call = call  # type: ignore[method-assign]
+
+            def snapshot() -> dict[str, object]:
+                calls.append("snapshot")
+                return {"status": "Disconnected", "labels": ["Connection configuration"]}
+
+            controller.snapshot = mock.Mock(side_effect=snapshot)
+            controller.capture = mock.Mock(return_value={})
+            launcher = mock.Mock(pid=42)
+            launcher.poll.return_value = None
+
+            with (
+                mock.patch.dict(os.environ, {"DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE": "1"}),
+                mock.patch.object(smoke.subprocess, "Popen", return_value=launcher),
+            ):
+                controller.start()
+
+        self.assertEqual(calls, ["probe", "findall-probe", "snapshot", "focus", "snapshot"])
+        self.assertEqual(controller.snapshot.call_count, 2)
+
+    def test_windows_uia_findall_probe_flag_requires_explicit_configuration(self) -> None:
+        flag = "DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE"
+        with mock.patch.dict(os.environ, {}, clear=True):
+            environment = local_vm._native_ui_environment("windows", {})
+            macos_environment = local_vm._native_ui_environment("macos", {})
+        self.assertNotIn(flag, environment)
+        self.assertNotIn(flag, macos_environment)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cwd = root / "cwd"
+            cwd.mkdir()
+            with mock.patch.dict(os.environ, {flag: "1"}, clear=True):
+                environment = local_vm._native_ui_environment("windows", {})
+            self.assertEqual(environment, {flag: "1"})
+            wrapper = local_vm_windows._native_ui_wrapper(
+                [sys.executable, "-m", "torturer_runner.ui.journey"],
+                cwd=cwd,
+                environment=environment,
+                stdout=root / "stdout.log",
+                stderr=root / "stderr.log",
+                pid=root / "task.pid",
+                child_pid=root / "child.pid",
+                exit_code=root / "task.exit",
+            )
+        self.assertIn(f"$info.EnvironmentVariables['{flag}'] = '1'", wrapper)
+        self.assertIn(flag, local_vm_windows._NATIVE_UI_ENVIRONMENT)
+
+    def test_windows_uia_findall_probe_uses_the_existing_helper_timeout_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "NativeUI.exe"
+            helper.touch()
+            controller = smoke.NativeUIController(
+                "windows",
+                root / "DobbyVPN.exe",
+                root / "profile.txt",
+                30,
+                helper=helper,
+                screenshot_dir=root / "screenshots",
+            )
+            completed = subprocess.CompletedProcess(
+                [str(helper)], 0, b'{"ready":true,"findAllCount":1}', b""
+            )
+            with (
+                mock.patch.object(
+                    smoke, "_windows_job_capture_callbacks",
+                    return_value=(mock.Mock(), mock.Mock(), mock.Mock()),
+                ),
+                mock.patch.object(smoke, "_native_run", return_value=completed) as run,
+            ):
+                response = controller._call("findall-probe")
+
+        self.assertEqual(response["findAllCount"], 1)
+        self.assertEqual(run.call_args.kwargs["timeout_seconds"], 10.0)
+        request = json.loads(run.call_args.kwargs["input_bytes"])
+        self.assertEqual(request["operation"], "findall-probe")
 
     def test_windows_native_ui_retains_window_readiness_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

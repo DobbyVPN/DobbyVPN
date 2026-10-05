@@ -15,6 +15,9 @@
 		A15F0FEA2D874D38007FA45D /* IOSIntegration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; settings = {ATTRIBUTES = (Required, ); }; };
 		D7A8C9B0E1F2435A0061FABD /* libresolv.9.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = D7A8C9B0E1F2435A0061FABC /* libresolv.9.tbd */; };
 		E00000000000000000000002 /* NativeUIInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000001 /* NativeUIInteractionTests.swift */; };
+		E0000000000000000000000D /* NativeRendererInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000B /* NativeRendererInteractionTests.swift */; };
+		E0000000000000000000000E /* NativeRendererTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000C /* NativeRendererTestSupport.swift */; };
+		F2000000000000000000001A /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
 		F20000000000000000000001 /* IOSIntegration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; };
 		F20000000000000000000002 /* IOSIntegration.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F20000000000000000000003 /* tunnel.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A120139F2D80DE3100D43A3A /* tunnel.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -85,6 +88,8 @@
 		AB3632DC29227652001CCB65 /* Config.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 		E00000000000000000000001 /* NativeUIInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeUIInteractionTests.swift; sourceTree = "<group>"; };
 		E00000000000000000000003 /* iosAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E0000000000000000000000B /* NativeRendererInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRendererInteractionTests.swift; sourceTree = "<group>"; };
+		E0000000000000000000000C /* NativeRendererTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRendererTestSupport.swift; sourceTree = "<group>"; };
 		F10000000000000000000002 /* NativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeApp.swift; sourceTree = "<group>"; };
 		F10000000000000000000003 /* IOSSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSessionClient.swift; sourceTree = "<group>"; };
 		F10000000000000000000004 /* DobbySessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbySessionClient.swift; sourceTree = "<group>"; };
@@ -263,6 +268,8 @@
 			isa = PBXGroup;
 			children = (
 				E00000000000000000000001 /* NativeUIInteractionTests.swift */,
+				E0000000000000000000000B /* NativeRendererInteractionTests.swift */,
+				E0000000000000000000000C /* NativeRendererTestSupport.swift */,
 			);
 			path = tests;
 			sourceTree = "<group>";
@@ -526,6 +533,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				E00000000000000000000002 /* NativeUIInteractionTests.swift in Sources */,
+				E0000000000000000000000D /* NativeRendererInteractionTests.swift in Sources */,
+				E0000000000000000000000E /* NativeRendererTestSupport.swift in Sources */,
+				F2000000000000000000001A /* DobbyShareSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

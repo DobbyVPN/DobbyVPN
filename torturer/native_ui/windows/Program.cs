@@ -356,10 +356,13 @@ internal static class Program
                 return 0;
             }
             var traceTree = operation == "tree";
+            var traceFindAllProbe = operation == "findall-probe";
             if (traceTree) TracePhase($"tree-window-discovery-start pid={process.Id}");
+            if (traceFindAllProbe) TracePhase($"uia-findall-probe-window-discovery-start pid={process.Id}");
             process.Refresh();
             var window = process.MainWindowHandle;
             if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
+            if (traceFindAllProbe) TracePhase($"uia-findall-probe-window-discovery-complete hwnd=0x{window.ToInt64():X}");
             var visible = window != IntPtr.Zero && IsWindowVisible(window);
             var minimized = window != IntPtr.Zero && IsIconic(window);
             if (!visible || minimized)
@@ -386,8 +389,24 @@ internal static class Program
             GetWindowThreadProcessId(window, out var owner);
             if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
             if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
+            if (traceFindAllProbe) TracePhase($"uia-findall-probe-root-start hwnd=0x{window.ToInt64():X}");
             var root = AutomationElement.FromHandle(window);
             if (traceTree) TracePhase("tree-uia-root-complete");
+            if (traceFindAllProbe) TracePhase("uia-findall-probe-root-complete");
+            if (traceFindAllProbe)
+            {
+                const string automationId = "Connection configuration";
+                TracePhase("uia-findall-probe-start automationId=Connection configuration");
+                var matches = root.FindAll(TreeScope.Subtree, new AndCondition(
+                    new PropertyCondition(AutomationElement.AutomationIdProperty, automationId),
+                    new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
+                    new PropertyCondition(AutomationElement.IsControlElementProperty, true)));
+                TracePhase($"uia-findall-probe-complete count={matches.Count}");
+                Console.WriteLine(JsonSerializer.Serialize(new {
+                    ready = true, pid = process.Id, identity, findAllCount = matches.Count
+                }));
+                return 0;
+            }
             AutomationElement Find(string name, bool editor = false, bool actionable = false)
             {
                 AutomationElementCollection FindBy(AutomationProperty property)
@@ -494,6 +513,20 @@ internal static class Program
                 Console.WriteLine(JsonSerializer.Serialize(new { ready = true, selected }));
                 return 0;
             }
+            if (operation == "log-position")
+            {
+                var logRoot = Find("Backend logs");
+                if (!logRoot.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
+                    throw new InvalidOperationException("Native log viewer does not expose scrolling");
+                var scroll = (ScrollPattern)scrollPattern;
+                var position = scroll.Current.VerticalScrollPercent;
+                if (position < 0)
+                    throw new InvalidOperationException("Native log viewer does not expose a vertical scroll position");
+                Console.WriteLine(JsonSerializer.Serialize(new {
+                    ready = true, vertical_scroll_percent = position
+                }));
+                return 0;
+            }
             if (operation == "scroll-logs")
             {
                 var position = Text("position");
@@ -557,6 +590,7 @@ internal static class Program
                 }));
                 return 0;
             }
+            long? pasteInvokedAtUnixMs = null;
             switch (operation)
             {
                 case "focus":
@@ -714,6 +748,7 @@ internal static class Program
                         if (!pasteButton.TryGetCurrentPattern(InvokePattern.Pattern, out var pasteInvoke))
                             throw new InvalidOperationException("Native Paste button has no invoke action");
                         TracePhase("paste-invoke-button");
+                        pasteInvokedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                         ((InvokePattern)pasteInvoke).Invoke();
                         TracePhase("paste-verify-field");
                         var valueWait = Stopwatch.StartNew();
@@ -760,7 +795,8 @@ internal static class Program
             }
             Console.WriteLine(JsonSerializer.Serialize(new {
                 ready = true, pid = process.Id, identity,
-                labels = Array.Empty<string>()
+                labels = Array.Empty<string>(),
+                paste_invoked_at_unix_ms = pasteInvokedAtUnixMs
             }));
             return 0;
         }

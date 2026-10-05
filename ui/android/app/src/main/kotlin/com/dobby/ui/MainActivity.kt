@@ -722,7 +722,6 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         if (state.logsError.isNotEmpty()) {
             Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
         }
-        Text("Recent logs. Shared diagnostics include the complete files.", style = MaterialTheme.typography.labelSmall)
         AndroidView(
             factory = { controller.createLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),

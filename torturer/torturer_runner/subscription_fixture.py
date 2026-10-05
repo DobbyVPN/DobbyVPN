@@ -17,6 +17,7 @@ import socketserver
 import ssl
 import tempfile
 import threading
+import time
 import uuid
 from urllib.parse import urlsplit
 import urllib.request
@@ -71,10 +72,12 @@ class SubscriptionFixture:
         self.profile_bytes = b""
         self.control_condition = threading.Condition()
         self.subscription_gets = 0
+        self.last_subscription_get_started_at_unix_ms = 0
         self.in_flight_gets = 0
         self.max_in_flight_gets = 0
         self.fail_next_gets = 0
         self.hold_gets = False
+        self.release_permits = 0
 
     def start(self) -> str:
         self.directory.mkdir(parents=True, exist_ok=False)
@@ -163,11 +166,14 @@ class SubscriptionFixture:
     def _serve_subscription(self, request: http.server.BaseHTTPRequestHandler) -> None:
         with self.control_condition:
             self.subscription_gets += 1
+            self.last_subscription_get_started_at_unix_ms = time.time_ns() // 1_000_000
             self.in_flight_gets += 1
             self.max_in_flight_gets = max(self.max_in_flight_gets, self.in_flight_gets)
             content = self.profile_bytes
-            while self.hold_gets:
+            while self.hold_gets and self.release_permits == 0:
                 self.control_condition.wait()
+            if self.hold_gets:
+                self.release_permits -= 1
             failed = self.fail_next_gets > 0
             if failed:
                 self.fail_next_gets -= 1
@@ -195,6 +201,7 @@ class SubscriptionFixture:
             with self.control_condition:
                 state = {
                     "subscription_gets": self.subscription_gets,
+                    "last_subscription_get_started_at_unix_ms": self.last_subscription_get_started_at_unix_ms,
                     "in_flight_gets": self.in_flight_gets,
                     "max_in_flight_gets": self.max_in_flight_gets,
                 }
@@ -208,6 +215,7 @@ class SubscriptionFixture:
         if request.command != "POST" or path not in {
             self.control_path + "/profile",
             self.control_path + "/hold",
+            self.control_path + "/release-one",
             self.control_path + "/release",
             self.control_path + "/fail-next",
         }:
@@ -232,8 +240,15 @@ class SubscriptionFixture:
                 self.profile_bytes = body
             elif path == self.control_path + "/hold":
                 self.hold_gets = True
+            elif path == self.control_path + "/release-one":
+                if not self.hold_gets:
+                    request.send_error(409, "Fixture responses are not held")
+                    return
+                self.release_permits += 1
+                self.control_condition.notify_all()
             elif path == self.control_path + "/release":
                 self.hold_gets = False
+                self.release_permits = 0
                 self.control_condition.notify_all()
             else:
                 self.fail_next_gets += 1
@@ -267,6 +282,9 @@ class SubscriptionFixture:
 
     def release_responses(self) -> None:
         self._control_request("/release", body=b"")
+
+    def release_one_response(self) -> None:
+        self._control_request("/release-one", body=b"")
 
     def fail_next_response(self) -> None:
         self._control_request("/fail-next", body=b"")
@@ -317,6 +335,7 @@ class SubscriptionFixture:
         errors: list[BaseException] = []
         with self.control_condition:
             self.hold_gets = False
+            self.release_permits = 0
             self.control_condition.notify_all()
         if self.server is not None:
             if self.thread is not None:

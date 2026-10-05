@@ -373,6 +373,7 @@ class InformationRetentionTests(unittest.TestCase):
             controller.configure.return_value = {"input_verified": True}
             controller.connect.return_value = {"status": "Connected"}
             controller.disconnect.return_value = {"status": "Disconnected"}
+            controller.cold_deep_link.return_value = {"status": "Connected"}
             controller.about.side_effect = lambda: (
                 controller.capture("about"),
                 {"about_version": True, "about_source_commit": True},
@@ -420,6 +421,9 @@ class InformationRetentionTests(unittest.TestCase):
                 "startup", "configured", "connected", "disconnected", "reconnected",
                 "about", "reopened", "process-recovered",
             }.issubset(milestones))
+            controller.cold_deep_link.assert_called_once_with(
+                "https://127.0.0.1:12345/subscription?cold=1"
+            )
 
     def test_simulator_second_timeout_streams_reach_primary_failure(self) -> None:
         initial_stdout = b"initial\x00\xff"
@@ -538,8 +542,8 @@ class InformationRetentionTests(unittest.TestCase):
             initial = "2026 · INFO · Backend\nready\nDetails\n"
             log_texts = iter((initial, initial, initial, initial + "new record\n", ""))
             positions = iter((
-                {"visible_range_start": 0},
-                {"visible_range_start": 0},
+                {"visible_range_start": 0, "visible_range_end": 100},
+                {"visible_range_start": 0, "visible_range_end": 100},
             ))
             operations: list[str] = []
 
@@ -570,6 +574,48 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertIn("select-log-text", operations)
             self.assertIn("log-position", operations)
             self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
+
+    def test_windows_clear_rejects_a_reading_position_change_while_frozen(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            profile = root / "profile.txt"
+            profile.write_text("https://example.invalid/subscription", encoding="utf-8")
+            controller = object.__new__(native_ui_smoke.NativeUIController)
+            controller.platform = "windows"
+            controller.profile = profile
+            controller.cleared_record = None
+            structured = "2026 · INFO · Backend · ready"
+            initial = structured + "\nDetails\n"
+            log_texts = iter((initial, initial, initial))
+            positions = iter((0.0, 25.0))
+
+            def call(operation: str, **fields: object) -> dict:
+                if operation == "logs":
+                    return {
+                        "ready": True,
+                        "text": next(log_texts),
+                        "entries": [{"text": structured, "foreground": 0}],
+                        "expansion_verified": True,
+                        "expanded_record": '{"message":"ready"}',
+                    }
+                if operation == "select-log-text":
+                    return {"ready": True, "selected": structured}
+                if operation == "log-position":
+                    return {"ready": True, "vertical_scroll_percent": next(positions)}
+                return {"ready": True}
+
+            def wait(predicate, message: str) -> None:
+                if not predicate():
+                    raise AssertionError(message)
+
+            controller._call = call
+            controller._wait = wait
+            controller._click = lambda _name: None
+            controller.failing_subscription = lambda _url: {}
+            controller.snapshot = lambda: {"status": "Disconnected"}
+
+            with self.assertRaisesRegex(native_ui_smoke.NativeUISmokeError, "reading position changed"):
+                controller.clear_logs()
 
     def test_native_windows_helper_uses_existing_job_boundary(self) -> None:
         process = mock.Mock()

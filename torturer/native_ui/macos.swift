@@ -576,8 +576,26 @@ func run() throws -> [String: Any] {
                             Thread.sleep(forTimeInterval: 0.05)
                         }
                     }
-                } else if accessibilitySetStatus == "not-settable" {
-                    accessibilitySetStatus = "scrollbar-min-max-unavailable"
+                } else {
+                    let targetValue = position == "top" ? 0.0 : 1.0
+                    let setResult = AXUIElementSetAttributeValue(
+                        scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
+                    )
+                    let limitStatus = accessibilitySetStatus == "not-settable"
+                        ? "scrollbar-min-max-unavailable"
+                        : accessibilitySetStatus
+                    accessibilitySetStatus =
+                        "\(limitStatus) normalized-endpoint-set-result=\(setResult.rawValue) value=\(targetValue)"
+                    if setResult == .success {
+                        for _ in 0..<10 {
+                            range = try checkedVisibleRange()
+                            if isAtTarget(range) {
+                                reached = true
+                                break
+                            }
+                            Thread.sleep(forTimeInterval: 0.05)
+                        }
+                    }
                 }
             } else {
                 accessibilitySetStatus = "settable-check=\(settableResult.rawValue) settable=\(settable.boolValue)"

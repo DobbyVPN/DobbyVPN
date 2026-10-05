@@ -355,13 +355,20 @@ extension DiagnosticsTests {
         let preview = DiagnosticFiles.entries(paths: [backend, stderr], boundary: boundary)
         XCTAssertTrue(preview.error.isEmpty)
         XCTAssertEqual(preview.entries.map(\.message), ["Stderr capture initialized", "later", "raw stack", "  frame", "{not-json}", rawJSON])
-        for rawEntry in preview.entries.suffix(4) {
+        let rawEntries = preview.entries.suffix(4)
+        for rawEntry in rawEntries.dropLast() {
             XCTAssertEqual(rawEntry.timestamp, "")
             XCTAssertNil(rawEntry.date)
             XCTAssertEqual(rawEntry.level, "RAW")
             XCTAssertEqual(rawEntry.source, "Tunnel stderr")
             XCTAssertEqual(rawEntry.raw, rawEntry.message)
         }
+        let jsonLikeRaw = try XCTUnwrap(rawEntries.last)
+        XCTAssertEqual(jsonLikeRaw.timestamp, "")
+        XCTAssertNil(jsonLikeRaw.date)
+        XCTAssertEqual(jsonLikeRaw.level, "RAW")
+        XCTAssertEqual(jsonLikeRaw.source, "Tunnel stderr")
+        XCTAssertEqual(jsonLikeRaw.raw, rawJSON)
         let capture = preview.entries[0]
         XCTAssertEqual(capture.timestamp, "2026-10-04T10:00:01Z")
         XCTAssertNotNil(capture.date)
@@ -398,18 +405,30 @@ extension DiagnosticsTests {
         try Data((backendRecord + "\n").utf8).write(to: backend)
         try Data((tunnelRecord + "\n").utf8).write(to: tunnel)
 
-        let first = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary).entries
-        let second = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary).entries
+        let firstRead = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary)
+        let secondRead = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary)
+        XCTAssertTrue(firstRead.error.isEmpty)
+        XCTAssertTrue(secondRead.error.isEmpty)
+        let first = firstRead.entries
+        let second = secondRead.entries
         XCTAssertEqual(first.map(\.message), ["backend", "tunnel"])
-        XCTAssertEqual(second.map(\.message), ["backend", "tunnel"])
+        XCTAssertEqual(first.map(\.timestamp), [timestamp, timestamp])
+        XCTAssertEqual(first.map(\.source), ["Backend", "Tunnel"])
+        XCTAssertNotNil(first[0].date)
+        XCTAssertEqual(first[0].date, first[1].date)
+        XCTAssertEqual(second.map(\.message), first.map(\.message))
+        XCTAssertEqual(second.map(\.source), first.map(\.source))
         XCTAssertEqual(first.map(\.id), second.map(\.id))
 
         let append = try FileHandle(forWritingTo: backend)
         try append.seekToEnd()
         try append.write(contentsOf: Data((#"{"timestamp":"\#(timestamp)","level":"INFO","message":"backend second"}"# + "\n").utf8))
         try append.close()
-        let afterAppend = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary).entries
+        let appendedRead = DiagnosticFiles.entries(paths: [backend, tunnel], boundary: boundary)
+        XCTAssertTrue(appendedRead.error.isEmpty)
+        let afterAppend = appendedRead.entries
         XCTAssertEqual(afterAppend.map(\.message), ["backend", "backend second", "tunnel"])
+        XCTAssertEqual(afterAppend.map(\.source), ["Backend", "Backend", "Tunnel"])
         XCTAssertEqual(afterAppend[0].id, first[0].id)
         XCTAssertEqual(afterAppend[2].id, first[1].id)
         XCTAssertNotEqual(afterAppend[1].id, first[0].id)
@@ -423,23 +442,38 @@ extension DiagnosticsTests {
         let boundary = directory.appendingPathComponent("view.json")
         let record = #"{"timestamp":"2026-10-04T10:00:01Z","level":"INFO","message":"completed record"}"#
         try Data(String(record.dropLast()).utf8).write(to: file)
-        XCTAssertTrue(DiagnosticFiles.entries(paths: [file], boundary: boundary).entries.isEmpty)
+        let incompleteRead = DiagnosticFiles.entries(paths: [file], boundary: boundary)
+        XCTAssertTrue(incompleteRead.error.isEmpty)
+        XCTAssertTrue(incompleteRead.entries.isEmpty)
 
         let writer = try FileHandle(forWritingTo: file)
         try writer.seekToEnd()
         try writer.write(contentsOf: Data((String(record.suffix(1)) + "\n").utf8))
         try writer.write(contentsOf: Data("partial ".utf8) + Data([0xCE]))
         try writer.close()
-        let partial = DiagnosticFiles.entries(paths: [file], boundary: boundary).entries
+        let partialRead = DiagnosticFiles.entries(paths: [file], boundary: boundary)
+        XCTAssertTrue(partialRead.error.isEmpty)
+        let partial = partialRead.entries
         XCTAssertEqual(partial.map(\.message), ["completed record", "partial "])
+        XCTAssertEqual(partial[0].timestamp, "2026-10-04T10:00:01Z")
+        XCTAssertNotNil(partial[0].date)
+        XCTAssertEqual(partial[0].level, "INFO")
+        XCTAssertEqual(partial[0].source, "Backend")
+        XCTAssertEqual(partial[0].raw, record)
+        XCTAssertEqual(partial[1].timestamp, "")
+        XCTAssertNil(partial[1].date)
+        XCTAssertEqual(partial[1].level, "RAW")
         let partialID = try XCTUnwrap(partial.last?.id)
 
         let continuation = try FileHandle(forWritingTo: file)
         try continuation.seekToEnd()
         try continuation.write(contentsOf: Data([0xBB, 0x0A]))
         try continuation.close()
-        let completed = DiagnosticFiles.entries(paths: [file], boundary: boundary).entries
+        let completedRead = DiagnosticFiles.entries(paths: [file], boundary: boundary)
+        XCTAssertTrue(completedRead.error.isEmpty)
+        let completed = completedRead.entries
         XCTAssertEqual(completed.map(\.message), ["completed record", "partial λ"])
+        XCTAssertEqual(completed.first, partial.first)
         XCTAssertEqual(completed.last?.id, partialID)
     }
 }

@@ -13,6 +13,8 @@ import android.graphics.drawable.AdaptiveIconDrawable
 import android.os.Build
 import android.os.Bundle
 import android.net.Uri
+import android.text.Spannable
+import android.text.Selection
 import android.view.WindowInsets
 import android.view.View
 import android.view.ViewGroup
@@ -131,6 +133,7 @@ class NativeUiInstrumentedTest {
 
         waitForOneOf(arrayOf("Disconnected"), 30_000)
         requireObject(connectionActionLabel)
+        verifyURLOnlyConnectionSurface()
         captureScreenshot("startup")
         captureInstalledLauncherArtwork()
         verifyAboutMetadata()
@@ -172,6 +175,7 @@ class NativeUiInstrumentedTest {
         }
         // Incomplete or invalid URLs must leave Connect disabled without fetching.
         dismissNativeInputAfterTextEntry()
+        verifyURLOnlyConnectionSurface()
         verifyLogThemeColors()
 
         verifyLogScrollingAndClear()
@@ -629,13 +633,19 @@ class NativeUiInstrumentedTest {
         val frozen = requireObject("Connection logs").text
         val frozenScrollY = logScrollY()
         check(frozenScrollY > 0) { "ANDROID_LOG_FREEZE_POSITION_NOT_CAPTURED " + logGeometry() }
+        val selectedText = selectVisibleLogText()
         val pending = "$prefix-pending"
         NativeVpnBridge.recordDiagnostic(context, "ui.test.scroll.pending", pending)
         // Two foreground refresh intervals must not change a frozen reader.
         Thread.sleep(1_600)
         check(requireObject("Connection logs").text == frozen
                 && kotlin.math.abs(logScrollY() - frozenScrollY) <= 2) {
-            "ANDROID_LOG_SCROLL_POSITION_NOT_FROZEN " + logGeometry()
+            "ANDROID_LOG_SCROLL_POSITION_CHANGED_AFTER_SELECTION selected=$selectedText " + logGeometry()
+        }
+        instrumentation.runOnMainSync {
+            val text = connectionLogTextView().text as? Spannable
+                ?: error("ANDROID_LOG_TEXT_NOT_SPANNABLE_AFTER_SELECTION")
+            Selection.removeSelection(text)
         }
 
         instrumentation.runOnMainSync { MainActivity.current?.recreate() }
@@ -677,6 +687,69 @@ class NativeUiInstrumentedTest {
         check(!reopened.contains("$prefix-0") && reopened.contains(afterClear)) {
             "ANDROID_CLEAR_BOUNDARY_DID_NOT_SURVIVE_ACTIVITY_REOPEN"
         }
+    }
+
+    private fun verifyURLOnlyConnectionSurface() {
+        val inputs = device.findObjects(By.clazz("android.widget.EditText").pkg(packageName))
+        check(inputs.size == 1) {
+            "ANDROID_CONNECTION_SCREEN_NOT_URL_ONLY input_count=${inputs.size}"
+        }
+        requireObject("Subscription URL")
+        val retiredControls = listOf(
+            "Load",
+            "Configuration text",
+            "Paste your configuration",
+            "Use subscription URL",
+            "Use configuration text…",
+            "Enter an HTTPS connection URL or inline configuration",
+            "Check your subscription URL or configuration. See logs for details.",
+            "Jump to latest",
+        )
+        val present = retiredControls.filter { waitForObject(it, 100) != null }
+        check(present.isEmpty()) { "ANDROID_RETIRED_CONNECTION_CONTROLS_VISIBLE $present" }
+    }
+
+    private fun selectVisibleLogText(): String {
+        val selected = arrayOfNulls<String>(1)
+        instrumentation.runOnMainSync {
+            val view = connectionLogTextView()
+            val text = view.text as? Spannable ?: error("ANDROID_LOG_TEXT_NOT_SPANNABLE")
+            val layout = view.layout ?: error("ANDROID_LOG_TEXT_LAYOUT_MISSING")
+            val viewport = view.parent as? View ?: error("ANDROID_LOG_SCROLL_VIEWPORT_MISSING")
+            val visible = Rect()
+            val viewportVisible = Rect()
+            check(view.getGlobalVisibleRect(visible) && viewport.getGlobalVisibleRect(viewportVisible)
+                    && visible.intersect(viewportVisible)) {
+                "ANDROID_LOG_TEXT_HAS_NO_VISIBLE_VIEWPORT"
+            }
+            val viewportLocation = IntArray(2)
+            viewport.getLocationOnScreen(viewportLocation)
+            val visibleContentTop = viewport.scrollY + visible.top - viewportLocation[1]
+            val visibleContentBottom = viewport.scrollY + visible.bottom - viewportLocation[1]
+            val textTop = view.top + view.extendedPaddingTop - view.scrollY
+            val scrollYBeforeSelection = viewport.scrollY
+            for (line in 0 until layout.lineCount) {
+                val lineTop = textTop + layout.getLineTop(line)
+                val lineBottom = textTop + layout.getLineBottom(line)
+                if (lineBottom <= visibleContentTop || lineTop >= visibleContentBottom) continue
+                val lineStart = layout.getLineStart(line)
+                val lineEnd = layout.getLineEnd(line)
+                val start = (lineStart until lineEnd).firstOrNull { !text[it].isWhitespace() } ?: continue
+                var end = start + 1
+                while (end < lineEnd && !text[end].isWhitespace()) end++
+                Selection.setSelection(text, start, end)
+                check(Selection.getSelectionStart(text) == start && Selection.getSelectionEnd(text) == end) {
+                    "ANDROID_LOG_TEXT_SELECTION_NOT_APPLIED"
+                }
+                check(viewport.scrollY == scrollYBeforeSelection) {
+                    "ANDROID_LOG_TEXT_SELECTION_MOVED_FROZEN_VIEW before=$scrollYBeforeSelection " +
+                        "after=${viewport.scrollY}"
+                }
+                selected[0] = text.subSequence(start, end).toString()
+                break
+            }
+        }
+        return checkNotNull(selected[0]) { "ANDROID_LOG_VISIBLE_LINE_SELECTION_FAILED" }
     }
 
     private fun logScrollY(): Int {

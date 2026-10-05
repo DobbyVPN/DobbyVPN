@@ -68,10 +68,16 @@ final class NativeUIInteractionTests: XCTestCase {
         let sentinelCount = occurrences(of: clearSentinel, in: logs.value as? String ?? "")
         app.buttons["Paste"].tap()
         XCTAssertTrue(waitForLogOccurrences(clearSentinel, atLeast: sentinelCount + 1, in: logs, timeout: 20))
+        let renderedBeforeClear = try XCTUnwrap(logs.value as? String)
+        let preClearRecords = renderedBeforeClear.components(separatedBy: "Details\n").filter { !$0.isEmpty }
+        XCTAssertFalse(preClearRecords.isEmpty, "There should be rendered records for Clear to remove")
         app.buttons["Clear"].tap()
-        let emptied = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", ""), object: logs)
-        XCTAssertEqual(XCTWaiter.wait(for: [emptied], timeout: 15), .completed,
-                       "Clear should leave the rendered log view empty")
+        let cleared = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
+            guard let logs = element as? XCUIElement, let rendered = logs.value as? String else { return false }
+            return preClearRecords.allSatisfy { !rendered.contains($0) }
+        }, object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 15), .completed,
+                       "Clear should remove every record that was rendered before the action")
         let configurationAfterClear = app.textFields["Connection configuration"]
         configurationAfterClear.tap()
         configurationAfterClear.typeText("x")
@@ -291,7 +297,14 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(details.waitForExistence(timeout: 10),
                       "The Paste validation record's Details control should be exposed by the log text view")
         XCTAssertEqual(details.label, "Details", "The Paste validation record should be collapsed before tapping")
-        XCTAssertTrue(details.isHittable, "The Paste validation Details control should be reachable at the log tail")
+        for _ in 0..<8 {
+            if details.isHittable { break }
+            let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.30))
+            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+            start.press(forDuration: 0.1, thenDragTo: end)
+        }
+        XCTAssertTrue(details.isHittable,
+                      "The selected Paste validation Details control should be reachable after scrolling its row into view")
         details.tap()
         let detailsExpanded = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label == %@", "Hide details"),
@@ -325,6 +338,16 @@ final class NativeUIInteractionTests: XCTestCase {
         configuration.tap()
         configuration.typeText("x")
         dismissConfigurationKeyboard()
+        let oldErrorCleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: errorStatus
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [oldErrorCleared], timeout: 5), .completed,
+                       "Editing the subscription should clear the prior Paste error before the refresh")
+        let positionAnchor = try XCTUnwrap(
+            firstHittableLogDetail(in: logs),
+            "A rendered log detail should anchor the reading position while the view is scrolled up"
+        )
+        let anchorOffsetBeforeRefresh = positionAnchor.frame.minY - logs.frame.minY
         paste.tap()
         XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
         let changedWhileScrolledUp = XCTNSPredicateExpectation(
@@ -333,6 +356,14 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(
             XCTWaiter.wait(for: [changedWhileScrolledUp], timeout: 1.5), .timedOut,
             "New records should not replace the rendered text while scrolled up"
+        )
+        XCTAssertTrue(positionAnchor.isHittable,
+                      "The same rendered log detail should remain visible after an update while scrolled up")
+        XCTAssertEqual(
+            positionAnchor.frame.minY - logs.frame.minY,
+            anchorOffsetBeforeRefresh,
+            accuracy: 2,
+            "A log refresh must preserve the visible reading position"
         )
 
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -444,5 +475,12 @@ final class NativeUIInteractionTests: XCTestCase {
             return self.occurrences(of: message, in: text) >= count
         }, object: logs)
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func firstHittableLogDetail(in logs: XCUIElement) -> XCUIElement? {
+        logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+            .allElementsBoundByIndex
+            .first(where: { $0.isHittable })
     }
 }

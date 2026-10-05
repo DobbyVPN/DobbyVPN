@@ -109,6 +109,8 @@ def _native_ui_environment(platform: str, runtime: dict[str, Any]) -> dict[str, 
         for name in _NATIVE_UI_HOST_ENVIRONMENT
         if isinstance((value := os.environ.get(name)), str)
     }
+    if platform == "windows" and os.environ.get("DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE") == "1":
+        environment["DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE"] = "1"
     runtime_environment = runtime.get("environment")
     if isinstance(runtime_environment, dict):
         environment.update({

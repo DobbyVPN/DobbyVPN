@@ -42,7 +42,12 @@ class SubscriptionFixtureTests(unittest.TestCase):
                     self.assertEqual(initial, response.read())
                 status, state = control()
                 self.assertEqual(200, status)
-                self.assertEqual({"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1}, json.loads(state))
+                initial_stats = json.loads(state)
+                self.assertEqual(
+                    {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                    {name: initial_stats[name] for name in ("subscription_gets", "in_flight_gets", "max_in_flight_gets")},
+                )
+                self.assertGreater(initial_stats["last_subscription_get_started_at_unix_ms"], 0)
 
                 with self.assertRaises(urllib.error.HTTPError) as denied:
                     control(key="incorrect-test-key")
@@ -86,11 +91,73 @@ class SubscriptionFixtureTests(unittest.TestCase):
                 self.assertEqual([(200, replacement)], outcome)
                 with urllib.request.urlopen(url + "?after-hold=1", context=context, timeout=5) as response:
                     self.assertEqual(after_hold, response.read())
+                final_stats = fixture.control_stats()
                 self.assertEqual(
                     {"subscription_gets": 6, "in_flight_gets": 0, "max_in_flight_gets": 1},
-                    fixture.control_stats(),
+                    {name: final_stats[name] for name in ("subscription_gets", "in_flight_gets", "max_in_flight_gets")},
                 )
+                self.assertGreater(final_stats["last_subscription_get_started_at_unix_ms"], 0)
             finally:
+                fixture.close()
+
+    def test_control_releases_one_held_response_and_keeps_the_next_held(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            profile = root / "profile.toml"
+            profile.write_bytes(b"[[Outline]]\nDescription = \"controlled\"\n")
+            fixture = SubscriptionFixture(profile, root / "fixture", "untrusted")
+            outcomes = []
+            threads = []
+            try:
+                url = fixture.start()
+                context = ssl.create_default_context(cafile=str(fixture.certificate))
+                fixture.hold_responses()
+
+                def held_get(suffix):
+                    try:
+                        with urllib.request.urlopen(url + suffix, context=context, timeout=5) as response:
+                            outcomes.append(response.read())
+                    except BaseException as error:
+                        outcomes.append(error)
+
+                threads = [
+                    threading.Thread(target=held_get, args=(f"?request={index}",))
+                    for index in range(2)
+                ]
+                for thread in threads:
+                    thread.start()
+
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    state = fixture.control_stats()
+                    if state["subscription_gets"] == 2 and state["in_flight_gets"] == 2:
+                        break
+                    time.sleep(0.01)
+                else:
+                    self.fail("both held subscription GETs did not become observable")
+
+                fixture.release_one_response()
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    state = fixture.control_stats()
+                    if len(outcomes) == 1 and state["in_flight_gets"] == 1:
+                        break
+                    time.sleep(0.01)
+                else:
+                    self.fail("releasing one response did not leave exactly one GET held")
+
+                self.assertEqual([profile.read_bytes()], outcomes)
+                fixture.release_responses()
+                for thread in threads:
+                    thread.join(timeout=5)
+                    self.assertFalse(thread.is_alive(), "released subscription GET remained blocked")
+                self.assertEqual([profile.read_bytes(), profile.read_bytes()], outcomes)
+                self.assertEqual(0, fixture.control_stats()["in_flight_gets"])
+            finally:
+                if fixture.url:
+                    fixture.release_responses()
+                for thread in threads:
+                    thread.join(timeout=5)
                 fixture.close()
 
     def test_tcp_fixture_and_cleanup_without_unix_socket_support(self):
