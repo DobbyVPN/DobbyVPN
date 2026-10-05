@@ -294,7 +294,11 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [detailsExpanded], timeout: 10), .completed,
                        "Tapping the newest Details control should expand that record")
         let expandedRecord = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value CONTAINS %@", "\"schema\":\"dobby.log/v1\""),
+            predicate: NSPredicate(
+                format: "value CONTAINS %@ OR value CONTAINS %@",
+                "\"schema\":\"dobby.log/v1\"",
+                "\"schema\":\"dobby.log\\/v1\""
+            ),
             object: logs
         )
         XCTAssertEqual(XCTWaiter.wait(for: [expandedRecord], timeout: 10), .completed,

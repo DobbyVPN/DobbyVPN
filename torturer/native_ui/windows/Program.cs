@@ -523,7 +523,19 @@ internal static class Program
                 try
                 {
                     TracePhase("tree-uia-walk-start");
-                    var elements = Walk(root).Where(e => !e.Current.IsOffscreen).ToList();
+                    var elements = new List<AutomationElement>();
+                    var nodeIndex = 0;
+                    foreach (var element in Walk(root, trace: TracePhase))
+                    {
+                        nodeIndex++;
+                        TracePhase($"tree-uia-walk-node={nodeIndex}-current-start");
+                        var current = element.Current;
+                        TracePhase($"tree-uia-walk-node={nodeIndex}-current-complete");
+                        TracePhase($"tree-uia-walk-node={nodeIndex}-is-offscreen-start");
+                        var isOffscreen = current.IsOffscreen;
+                        TracePhase($"tree-uia-walk-node={nodeIndex}-is-offscreen-complete offscreen={isOffscreen}");
+                        if (!isOffscreen) elements.Add(element);
+                    }
                     TracePhase($"tree-uia-walk-complete elements={elements.Count}");
                     enabled_controls = elements.Where(e => e.Current.IsEnabled).SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray();
                     labels = elements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
@@ -755,20 +767,40 @@ internal static class Program
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 
-    private static IEnumerable<AutomationElement> Walk(AutomationElement root, bool includeLogs = false)
+    private static IEnumerable<AutomationElement> Walk(
+        AutomationElement root,
+        bool includeLogs = false,
+        Action<string>? trace = null)
     {
         var queue = new Queue<AutomationElement>();
         queue.Enqueue(root);
         int count = 0;
+        int edgeCount = 0;
         while (queue.Count > 0)
         {
             if (++count > 8192) throw new InvalidOperationException("Accessibility tree exceeds 8192 elements");
             var element = queue.Dequeue();
             yield return element;
             // Control discovery does not need mutable log records or their Details children.
-            if (!includeLogs && element.Current.AutomationId == "Backend logs") continue;
-            for (var child = TreeWalker.ControlViewWalker.GetFirstChild(element); child is not null;
-                 child = TreeWalker.ControlViewWalker.GetNextSibling(child)) queue.Enqueue(child);
+            if (!includeLogs)
+            {
+                trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-start");
+                var automationId = element.Current.AutomationId;
+                trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-complete");
+                if (automationId == "Backend logs") continue;
+            }
+
+            trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-start");
+            var child = TreeWalker.ControlViewWalker.GetFirstChild(element);
+            trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-complete has-child={child is not null}");
+            while (child is not null)
+            {
+                queue.Enqueue(child);
+                var currentEdge = ++edgeCount;
+                trace?.Invoke($"tree-uia-edge={currentEdge}-get-next-sibling-start from-node={count}");
+                child = TreeWalker.ControlViewWalker.GetNextSibling(child);
+                trace?.Invoke($"tree-uia-edge={currentEdge}-get-next-sibling-complete has-sibling={child is not null}");
+            }
         }
     }
 

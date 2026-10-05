@@ -57,7 +57,10 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
 
 class AndroidScreenshotCollectionTests(unittest.TestCase):
     def test_failure_checkpoints_and_installed_icon_are_retained(self) -> None:
-        labels = ("startup", "about-metadata", "landscape-large-font", "failure")
+        labels = (
+            "startup", "about-metadata", "landscape-large-font",
+            "small-screen-scroll-failure", "failure",
+        )
         root = Path("/data/user/0/com.dobby.vpn/cache/dobbyvpn-rendered-screenshots/")
         payloads: dict[str, bytes] = {}
         records = []

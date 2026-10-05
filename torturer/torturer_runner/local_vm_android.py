@@ -55,6 +55,7 @@ _LAUNCHER_ARTWORK_MARKER = re.compile(
 _LOCAL_REQUIRED_SCREENSHOT_LABELS = (
     "startup", "about-metadata", "landscape-large-font", "failure-state", "reopened",
 )
+_LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT = "small-screen-scroll-failure"
 
 
 def _error(message: str) -> Exception:
@@ -463,10 +464,28 @@ def _collect_rendered_screenshots(
                 "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: failed local run "
                 "must end with exactly one failure milestone"
             )
-        if tuple(labels[:-1]) != _LOCAL_REQUIRED_SCREENSHOT_LABELS[: len(labels) - 1]:
+        prior_labels = labels[:-1]
+        diagnostic_count = prior_labels.count(_LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT)
+        if diagnostic_count > 1:
+            raise _error(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: duplicate small-screen diagnostic frame"
+            )
+        milestones = tuple(
+            label for label in prior_labels
+            if label != _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT
+        )
+        if milestones != _LOCAL_REQUIRED_SCREENSHOT_LABELS[: len(milestones)]:
             raise _error(
                 "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: local failure "
                 "milestones are out of order"
+            )
+        if diagnostic_count and tuple(prior_labels) != (
+            *_LOCAL_REQUIRED_SCREENSHOT_LABELS[:3],
+            _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT,
+        ):
+            raise _error(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: small-screen diagnostic frame "
+                "must follow the large-font layout frame"
             )
     seen: dict[str, tuple[str, int, str, int, int]] = {}
     for match in matches:

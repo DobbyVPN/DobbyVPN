@@ -989,19 +989,12 @@ class NativeUiInstrumentedTest {
     }
 
     private fun scrollControlsToConnectionAction() {
-        val width = device.displayWidth
-        val height = device.displayHeight
-        var ancestor: UiObject2? = requireObject("Subscription URL")
-        val scrollableViewports = mutableListOf<UiObject2>()
-        while (ancestor != null) {
-            val bounds = ancestor.visibleBounds
-            if (ancestor.isScrollable && bounds.width() >= width * 8 / 10 && bounds.height() >= height / 5) {
-                scrollableViewports += ancestor
-            }
-            ancestor = ancestor.parent
-        }
-        val viewport = scrollableViewports.maxByOrNull { it.visibleBounds.height() }
-            ?: throw AssertionError("ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING ${width}x$height")
+        var viewport = currentControlsScrollViewport()
+        // rememberScrollState restores its offset across configuration changes.
+        // A failed UP means this viewport is already at the top.
+        viewport.scroll(androidx.test.uiautomator.Direction.UP, 1f)
+        device.waitForIdle()
+        viewport = currentControlsScrollViewport()
 
         var reachedStatus: UiObject2? = null
         var reachedAction: UiObject2? = null
@@ -1014,14 +1007,67 @@ class NativeUiInstrumentedTest {
             device.waitForIdle()
         }
 
-        check(reachedStatus?.visibleBounds?.isEmpty == false) {
-            "ANDROID_SMALL_SCREEN_STATUS_NOT_REACHABLE_AFTER_SCROLL"
-        }
         var button = reachedAction
         while (button != null && !button.isClickable) button = button.parent
-        check(button?.let { it.isClickable && !it.visibleBounds.isEmpty } == true) {
-            "ANDROID_SMALL_SCREEN_CONNECTION_ACTION_NOT_REACHABLE"
+        if (reachedStatus?.visibleBounds?.isEmpty != false) {
+            failSmallScreenReachability(
+                "ANDROID_SMALL_SCREEN_STATUS_NOT_REACHABLE_AFTER_SCROLL",
+                viewport,
+                reachedStatus,
+                reachedAction,
+                button,
+            )
         }
+        if (button?.let { it.isClickable && !it.visibleBounds.isEmpty } != true) {
+            failSmallScreenReachability(
+                "ANDROID_SMALL_SCREEN_CONNECTION_ACTION_NOT_REACHABLE",
+                viewport,
+                reachedStatus,
+                reachedAction,
+                button,
+            )
+        }
+    }
+
+    private fun currentControlsScrollViewport(): UiObject2 {
+        val width = device.displayWidth
+        val height = device.displayHeight
+        var ancestor: UiObject2? = requireObject("Subscription URL")
+        val scrollableViewports = mutableListOf<UiObject2>()
+        while (ancestor != null) {
+            val bounds = ancestor.visibleBounds
+            if (ancestor.isScrollable && bounds.width() >= width * 8 / 10 && bounds.height() >= height / 5) {
+                scrollableViewports += ancestor
+            }
+            ancestor = ancestor.parent
+        }
+        return scrollableViewports.maxByOrNull { it.visibleBounds.height() }
+            ?: throw AssertionError("ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING ${width}x$height")
+    }
+
+    private fun failSmallScreenReachability(
+        reason: String,
+        viewport: UiObject2,
+        status: UiObject2?,
+        action: UiObject2?,
+        clickableAction: UiObject2?,
+    ): Nothing {
+        fun bounds(node: UiObject2?): String {
+            if (node == null) return "missing"
+            return runCatching { node.visibleBounds.toString() }
+                .getOrElse { "unavailable(${it.javaClass.simpleName})" }
+        }
+
+        val screenshotFailure = runCatching {
+            captureScreenshot("small-screen-scroll-failure")
+        }.exceptionOrNull()
+        val screenshotDiagnostic = screenshotFailure?.let {
+            " screenshot_error=${it.javaClass.simpleName}:${it.message}"
+        }.orEmpty()
+        throw AssertionError(
+            "$reason viewport=${bounds(viewport)} status=${bounds(status)} " +
+                "action=${bounds(action)} clickable_action=${bounds(clickableAction)}$screenshotDiagnostic"
+        )
     }
 
     private fun waitForTextContaining(text: String, timeoutMillis: Long = 10_000) {

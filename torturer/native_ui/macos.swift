@@ -46,6 +46,20 @@ func label(_ element: AXUIElement, _ name: String) throws -> String {
     (try attribute(element, name)) as? String ?? ""
 }
 
+func identifier(_ element: AXUIElement) throws -> String {
+    do {
+        return try label(element, kAXIdentifierAttribute)
+    } catch let error as AccessibilityReadError
+        where error.attribute == kAXIdentifierAttribute && error.code == .illegalArgument {
+        // AXIdentifier is optional matching metadata. A provider can reject its
+        // value for one node; preserve that node's title/value and keep walking.
+        FileHandle.standardError.write(
+            Data("Optional AXIdentifier read failed; ignoring identifier: \(error)\n".utf8)
+        )
+        return ""
+    }
+}
+
 func visibleCharacterRange(_ element: AXUIElement) throws -> (range: CFRange, characterCount: Int) {
     var lastRange = CFRange(location: -1, length: 0)
     var lastCharacterCount = -1
@@ -90,17 +104,17 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
 }
 
 func names(_ element: AXUIElement) throws -> [String] {
-    var values = try [kAXIdentifierAttribute, kAXTitleAttribute, kAXValueAttribute]
-        .compactMap { name -> String? in
-            // Text fields are verified by type, not copied into every tree response.
-            if name == kAXValueAttribute {
-                let role = try label(element, kAXRoleAttribute)
-                if role == kAXTextAreaRole || role == kAXTextFieldRole { return nil }
-            }
-            let value = try label(element, name)
-            return value.isEmpty ? nil : value
-        }
+    var values = [String]()
+    let axIdentifier = try identifier(element)
+    let title = try label(element, kAXTitleAttribute)
+    if !axIdentifier.isEmpty { values.append(axIdentifier) }
+    if !title.isEmpty { values.append(title) }
+    // Text fields are verified by type, not copied into every tree response.
     let role = try label(element, kAXRoleAttribute)
+    if role != kAXTextAreaRole && role != kAXTextFieldRole {
+        let value = try label(element, kAXValueAttribute)
+        if !value.isEmpty { values.append(value) }
+    }
     do {
         let description = try attribute(element, kAXDescriptionAttribute) as? String ?? ""
         if !description.isEmpty { values.append(description) }
@@ -129,7 +143,7 @@ func find(_ nodes: [AXUIElement], _ name: String, editor: Bool = false) throws -
         }
         return try names(node).contains(name)
     }
-    let identified = try matches.filter { try label($0, kAXIdentifierAttribute) == name }
+    let identified = try matches.filter { try identifier($0) == name }
     if !identified.isEmpty { matches = identified }
     if matches.count > 1 {
         // SwiftUI's toolbar item and its inner button both expose AXButton with
@@ -409,7 +423,7 @@ func run() throws -> [String: Any] {
             let labels = try nodes.flatMap(names)
             let enabled = try nodes.filter { (try attribute($0, kAXEnabledAttribute)) as? Bool == true }.flatMap(names)
             return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity,
-                    "window_count": windows.count, "window_id": try label(window, kAXIdentifierAttribute),
+                    "window_count": windows.count, "window_id": try identifier(window),
                     "labels": labels, "enabled_controls": enabled, "link_urls": try linkURLs(nodes)]
         }
     } catch {
