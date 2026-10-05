@@ -359,7 +359,6 @@ func run() throws -> [String: Any] {
         return [:]
     }
     try require(AXIsProcessTrusted(), "Accessibility permission unavailable")
-    let pid = app.processIdentifier
     func activate() throws {
         try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")
         let deadline = Date().addingTimeInterval(2)
