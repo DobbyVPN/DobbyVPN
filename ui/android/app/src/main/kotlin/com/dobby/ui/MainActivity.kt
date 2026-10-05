@@ -1,6 +1,7 @@
 package com.dobby.ui
 
 import android.content.ClipboardManager
+import android.content.ClipDescription
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -332,7 +333,12 @@ private class SessionController(private val activity: MainActivity) {
     fun setVisible(value: Boolean) { visible = value; if (value) refreshClipboard() }
 
     private fun refreshClipboard() {
-        val available = runCatching { clipboard.hasPrimaryClip() }.getOrDefault(false)
+        val available = runCatching {
+            clipboard.hasPrimaryClip() && clipboard.primaryClipDescription?.let { description ->
+                description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) ||
+                    description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)
+            } == true
+        }.getOrDefault(false)
         if (state.canPaste != available) state = state.copy(canPaste = available)
     }
 

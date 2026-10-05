@@ -351,16 +351,15 @@ class NativeUiInstrumentedTest {
             waitForTextContaining("Clipboard item has no text")
 
             clipboard.setPrimaryClip(ClipData.newRawUri("non-text", Uri.parse("content://example.invalid/item")))
-            requireObject("Paste")
-            tapStable("Paste")
-            waitForOneOfTextContaining(
-                arrayOf("HTTPS subscription URL with a host", "Clipboard item could not be read"),
-            )
+            check(waitForObject("Paste", 500) == null) { "ANDROID_PASTE_SHOWN_WITHOUT_TEXT_CLIP" }
 
-            clipboard.setPrimaryClip(ClipData.newPlainText("invalid", "http://example.invalid/subscription"))
+            val invalidClipboardText = "http://example.invalid/subscription"
+            clipboard.setPrimaryClip(ClipData.newPlainText("invalid", invalidClipboardText))
             requireObject("Paste")
+            waitForConfigurationText("", 500)
             tapStable("Paste")
             waitForTextContaining("HTTPS subscription URL with a host")
+            waitForConfigurationText("", 500)
         } finally {
             clipboard.clearPrimaryClip()
         }
@@ -692,17 +691,6 @@ class NativeUiInstrumentedTest {
             Thread.sleep(100)
         }
         throw AssertionError("ANDROID_UI_TEXT_TIMEOUT:$text")
-    }
-
-    private fun waitForOneOfTextContaining(texts: Array<String>, timeoutMillis: Long = 10_000) {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (System.currentTimeMillis() < deadline) {
-            for (text in texts) {
-                if (device.findObject(By.textContains(text).pkg(packageName)) != null) return
-            }
-            Thread.sleep(100)
-        }
-        throw AssertionError("ANDROID_UI_TEXT_TIMEOUT:${texts.joinToString(" or ")}")
     }
 
     /** Capture a complete rendered frame as an extra, integrity-checked artifact. */
