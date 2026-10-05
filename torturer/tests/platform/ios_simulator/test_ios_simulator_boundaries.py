@@ -14,6 +14,28 @@ from torturer_runner.native_cases import IOS_LOGS_FREEZE_RESUME_CASE, IOS_RENDER
 
 
 class IOSSimulatorBoundaryTests(unittest.TestCase):
+    def test_early_failure_report_is_nonempty_and_keeps_exception_notes(self) -> None:
+        failure = ios_simulator_app.IOSSimulatorStageError("install", "simctl failed")
+        failure.add_note("command_stdout:\ninstall stdout")
+        failure.add_note("command_stderr:\ninstall stderr")
+
+        with tempfile.TemporaryDirectory() as name:
+            work_dir = Path(name)
+            report = ios_simulator_app.retain_ios_failure_diagnostic(work_dir, failure)
+            content = report.read_text(encoding="utf-8")
+            retained = ios_simulator_app.retain_ios_diagnostics(
+                work_dir, work_dir / "collected"
+            )
+
+        self.assertTrue(content.strip())
+        self.assertIn(
+            "IOSSimulatorStageError: iOS Simulator stage 'install' failed: simctl failed",
+            content,
+        )
+        self.assertIn("command_stdout:\ninstall stdout", content)
+        self.assertIn("command_stderr:\ninstall stderr", content)
+        self.assertEqual([path.name for path in retained], ["runner-failure.txt"])
+
     def test_run_reactivates_prepared_screenshot_decoder_without_installing(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             run_dir = Path(name)

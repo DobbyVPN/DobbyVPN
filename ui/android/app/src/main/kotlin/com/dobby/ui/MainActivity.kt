@@ -586,6 +586,7 @@ private class SessionController(
 @Composable
 private fun DobbyApp(controller: SessionController) {
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(title = { Text("DobbyVPN") }, actions = {
                 TextButton(onClick = { controller.show("about") }) { Text("About") }
@@ -724,13 +725,11 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         if (state.logsError.isNotEmpty()) {
             Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
         }
-        Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
-            AndroidView(
-                factory = { controller.createLogView(it) },
-                modifier = Modifier.fillMaxSize(),
-                update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
-            )
-        }
+        AndroidView(
+            factory = { controller.createLogView(it) },
+            modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds(),
+            update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
+        )
     }
 }
 

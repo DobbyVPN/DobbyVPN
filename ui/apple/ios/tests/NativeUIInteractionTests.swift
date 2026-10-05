@@ -553,8 +553,8 @@ final class NativeUIInteractionTests: XCTestCase {
         screenshotName: String? = nil
     ) -> CGFloat {
         let offsetBefore = anchor.element.frame.minY - logs.frame.minY
-        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.30))
-        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.55))
+        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.30))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.55))
         start.press(forDuration: 0.05, thenDragTo: end)
 
         let detailElements = logs.descendants(matching: .any)

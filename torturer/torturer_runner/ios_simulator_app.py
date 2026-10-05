@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from typing import Callable, Protocol, Sequence, TypeVar
 
 from torturer_runner.diagnostics import (
@@ -569,6 +570,18 @@ def _ios_diagnostics_directory(work_dir: Path) -> Path:
     return work_dir / "diagnostics" / "ios-simulator"
 
 
+def retain_ios_failure_diagnostic(work_dir: Path, failure: BaseException) -> Path:
+    """Write the full setup/test exception so early CI failures have an artifact."""
+    diagnostics = _ios_diagnostics_directory(work_dir)
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    report = diagnostics / "runner-failure.txt"
+    report.write_text(
+        "".join(traceback.format_exception(type(failure), failure, failure.__traceback__)),
+        encoding="utf-8",
+    )
+    return report
+
+
 def _copy_complete_directory(source: Path, destination: Path, *, label: str) -> Path:
     """Copy one owned directory without accepting a partial destination."""
     if source.is_symlink() or not source.is_dir():
@@ -730,7 +743,7 @@ _IOS_LOG_NAMES = (
     "go_app_logs.jsonl", "go_app_logs.jsonl.stderr",
     "go_tunnel_logs.jsonl", "go_tunnel_logs.jsonl.stderr",
 )
-_IOS_RETAINED_LOG_NAMES = {"app-native.log"} | {
+_IOS_RETAINED_LOG_NAMES = {"app-native.log", "runner-failure.txt"} | {
     name + suffix for name in _IOS_LOG_NAMES for suffix in ("", ".previous")
 }
 

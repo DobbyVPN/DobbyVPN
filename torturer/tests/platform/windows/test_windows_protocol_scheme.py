@@ -190,7 +190,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
 
-    def test_windows_uia_findall_probe_is_opt_in_before_initial_snapshot(self) -> None:
+    def test_windows_uia_findall_probe_isolated_from_startup_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             helper = root / "NativeUI.exe"
@@ -219,11 +219,9 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             controller._call = call  # type: ignore[method-assign]
 
-            def snapshot() -> dict[str, object]:
-                calls.append("snapshot")
-                return {"status": "Disconnected", "labels": ["Connection configuration"]}
-
-            controller.snapshot = mock.Mock(side_effect=snapshot)
+            controller.snapshot = mock.Mock(
+                side_effect=AssertionError("probe must bypass tree snapshot")
+            )
             controller.capture = mock.Mock(return_value={})
             launcher = mock.Mock(pid=42)
             launcher.poll.return_value = None
@@ -231,8 +229,13 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             with mock.patch.object(smoke.subprocess, "Popen", return_value=launcher):
                 controller.start()
 
-        self.assertEqual(calls, ["probe", "findall-probe", "snapshot", "focus", "snapshot"])
-        self.assertEqual(controller.snapshot.call_count, 2)
+        self.assertEqual(calls, ["probe", "findall-probe"])
+        controller.snapshot.assert_not_called()
+        controller.capture.assert_not_called()
+        self.assertEqual(
+            controller.native_case_results[WINDOWS_FINDALL_PROBE_CASE]["findAllCount"],
+            1,
+        )
 
     def test_windows_native_cases_are_command_selectors_and_probe_is_not_an_env_flag(self) -> None:
         flag = "DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE"

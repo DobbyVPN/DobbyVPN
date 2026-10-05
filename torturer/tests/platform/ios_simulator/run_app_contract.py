@@ -16,6 +16,7 @@ from torturer_runner.ios_simulator_app import (  # noqa: E402
     SubprocessCommandRunner,
     public_ios_simulator_app_contract,
     prepare_ios_simulator_candidate,
+    retain_ios_failure_diagnostic,
     run_ios_simulator_app_contract,
 )
 
@@ -50,6 +51,13 @@ def main(argv: list[str] | None = None) -> int:
             budget=budget,
         )
     except IOSSimulatorAppContractError as error:
+        try:
+            retain_ios_failure_diagnostic(args.work_dir, error)
+        except OSError as collection_error:
+            print(
+                f"diagnostic collection error: could not retain iOS Simulator failure: {collection_error}",
+                file=sys.stderr,
+            )
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(

@@ -240,6 +240,7 @@ class NativeUIController:
                 if result.get("ready") is not True:
                     raise NativeUISmokeError("Windows UI Automation FindAll probe could not inspect the visible control")
                 self.native_case_results[WINDOWS_FINDALL_PROBE_CASE] = result
+                return {}
 
         def ready():
             code = None if self.process is None else self.process.poll()
