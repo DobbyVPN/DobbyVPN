@@ -28,6 +28,20 @@ func attribute(_ element: AXUIElement, _ name: String) throws -> CFTypeRef? {
     return value
 }
 
+func axValue(_ element: AXUIElement, _ name: String) throws -> AXValue? {
+    guard let value = try attribute(element, name), CFGetTypeID(value) == AXValueGetTypeID() else {
+        return nil
+    }
+    return unsafeBitCast(value, to: AXValue.self)
+}
+
+func axElement(_ element: AXUIElement, _ name: String) throws -> AXUIElement? {
+    guard let value = try attribute(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else {
+        return nil
+    }
+    return unsafeBitCast(value, to: AXUIElement.self)
+}
+
 func label(_ element: AXUIElement, _ name: String) throws -> String {
     (try attribute(element, name)) as? String ?? ""
 }
@@ -354,8 +368,8 @@ func run() throws -> [String: Any] {
             throw HelperError("Log scroll position must be top or bottom")
         }
         let view = try find(nodes, "Connection logs", editor: true)
-        guard let positionValue = try attribute(view, kAXPositionAttribute) as? AXValue,
-              let sizeValue = try attribute(view, kAXSizeAttribute) as? AXValue else {
+        guard let positionValue = try axValue(view, kAXPositionAttribute),
+              let sizeValue = try axValue(view, kAXSizeAttribute) else {
             throw HelperError("Native log viewer has no accessible bounds")
         }
         var origin = CGPoint.zero
@@ -368,7 +382,7 @@ func run() throws -> [String: Any] {
         var scrollArea: AXUIElement?
         for _ in 0..<8 {
             guard let current = parent,
-                  let next = try attribute(current, kAXParentAttribute) as? AXUIElement else { break }
+                  let next = try axElement(current, kAXParentAttribute) else { break }
             if try label(next, kAXRoleAttribute) == kAXScrollAreaRole {
                 scrollArea = next
                 break
@@ -376,7 +390,7 @@ func run() throws -> [String: Any] {
             parent = next
         }
         guard let area = scrollArea,
-              let scrollbar = try attribute(area, kAXVerticalScrollBarAttribute) as? AXUIElement else {
+              let scrollbar = try axElement(area, kAXVerticalScrollBarAttribute) else {
             throw HelperError("Native log viewer does not expose a vertical scrollbar")
         }
         func scrollValue() throws -> Double {
