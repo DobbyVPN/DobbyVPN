@@ -91,6 +91,47 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 self.assertIn(assertion, source)
         self.assertNotIn(".Current.CanResize", source)
 
+    def test_windows_native_ui_retains_window_readiness_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "NativeUI.exe"
+            helper.touch()
+            controller = smoke.NativeUIController(
+                "windows",
+                root / "DobbyVPN.exe",
+                root / "profile.txt",
+                5,
+                helper=helper,
+                screenshot_dir=root / "screenshots",
+            )
+            controller.pid = 42
+            controller.identity = "candidate-ui-instance"
+            response = {
+                "ready": False,
+                "pid": 42,
+                "identity": "candidate-ui-instance",
+                "windowHandle": "0x0",
+                "visible": False,
+                "minimized": False,
+                "ownerPid": 0,
+                "candidateSessionId": 1,
+                "helperSessionId": 1,
+                "mainWindowTitle": "",
+                "windowDescription": "unavailable",
+            }
+            completed = subprocess.CompletedProcess(
+                [str(helper)], 0, json.dumps(response).encode("utf-8"), b""
+            )
+
+            with mock.patch.object(smoke, "_native_run", return_value=completed):
+                snapshot = controller.snapshot()
+
+        self.assertEqual(snapshot["status"], "Unknown")
+        self.assertEqual(
+            controller.last_window_readiness,
+            {key: value for key, value in response.items() if key not in {"ready", "pid", "identity"}},
+        )
+
     def test_warm_protocol_import_uses_shell_and_keeps_the_existing_ui_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

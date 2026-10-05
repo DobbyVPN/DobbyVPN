@@ -115,6 +115,7 @@ class NativeUIController:
         self.pid: int | None = None
         self.identity: str | None = None
         self.window_id: str | None = None
+        self.last_window_readiness: dict[str, object] | None = None
         self.launch_count = self.capture_count = 0
         self.reconnecting_seen = False
         self.cleared_record: str | None = None
@@ -190,6 +191,7 @@ class NativeUIController:
                 raise NativeUISmokeError("candidate UI is already running before launch")
         self.launch_count += 1
         self.window_id = None
+        self.last_window_readiness = None
         prefix = self.logs / f"{self.platform}-app-{self.launch_count:02d}"
         command = [str(self.binary)]
         if self.platform == "macos":
@@ -235,7 +237,15 @@ class NativeUIController:
             state = self.snapshot()
             return state["status"] != "Unknown" and "Connection configuration" in state["labels"]
 
-        self._wait(ready, "native UI did not expose its connection page")
+        try:
+            self._wait(ready, "native UI did not expose its connection page")
+        except NativeUISmokeError as error:
+            if self.platform == "windows" and self.last_window_readiness is not None:
+                details = json.dumps(self.last_window_readiness, sort_keys=True, separators=(",", ":"))
+                raise NativeUISmokeError(
+                    f"{error}; last Windows window-readiness response: {details}"
+                ) from error
+            raise
         self._call("focus")
         self.capture("startup")
         return self.snapshot()
@@ -265,6 +275,22 @@ class NativeUIController:
 
     def snapshot(self) -> dict:
         value = self._call("tree")
+        if self.platform == "windows" and value.get("ready") is False:
+            diagnostic_keys = (
+                "windowHandle",
+                "visible",
+                "minimized",
+                "ownerPid",
+                "candidateSessionId",
+                "helperSessionId",
+                "mainWindowTitle",
+                "windowDescription",
+            )
+            self.last_window_readiness = {
+                key: value[key] for key in diagnostic_keys if key in value
+            }
+        elif self.platform == "windows" and value.get("ready") is True:
+            self.last_window_readiness = None
         if self.platform == "macos" and value.get("ready") is True:
             window_id = value.get("window_id")
             if value.get("window_count") != 1 or not window_id:
