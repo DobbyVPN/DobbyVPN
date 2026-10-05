@@ -89,9 +89,8 @@ public sealed partial class MainWindow : Window
             _shutdown.Dispose();
         };
         Clipboard.ContentChanged += ClipboardChanged;
-        Activated += (_, _) => RefreshClipboard();
+        Activated += (_, _) => DispatcherQueue.TryEnqueue(RefreshClipboard);
         Closed += (_, _) => Clipboard.ContentChanged -= ClipboardChanged;
-        RefreshClipboard();
         _ = PollSnapshotsAsync(_shutdown.Token);
         _ = RefreshSnapshotAsync();
     }
