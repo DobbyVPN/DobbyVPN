@@ -276,7 +276,6 @@ final class NativeUIInteractionTests: XCTestCase {
         let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
         XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 4)
 
-        for _ in 0..<6 { logs.swipeUp() }
         let latestLogText = try XCTUnwrap(logs.value as? String)
         XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
         let detailElements = logs.descendants(matching: .any)
@@ -317,6 +316,7 @@ final class NativeUIInteractionTests: XCTestCase {
         )
         XCTAssertTrue(expandedText.contains("\"event\":\"ui.failure\""))
         XCTAssertTrue(expandedText.contains("\"source\":\"native-ui\""))
+        for _ in 0..<6 { logs.swipeUp() }
         let frozen = try XCTUnwrap(logs.value as? String)
         openAbout()
         app.buttons["Done"].tap()

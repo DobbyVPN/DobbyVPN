@@ -545,16 +545,58 @@ func run() throws -> [String: Any] {
                 "scroll-logs target=\(position) start-range=\(rangeDescription(range)) " +
                     "characters=\(characterCount) scrollbar=\(scrollbarValueDescription())\n"
             ).utf8))
-            let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
-            guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                      mouseCursorPosition: center, mouseButton: .left) else {
-                throw HelperError("Could not position the pointer over native logs")
+            var reached = false
+            var accessibilitySetStatus = "not-settable"
+            var settable = DarwinBoolean(false)
+            let settableResult = AXUIElementIsAttributeSettable(
+                scrollbar, kAXValueAttribute as CFString, &settable
+            )
+            if settableResult == .success && settable.boolValue {
+                var scrollbarMinimum: NSNumber?
+                var scrollbarMaximum: NSNumber?
+                do {
+                    scrollbarMinimum = try attribute(scrollbar, kAXMinValueAttribute) as? NSNumber
+                    scrollbarMaximum = try attribute(scrollbar, kAXMaxValueAttribute) as? NSNumber
+                } catch {
+                    accessibilitySetStatus = "scrollbar-limit-read-error=\(error)"
+                }
+                if let minimum = scrollbarMinimum, let maximum = scrollbarMaximum {
+                    let targetValue = position == "top" ? minimum.doubleValue : maximum.doubleValue
+                    let setResult = AXUIElementSetAttributeValue(
+                        scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
+                    )
+                    accessibilitySetStatus = "set-result=\(setResult.rawValue) value=\(targetValue)"
+                    if setResult == .success {
+                        for _ in 0..<10 {
+                            range = try checkedVisibleRange()
+                            if isAtTarget(range) {
+                                reached = true
+                                break
+                            }
+                            Thread.sleep(forTimeInterval: 0.05)
+                        }
+                    }
+                } else if accessibilitySetStatus == "not-settable" {
+                    accessibilitySetStatus = "scrollbar-min-max-unavailable"
+                }
+            } else {
+                accessibilitySetStatus = "settable-check=\(settableResult.rawValue) settable=\(settable.boolValue)"
             }
-            moved.post(tap: .cghidEventTap)
+            FileHandle.standardError.write(Data((
+                "scroll-logs accessibility-set \(accessibilitySetStatus) reached=\(reached) " +
+                    "range=\(rangeDescription(range)) scrollbar=\(scrollbarValueDescription())\n"
+            ).utf8))
+            let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+            if !reached {
+                guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                          mouseCursorPosition: center, mouseButton: .left) else {
+                    throw HelperError("Could not position the pointer over native logs")
+                }
+                moved.post(tap: .cghidEventTap)
+            }
             let maximumScrollEvents = 64
             var totalScrollEvents = 0
-            var reached = false
-            for delta in [100, -100] {
+            for delta in (reached ? [] : [100, -100]) {
                 var unchanged = 0
                 var directionEventCount = 0
                 var madeProgress = false

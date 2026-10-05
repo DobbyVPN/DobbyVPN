@@ -615,7 +615,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         else -> "Disconnected"
     }
     BoxWithConstraints(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        val controlsHeight = maxHeight * 0.65f
+        val controlsHeight = maxHeight * 0.5f
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(
                 Modifier.heightIn(max = controlsHeight).clipToBounds().verticalScroll(rememberScrollState()),
