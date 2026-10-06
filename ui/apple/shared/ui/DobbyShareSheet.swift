@@ -107,6 +107,7 @@ struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int
     let onFollowingChange: (Bool) -> Void
+    let onScrollDiagnostic: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -120,6 +121,7 @@ struct DobbyLogView: UIViewRepresentable {
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
         context.coordinator.onFollowingChange = onFollowingChange
+        context.coordinator.onScrollDiagnostic = onScrollDiagnostic
         view.updateFollowingAccessibilityHint(isFollowing: true)
         return view
     }
@@ -127,6 +129,7 @@ struct DobbyLogView: UIViewRepresentable {
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onFollowingChange = onFollowingChange
+        coordinator.onScrollDiagnostic = onScrollDiagnostic
         let cleared = clear != coordinator.lastClear
         if cleared {
             coordinator.isFollowing = true
@@ -163,6 +166,16 @@ struct DobbyLogView: UIViewRepresentable {
         var displayedEntries: [DobbyLogEntry] = []
         var expanded = Set<String>()
         var onFollowingChange: ((Bool) -> Void)?
+        var onScrollDiagnostic: ((String) -> Void)?
+        var recordedActiveScrollSample = false
+
+        private struct FollowingUpdate {
+            let previous: Bool
+            let current: Bool
+            let changed: Bool
+            let emitted: Bool
+        }
+
         func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
             guard let index = Int(url.lastPathComponent), displayedEntries.indices.contains(index) else { return false }
             let id = displayedEntries[index].id
@@ -175,27 +188,57 @@ struct DobbyLogView: UIViewRepresentable {
             return false
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard !updating,
-                  scrollView is DobbyLogTextView,
-                  isUserDragging || scrollView.isDecelerating
-            else { return }
-            updateFollowingState(for: scrollView)
+            guard scrollView is DobbyLogTextView else { return }
+            let gestureActive = isUserDragging || scrollView.isDragging || scrollView.isDecelerating
+            guard gestureActive else { return }
+
+            let accepted = !updating && (isUserDragging || scrollView.isDecelerating)
+            let update = accepted ? updateFollowingState(for: scrollView) : nil
+            if !recordedActiveScrollSample {
+                recordScrollDiagnostic(
+                    "didScroll", for: scrollView, accepted: accepted, update: update
+                )
+                recordedActiveScrollSample = true
+            }
+            if let update, update.changed {
+                recordScrollDiagnostic(
+                    "followingChange", for: scrollView, accepted: accepted, update: update
+                )
+            }
         }
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             guard scrollView is DobbyLogTextView else { return }
             isUserDragging = true
+            recordedActiveScrollSample = false
+            recordScrollDiagnostic("willBeginDragging", for: scrollView, accepted: true)
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-            guard isUserDragging, !decelerate else { return }
-            isUserDragging = false
-            updateFollowingState(for: scrollView)
+            guard scrollView is DobbyLogTextView else { return }
+            var update: FollowingUpdate?
+            let accepted = isUserDragging && !decelerate
+            if accepted {
+                isUserDragging = false
+                update = updateFollowingState(for: scrollView)
+            }
+            recordScrollDiagnostic(
+                "didEndDragging(decelerate=\(decelerate))",
+                for: scrollView,
+                accepted: accepted,
+                update: update
+            )
+            recordedActiveScrollSample = false
         }
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            guard scrollView is DobbyLogTextView else { return }
             isUserDragging = false
-            updateFollowingState(for: scrollView)
+            let update = updateFollowingState(for: scrollView)
+            recordScrollDiagnostic("didEndDecelerating", for: scrollView, accepted: true, update: update)
+            recordedActiveScrollSample = false
         }
-        private func updateFollowingState(for scrollView: UIScrollView) {
-            guard let logView = scrollView as? DobbyLogTextView, !logView.isRestoringReadingPosition else { return }
+        private func updateFollowingState(for scrollView: UIScrollView) -> FollowingUpdate? {
+            guard let logView = scrollView as? DobbyLogTextView,
+                  !logView.isRestoringReadingPosition else { return nil }
+            let previous = isFollowing
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height,
                 contentHeight: scrollView.contentSize.height
@@ -206,6 +249,50 @@ struct DobbyLogView: UIViewRepresentable {
             logView.updateFollowingAccessibilityHint(isFollowing: atBottom)
             if changed { onFollowingChange?(atBottom) }
             if !atBottom { logView.captureReadingPosition() }
+            return FollowingUpdate(
+                previous: previous,
+                current: atBottom,
+                changed: changed,
+                emitted: changed && onFollowingChange != nil
+            )
+        }
+
+        private func recordScrollDiagnostic(
+            _ event: String,
+            for scrollView: UIScrollView,
+            accepted: Bool,
+            update: FollowingUpdate? = nil
+        ) {
+            guard let logView = scrollView as? DobbyLogTextView,
+                  let onScrollDiagnostic else { return }
+            let viewportBottom = scrollView.contentOffset.y + scrollView.bounds.height
+            let distanceToBottom = scrollView.contentSize.height - viewportBottom
+            let atBottom = shouldFollowLogUpdates(
+                viewportBottom: viewportBottom,
+                contentHeight: scrollView.contentSize.height
+            )
+            func number(_ value: CGFloat) -> String {
+                String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
+            }
+            onScrollDiagnostic([
+                "event=\(event)",
+                "accepted=\(accepted)",
+                "userDragging=\(isUserDragging)",
+                "scrollIsDragging=\(scrollView.isDragging)",
+                "decelerating=\(scrollView.isDecelerating)",
+                "updating=\(updating)",
+                "restoring=\(logView.isRestoringReadingPosition)",
+                "offsetY=\(number(scrollView.contentOffset.y))",
+                "viewportHeight=\(number(scrollView.bounds.height))",
+                "contentHeight=\(number(scrollView.contentSize.height))",
+                "viewportBottom=\(number(viewportBottom))",
+                "distanceToBottom=\(number(distanceToBottom))",
+                "atBottom=\(atBottom)",
+                "followingBefore=\(update?.previous ?? isFollowing)",
+                "followingAfter=\(update?.current ?? isFollowing)",
+                "changed=\(update?.changed ?? false)",
+                "emitted=\(update?.emitted ?? false)",
+            ].joined(separator: " "))
         }
     }
 }

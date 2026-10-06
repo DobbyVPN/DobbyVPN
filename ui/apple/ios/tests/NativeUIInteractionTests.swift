@@ -285,6 +285,7 @@ final class NativeUIInteractionTests: XCTestCase {
         let validationError = "Paste an HTTPS subscription URL with a host"
         app.terminate()
         UIPasteboard.general.string = clipboard
+        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
         app.launch()
 
         let configuration = app.textFields["Connection configuration"]
@@ -295,6 +296,9 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
         let followingState = app.staticTexts["Connection log following state"]
         XCTAssertTrue(followingState.waitForExistence(timeout: 10))
+        let scrollTrace = app.descendants(matching: .any)
+            .matching(identifier: "Log scroll diagnostics").firstMatch
+        XCTAssertTrue(scrollTrace.waitForExistence(timeout: 10))
         let followingLabel = "Following newest entries"
         let frozenLabel = "Updates paused while reading"
         XCTAssertEqual(followingState.label, followingLabel,
@@ -410,8 +414,9 @@ final class NativeUIInteractionTests: XCTestCase {
         )
         let followStateResult = XCTWaiter.wait(for: [followingPaused], timeout: 3)
         attachScreenshot("logs-freeze-scrolled")
+        let observedScrollTrace = scrollTrace.value as? String ?? "<no accessibility value>"
         XCTAssertEqual(followStateResult, .completed,
-                       "A user scroll away from the bottom should publish the paused state")
+                       "A user scroll away from the bottom should publish the paused state. UIKit trace:\n\(observedScrollTrace)")
         XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
                        "Scrolling should preserve the rendered log entries")
         let frozen = try XCTUnwrap(logs.value as? String)

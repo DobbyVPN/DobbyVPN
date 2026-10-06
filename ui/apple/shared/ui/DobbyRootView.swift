@@ -7,6 +7,7 @@ import AppKit
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
+    private let onLogScrollDiagnostic: ((String) -> Void)?
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var configurationFocused: Bool
     @State private var showingAbout = false
@@ -17,7 +18,13 @@ public struct DobbyRootView: View {
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
 
-    public init(model: DobbySessionViewModel) { self.model = model }
+    public init(
+        model: DobbySessionViewModel,
+        onLogScrollDiagnostic: ((String) -> Void)? = nil
+    ) {
+        self.model = model
+        self.onLogScrollDiagnostic = onLogScrollDiagnostic
+    }
 
     public var body: some View {
 #if os(iOS)
@@ -255,7 +262,8 @@ public struct DobbyRootView: View {
             DobbyLogView(
                 entries: model.logEntries,
                 clear: model.clearRevision,
-                onFollowingChange: { followingLogs = $0 }
+                onFollowingChange: { followingLogs = $0 },
+                onScrollDiagnostic: onLogScrollDiagnostic
             )
                 .accessibilityIdentifier("Connection logs")
 #else

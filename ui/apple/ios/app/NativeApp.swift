@@ -16,9 +16,19 @@ struct NativeDobbyVPNApp: App {
     var body: some Scene {
         WindowGroup {
 #if DOBBY_SIMULATOR_TEST
-            DobbyRootView(model: model)
+            DobbyRootView(
+                model: model,
+                onLogScrollDiagnostic: SimulatorLogScrollDiagnostics.shared.isEnabled
+                    ? { SimulatorLogScrollDiagnostics.shared.append($0) }
+                    : nil
+            )
                 .overlay(alignment: .topLeading) {
                     SimulatorTestSessionStateView(model: model)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if SimulatorLogScrollDiagnostics.shared.isEnabled {
+                        SimulatorLogScrollDiagnosticsView()
+                    }
                 }
 #else
             DobbyRootView(model: model)
@@ -38,6 +48,38 @@ private struct SimulatorTestSessionStateView: View {
             .accessibilityLabel("Simulator test session state")
             .accessibilityIdentifier("Simulator test session state")
             .accessibilityValue(state)
+            .frame(width: 1, height: 1)
+            .opacity(0.01)
+            .accessibilityHidden(false)
+    }
+}
+
+final class SimulatorLogScrollDiagnostics: ObservableObject {
+    static let shared = SimulatorLogScrollDiagnostics()
+    static let environmentKey = "DOBBY_IOS_TEST_LOG_SCROLL_TRACE"
+
+    let isEnabled: Bool
+    @Published private(set) var value = ""
+
+    private init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        isEnabled = environment[Self.environmentKey] == "1"
+    }
+
+    func append(_ record: String) {
+        guard isEnabled else { return }
+        value += value.isEmpty ? record : "\n\(record)"
+    }
+}
+
+private struct SimulatorLogScrollDiagnosticsView: View {
+    @ObservedObject private var diagnostics = SimulatorLogScrollDiagnostics.shared
+
+    var body: some View {
+        Text("Log scroll diagnostics")
+            .accessibilityElement()
+            .accessibilityLabel("Log scroll diagnostics")
+            .accessibilityIdentifier("Log scroll diagnostics")
+            .accessibilityValue(diagnostics.value)
             .frame(width: 1, height: 1)
             .opacity(0.01)
             .accessibilityHidden(false)
