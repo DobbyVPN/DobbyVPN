@@ -16,6 +16,11 @@ struct AccessibilityReadError: Error, CustomStringConvertible {
     var description: String { "AX read \(attribute) failed: \(code.rawValue)" }
 }
 
+func isTransientAccessibilityRead(_ error: AccessibilityReadError) -> Bool {
+    error.code == .failure || error.code == .cannotComplete || error.code == .invalidUIElement ||
+        (error.code == .illegalArgument && error.attribute == kAXRoleAttribute)
+}
+
 func require(_ condition: Bool, _ message: String) throws {
     if !condition { throw HelperError(message) }
 }
@@ -101,6 +106,29 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
         queue.append(contentsOf: children)
     }
     return queue
+}
+
+func retryTransientAccessibilityReads<T>(
+    context: String,
+    deadline: Date,
+    operation: () throws -> T
+) throws -> T {
+    var lastTransientError: AccessibilityReadError?
+    var loggedRetry = false
+    repeat {
+        do {
+            return try operation()
+        } catch let error as AccessibilityReadError where isTransientAccessibilityRead(error) {
+            lastTransientError = error
+            if !loggedRetry {
+                FileHandle.standardError.write(Data("\(error) during \(context); retrying\n".utf8))
+                loggedRetry = true
+            }
+        }
+        if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+    } while Date() < deadline
+    if let lastTransientError { throw lastTransientError }
+    throw HelperError("Accessibility operation did not complete before its deadline: \(context)")
 }
 
 func names(_ element: AXUIElement) throws -> [String] {
@@ -258,7 +286,10 @@ func paste(_ editor: AXUIElement, source: String) throws {
 
 func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, source: String) throws -> Int64 {
     let value = try String(contentsOfFile: source, encoding: .utf8)
-    let initialNodes = try elements(window)
+    let initialNodes = try retryTransientAccessibilityReads(
+        context: "Paste initial tree discovery",
+        deadline: Date().addingTimeInterval(5)
+    ) { try elements(window) }
     let editor = try find(initialNodes, "Connection configuration", editor: true)
     let fieldBeforeClipboard = try label(editor, kAXValueAttribute)
     let board = NSPasteboard.general
@@ -279,21 +310,37 @@ func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, so
             try require(app.activate(options: [.activateAllWindows]), "Could not refresh native Paste availability for \(reason) clipboard")
             let deadline = Date().addingTimeInterval(5)
             var lastAvailabilityError: HelperError?
+            var lastTransientReadError: AccessibilityReadError?
             repeat {
-                let nodes = try elements(window)
-                let currentEditor = try find(nodes, "Connection configuration", editor: true)
-                try require(try label(currentEditor, kAXValueAttribute) == fieldBeforeClipboard,
-                            "\(reason) clipboard availability changed the configuration before Paste was tapped")
-                let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
-                if expected {
-                    do { return (currentEditor, try find(buttons, "Paste")) }
-                    catch let error as HelperError { lastAvailabilityError = error }
-                } else {
-                    let pasteAvailable = try buttons.contains { try names($0).contains("Paste") }
-                    if !pasteAvailable { return (currentEditor, nil) }
+                do {
+                    let availability = try retryTransientAccessibilityReads(
+                        context: "Paste \(reason) clipboard availability",
+                        deadline: deadline
+                    ) { () -> (editor: AXUIElement, button: AXUIElement?)? in
+                        let nodes = try elements(window)
+                        let currentEditor = try find(nodes, "Connection configuration", editor: true)
+                        try require(try label(currentEditor, kAXValueAttribute) == fieldBeforeClipboard,
+                                    "\(reason) clipboard availability changed the configuration before Paste was tapped")
+                        let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
+                        if expected {
+                            do { return (currentEditor, try find(buttons, "Paste")) }
+                            catch let error as HelperError { lastAvailabilityError = error }
+                        } else {
+                            let pasteAvailable = try buttons.contains { try names($0).contains("Paste") }
+                            if !pasteAvailable { return (currentEditor, nil) }
+                        }
+                        return nil
+                    }
+                    lastTransientReadError = nil
+                    if let availability { return availability }
+                } catch let error as AccessibilityReadError where isTransientAccessibilityRead(error) {
+                    lastTransientReadError = error
                 }
                 if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
             } while Date() < deadline
+            if let lastTransientReadError {
+                throw HelperError("Native Paste availability could not read a stable Accessibility tree; last error=\(lastTransientReadError)")
+            }
             if expected, let lastAvailabilityError { throw lastAvailabilityError }
             if expected { throw HelperError("Native Paste button did not become available for a \(reason) clipboard") }
             throw HelperError("Native Paste button was available for a \(reason) clipboard")
@@ -316,11 +363,23 @@ func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, so
         try press(pasteButton)
         let deadline = Date().addingTimeInterval(5)
         var observed = ""
+        var lastTransientValueError: AccessibilityReadError?
         repeat {
-            observed = try label(currentEditor, kAXValueAttribute)
+            do {
+                observed = try retryTransientAccessibilityReads(
+                    context: "reading the pasted URL",
+                    deadline: min(deadline, Date().addingTimeInterval(0.25))
+                ) { try label(currentEditor, kAXValueAttribute) }
+                lastTransientValueError = nil
+            } catch let error as AccessibilityReadError where isTransientAccessibilityRead(error) {
+                lastTransientValueError = error
+            }
             if observed == value { break }
             if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
         } while Date() < deadline
+        if observed != value, let lastTransientValueError {
+            throw HelperError("Native Paste could not verify the URL after transient Accessibility read errors; last error=\(lastTransientValueError)")
+        }
         try require(observed == value, "Native Paste button did not fill the subscription URL")
         board.clearContents()
         if !previous.isEmpty && !board.writeObjects(previous) {
@@ -462,8 +521,7 @@ func run() throws -> [String: Any] {
         }
     } catch {
         if operation == "tree", let readError = error as? AccessibilityReadError,
-           readError.code == .failure || readError.code == .cannotComplete || readError.code == .invalidUIElement ||
-            (readError.code == .illegalArgument && readError.attribute == kAXRoleAttribute) {
+           isTransientAccessibilityRead(readError) {
             // SwiftUI can invalidate a node between children enumeration and
             // AXRole reads when loading/error controls change. Rediscover the
             // read-only tree within Python's existing action deadline.
