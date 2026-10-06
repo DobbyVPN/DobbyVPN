@@ -273,6 +273,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'TracePhase("tree-uia-root-complete")',
             'TracePhase("tree-uia-walk-start")',
             'foreach (var element in Walk(root, trace: TracePhase))',
+            'catch (COMException error) when (error.HResult == unchecked((int)0x8000FFFF))',
+            'uiaError = error.ToString()',
             'var isOffscreen = current.IsOffscreen;',
             'trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-start");',
             'trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-complete id={automationId}");',
@@ -559,6 +561,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 "mainWindowTitle": "",
                 "windowDescription": "unavailable",
                 "processTopLevelWindows": [],
+                "uiaError": "System.Runtime.InteropServices.COMException (0x8000FFFF): Catastrophic failure",
             }
             completed = subprocess.CompletedProcess(
                 [str(helper)], 0, json.dumps(response).encode("utf-8"), b""

@@ -654,6 +654,14 @@ internal static class Program
                     }));
                     return 0;
                 }
+                catch (COMException error) when (error.HResult == unchecked((int)0x8000FFFF))
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(new {
+                        ready = false, alive = true, pid = process.Id, identity,
+                        uiaError = error.ToString()
+                    }));
+                    return 0;
+                }
                 Console.WriteLine(JsonSerializer.Serialize(new {
                     ready = true, pid = process.Id, identity, labels, enabled_controls, help_texts
                 }));
