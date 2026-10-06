@@ -284,6 +284,10 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let followingLabel = "Connection logs"
+        let frozenLabel = "Connection logs, holding new entries"
+        XCTAssertEqual(logs.label, followingLabel,
+                       "The log view should identify its initial follow state")
         let errorStatus = app.staticTexts["Error"]
         var expectedErrorCount = occurrences(of: validationError, in: logs.value as? String ?? "")
         paste.tap()
@@ -388,6 +392,8 @@ final class NativeUIInteractionTests: XCTestCase {
         )
         XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
                              "The gesture should move the identifiable record away from the bottom")
+        XCTAssertEqual(logs.label, frozenLabel,
+                       "A user scroll away from the bottom should freeze the displayed log entries")
         XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
                        "Scrolling should preserve the rendered log entries")
         let frozen = try XCTUnwrap(logs.value as? String)
@@ -401,6 +407,8 @@ final class NativeUIInteractionTests: XCTestCase {
                        "Editing the configuration should not move the frozen log view")
         XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
                       "The same log record should remain visible after dismissing the configuration keyboard")
+        XCTAssertEqual(logs.label, frozenLabel,
+                       "The configuration keyboard must not resume automatic log following")
         XCTAssertEqual(
             positionAnchor.element.frame.minY - logs.frame.minY,
             anchorOffsetBeforeConfiguration,
@@ -413,6 +421,8 @@ final class NativeUIInteractionTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { refreshOpportunity.fulfill() }
         wait(for: [refreshOpportunity], timeout: 2.0)
         attachScreenshot("logs-freeze-after-refresh")
+        XCTAssertEqual(logs.label, frozenLabel,
+                       "A Paste validation entry must not resume following while the reader is away from the bottom")
         XCTAssertEqual(logs.value as? String, frozen,
                        "The refreshed log source should stay frozen while the reader is away from the bottom")
         XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
@@ -467,6 +477,8 @@ final class NativeUIInteractionTests: XCTestCase {
             return self.occurrences(of: validationError, in: text) > errorsBeforeScroll
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed, "Returning to the bottom should resume new log entries")
+        XCTAssertEqual(logs.label, followingLabel,
+                       "Returning to the bottom should restore automatic log following")
     }
 
     private func verifyColdAndWarmImports() throws {

@@ -67,6 +67,15 @@ private final class DobbyLogTextView: UITextView {
         if sizeChanged && preservesReadingPosition { restoreReadingPosition() }
     }
 
+    func updateFollowingAccessibility(isFollowing: Bool) {
+        accessibilityLabel = isFollowing
+            ? NSLocalizedString("Connection logs", comment: "")
+            : NSLocalizedString("Connection logs, holding new entries", comment: "")
+        accessibilityHint = isFollowing
+            ? NSLocalizedString("Showing newest entries. Scroll up to pause automatic updates.", comment: "")
+            : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
+    }
+
     func captureReadingPosition() {
         guard textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
@@ -112,6 +121,7 @@ struct DobbyLogView: UIViewRepresentable {
         view.adjustsFontForContentSizeCategory = true
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
+        view.updateFollowingAccessibility(isFollowing: true)
         return view
     }
 
@@ -123,7 +133,10 @@ struct DobbyLogView: UIViewRepresentable {
             coordinator.expanded.removeAll()
         }
         if coordinator.isFollowing { coordinator.displayedEntries = entries }
-        (view as? DobbyLogTextView)?.preservesReadingPosition = !coordinator.isFollowing
+        if let logView = view as? DobbyLogTextView {
+            logView.preservesReadingPosition = !coordinator.isFollowing
+            logView.updateFollowingAccessibility(isFollowing: coordinator.isFollowing)
+        }
         let attributed = logText(coordinator.displayedEntries, expanded: coordinator.expanded)
         let text = attributed.string
         coordinator.updating = true
@@ -187,6 +200,7 @@ struct DobbyLogView: UIViewRepresentable {
             )
             isFollowing = atBottom
             logView.preservesReadingPosition = !atBottom
+            logView.updateFollowingAccessibility(isFollowing: atBottom)
             if !atBottom { logView.captureReadingPosition() }
         }
     }
