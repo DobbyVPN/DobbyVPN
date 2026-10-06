@@ -593,11 +593,26 @@ final class NativeUIInteractionTests: XCTestCase {
     private func assertFrozenLogTextIsSelectable(in logs: XCUIElement, frozenText: String) {
         let textPoint = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.45))
         textPoint.press(forDuration: 1.0)
-        let copyAction = app.descendants(matching: .any)
+        attachScreenshot("logs-freeze-selection-menu")
+        let copyActionInApp = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
-        XCTAssertTrue(copyAction.waitForExistence(timeout: 5),
-                      "A long press on frozen log text should expose the native Copy action")
-        guard copyAction.exists else { return }
+        let systemUI = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let copyActionInSystemUI = systemUI.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
+        let copyAction: XCUIElement
+        if copyActionInApp.waitForExistence(timeout: 3) {
+            copyAction = copyActionInApp
+        } else if copyActionInSystemUI.waitForExistence(timeout: 2) {
+            copyAction = copyActionInSystemUI
+        } else {
+            XCTFail(
+                "A long press on frozen log text should expose the native Copy action. " +
+                    "App Copy visible: \(copyActionInApp.exists); system Copy visible: \(copyActionInSystemUI.exists). " +
+                    "App hierarchy: \(app.debugDescription.prefix(5000)); " +
+                    "system hierarchy: \(systemUI.debugDescription.prefix(2500))"
+            )
+            return
+        }
         copyAction.tap()
         XCTAssertEqual(logs.value as? String, frozenText,
                        "Selecting and copying log text must not replace the frozen entries")
