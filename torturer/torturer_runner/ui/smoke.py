@@ -124,6 +124,7 @@ class NativeUIController:
         self.launch_count = self.capture_count = 0
         self.reconnecting_seen = False
         self.cleared_record: str | None = None
+        self.log_resize_verified = False
 
     @property
     def timeout(self) -> float:
@@ -150,7 +151,7 @@ class NativeUIController:
             request["identity"] = self.identity
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
-        operation_limit = 30.0 if self.platform == "windows" and operation == "tree" else 10.0
+        operation_limit = 30.0 if self.platform == "windows" and operation in {"tree", "resize-window"} else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}
         if self.platform == "windows":
@@ -396,14 +397,29 @@ class NativeUIController:
         return self.snapshot()
 
     def import_link(self, url: str) -> dict:
+        self.dispatch_import_link(url, repeats=2)
+        self._wait(lambda: "Retry" not in self.snapshot()["labels"], "import did not replace failed subscription")
+        self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "imported profiles are unavailable")
+        return self.snapshot()
+
+    def dispatch_import_link(self, url: str, *, repeats: int = 1) -> dict:
+        """Deliver a warm import and verify it stayed in the current window.
+
+        Unlike ``import_link``, this returns before subscription loading
+        completes so a caller can inspect a connection request that is still
+        pending while the imported URL is being fetched.
+        """
+        if repeats < 1 or repeats > 2:
+            raise ValueError("warm import delivery supports one or two identical links")
         from urllib.parse import quote
         link = "dobbyvpn://import?url=" + quote(url, safe="")
         self.profile.write_text(url, encoding="utf-8")
         before = self._call("probe")
         identity_before, pid_before = before.get("identity"), before.get("pid")
-        for _ in range(2):
+        for _ in range(repeats):
             self._open_link(link)
-        time.sleep(0.25)
+        if repeats > 1:
+            time.sleep(0.25)
         # Windows' helper rejects duplicate matching processes when it probes
         # without a PID, then returns the existing process identity.
         after = self._call("probe", unbound=self.platform == "windows")
@@ -413,9 +429,8 @@ class NativeUIController:
             not before.get("windowHandle") or after.get("windowHandle") != before.get("windowHandle")
         ):
             raise NativeUISmokeError("warm deep link did not reuse the existing Windows window")
-        self._wait(lambda: "Retry" not in self.snapshot()["labels"], "import did not replace failed subscription")
-        self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "imported profiles are unavailable")
-        return self.snapshot()
+        return {"ready": True, "pid": after.get("pid"), "identity": after.get("identity"),
+                "windowHandle": after.get("windowHandle")}
 
     def clear_logs(self) -> dict:
         previous = ""
@@ -433,6 +448,19 @@ class NativeUIController:
                 raise NativeUISmokeError("Windows log entries did not expose rendered structured text")
             if not initial_view.get("expansion_verified"):
                 raise NativeUISmokeError("Windows structured log Details did not reveal the original record")
+            capture_row = next((
+                entry.get("text", "") for entry in rendered
+                if isinstance(entry, dict) and "Stderr capture initialized" in entry.get("text", "")
+            ), "")
+            capture_header = capture_row.splitlines()[0] if capture_row else ""
+            if (
+                " · INFO · Backend stderr" not in capture_header
+                or "Stderr capture initialized" not in capture_row
+                or any(severity in capture_header for severity in (" · ERROR · ", " · FATAL · ", " · PANIC · "))
+            ):
+                raise NativeUISmokeError(
+                    "Windows rendered stderr.capture row was missing its informational severity or friendly stream name"
+                )
             try:
                 original_record = json.loads(initial_view.get("expanded_record", ""))
             except (json.JSONDecodeError, TypeError) as error:
@@ -479,6 +507,23 @@ class NativeUIController:
             self._call("scroll-logs", position="top")
             frozen_position = self._call("log-position")
             frozen = self._call("logs").get("text", "")
+            original_window = self.resize_window(640, 640)
+            try:
+                resized_view = self._call("logs")
+                resized_position = self._call("log-position")
+                if resized_view.get("text", "") != frozen:
+                    raise NativeUISmokeError("Windows log entries changed when the window was resized while frozen")
+                if resized_position.get("visible_first_record") != frozen_position.get("visible_first_record"):
+                    raise NativeUISmokeError(
+                        "Windows reading position changed when the window was resized while following was frozen: "
+                        f"before={frozen_position} after={resized_position}"
+                    )
+            finally:
+                self.resize_window(
+                    original_window["width"], original_window["height"],
+                    left=original_window["left"], top=original_window["top"],
+                )
+            self.log_resize_verified = True
             original_url = self.profile.read_text(encoding="utf-8").strip()
             failure_url = original_url.rsplit("/", 1)[0] + "/missing"
             try:
@@ -517,6 +562,20 @@ class NativeUIController:
             self._call("scroll-logs", position="top")
             frozen_position = self._call("log-position")
             frozen = self._call("logs").get("text", "")
+            original_window = self.resize_window(640, 560)
+            try:
+                resized_view = self._call("logs")
+                resized_position = self._call("log-position")
+                if resized_view.get("text", "") != frozen:
+                    raise NativeUISmokeError("macOS log entries changed when the window was resized while frozen")
+                if resized_position.get("visible_range_start") != frozen_position.get("visible_range_start"):
+                    raise NativeUISmokeError(
+                        "macOS reading position changed when the window was resized while following was frozen: "
+                        f"before={frozen_position} after={resized_position}"
+                    )
+            finally:
+                self.resize_window(original_window["width"], original_window["height"])
+            self.log_resize_verified = True
             original_url = self.profile.read_text(encoding="utf-8").strip()
             failure_url = original_url.rsplit("/", 1)[0] + "/missing"
             try:
@@ -577,6 +636,44 @@ class NativeUIController:
         self._click("VPN connection action")
         return self.wait_status("Connected")
 
+    def connect_with_auto_stop(self) -> dict:
+        """Require an enabled Stop control while Auto selection is pending."""
+        self._click("VPN connection action")
+        deadline = time.monotonic() + self.timeout
+        stop_seen = False
+        latest: dict = {}
+        while time.monotonic() < deadline:
+            latest = self.snapshot()
+            status = latest.get("status")
+            if status in {"Connecting", "Reconnecting"}:
+                labels = set(latest.get("labels", []))
+                enabled = set(latest.get("enabled_controls", []))
+                if "Stop" in labels and "Stop" in enabled:
+                    competing = sorted(
+                        name for name in enabled
+                        if isinstance(name, str)
+                        and name.startswith("Profile ")
+                        and name.endswith(" action")
+                    )
+                    if competing:
+                        raise NativeUISmokeError(
+                            "Auto selection exposed Stop while profile Connect actions remained enabled: "
+                            + ", ".join(competing)
+                        )
+                    stop_seen = True
+            elif status == "Connected":
+                if not stop_seen:
+                    raise NativeUISmokeError(
+                        "Auto selection completed without a rendered, enabled Stop control"
+                    )
+                return {**latest, "auto_stop_observed": True}
+            elif status in {"Failed", "Error"}:
+                raise NativeUISmokeError(
+                    f"Auto selection failed before its Stop control could be verified: {latest}"
+                )
+            time.sleep(min(0.04, max(0.0, deadline - time.monotonic())))
+        raise NativeUISmokeError("Auto selection did not complete before the native UI deadline")
+
     def disconnect(self) -> dict:
         self._click("VPN connection action")
         return self.wait_status("Disconnected")
@@ -587,6 +684,16 @@ class NativeUIController:
         self._wait(lambda: "Auto connect" in self.snapshot()["labels"], "replacement service did not expose Connect")
         self.configure()
         return self.connect()
+
+    def resize_window(self, width: int, height: int, *, left: int | None = None, top: int | None = None) -> dict:
+        if width < 560 or height < 460:
+            raise ValueError("native desktop window size is below the supported minimum")
+        request: dict[str, int] = {"width": width, "height": height}
+        if left is not None:
+            request["left"] = left
+        if top is not None:
+            request["top"] = top
+        return self._call("resize-window", **request)
 
     def about(self) -> dict:
         self._click("About")

@@ -17,6 +17,7 @@
 		E00000000000000000000002 /* NativeUIInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000001 /* NativeUIInteractionTests.swift */; };
 		E0000000000000000000000D /* NativeRendererInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000B /* NativeRendererInteractionTests.swift */; };
 		E0000000000000000000000E /* NativeRendererTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000000000000000000000C /* NativeRendererTestSupport.swift */; };
+		E00000000000000000000010 /* NativeSubscriptionFixtureInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000000000000000000011 /* NativeSubscriptionFixtureInteractionTests.swift */; };
 		F2000000000000000000001A /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
 		F20000000000000000000001 /* IOSIntegration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; };
 		F20000000000000000000002 /* IOSIntegration.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -37,6 +38,7 @@
 		F20000000000000000000017 /* DobbySessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000005 /* DobbySessionViewModel.swift */; };
 		F20000000000000000000018 /* DobbyRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000006 /* DobbyRootView.swift */; };
 		F20000000000000000000019 /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
+		F20000000000000000000043 /* IOSSimulatorTestSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000043 /* IOSSimulatorTestSessionClient.swift */; };
 		C20000000000000000000001 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000001 /* LICENSE */; };
 		C20000000000000000000002 /* THIRD_PARTY_NOTICES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000002 /* THIRD_PARTY_NOTICES */; };
 		C20000000000000000000003 /* LICENSES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000003 /* LICENSES */; };
@@ -91,6 +93,7 @@
 		E00000000000000000000003 /* iosAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E0000000000000000000000B /* NativeRendererInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRendererInteractionTests.swift; sourceTree = "<group>"; };
 		E0000000000000000000000C /* NativeRendererTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRendererTestSupport.swift; sourceTree = "<group>"; };
+		E00000000000000000000011 /* NativeSubscriptionFixtureInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSubscriptionFixtureInteractionTests.swift; sourceTree = "<group>"; };
 		F10000000000000000000002 /* NativeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeApp.swift; sourceTree = "<group>"; };
 		F10000000000000000000003 /* IOSSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSessionClient.swift; sourceTree = "<group>"; };
 		F10000000000000000000004 /* DobbySessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbySessionClient.swift; sourceTree = "<group>"; };
@@ -99,6 +102,7 @@
 		F10000000000000000000007 /* DobbyShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyShareSheet.swift; sourceTree = "<group>"; };
 		F10000000000000000000008 /* Dobby-Vpn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F10000000000000000000009 /* Dobby-Vpn-Simulator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn-Simulator.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F10000000000000000000043 /* IOSSimulatorTestSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSimulatorTestSessionClient.swift; sourceTree = "<group>"; };
 		C10000000000000000000001 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../LICENSE; sourceTree = "<group>"; };
 		C10000000000000000000002 /* THIRD_PARTY_NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../THIRD_PARTY_NOTICES; sourceTree = "<group>"; };
 		C10000000000000000000003 /* LICENSES */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ../../../LICENSES; sourceTree = "<group>"; };
@@ -260,6 +264,7 @@
 				7555FF8C242A565B00829871 /* Info.plist */,
 				F10000000000000000000002 /* NativeApp.swift */,
 				F10000000000000000000003 /* IOSSessionClient.swift */,
+				F10000000000000000000043 /* IOSSimulatorTestSessionClient.swift */,
 				058557D7273AAEEB004C7B11 /* Preview Content */,
 			);
 			path = app;
@@ -272,6 +277,7 @@
 				E00000000000000000000001 /* NativeUIInteractionTests.swift */,
 				E0000000000000000000000B /* NativeRendererInteractionTests.swift */,
 				E0000000000000000000000C /* NativeRendererTestSupport.swift */,
+				E00000000000000000000011 /* NativeSubscriptionFixtureInteractionTests.swift */,
 			);
 			path = tests;
 			sourceTree = "<group>";
@@ -537,6 +543,7 @@
 				E00000000000000000000002 /* NativeUIInteractionTests.swift in Sources */,
 				E0000000000000000000000D /* NativeRendererInteractionTests.swift in Sources */,
 				E0000000000000000000000E /* NativeRendererTestSupport.swift in Sources */,
+				E00000000000000000000010 /* NativeSubscriptionFixtureInteractionTests.swift in Sources */,
 				F2000000000000000000001A /* DobbyShareSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -566,6 +573,7 @@
 				F20000000000000000000017 /* DobbySessionViewModel.swift in Sources */,
 				F20000000000000000000018 /* DobbyRootView.swift in Sources */,
 				F20000000000000000000019 /* DobbyShareSheet.swift in Sources */,
+				F20000000000000000000043 /* IOSSimulatorTestSessionClient.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1016,6 +1024,7 @@
 				SDKROOT = iphonesimulator;
 				SUPPORTED_PLATFORMS = iphonesimulator;
 				SWIFT_VERSION = 5.0;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DOBBY_SIMULATOR_TEST $(inherited)";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -1038,6 +1047,7 @@
 				SDKROOT = iphonesimulator;
 				SUPPORTED_PLATFORMS = iphonesimulator;
 				SWIFT_VERSION = 5.0;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DOBBY_SIMULATOR_TEST $(inherited)";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;

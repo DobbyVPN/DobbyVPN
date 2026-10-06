@@ -374,12 +374,10 @@ final class NativeUIInteractionTests: XCTestCase {
             renderedLogRecord(atDetailIndex: targetDetailIndex, in: renderedBeforeFreeze),
             "The selected Paste record should remain associated with its Details control"
         )
-        let positionAnchor = try XCTUnwrap(
-            visibleLogAnchor(in: logs) ??
-                (elementIsVisible(details, in: logs)
-                    ? RenderedLogAnchor(detailIndex: targetDetailIndex, record: selectedRecord, element: details)
-                    : nil),
-            "A visible rendered record should anchor the reading position before scrolling"
+        XCTAssertTrue(elementIsVisible(details, in: logs),
+                      "The selected Paste record's Details link should remain in the rendered log viewport after collapsing")
+        let positionAnchor = RenderedLogAnchor(
+            detailIndex: targetDetailIndex, record: selectedRecord, element: details
         )
         XCTAssertTrue(renderedBeforeFreeze.contains(positionAnchor.record),
                       "The anchor should identify a specific rendered log record")
@@ -576,11 +574,11 @@ final class NativeUIInteractionTests: XCTestCase {
             guard element.label == "Details", elementIsVisible(element, in: logs),
                   let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { return nil }
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
-            guard (0.05...0.80).contains(relativeY) else { return nil }
+            guard (0.05...0.75).contains(relativeY) else { return nil }
             return (RenderedLogAnchor(detailIndex: index, record: record, element: element), relativeY)
         }
         return candidates.min {
-            abs($0.relativeY - 0.45) < abs($1.relativeY - 0.45)
+            abs($0.relativeY - 0.20) < abs($1.relativeY - 0.20)
         }?.anchor
     }
 
@@ -591,12 +589,7 @@ final class NativeUIInteractionTests: XCTestCase {
         screenshotName: String? = nil
     ) -> CGFloat {
         let offsetBefore = anchor.element.frame.minY - logs.frame.minY
-        let relativeY = (anchor.element.frame.midY - logs.frame.minY) / logs.frame.height
-        let startY = max(0.05, min(0.55, relativeY - 0.20))
-        let endY = min(0.94, startY + 0.35)
-        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
-        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        logs.swipeDown(velocity: .slow)
 
         let detailElements = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
@@ -606,9 +599,11 @@ final class NativeUIInteractionTests: XCTestCase {
                 && currentAnchor.frame.minY - logs.frame.minY > offsetBefore + 24
         }, object: logs)
         let scrollSettled = XCTWaiter.wait(for: [movedIntoReadingArea], timeout: 5)
-        if let screenshotName { attachScreenshot(screenshotName) }
+        attachScreenshot(screenshotName ?? "logs-scroll-attempt")
         XCTAssertEqual(scrollSettled, .completed,
-                       "The drag should leave the same rendered log row visible away from the bottom")
+                       "A downward scroll should move the same rendered row away from the bottom; " +
+                           "before=\(offsetBefore), after=\(currentAnchor.frame.minY - logs.frame.minY), " +
+                           "viewport=\(logs.frame)")
         let offsetAfter = currentAnchor.frame.minY - logs.frame.minY
         XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
                              "The downward drag should move the reader more than the follow threshold")

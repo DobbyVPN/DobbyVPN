@@ -50,6 +50,44 @@ class _RecordingRunner:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_auto_selection_requires_an_enabled_rendered_stop_before_connected(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller._timeout = 10.0
+        controller._deadline = None
+        controller._click = mock.Mock()
+        controller.snapshot = mock.Mock(side_effect=(
+            {
+                "status": "Connecting",
+                "labels": ["Stop", "Profile 1 action"],
+                "enabled_controls": ["Stop"],
+            },
+            {
+                "status": "Connected",
+                "labels": ["Disconnect"],
+                "enabled_controls": ["VPN connection action"],
+            },
+        ))
+
+        with mock.patch("torturer_runner.ui.smoke.time.sleep"):
+            result = controller.connect_with_auto_stop()
+
+        self.assertTrue(result["auto_stop_observed"])
+        controller._click.assert_called_once_with("VPN connection action")
+
+    def test_auto_selection_does_not_claim_stop_after_it_has_already_connected(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller._timeout = 10.0
+        controller._deadline = None
+        controller._click = mock.Mock()
+        controller.snapshot = mock.Mock(return_value={
+            "status": "Connected",
+            "labels": ["Disconnect"],
+            "enabled_controls": ["VPN connection action"],
+        })
+
+        with self.assertRaisesRegex(smoke.NativeUISmokeError, "without a rendered, enabled Stop"):
+            controller.connect_with_auto_stop()
+
     def test_warm_deep_link_requires_the_same_window_not_only_the_same_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -75,6 +113,36 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 profile.read_text(encoding="utf-8"),
                 "https://example.invalid/subscription",
             )
+
+    def test_pending_import_dispatch_returns_without_waiting_for_profile_load(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "source.url"
+            controller = object.__new__(smoke.NativeUIController)
+            controller.platform = "windows"
+            controller.profile = profile
+            controller._timeout = 10.0
+            controller._deadline = None
+            controller._call = mock.Mock(side_effect=(
+                {"pid": 42, "identity": "same-process", "windowHandle": "0x1234"},
+                {"pid": 42, "identity": "same-process", "windowHandle": "0x1234"},
+            ))
+            controller._open_link = mock.Mock()
+            controller._wait = mock.Mock(side_effect=AssertionError("pending import must not wait for load completion"))
+            controller.snapshot = mock.Mock(side_effect=AssertionError("pending import must not wait for rendered profiles"))
+
+            result = controller.dispatch_import_link("https://example.invalid/subscription?pending=1")
+            saved_source = profile.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["windowHandle"], "0x1234")
+        controller._open_link.assert_called_once_with(
+            "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fsubscription%3Fpending%3D1"
+        )
+        self.assertEqual(controller._call.call_count, 2)
+        controller._wait.assert_not_called()
+        controller.snapshot.assert_not_called()
+        self.assertEqual(saved_source, "https://example.invalid/subscription?pending=1")
 
     def test_windows_probe_reports_main_window_handle_for_activation_checks(self) -> None:
         source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
@@ -187,7 +255,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
     def test_tree_discovery_prefers_visible_owned_window_before_activation_fallback(self) -> None:
         source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
-        tree_discovery = source.split('if (traceTree)\n            {', 1)[1].split(
+        tree_discovery = source.split('if (activateAndDiscoverWindow)\n            {', 1)[1].split(
             '\n            else\n            {', 1
         )[0]
 

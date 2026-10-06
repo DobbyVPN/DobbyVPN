@@ -29,6 +29,8 @@ from torturer_runner.ios_simulator import (
     iphonesimulator_sdk_version_command,
     simctl_boot_command,
     simctl_bootstatus_command,
+    simctl_create_command,
+    simctl_delete_command,
     simctl_get_app_container_command,
     simctl_install_command,
     simctl_terminate_command,
@@ -39,6 +41,7 @@ from torturer_runner.screenshot_artifacts import (
     assert_files_identical,
     png_metadata,
 )
+from torturer_runner.native_cases import IOS_SUBSCRIPTION_FIXTURE_CASE
 
 
 _RUNTIME = re.compile(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-(\d+(?:-\d+)*)\Z")
@@ -62,6 +65,7 @@ IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS = 10 * 60
 # contract; RunBudget still enforces the 30-minute lane and cleanup reserve.
 IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
+IOS_SUBSCRIPTION_FIXTURE_EXPECTED_GETS = 2
 # A timed-out command can use one grace window to stop its process group, then
 # the remaining reserve to drain inherited pipes and reap the direct child.
 # Keep this outside each operation timeout so RunBudget retains its cleanup
@@ -86,6 +90,8 @@ STAGE_TIMEOUT_SECONDS = {
     # one-time Data Migration before bootstatus reports ready. Keep this a
     # single bounded wait; the lane budget still reserves cleanup time.
     "bootstatus": 360,
+    "create-simulator": 60,
+    "delete-simulator": 60,
     # A slow iOS 26 boot can leave installd busy after bootstatus reports
     # ready. Keep one bounded install attempt inside the lane budget.
     "install": 300,
@@ -332,6 +338,8 @@ class AvailableSimulator:
     udid: str
     name: str
     runtime: str
+    device_type_identifier: str = ""
+    temporary: bool = False
 
 
 @dataclass(frozen=True)
@@ -395,7 +403,7 @@ def select_available_iphone(
         raise IOSSimulatorAppContractError("simctl did not provide a readable device inventory") from error
     if not isinstance(devices, dict):
         raise IOSSimulatorAppContractError("simctl device inventory has an invalid shape")
-    candidates: list[tuple[tuple[int, ...], str, str, str]] = []
+    candidates: list[tuple[tuple[int, ...], str, str, str, str]] = []
     for runtime, entries in devices.items():
         match = _RUNTIME.fullmatch(runtime) if isinstance(runtime, str) else None
         if match is None or not isinstance(entries, list):
@@ -413,15 +421,21 @@ def select_available_iphone(
                 udid = simctl_boot_command(raw_udid)[-1]
             except IOSSimulatorContractError:
                 continue
-            candidates.append((version, name, udid, runtime))
+            device_type = entry.get("deviceTypeIdentifier", "")
+            if not isinstance(device_type, str):
+                device_type = ""
+            candidates.append((version, name, udid, runtime, device_type))
     if not candidates:
         raise IOSSimulatorAppContractError(
             "no available iPhone Simulator matches active iphonesimulator SDK "
             f"{sdk_version_text}"
         )
-    version, name, udid, runtime = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+    version, name, udid, runtime, device_type = max(candidates, key=lambda item: (item[0], item[1], item[2]))
     del version
-    return AvailableSimulator(udid=udid, name=name, runtime=runtime)
+    return AvailableSimulator(
+        udid=udid, name=name, runtime=runtime,
+        device_type_identifier=device_type,
+    )
 
 
 def _active_iphonesimulator_sdk_version(
@@ -443,6 +457,98 @@ def _active_iphonesimulator_sdk_version(
             f"{sdk_version or '<empty>'}",
         )
     return sdk_version
+
+
+def _create_disposable_simulator(
+    selected: AvailableSimulator,
+    *,
+    runner: CommandRunner,
+    budget: RunBudget,
+) -> AvailableSimulator:
+    if not selected.device_type_identifier:
+        raise IOSSimulatorStageError(
+            "create-simulator",
+            "selected iPhone Simulator does not report its device type",
+        )
+    name = "DobbyVPN Torturer " + uuid.uuid4().hex[:12]
+    result = _require_success(
+        runner,
+        simctl_create_command(name, selected.device_type_identifier, selected.runtime),
+        "create-simulator",
+        budget=budget,
+    )
+    output = result.stdout.strip()
+    try:
+        udid = simctl_boot_command(output)[-1]
+    except IOSSimulatorContractError as error:
+        raise IOSSimulatorStageError(
+            "create-simulator",
+            "simctl create did not return a valid Simulator identifier",
+        ) from error
+    return AvailableSimulator(
+        udid=udid,
+        name=name,
+        runtime=selected.runtime,
+        device_type_identifier=selected.device_type_identifier,
+        temporary=True,
+    )
+
+
+def _write_disposable_subscription_profile(work_dir: Path) -> Path:
+    """Create a synthetic twelve-profile list for the Simulator test client."""
+    sections = []
+    for index in range(1, 13):
+        sections.append(
+            "[[Outline]]\n"
+            f'Description = "Simulator fixture profile {index}"\n'
+            'Server = "192.0.2.10"\n'
+            "Port = 443\n"
+            'Password = "fixture-only"'
+        )
+    path = work_dir / "simulator-subscription-profile.toml"
+    path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+    return path
+
+
+def _subscription_fixture_test_environment(fixture: object) -> dict[str, str]:
+    """Pass the exact XCTest env keys; fixture control credentials stay host-side.
+
+    XCTest receives ``DOBBY_IOS_TEST_SUBSCRIPTION_URL``,
+    ``DOBBY_IOS_TEST_FIXTURE_REQUIRED=1`` and
+    ``DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE=1``. Its app launch forwards only
+    the marker and seed flag, leaving the URL to the rendered Paste/deep-link
+    interaction. The HTTPS fixture's control URL, key and CA never enter XCTest.
+    """
+    return {
+        "DOBBY_IOS_TEST_SUBSCRIPTION_URL": str(getattr(fixture, "url")),
+        "DOBBY_IOS_TEST_FIXTURE_REQUIRED": "1",
+        "DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE": "1",
+    }
+
+
+def _assert_subscription_fixture_request_count(
+    fixture: object, *, expected_gets: int = 1
+) -> dict[str, int]:
+    """Check host-owned stats: subscription_gets, in_flight_gets, max_in_flight_gets."""
+    if isinstance(expected_gets, bool) or not isinstance(expected_gets, int) or expected_gets < 1:
+        raise ValueError("expected fixture GET count must be a positive integer")
+    stats = getattr(fixture, "control_stats")()
+    if not isinstance(stats, dict):
+        raise IOSSimulatorAppContractError(
+            "rendered subscription fixture returned invalid request statistics"
+        )
+    expected = {
+        "subscription_gets": expected_gets,
+        "in_flight_gets": 0,
+        "max_in_flight_gets": 1,
+    }
+    observed = {key: stats.get(key) for key in expected}
+    if observed != expected:
+        raise IOSSimulatorAppContractError(
+            f"rendered subscription fixture expected {expected_gets} completed "
+            f"non-overlapping GETs: {observed}"
+        )
+    return stats
 
 
 def xcodebuild_app_command(
@@ -1163,6 +1269,11 @@ def run_ios_simulator_app_contract(
     xctest_started = False
     retained_result_bundle: Path | None = None
     retained_native_log: Path | None = None
+    subscription_fixture = None
+    subscription_fixture_directory = work_dir / "native-subscription-fixture"
+    requires_subscription_fixture = (
+        native_cases is not None and IOS_SUBSCRIPTION_FIXTURE_CASE in native_cases
+    )
 
     try:
         inventory = _require_success(
@@ -1173,11 +1284,18 @@ def run_ios_simulator_app_contract(
         )
         sdk_version = _active_iphonesimulator_sdk_version(runner, budget=budget)
         try:
-            simulator = select_available_iphone(inventory.stdout, sdk_version)
+            selected_simulator = select_available_iphone(inventory.stdout, sdk_version)
         except BaseException as error:
             if isinstance(error, (KeyboardInterrupt, SystemExit)):
                 raise
             raise _stage_error("select-device", error) from error
+        simulator = (
+            _create_disposable_simulator(
+                selected_simulator, runner=runner, budget=budget
+            )
+            if requires_subscription_fixture
+            else selected_simulator
+        )
         keyboard_override = _read_simulator_hardware_keyboard_override(simulator.udid)
         if keyboard_override is None:
             previous_keyboard_preference = _disable_simulator_hardware_keyboard(
@@ -1239,6 +1357,21 @@ def run_ios_simulator_app_contract(
             ),
         )
         app_installed = True
+        test_environment = None
+        if requires_subscription_fixture:
+            from torturer_runner.subscription_fixture import SubscriptionFixture
+
+            subscription_fixture = SubscriptionFixture(
+                _write_disposable_subscription_profile(work_dir),
+                subscription_fixture_directory,
+                "ios_simulator",
+                simulator_udid=simulator.udid,
+                simulator_temporary=simulator.temporary,
+            )
+            # start() records Simulator trust before installing it, so the
+            # common finally cleanup can handle partial setup failures too.
+            subscription_fixture.start()
+            test_environment = _subscription_fixture_test_environment(subscription_fixture)
         project = candidate_root / _PROJECT_PATH
         if not project.is_dir():
             raise IOSSimulatorStageError(
@@ -1274,6 +1407,7 @@ def run_ios_simulator_app_contract(
                     result_bundle=result_bundle,
                     architecture=contract.architecture,
                     native_cases=native_cases,
+                    test_environment=test_environment,
                 ),
                 "xctest-ui",
                 cwd=candidate_root,
@@ -1281,6 +1415,11 @@ def run_ios_simulator_app_contract(
                 timeout_seconds=STAGE_TIMEOUT_SECONDS["xctest-ui"],
             ),
         )
+        if subscription_fixture is not None:
+            _assert_subscription_fixture_request_count(
+                subscription_fixture,
+                expected_gets=IOS_SUBSCRIPTION_FIXTURE_EXPECTED_GETS,
+            )
 
     except BaseException as error:
         failure = error
@@ -1328,6 +1467,17 @@ def run_ios_simulator_app_contract(
                         cleanup_errors.append(
                             ("iOS app log export collection failed", error)
                         )
+            if subscription_fixture is not None:
+                try:
+                    subscription_fixture.close()
+                except BaseException as error:
+                    cleanup_errors.append(("iOS subscription fixture cleanup failed", error))
+                    try:
+                        SubscriptionFixture.cleanup_interrupted(subscription_fixture_directory)
+                    except BaseException as retry_error:
+                        cleanup_errors.append(
+                            ("iOS subscription fixture retry cleanup failed", retry_error)
+                        )
             if simulator is not None:
                 if app_installed:
                     try:
@@ -1348,6 +1498,20 @@ def run_ios_simulator_app_contract(
                         _shutdown_simulator(runner, simulator, budget=budget)
                     except BaseException as error:
                         cleanup_errors.append(("Simulator shutdown also failed", error))
+                if simulator.temporary:
+                    try:
+                        _require_success(
+                            runner,
+                            simctl_delete_command(simulator.udid),
+                            "delete-simulator",
+                            timeout_seconds=max(
+                                1,
+                                budget.cleanup_timeout() - COMMAND_TERMINATION_RESERVE_SECONDS,
+                            ),
+                            bounded_timeout=True,
+                        )
+                    except BaseException as error:
+                        cleanup_errors.append(("Disposable Simulator deletion failed", error))
             if keyboard_preference_configured:
                 try:
                     _restore_simulator_hardware_keyboard(

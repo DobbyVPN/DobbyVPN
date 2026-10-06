@@ -51,10 +51,24 @@ def command(arguments: list[str], *, input_bytes: bytes | None = None) -> bytes:
 
 
 class SubscriptionFixture:
-    def __init__(self, profile: Path, directory: Path, platform: str, *, adb: list[str] | None = None, certificate_helper: Path | None = None):
+    def __init__(
+        self,
+        profile: Path,
+        directory: Path,
+        platform: str,
+        *,
+        adb: list[str] | None = None,
+        certificate_helper: Path | None = None,
+        simulator_udid: str | None = None,
+        simulator_temporary: bool = False,
+    ):
         self.profile, self.directory, self.platform = profile, directory, platform
         self.adb = adb or ["adb"]
         self.certificate_helper = certificate_helper
+        self.simulator_udid = simulator_udid or ""
+        self.simulator_temporary = simulator_temporary
+        if platform == "ios_simulator" and (not self.simulator_udid or not simulator_temporary):
+            raise ValueError("iOS Simulator fixture trust requires its own disposable Simulator")
         self.server: http.server.ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.trusted = False
@@ -149,6 +163,13 @@ class SubscriptionFixture:
             self.forwarded = True
             self._save()
             command([*self.adb, "reverse", "--no-rebind", f"tcp:{self.port}", f"localfilesystem:{self.socket_path}"])
+        elif self.platform == "ios_simulator":
+            # simctl has no per-certificate removal command. The iOS rendered
+            # fixture therefore trusts only a run-owned Simulator which is
+            # deleted after the test; reset here also handles normal teardown.
+            self.trusted = True
+            self._save()
+            command(["xcrun", "simctl", "keychain", self.simulator_udid, "add-root-cert", str(self.certificate)])
         elif self.platform != "untrusted":
             raise ValueError("Unsupported subscription fixture trust target")
         self.trusted = self.platform != "untrusted"
@@ -311,6 +332,8 @@ class SubscriptionFixture:
             "socket_path": self.socket_path,
             "control_key": self.control_key,
             "control_path": self.control_path,
+            "simulator_udid": self.simulator_udid,
+            "simulator_temporary": self.simulator_temporary,
         }), encoding="utf-8")
 
     @classmethod
@@ -319,7 +342,11 @@ class SubscriptionFixture:
         if not marker.is_file():
             return
         state = json.loads(marker.read_text(encoding="utf-8"))
-        fixture = cls(directory / "unused", directory, state["platform"], adb=state["adb"])
+        fixture = cls(
+            directory / "unused", directory, state["platform"], adb=state["adb"],
+            simulator_udid=state.get("simulator_udid"),
+            simulator_temporary=state.get("simulator_temporary", False),
+        )
         fixture.fingerprint = state["fingerprint"]
         fixture.trusted = state["trusted"]
         fixture.forwarded = state["forwarded"]
@@ -330,6 +357,17 @@ class SubscriptionFixture:
         fixture.control_key = state.get("control_key", "")
         fixture.control_path = state.get("control_path", "")
         fixture.close()
+
+    def _simulator_exists(self) -> bool:
+        if not self.simulator_udid:
+            return False
+        inventory = json.loads(command(["xcrun", "simctl", "list", "devices", "-j"]))
+        return any(
+            isinstance(device, dict) and device.get("udid", "").upper() == self.simulator_udid.upper()
+            for devices in inventory.get("devices", {}).values()
+            if isinstance(devices, list)
+            for device in devices
+        )
 
     def close(self) -> None:
         errors: list[BaseException] = []
@@ -350,6 +388,14 @@ class SubscriptionFixture:
                             "/Library/Keychains/System.keychain"]]
             elif self.platform == "windows":
                 cleanup = [["certutil", "-delstore", "Root", self.fingerprint]]
+            elif self.platform == "ios_simulator" and self.simulator_temporary:
+                try:
+                    # If the disposable device was already deleted by outer
+                    # interruption cleanup, its trust store is gone as well.
+                    if self._simulator_exists():
+                        cleanup = [["xcrun", "simctl", "keychain", self.simulator_udid, "reset"]]
+                except BaseException as error:
+                    errors.append(error)
         if self.android_staged:
             # A killed mount command may have succeeded before its caller returned.
             # Compare inode identity before unmounting: never remove another mount.

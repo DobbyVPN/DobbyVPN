@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 import re
 
-from .native_cases import IOS_LOGS_FREEZE_RESUME_CASE, IOS_RENDERER_SEVERITY_CASE
+from .native_cases import (
+    IOS_LOGS_FREEZE_RESUME_CASE,
+    IOS_RENDERER_SEVERITY_CASE,
+    IOS_SUBSCRIPTION_FIXTURE_CASE,
+)
 
 
 _UDID = re.compile(r"[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}\Z")
@@ -16,11 +20,16 @@ _DEFAULT_UI_TEST_SELECTION = (
     "iosAppUITests/NativeUIInteractionTests",
     "iosAppUITests/NativeRendererInteractionTests/"
     "testSeverityColorsResolveForLightAndDarkAppearances",
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
+    "testAutomaticProfilesAndFixtureRequestCounts",
 )
 _NATIVE_CASE_TEST_SELECTIONS = {
     IOS_LOGS_FREEZE_RESUME_CASE:
         "iosAppUITests/NativeUIInteractionTests/testLogsFreezeAndResumeAtBottom",
     IOS_RENDERER_SEVERITY_CASE: _DEFAULT_UI_TEST_SELECTION[1],
+    IOS_SUBSCRIPTION_FIXTURE_CASE:
+        "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
+        "testAutomaticProfilesAndFixtureRequestCounts",
 }
 
 
@@ -60,6 +69,26 @@ def simctl_boot_command(device_udid: str) -> list[str]:
 
 def simctl_bootstatus_command(device_udid: str) -> list[str]:
     return ["xcrun", "simctl", "bootstatus", _validate_udid(device_udid), "-b"]
+
+
+def simctl_create_command(name: str, device_type_identifier: str, runtime_identifier: str) -> list[str]:
+    if not isinstance(name, str) or not name.strip() or "\x00" in name or "\n" in name:
+        raise IOSSimulatorContractError("Simulator name is invalid")
+    if not isinstance(device_type_identifier, str) or not re.fullmatch(
+        r"com\.apple\.CoreSimulator\.SimDeviceType\.[A-Za-z0-9.-]+",
+        device_type_identifier,
+    ):
+        raise IOSSimulatorContractError("Simulator device type is invalid")
+    if not isinstance(runtime_identifier, str) or not re.fullmatch(
+        r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9]+(?:-[0-9]+)*",
+        runtime_identifier,
+    ):
+        raise IOSSimulatorContractError("Simulator runtime is invalid")
+    return ["xcrun", "simctl", "create", name, device_type_identifier, runtime_identifier]
+
+
+def simctl_delete_command(device_udid: str) -> list[str]:
+    return ["xcrun", "simctl", "delete", _validate_udid(device_udid)]
 
 
 def simctl_install_command(device_udid: str, app: str | Path) -> list[str]:
@@ -110,6 +139,7 @@ def xcodebuild_ui_test_without_building_command(
     *,
     architecture: str,
     native_cases: Sequence[str] | None = None,
+    test_environment: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Run prepared XCTest products and retain their result bundle."""
     app_project = Path(project)
@@ -150,7 +180,16 @@ def xcodebuild_ui_test_without_building_command(
         "CODE_SIGN_IDENTITY=-",
         "test-without-building",
     ]
-    return command
+    if test_environment is None:
+        return command
+    environment_arguments: list[str] = []
+    for key, value in sorted(test_environment.items()):
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise IOSSimulatorContractError("XCTest environment variable name is invalid")
+        if not isinstance(value, str) or "\x00" in value:
+            raise IOSSimulatorContractError("XCTest environment variable value is invalid")
+        environment_arguments.append(f"{key}={value}")
+    return ["/usr/bin/env", *environment_arguments, *command]
 
 
 def _validate_bundle_identifier(value: str) -> None:

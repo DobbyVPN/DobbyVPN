@@ -1,5 +1,6 @@
 package com.dobby
 
+import android.app.ActivityManager
 import android.app.Instrumentation
 import android.app.UiModeManager
 import android.content.ClipData
@@ -638,6 +639,10 @@ class NativeUiInstrumentedTest {
 
     private fun verifyLogScrollingAndClear() {
         val context = instrumentation.targetContext
+        val processRestartFixture = File(context.filesDir, "test-clear-process-restart.json")
+        check(!processRestartFixture.exists() || processRestartFixture.delete()) {
+            "ANDROID_CLEAR_PROCESS_RESTART_FIXTURE_RESET_FAILED"
+        }
         val prefix = "scroll-check-${System.nanoTime()}"
         repeat(80) { NativeVpnBridge.recordDiagnostic(context, "ui.test.scroll", "$prefix-$it") }
         waitForTextContaining("$prefix-79")
@@ -721,6 +726,17 @@ class NativeUiInstrumentedTest {
         check(!reopened.contains("$prefix-0") && reopened.contains(afterClear)) {
             "ANDROID_CLEAR_BOUNDARY_DID_NOT_SURVIVE_ACTIVITY_REOPEN"
         }
+        val fixtureTemporary = File(processRestartFixture.path + ".tmp")
+        fixtureTemporary.writeText(
+            JSONObject()
+                .put("cleared_record", "$prefix-0")
+                .put("post_clear_record", afterClear)
+                .put("original_process_id", targetAppProcessId(context))
+                .toString(),
+        )
+        check(fixtureTemporary.renameTo(processRestartFixture)) {
+            "ANDROID_CLEAR_PROCESS_RESTART_FIXTURE_WRITE_FAILED"
+        }
     }
 
     private fun verifyURLOnlyConnectionSurface() {
@@ -741,6 +757,12 @@ class NativeUiInstrumentedTest {
         )
         val present = retiredControls.filter { waitForObject(it, 100) != null }
         check(present.isEmpty()) { "ANDROID_RETIRED_CONNECTION_CONTROLS_VISIBLE $present" }
+    }
+
+    private fun targetAppProcessId(context: android.content.Context): Int {
+        val processes = context.getSystemService(ActivityManager::class.java).runningAppProcesses.orEmpty()
+        return processes.firstOrNull { it.processName == packageName }?.pid
+            ?: error("ANDROID_TARGET_APP_PROCESS_ID_UNAVAILABLE")
     }
 
     private fun selectVisibleLogText(): String {

@@ -76,17 +76,20 @@ def run(
 
     class Runner(ios.SubprocessCommandRunner):
         def run(self, command, **kwargs):
+            arguments = list(command)
             # Save ownership BEFORE boot/install so an interrupted helper can
             # still be cleaned up by the guest supervisor.
-            if list(command[:3]) == ["xcrun", "simctl", "boot"]:
+            if arguments[:3] == ["xcrun", "simctl", "boot"]:
                 state = _read_state(run_dir)
-                state["runtime"] = {"udid": command[3], "bundle_id": contract.bundle_identifier}
+                runtime = state.get("runtime") or {}
+                runtime.update({"udid": command[3], "bundle_id": contract.bundle_identifier})
+                state["runtime"] = runtime
                 _write_json(run_dir / "platform.json", state)
-            if list(command[:3]) == ["xcrun", "simctl", "install"]:
+            if arguments[:3] == ["xcrun", "simctl", "install"]:
                 state = _read_state(run_dir)
                 state["runtime"]["installed"] = True
                 _write_json(run_dir / "platform.json", state)
-            if list(command[:3]) == ["xcrun", "simctl", "shutdown"]:
+            if arguments[:3] == ["xcrun", "simctl", "shutdown"]:
                 state = _read_state(run_dir)
                 if state["runtime"].get("installed"):
                     result = super().run(["xcrun", "simctl", "uninstall", command[3], contract.bundle_identifier], **kwargs)
@@ -94,7 +97,26 @@ def run(
                         raise ios.IOSSimulatorAppContractError("Simulator app uninstall failed")
                     state["runtime"]["installed"] = False
                     _write_json(run_dir / "platform.json", state)
-            return super().run(command, **kwargs)
+            result = super().run(command, **kwargs)
+            if result.returncode == 0 and arguments[:3] == ["xcrun", "simctl", "create"]:
+                state = _read_state(run_dir)
+                state["runtime"] = {
+                    "udid": result.stdout.strip(),
+                    "bundle_id": contract.bundle_identifier,
+                    "temporary": True,
+                    "created": True,
+                    "installed": False,
+                }
+                _write_json(run_dir / "platform.json", state)
+            elif result.returncode == 0 and arguments[:3] == ["xcrun", "simctl", "delete"]:
+                state = _read_state(run_dir)
+                runtime = state.get("runtime") or {}
+                runtime["created"] = False
+                runtime["deleted"] = True
+                runtime["installed"] = False
+                state["runtime"] = runtime
+                _write_json(run_dir / "platform.json", state)
+            return result
 
     runner = Runner()
     budget = ios.RunBudget(max_seconds=timeout, cleanup_reserve_seconds=min(120, timeout / 4))
@@ -164,6 +186,70 @@ def cleanup(run_dir: Path, runtime: dict, logs: Path, timeout: float) -> None:
     udid = runtime.get("udid")
     if not udid:
         return
+    if runtime.get("temporary"):
+        from torturer_runner.subscription_fixture import SubscriptionFixture
+
+        fixture_directory = run_dir / "work" / "ios" / "native-subscription-fixture"
+        cleanup_errors: list[BaseException] = []
+
+        if not runtime.get("deleted"):
+            try:
+                inventory = _run_logged(
+                    ["xcrun", "simctl", "list", "devices", "-j"],
+                    cwd=run_dir,
+                    logs=logs,
+                    label="ios-cleanup-inventory",
+                    timeout=timeout,
+                )
+                devices = [
+                    device
+                    for values in json.loads(inventory.stdout)["devices"].values()
+                    for device in values
+                ]
+                selected = next(
+                    (device for device in devices if device["udid"].upper() == udid.upper()),
+                    None,
+                )
+                if selected is not None:
+                    if selected["state"] != "Shutdown":
+                        try:
+                            # Reset the disposable device trust before shutdown;
+                            # deleting the device below is the final removal.
+                            SubscriptionFixture.cleanup_interrupted(fixture_directory)
+                        except BaseException as error:
+                            cleanup_errors.append(error)
+                        _run_logged(
+                            ["xcrun", "simctl", "shutdown", udid],
+                            cwd=run_dir,
+                            logs=logs,
+                            label="ios-cleanup-shutdown-temporary",
+                            timeout=timeout,
+                        )
+                    _run_logged(
+                        ["xcrun", "simctl", "delete", udid],
+                        cwd=run_dir,
+                        logs=logs,
+                        label="ios-cleanup-delete-temporary",
+                        timeout=timeout,
+                    )
+                state = _read_state(run_dir)
+                state["runtime"]["created"] = False
+                state["runtime"]["deleted"] = True
+                state["runtime"]["installed"] = False
+                _write_json(run_dir / "platform.json", state)
+            except BaseException as error:
+                cleanup_errors.append(error)
+
+        try:
+            # If deletion succeeded, the trust store is gone and the marker can
+            # be removed without touching any reusable Simulator.
+            SubscriptionFixture.cleanup_interrupted(fixture_directory)
+        except BaseException as error:
+            cleanup_errors.append(error)
+        if cleanup_errors:
+            raise ExceptionGroup("Disposable iOS Simulator cleanup failed", cleanup_errors)
+        return
+
     # The existing helper normally shuts down its Simulator itself. On
     # interruption, only the recorded device may need stopping.
     inventory = _run_logged(["xcrun", "simctl", "list", "devices", "-j"], cwd=run_dir,

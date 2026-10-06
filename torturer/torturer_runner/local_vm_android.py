@@ -33,6 +33,7 @@ from .local_vm import _run_logged, _save_state
 _SERIAL = re.compile(r"^[A-Za-z0-9._:-]+$")
 APP_PACKAGE = "com.dobby.vpn"
 COMPANION_PACKAGE = "com.dobby.vpn.test"
+_MAIN_ACTIVITY = "com.dobby.vpn/com.dobby.ui.MainActivity"
 _DIAGNOSTICS_DIRECTORY = f"/data/user/0/{APP_PACKAGE}/files/diagnostics"
 _NATIVE_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/native_logs.jsonl"
 _GO_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/go_app_logs.jsonl"
@@ -322,6 +323,54 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
             collection_errors.append(
                 _render_collection_error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED", error)
             )
+    if not selected_cases and parsed.succeeded:
+        try:
+            restarted = _verify_clear_boundary_after_process_restart(
+                adb_value,
+                serial,
+                run_dir=run_dir,
+                logs=logs,
+                timeout=timeout,
+                environment=environment,
+            )
+        except Exception as error:
+            try:
+                restart_collection_errors = _collect_android_diagnostics(
+                    adb_value,
+                    serial,
+                    run_dir=run_dir,
+                    logs=logs,
+                    timeout=min(timeout, 30),
+                    environment=environment,
+                )
+            except Exception as collection_error:
+                restart_collection_errors = [
+                    _render_collection_error(
+                        "ANDROID_DIAGNOSTIC_COLLECTION_FAILED", collection_error
+                    )
+                ]
+            for collection_error in restart_collection_errors:
+                error.add_note(collection_error)
+            raise
+        result = subprocess.CompletedProcess(
+            args=result.args,
+            returncode=restarted.returncode if restarted.returncode else result.returncode,
+            stdout=(
+                result.stdout
+                + b"\n--- ANDROID CLEAR PROCESS-RESTART CHECK ---\n"
+                + restarted.stdout
+            ),
+            stderr=(
+                (result.stderr or b"")
+                + b"\n--- ANDROID CLEAR PROCESS-RESTART CHECK STDERR ---\n"
+                + (restarted.stderr or b"")
+            ),
+        )
+        parsed = parse_instrumentation_result(
+            returncode=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
     collection_errors.extend(
         _collect_android_diagnostics(
             adb_value,
@@ -336,6 +385,58 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         result,
         instrumentation_succeeded=parsed.succeeded,
         collection_errors=collection_errors,
+    )
+
+
+def _verify_clear_boundary_after_process_restart(
+    adb: str,
+    serial: str,
+    *,
+    run_dir: Path,
+    logs: Path,
+    timeout: float,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[bytes]:
+    """Kill and relaunch Android before checking the persisted Clear boundary."""
+
+    _adb_call(
+        adb,
+        serial,
+        ["shell", "am", "force-stop", APP_PACKAGE],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-clear-boundary-process-death",
+        timeout=min(timeout, 30),
+        environment=environment,
+    )
+    launched = _adb_call(
+        adb,
+        serial,
+        ["shell", "am", "start", "-W", "-n", _MAIN_ACTIVITY],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-clear-boundary-process-restart-launch",
+        timeout=min(timeout, 30),
+        environment=environment,
+    )
+    if b"Status: ok" not in launched.stdout or b"Complete" not in launched.stdout:
+        raise _error("Android app did not launch after the Clear process-death check")
+    return _adb_call(
+        adb,
+        serial,
+        [
+            "shell", "am", "instrument", "-w", "-r", "--no-restart",
+            "-e", "class",
+            "com.dobby.NativeUiClearProcessRestartTest#"
+            "clearBoundarySurvivesAppProcessDeath",
+            "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
+        ],
+        run_dir=run_dir,
+        logs=logs,
+        label="android-clear-boundary-process-restart-test",
+        timeout=min(timeout, 60),
+        environment=environment,
+        check=False,
     )
 
 

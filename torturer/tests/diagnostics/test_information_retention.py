@@ -428,13 +428,16 @@ class InformationRetentionTests(unittest.TestCase):
                 "height": 1,
             }
             smoke = SimpleNamespace(NativeUIController=mock.Mock(return_value=controller))
+            native_checks = {name: True for name in native_ui._REQUIRED_TRUE_CHECKS}
+            if args.platform == "windows":
+                native_checks["rendered_stderr_capture_label"] = True
 
             with (
                 mock.patch.object(native_ui, "_ensure_directory"),
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
                 mock.patch.object(native_ui, "smoke", smoke),
-                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value={name: True for name in native_ui._REQUIRED_TRUE_CHECKS}),
+                mock.patch.object(native_ui, "_exercise_subscription_controls", return_value=native_checks),
                 mock.patch(
                     "torturer_runner.subscription_fixture.SubscriptionFixture",
                     return_value=mock.Mock(
@@ -579,8 +582,9 @@ class InformationRetentionTests(unittest.TestCase):
             controller.profile = profile
             controller.cleared_record = None
             initial = "2026 · INFO · Backend\nready\nDetails\n"
-            log_texts = iter((initial, initial, initial, initial, initial + "new record\n", ""))
+            log_texts = iter((initial, initial, initial, initial, initial, initial + "new record\n", ""))
             positions = iter((
+                {"visible_range_start": 0, "visible_range_end": 100},
                 {"visible_range_start": 0, "visible_range_end": 100},
                 {"visible_range_start": 0, "visible_range_end": 100},
                 {"visible_range_start": 0, "visible_range_end": 100},
@@ -595,6 +599,8 @@ class InformationRetentionTests(unittest.TestCase):
                     return {"ready": True, "selected": initial}
                 if operation == "log-position":
                     return {"ready": True, **next(positions)}
+                if operation == "resize-window":
+                    return {"ready": True, "width": 900, "height": 700}
                 return {"ready": True}
 
             def wait(predicate, message: str) -> None:
@@ -613,6 +619,8 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(controller.cleared_record, "2026 · INFO · Backend")
             self.assertIn("select-log-text", operations)
             self.assertIn("log-position", operations)
+            self.assertEqual(operations.count("resize-window"), 2)
+            self.assertTrue(controller.log_resize_verified)
             self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
 
     def test_windows_clear_rejects_a_reading_position_change_while_frozen(self) -> None:
@@ -634,14 +642,21 @@ class InformationRetentionTests(unittest.TestCase):
                     return {
                         "ready": True,
                         "text": next(log_texts),
-                        "entries": [{"text": structured, "foreground": 0}],
+                        "entries": [
+                            {"text": "2026-10-06T00:00:00Z · INFO · Backend stderr\nStderr capture initialized", "foreground": 0},
+                            {"text": structured, "foreground": 0},
+                        ],
                         "expansion_verified": True,
                         "expanded_record": '{"message":"ready"}',
                     }
                 if operation == "select-log-text":
                     return {"ready": True, "selected": structured}
                 if operation == "log-position":
-                    return {"ready": True, "vertical_scroll_percent": next(positions)}
+                    position = next(positions)
+                    return {"ready": True, "vertical_scroll_percent": position,
+                            "visible_first_record": "record-at-" + str(position)}
+                if operation == "resize-window":
+                    return {"ready": True, "left": 50, "top": 60, "width": 900, "height": 700}
                 return {"ready": True}
 
             def wait(predicate, message: str) -> None:
@@ -668,8 +683,9 @@ class InformationRetentionTests(unittest.TestCase):
             controller.cleared_record = None
             structured = "2026 · INFO · Backend · ready"
             initial = structured + "\nDetails\n"
-            log_texts = iter((initial, initial, initial, initial, initial + "new record\n", ""))
-            positions = iter((25.0, 25.0, 25.0))
+            capture = "2026-10-06T00:00:00Z · INFO · Backend stderr\nStderr capture initialized"
+            log_texts = iter((initial, initial, initial, initial, initial, initial + "new record\n", ""))
+            positions = iter((25.0, 25.0, 25.0, 25.0))
             selected = iter((structured, structured))
             operations: list[str] = []
 
@@ -679,14 +695,18 @@ class InformationRetentionTests(unittest.TestCase):
                     return {
                         "ready": True,
                         "text": next(log_texts),
-                        "entries": [{"text": structured, "foreground": 1}],
+                        "entries": [{"text": capture, "foreground": 1}, {"text": structured, "foreground": 1}],
                         "expansion_verified": True,
                         "expanded_record": '{"message":"ready"}',
                     }
                 if operation == "select-log-text":
                     return {"ready": True, "selected": next(selected)}
                 if operation == "log-position":
-                    return {"ready": True, "vertical_scroll_percent": next(positions)}
+                    position = next(positions)
+                    return {"ready": True, "vertical_scroll_percent": position,
+                            "visible_first_record": "record-at-" + str(position)}
+                if operation == "resize-window":
+                    return {"ready": True, "left": 50, "top": 60, "width": 900, "height": 700}
                 return {"ready": True}
 
             def wait(predicate, message: str) -> None:
@@ -704,7 +724,9 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(result, {"status": "Disconnected"})
             self.assertEqual(controller.cleared_record, structured)
             self.assertEqual(operations.count("select-log-text"), 2)
-            self.assertEqual(operations.count("log-position"), 3)
+            self.assertEqual(operations.count("log-position"), 4)
+            self.assertEqual(operations.count("resize-window"), 2)
+            self.assertTrue(controller.log_resize_verified)
             self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
 
     def test_native_windows_helper_uses_existing_job_boundary(self) -> None:

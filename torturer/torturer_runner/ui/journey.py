@@ -80,6 +80,10 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "profile_switch_native",
     "manual_state_reopened",
     "profile_switch_transition_controls",
+    "auto_stop_during_auto_selection",
+    "import_during_connecting_preserves_request",
+    "logs_freeze_resize_preserves_reading_position",
+    "long_profile_list_keeps_logs_accessible",
     "deep_link_rejections_preserve_connection",
     "loading_disables_stale_actions",
     "failed_load_preserves_tunnel",
@@ -125,9 +129,12 @@ _REQUIRED_TRUE_CHECKS = frozenset({
 })
 
 
-def _require_complete_checks(checks: dict[str, object]) -> None:
+def _require_complete_checks(checks: dict[str, object], platform: str | None = None) -> None:
     """Fail closed when an evidence-producing step returned false/missing data."""
-    failed = sorted(key for key in _REQUIRED_TRUE_CHECKS if checks.get(key) is not True)
+    required = set(_REQUIRED_TRUE_CHECKS)
+    if platform == "windows":
+        required.add("rendered_stderr_capture_label")
+    failed = sorted(key for key in required if checks.get(key) is not True)
     if failed:
         raise NativeUIJourneyError(
             "required native UI checks did not pass: " + ", ".join(failed)
@@ -489,7 +496,7 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
             time.sleep(0.1)
         raise NativeUIJourneyError("Native selection did not reach its requested generation and profile")
 
-    def switch_profile(previous: dict, index: int, competing_index: int) -> dict:
+    def switch_profile(previous: dict, index: int, competing_index: int, *, during_pending=None) -> dict:
         target = f"Profile {index + 1} action"
         competing = f"Profile {competing_index + 1} action"
         deadline = time.monotonic() + timeout
@@ -520,6 +527,10 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
                     if competing in enabled:
                         raise NativeUIJourneyError("a competing profile Connect action remained enabled during switching")
                     transition_seen = True
+                    if during_pending is not None:
+                        observe_pending = during_pending
+                        during_pending = None
+                        observe_pending(current)
                 next_ui_check = time.monotonic() + 0.15
             if (current.get("state") == "CONNECTED" and current.get("generation", 0) > previous.get("generation", 0)
                     and current.get("active_mode") == "PROFILE_INDEX"
@@ -582,7 +593,83 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     ui.activate_profile(first)
     manual = selected(canceled, first)
     second = 0 if first == 1 else 1
-    switched = switch_profile(manual, second, first)
+
+    pending_import: dict[str, object] = {}
+
+    def import_while_switching(pending: dict) -> None:
+        expected = pending.get("pending_target")
+        if not (
+            isinstance(expected, dict)
+            and expected.get("mode") == "PROFILE_INDEX"
+            and expected.get("index") == second
+        ):
+            raise NativeUIJourneyError(
+                "desktop import test did not begin from the selected profile's pending switch target"
+            )
+        current_url = ui.profile.read_text(encoding="utf-8").strip()
+        separator = "&" if "?" in current_url else "?"
+        imported_url = current_url + separator + "import-during-connect=1"
+        before_gets = stats()["subscription_gets"]
+        fixture.hold_responses()
+        try:
+            ui.dispatch_import_link(imported_url)
+            deadline = time.monotonic() + timeout
+            current_stats = stats()
+            while time.monotonic() < deadline:
+                current_stats = stats()
+                if current_stats["subscription_gets"] > before_gets + 1:
+                    raise NativeUIJourneyError("import during a pending profile switch issued duplicate requests")
+                if current_stats["max_in_flight_gets"] > 1:
+                    raise NativeUIJourneyError("import during a pending profile switch overlapped subscription requests")
+                if current_stats["subscription_gets"] == before_gets + 1 and current_stats["in_flight_gets"] == 1:
+                    break
+                time.sleep(0.025)
+            else:
+                raise NativeUIJourneyError("desktop import did not begin a held subscription request during switching")
+
+            loading = base._snapshot(min(30, timeout), "NATIVE_PENDING_IMPORT_STATUS_FAILED")
+            pending_target = loading.get("pending_target")
+            still_pending = (
+                isinstance(pending_target, dict)
+                and pending_target.get("mode") == "PROFILE_INDEX"
+                and pending_target.get("index") == second
+            )
+            active_target = (
+                loading.get("active_mode") == "PROFILE_INDEX"
+                and loading.get("active_index") == second
+            )
+            active_profile = loading.get("active_profile")
+            connected_target = (
+                loading.get("state") == "CONNECTED"
+                and isinstance(active_profile, dict)
+                and active_profile.get("index") == second
+            )
+            if not (still_pending or active_target or connected_target):
+                raise NativeUIJourneyError(
+                    "subscription import interrupted or replaced the authoritative pending profile switch"
+                )
+            if loading.get("source_url") != pending.get("source_url"):
+                raise NativeUIJourneyError("held subscription import changed the accepted URL before its response completed")
+            pending_import.update({"url": imported_url, "before_gets": before_gets})
+        finally:
+            fixture.release_responses()
+
+    switched = switch_profile(manual, second, first, during_pending=import_while_switching)
+    if pending_import:
+        imported = str(pending_import["url"])
+        before_gets = int(pending_import["before_gets"])
+        loaded_import = wait_for_snapshot(
+            lambda value: value.get("source_url") == imported,
+            "subscription import did not complete after the profile switch",
+        )
+        wait_for_gets(before_gets + 1, "import during profile switching did not complete exactly one request")
+        require_active_generation(
+            loaded_import, switched,
+            "accepting the imported URL started, stopped, or replaced the selected profile connection",
+        )
+        if loaded_import.get("active_index") != second or loaded_import.get("digest") != switched.get("digest"):
+            raise NativeUIJourneyError("import completion changed the profile switch target or active inventory")
+        checks["import_during_connecting_preserves_request"] = True
     checks["profile_switch_transition_controls"] = True
 
     # Relaunch the frontend while a manual target is active. The same loaded
@@ -878,6 +965,11 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     checks["retry_success_native"] = True
 
     ui.clear_logs()
+    if not getattr(ui, "log_resize_verified", False):
+        raise NativeUIJourneyError("desktop logs did not verify frozen reading position across window resize")
+    checks["logs_freeze_resize_preserves_reading_position"] = True
+    if ui.platform == "windows":
+        checks["rendered_stderr_capture_label"] = True
     empty_logs = ui._call("logs")
     if empty_logs.get("ready") is not True or empty_logs.get("text", "").strip():
         raise NativeUIJourneyError("Clear did not leave an empty rendered log view")
@@ -912,8 +1004,11 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError("reopening the desktop UI refetched an already loaded inventory")
     checks["clear_boundary_survives_frontend_reopen"] = True
 
-    ui.connect()
+    auto_connection = ui.connect_with_auto_stop()
     selected(switched, None)
+    if auto_connection.get("auto_stop_observed") is not True:
+        raise NativeUIJourneyError("Auto selection returned without proving its rendered Stop action")
+    checks["auto_stop_during_auto_selection"] = True
 
     # Replace the visible inventory while Auto is active. The active profile
     # must remain identifiable even though it is absent from the new rows, and
@@ -1032,6 +1127,70 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         "restoring the accepted URL after invalid Paste failed",
     )
     require_active_generation(restored_paste, pasted_connection, "restoring the URL after Paste changed the active generation")
+
+    # A long inventory must remain bounded to its profile viewport so the
+    # independent diagnostics pane stays usable on desktop-sized windows.
+    previous_inventory = fixture.profile_bytes
+    large_inventory = b"\n\n".join(
+        (
+            b'[[Outline]]\nDescription = "' +
+            (b"" if index == 0 else f"Layout profile {index + 1}".encode("utf-8")) +
+            b'"\nServer = "127.0.0.1"\nPort = 9\nPassword = "never-connect-layout-' +
+            str(index + 1).encode("ascii") + b'"'
+        )
+        for index in range(24)
+    )
+    fixture.replace_response(large_inventory)
+    layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=24-profiles"
+    before_layout_gets = stats()["subscription_gets"]
+    ui.import_link(layout_source)
+    large_layout = wait_for_snapshot(
+        lambda value: value.get("source_url") == layout_source,
+        "the 24-profile layout fixture did not load",
+    )
+    wait_for_gets(before_layout_gets + 1, "the 24-profile layout fixture did not complete exactly one request")
+    if len(large_layout.get("profiles", [])) != 24:
+        raise NativeUIJourneyError("desktop did not load all 24 profiles in source order")
+    require_active_generation(
+        large_layout, restored_paste,
+        "loading a long profile list changed or interrupted the active connection",
+    )
+    layout_view = ui.snapshot()
+    expected_logs_control = "Backend logs" if ui.platform == "windows" else "Connection logs"
+    if not {"Profile 1 action", "Profile 2 action", expected_logs_control}.issubset(set(layout_view.get("labels", []))):
+        raise NativeUIJourneyError("the long profile list hid the top profile actions or desktop logs pane")
+    rendered_logs = ui._call("logs")
+    if rendered_logs.get("ready") is not True or not str(rendered_logs.get("text", "")).strip():
+        raise NativeUIJourneyError("desktop log output was unavailable while the long profile list was rendered")
+    visible_log_position = ui._call("log-position")
+    if ui.platform == "macos":
+        visible_range_start = visible_log_position.get("visible_range_start")
+        visible_range_end = visible_log_position.get("visible_range_end")
+        if not (
+            isinstance(visible_range_start, int)
+            and isinstance(visible_range_end, int)
+            and visible_range_end > visible_range_start
+        ):
+            raise NativeUIJourneyError("desktop logs had no readable viewport with the long profile list")
+    elif not str(visible_log_position.get("visible_first_record", "")).strip():
+        raise NativeUIJourneyError("desktop logs had no visible record with the long profile list")
+
+    fixture.replace_response(previous_inventory)
+    restore_layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=restore"
+    before_restore_layout_gets = stats()["subscription_gets"]
+    ui.import_link(restore_layout_source)
+    restored_layout = wait_for_snapshot(
+        lambda value: value.get("source_url") == restore_layout_source,
+        "the normal profile inventory did not return after long-list verification",
+    )
+    wait_for_gets(before_restore_layout_gets + 1, "restoring the normal inventory did not complete exactly one request")
+    require_active_generation(
+        restored_layout, restored_paste,
+        "restoring the normal profile inventory changed or interrupted the active connection",
+    )
+    if restored_layout.get("digest") != restored_paste.get("digest"):
+        raise NativeUIJourneyError("long-list verification did not restore the prior profile inventory")
+    checks["long_profile_list_keeps_logs_accessible"] = True
 
     ui.capture("subscription-controls")
     checks.update({
@@ -1318,7 +1477,7 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if not cleanup_verified(args.timeout):
             raise NativeUIJourneyError("final native Disconnect cleanup was not verified")
         checks["final_cleanup_verified"] = True
-        _require_complete_checks(checks)
+        _require_complete_checks(checks, args.platform)
     except BaseException as error:
         primary = error
         error.native_ui_checks = dict(checks)

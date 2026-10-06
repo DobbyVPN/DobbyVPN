@@ -363,9 +363,10 @@ internal static class Program
                 return 0;
             }
             var traceTree = operation == "tree";
+            var activateAndDiscoverWindow = traceTree || operation == "resize-window";
             if (traceTree) TracePhase($"tree-window-discovery-start pid={process.Id}");
             IntPtr window = IntPtr.Zero;
-            if (traceTree)
+            if (activateAndDiscoverWindow)
             {
                 string[] lastWindows = Array.Empty<string>();
                 string lastTitle = "unavailable";
@@ -446,6 +447,35 @@ internal static class Program
             if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
             var root = AutomationElement.FromHandle(window);
             if (traceTree) TracePhase("tree-uia-root-complete");
+            if (operation == "resize-window")
+            {
+                if (!GetWindowRect(window, out var original))
+                    throw new InvalidOperationException("Could not read native window bounds before resize");
+                var width = request.TryGetProperty("width", out var requestedWidth) ? requestedWidth.GetInt32() : 0;
+                var height = request.TryGetProperty("height", out var requestedHeight) ? requestedHeight.GetInt32() : 0;
+                if (width < 560 || height < 460)
+                    throw new ArgumentOutOfRangeException("width", "Requested native window is below its supported minimum");
+                var left = request.TryGetProperty("left", out var requestedLeft) ? requestedLeft.GetInt32() : original.Left;
+                var top = request.TryGetProperty("top", out var requestedTop) ? requestedTop.GetInt32() : original.Top;
+                if (!SetWindowPos(window, IntPtr.Zero, left, top, width, height, 0x0004 | 0x0010))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not resize the native window");
+                Rect resized = default;
+                WaitFor(() => GetWindowRect(window, out resized) &&
+                    Math.Abs((resized.Right - resized.Left) - width) <= 20 &&
+                    Math.Abs((resized.Bottom - resized.Top) - height) <= 20,
+                    $"Native window did not settle at the requested {width}x{height} size");
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    ready = true,
+                    left = original.Left,
+                    top = original.Top,
+                    width = original.Right - original.Left,
+                    height = original.Bottom - original.Top,
+                    resized_width = resized.Right - resized.Left,
+                    resized_height = resized.Bottom - resized.Top,
+                }));
+                return 0;
+            }
             AutomationElement Find(string name, bool editor = false, bool actionable = false)
             {
                 AutomationElement? FindBy(AutomationProperty property)
@@ -555,8 +585,14 @@ internal static class Program
                 var position = scroll.Current.VerticalScrollPercent;
                 if (position < 0)
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll position");
+                var firstVisibleRecord = Walk(logRoot, includeLogs: true)
+                    .Where(element => element.Current.ControlType == ControlType.Text && !element.Current.IsOffscreen)
+                    .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
+                        ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
+                    .FirstOrDefault(text => text.Contains(" · ", StringComparison.Ordinal)) ?? "";
                 Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true, vertical_scroll_percent = position
+                    ready = true, vertical_scroll_percent = position,
+                    visible_first_record = firstVisibleRecord
                 }));
                 return 0;
             }

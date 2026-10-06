@@ -519,6 +519,40 @@ func run() throws -> [String: Any] {
                     "window_count": windows.count, "window_id": try identifier(window),
                     "labels": labels, "enabled_controls": enabled, "link_urls": try linkURLs(nodes)]
         }
+        if operation == "resize-window" {
+            guard let requestedWidth = request["width"] as? NSNumber,
+                  let requestedHeight = request["height"] as? NSNumber else {
+                throw HelperError("Missing requested native window dimensions")
+            }
+            let width = requestedWidth.doubleValue
+            let height = requestedHeight.doubleValue
+            try require(width >= 560 && height >= 460, "Requested native window is below its supported minimum")
+            guard let originalValue = try axValue(window, kAXSizeAttribute) else {
+                throw HelperError("Native window size is unavailable before resize")
+            }
+            var originalSize = CGSize.zero
+            try require(AXValueGetValue(originalValue, .cgSize, &originalSize), "Could not read original native window size")
+            var requestedSize = CGSize(width: width, height: height)
+            guard let requestedValue = AXValueCreate(.cgSize, &requestedSize) else {
+                throw HelperError("Could not create requested native window size")
+            }
+            try activate()
+            let setResult = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, requestedValue)
+            try require(setResult == .success, "Native window rejected resize: \(setResult.rawValue)")
+            var resizedSize = CGSize.zero
+            let deadline = Date().addingTimeInterval(3)
+            repeat {
+                if let value = try axValue(window, kAXSizeAttribute) {
+                    try require(AXValueGetValue(value, .cgSize, &resizedSize), "Could not read resized native window size")
+                    if abs(resizedSize.width - width) <= 20 && abs(resizedSize.height - height) <= 20 { break }
+                }
+                Thread.sleep(forTimeInterval: 0.05)
+            } while Date() < deadline
+            try require(abs(resizedSize.width - width) <= 20 && abs(resizedSize.height - height) <= 20,
+                        "Native window did not settle at the requested \(Int(width))x\(Int(height)) size")
+            return ["ready": true, "width": originalSize.width, "height": originalSize.height,
+                    "resized_width": resizedSize.width, "resized_height": resizedSize.height]
+        }
     } catch {
         if operation == "tree", let readError = error as? AccessibilityReadError,
            isTransientAccessibilityRead(readError) {

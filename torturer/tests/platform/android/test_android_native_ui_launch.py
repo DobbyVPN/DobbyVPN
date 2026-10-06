@@ -101,9 +101,15 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
 
             def adb_call(_adb, _serial, arguments, *, label, **_kwargs):
                 calls.append((label, arguments))
-                if label == "android-native-ui-cold-bare-link-start":
+                if label in {
+                    "android-native-ui-cold-bare-link-start",
+                    "android-clear-boundary-process-restart-launch",
+                }:
                     return subprocess.CompletedProcess(("adb",), 0, start_output, b"")
-                if label == "android-native-ui":
+                if label in {
+                    "android-native-ui",
+                    "android-clear-boundary-process-restart-test",
+                }:
                     return subprocess.CompletedProcess(("adb",), 0, b"instrumentation output\n", b"")
                 return subprocess.CompletedProcess(("adb",), 0, b"", b"")
 
@@ -139,6 +145,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertIsNotNone(result)
         self.assertEqual(result.returncode, 0)
+        self.assertIn(b"--- ANDROID CLEAR PROCESS-RESTART CHECK ---", result.stdout)
         self.assertEqual(
             calls[:3],
             [
@@ -163,6 +170,29 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                 ),
             ],
         )
+        self.assertEqual(
+            calls[3:],
+            [
+                (
+                    "android-clear-boundary-process-death",
+                    ["shell", "am", "force-stop", local_vm_android.APP_PACKAGE],
+                ),
+                (
+                    "android-clear-boundary-process-restart-launch",
+                    ["shell", "am", "start", "-W", "-n", "com.dobby.vpn/com.dobby.ui.MainActivity"],
+                ),
+                (
+                    "android-clear-boundary-process-restart-test",
+                    [
+                        "shell", "am", "instrument", "-w", "-r", "--no-restart",
+                        "-e", "class",
+                        "com.dobby.NativeUiClearProcessRestartTest#"
+                        "clearBoundarySurvivesAppProcessDeath",
+                        "com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner",
+                    ],
+                ),
+            ],
+        )
 
     def test_small_screen_case_runs_only_its_exact_instrumentation_method(self) -> None:
         result, error, calls = self._run_ui(
@@ -177,6 +207,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             instrument[instrument.index("-e") + 2],
             "com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable",
         )
+        self.assertFalse(any("clear-boundary-process" in label for label, _ in calls))
 
     def test_missing_foreground_marker_stops_before_instrumentation(self) -> None:
         for output in (b"Status: ok\n", b"Complete\n"):
