@@ -156,6 +156,9 @@ struct DobbyLogView: UIViewRepresentable {
             if NSMaxRange(selection) <= view.textStorage.length { view.selectedRange = selection }
         }
         view.layoutIfNeeded()
+        if let logView = view as? DobbyLogTextView {
+            _ = coordinator.effectiveContentHeight(for: logView)
+        }
         if coordinator.isFollowing || cleared {
             view.scrollRangeToVisible(NSRange(location: view.textStorage.length, length: 0))
         } else { view.setContentOffset(offset, animated: false) }
@@ -175,6 +178,7 @@ struct DobbyLogView: UIViewRepresentable {
         var isRecordingLayoutDiagnostics = false
         private(set) var diagnosticEventCount = 0
         private let maximumDiagnosticEvents = 96
+        private var lastStableContentHeight: CGFloat?
 
         private struct FollowingUpdate {
             let previous: Bool
@@ -195,6 +199,9 @@ struct DobbyLogView: UIViewRepresentable {
             textView.attributedText = logText(displayedEntries, expanded: expanded)
             recordScrollDiagnostic("details-text-assigned", for: textView, accepted: false)
             textView.layoutIfNeeded()
+            if let logView = textView as? DobbyLogTextView {
+                _ = effectiveContentHeight(for: logView)
+            }
             recordScrollDiagnostic("details-after-layout-if-needed", for: textView, accepted: false)
             if isFollowing {
                 textView.scrollRangeToVisible(NSRange(location: textView.textStorage.length, length: 0))
@@ -257,10 +264,11 @@ struct DobbyLogView: UIViewRepresentable {
             guard let logView = scrollView as? DobbyLogTextView,
                   !logView.isRestoringReadingPosition else { return nil }
             let previous = isFollowing
+            let contentHeight = effectiveContentHeight(for: logView)
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height
                     - scrollView.adjustedContentInset.bottom,
-                contentHeight: scrollView.contentSize.height
+                contentHeight: contentHeight
             )
             let changed = isFollowing != atBottom
             isFollowing = atBottom
@@ -289,9 +297,10 @@ struct DobbyLogView: UIViewRepresentable {
             let rawViewportBottom = scrollView.contentOffset.y + scrollView.bounds.height
             let viewportBottom = rawViewportBottom - scrollView.adjustedContentInset.bottom
             let distanceToBottom = scrollView.contentSize.height - viewportBottom
+            let followHeight = effectiveContentHeight(for: logView)
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: viewportBottom,
-                contentHeight: scrollView.contentSize.height
+                contentHeight: followHeight
             )
             func number(_ value: CGFloat) -> String {
                 String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
@@ -313,6 +322,8 @@ struct DobbyLogView: UIViewRepresentable {
                 "textContainerInsetBottom=\(number(logView.textContainerInset.bottom))",
                 "contentInsetBottom=\(number(scrollView.contentInset.bottom))",
                 "adjustedContentInsetBottom=\(number(scrollView.adjustedContentInset.bottom))",
+                "effectiveContentHeight=\(number(followHeight))",
+                "stableContentHeight=\(number(lastStableContentHeight ?? followHeight))",
                 "rawViewportBottom=\(number(rawViewportBottom))",
                 "adjustedViewportBottom=\(number(viewportBottom))",
                 "distanceToBottom=\(number(distanceToBottom))",
@@ -322,6 +333,19 @@ struct DobbyLogView: UIViewRepresentable {
                 "changed=\(update?.changed ?? false)",
                 "emitted=\(update?.emitted ?? false)",
             ].joined(separator: " "))
+        }
+
+        func effectiveContentHeight(for logView: DobbyLogTextView) -> CGFloat {
+            let measured = logView.contentSize.height
+            let emptyTextHeight = logView.textContainerInset.top + logView.textContainerInset.bottom
+            if logView.textStorage.length == 0 || measured > emptyTextHeight + 1 {
+                lastStableContentHeight = measured
+                return measured
+            }
+            // During a transient TextKit layout, UITextView can report only its
+            // container insets while retaining nonempty text. Keep the last
+            // laid-out height for follow-state decisions until layout settles.
+            return lastStableContentHeight ?? measured
         }
     }
 }

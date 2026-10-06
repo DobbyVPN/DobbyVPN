@@ -666,7 +666,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         val controlsHeight = maxHeight * 0.5f
         Column(Modifier.traceComposeConstraints("connection-column").fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(
-                Modifier.weight(2f, fill = false).heightIn(max = controlsHeight)
+                Modifier.heightIn(max = controlsHeight)
                     .traceComposeConstraints("connection-controls")
                     .clipToBounds().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -727,7 +727,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     }
                 }
             }
-            LogsPane(controller, Modifier.weight(3f))
+            LogsPane(controller, Modifier.weight(1f))
         }
     }
 }
