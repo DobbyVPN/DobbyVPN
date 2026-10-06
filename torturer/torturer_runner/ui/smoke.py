@@ -218,9 +218,27 @@ class NativeUIController:
             with Path(str(prefix) + ".launcher.stdout.log").open("xb") as stdout, Path(str(prefix) + ".launcher.stderr.log").open("xb") as stderr:
                 self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
         elif self.platform == "windows":
-            os.startfile(link if link is not None else str(self.binary))  # type: ignore[attr-defined]
-            self.process = None
-            time.sleep(0.25)
+            if link is not None:
+                # Reopen with an import uses the actual OS scheme activation.
+                os.startfile(link)  # type: ignore[attr-defined]
+                self.process = None
+                time.sleep(0.25)
+            else:
+                stdout_path = Path(str(prefix) + ".stdout.log")
+                stderr_path = Path(str(prefix) + ".stderr.log")
+                # Launch the unpackaged WinUI executable in this interactive
+                # task directly. Shell activation can be serviced by Explorer
+                # and redirect to a different AppInstance; Popen gives the
+                # controller the exact process and run-scoped environment.
+                # Protocol links continue through os.startfile above.
+                with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
+                    self.process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+                self.pid = self.process.pid
         else:
             with Path(str(prefix) + ".launcher.stdout.log").open("xb") as stdout, Path(str(prefix) + ".launcher.stderr.log").open("xb") as stderr:
                 self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)

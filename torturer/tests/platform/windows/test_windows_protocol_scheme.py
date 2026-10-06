@@ -50,6 +50,57 @@ class _RecordingRunner:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_windows_cold_launch_uses_exact_interactive_child_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "DobbyVPN.exe"
+            helper = root / "native-ui.exe"
+            profile = root / "source.url"
+            binary.write_bytes(b"candidate")
+            helper.write_bytes(b"helper")
+            profile.write_text("https://example.invalid/subscription", encoding="utf-8")
+            process = mock.Mock()
+            process.pid = 2468
+            process.poll.return_value = None
+            controller = smoke.NativeUIController(
+                "windows", binary, profile, 10.0,
+                helper=helper, screenshot_dir=root / "screenshots",
+            )
+            probes = iter((
+                {"alive": False},
+                {"alive": True, "pid": 2468, "identity": "created-at-1"},
+            ))
+
+            def helper_call(operation: str, **_fields: object) -> dict[str, object]:
+                if operation == "probe":
+                    response = next(probes)
+                    if response.get("alive") is True:
+                        controller.pid = int(response["pid"])
+                        controller.identity = str(response["identity"])
+                    return response
+                return {"ready": True}
+
+            controller._call = mock.Mock(side_effect=helper_call)
+            controller.snapshot = mock.Mock(return_value={
+                "status": "Disconnected",
+                "labels": ["Connection configuration"],
+            })
+            controller.capture = mock.Mock(return_value={"path": str(root / "startup.png")})
+            with (
+                mock.patch("torturer_runner.ui.smoke.subprocess.Popen", return_value=process) as popen,
+                mock.patch("os.startfile", create=True) as startfile,
+            ):
+                result = controller.start()
+            self.assertEqual(result["status"], "Disconnected")
+            self.assertIs(controller.process, process)
+            self.assertEqual(controller.pid, 2468)
+            self.assertEqual(controller.identity, "created-at-1")
+            self.assertEqual(popen.call_args.args[0], [str(binary)])
+            self.assertIs(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertTrue((root / "windows-app-01.stdout.log").is_file())
+            self.assertTrue((root / "windows-app-01.stderr.log").is_file())
+            startfile.assert_not_called()
+
     def test_auto_selection_requires_an_enabled_rendered_stop_before_connected(self) -> None:
         controller = object.__new__(smoke.NativeUIController)
         controller._timeout = 10.0
