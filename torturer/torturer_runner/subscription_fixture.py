@@ -39,9 +39,18 @@ class UnixHTTPServer(http.server.ThreadingHTTPServer):
         self.server_port = 0
 
 
-def command(arguments: list[str], *, input_bytes: bytes | None = None) -> bytes:
+def command(
+    arguments: list[str],
+    *,
+    input_bytes: bytes | None = None,
+    timeout_seconds: float = 30,
+) -> bytes:
     try:
-        result = run_finite_capture(arguments, timeout_seconds=30, input_bytes=input_bytes)
+        result = run_finite_capture(
+            arguments,
+            timeout_seconds=timeout_seconds,
+            input_bytes=input_bytes,
+        )
     except BaseException as error:
         emit_streams("subscription-fixture", *exception_output(error))
         raise
@@ -169,7 +178,17 @@ class SubscriptionFixture:
             # deleted after the test; reset here also handles normal teardown.
             self.trusted = True
             self._save()
-            command(["xcrun", "simctl", "keychain", self.simulator_udid, "add-root-cert", str(self.certificate)])
+            command(
+                [
+                    "xcrun",
+                    "simctl",
+                    "keychain",
+                    self.simulator_udid,
+                    "add-root-cert",
+                    str(self.certificate),
+                ],
+                timeout_seconds=120,
+            )
         elif self.platform != "untrusted":
             raise ValueError("Unsupported subscription fixture trust target")
         self.trusted = self.platform != "untrusted"

@@ -903,8 +903,16 @@ internal static class Program
                 if (automationId == "Backend logs") continue;
 
                 trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-start");
-                var controlType = element.Current.ControlType.ProgrammaticName;
+                var controlTypeValue = element.Current.ControlType;
+                var controlType = controlTypeValue.ProgrammaticName;
                 trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-complete type={controlType}");
+                // The Windows title bar is system chrome; its provider threw
+                // E_UNEXPECTED while enumerating descendants on the test host.
+                if (controlTypeValue == ControlType.TitleBar)
+                {
+                    trace?.Invoke($"tree-uia-walk-node={count}-skip-titlebar-descendants");
+                    continue;
+                }
             }
 
             trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-start");

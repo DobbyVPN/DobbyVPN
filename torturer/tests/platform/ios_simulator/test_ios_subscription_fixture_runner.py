@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -18,6 +19,18 @@ _UDID = "01234567-89ab-cdef-0123-456789abcdef"
 
 
 class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
+    def test_fixture_command_forwards_its_bounded_timeout(self) -> None:
+        result = subprocess.CompletedProcess(["simctl"], 0, b"", b"")
+        with (
+            patch.object(subscription_fixture, "run_finite_capture", return_value=result) as run,
+            patch.object(subscription_fixture, "emit_streams"),
+        ):
+            subscription_fixture.command(["simctl"], timeout_seconds=120)
+
+        run.assert_called_once_with(
+            ["simctl"], timeout_seconds=120, input_bytes=None
+        )
+
     def test_default_and_selected_fixture_test_receive_run_owned_fixture(self) -> None:
         fixture = SimpleNamespace(
             url="https://127.0.0.1:49123/subscription",
@@ -122,6 +135,7 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
             )
             real_command = subscription_fixture.command
             trust_commands: list[list[str]] = []
+            trust_timeouts: list[float] = []
 
             def command(arguments, **kwargs):
                 arguments = list(arguments)
@@ -130,6 +144,7 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
                     return json.dumps(inventory).encode()
                 if arguments[:4] == ["xcrun", "simctl", "keychain", _UDID]:
                     trust_commands.append(arguments)
+                    trust_timeouts.append(kwargs.get("timeout_seconds", 30))
                     return b""
                 return real_command(arguments, **kwargs)
 
@@ -148,6 +163,7 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
                     ["xcrun", "simctl", "keychain", _UDID, "reset"],
                 ],
             )
+            self.assertEqual(trust_timeouts, [120, 30])
             self.assertFalse(fixture.directory.exists())
 
     def test_fixture_rejects_reusable_simulator_trust(self) -> None:
