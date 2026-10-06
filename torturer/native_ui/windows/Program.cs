@@ -345,10 +345,10 @@ internal static class Program
             if (operation == "probe")
             {
                 process.Refresh();
-                var window = process.MainWindowHandle;
+                var probeWindowHandle = process.MainWindowHandle;
                 Console.WriteLine(JsonSerializer.Serialize(new {
                     alive = true, pid = process.Id, identity,
-                    windowHandle = window == IntPtr.Zero ? null : $"0x{window.ToInt64():X}"
+                    windowHandle = probeWindowHandle == IntPtr.Zero ? null : $"0x{probeWindowHandle.ToInt64():X}"
                 }));
                 return 0;
             }
