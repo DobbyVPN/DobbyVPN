@@ -75,12 +75,18 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [failedRequest], timeout: 15), .completed)
         let retry = app.buttons["Retry"]
         XCTAssertTrue(retry.waitForExistence(timeout: 15), "A failed load should offer Retry")
-        let pasteElapsed = ProcessInfo.processInfo.systemUptime - pasteStartedAt
-        XCTAssertLessThan(
-            pasteElapsed, 1.5,
-            "Explicit Paste should begin loading immediately; request failure rendered after \(pasteElapsed)s"
-        )
+        attachScreenshot("subscription-failure")
         let failedState = try XCTUnwrap(Self.sessionState(from: failedStateElement))
+        let requestStartedAt = try XCTUnwrap(
+            (failedState["request_started_at_uptime"] as? NSNumber)?.doubleValue,
+            "The Simulator test client should report when it started the Paste request"
+        )
+        let pasteRequestElapsed = requestStartedAt - pasteStartedAt
+        XCTAssertLessThan(
+            pasteRequestElapsed, 1.5,
+            "Explicit Paste should start the request immediately; Configure began after \(pasteRequestElapsed)s"
+        )
+        XCTAssertGreaterThanOrEqual(pasteRequestElapsed, 0)
         assertFailedLoadWithoutConnection(failedState)
         XCTAssertTrue(
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Subscription request failed")).firstMatch.exists,
@@ -98,6 +104,7 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertEqual(autoAction.label, "Auto connect")
         XCTAssertTrue(autoAction.isHittable)
         XCTAssertTrue(app.staticTexts["Simulator fixture profile 1"].waitForExistence(timeout: 10))
+        attachScreenshot("subscription-profiles")
 
         let controls = app.scrollViews.matching(identifier: "Connection controls").firstMatch
         XCTAssertTrue(controls.exists)
@@ -287,6 +294,13 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         components.host = "import"
         components.queryItems = [URLQueryItem(name: "url", value: source)]
         return try XCTUnwrap(components.url)
+    }
+
+    private func attachScreenshot(_ name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "dobbyvpn-ui-\(name)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private static func sessionState(from element: XCUIElement) -> [String: Any]? {

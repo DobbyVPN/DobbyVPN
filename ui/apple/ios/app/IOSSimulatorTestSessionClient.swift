@@ -39,6 +39,7 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
     private var activeProfile: Profile?
     private var configureRequests = 0
     private var requestCount = 0
+    private var lastRequestStartedAtUptime: TimeInterval = 0
     private var startRequests = 0
     private var stopRequests = 0
 
@@ -87,6 +88,7 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
             "profile_count": profiles.count,
             "configure_requests": configureRequests,
             "request_count": requestCount,
+            "request_started_at_uptime": lastRequestStartedAtUptime,
             "start_requests": startRequests,
             "stop_requests": stopRequests,
         ]
@@ -170,6 +172,7 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
             return failure("STALE_SEQUENCE", "Subscription request was superseded")
         }
         requestCount += 1
+        lastRequestStartedAtUptime = ProcessInfo.processInfo.systemUptime
         lock.unlock()
 
         let body: Data

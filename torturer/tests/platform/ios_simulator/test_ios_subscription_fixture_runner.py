@@ -263,6 +263,7 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
             "generation",
             "configure_requests",
             "request_count",
+            "request_started_at_uptime",
             "start_requests",
             "stop_requests",
         ):
@@ -279,7 +280,10 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
         self.assertIn('app.buttons["Retry"]', rendered_test)
         self.assertIn("assertFailedLoadWithoutConnection", rendered_test)
         self.assertIn("assertRetriedLoadWithoutConnection", rendered_test)
-        self.assertIn("pasteElapsed, 1.5", rendered_test)
+        self.assertIn("pasteRequestElapsed, 1.5", rendered_test)
+        self.assertIn('XCTAttachment(screenshot: app.screenshot())', rendered_test)
+        self.assertIn('attachScreenshot("subscription-failure")', rendered_test)
+        self.assertIn('attachScreenshot("subscription-profiles")', rendered_test)
         self.assertIn("Tunnel stderr · tunnel", rendered_test)
         self.assertIn("Stderr capture initialized", rendered_test)
         self.assertIn("paste.tap()", rendered_test)
