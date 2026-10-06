@@ -587,10 +587,10 @@ final class NativeUIInteractionTests: XCTestCase {
     ) -> CGFloat {
         let initialAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
         let offsetBefore = initialAnchor.frame.minY - logs.frame.minY
-        // Keep the selected row high enough to stay visible even though XCTest's
-        // synthesized drag can move the text farther than its normalized delta.
+        // The selected row is near the top, so a bounded longer drag can clear
+        // the follow threshold while keeping that same row in view.
         let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.60))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
         start.press(forDuration: 0.1, thenDragTo: end)
         attachScreenshot(screenshotName ?? "logs-scroll-attempt")
         let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
