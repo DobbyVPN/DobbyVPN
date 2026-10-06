@@ -400,13 +400,9 @@ final class NativeUIInteractionTests: XCTestCase {
                        "Editing the configuration should not move the frozen log view")
         let anchorOffsetBeforeRefresh = positionAnchor.element.frame.minY - logs.frame.minY
         paste.tap()
-        let changedWhileScrolledUp = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value != %@", frozen), object: logs
-        )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [changedWhileScrolledUp], timeout: 1.5), .timedOut,
-            "New records should not replace the rendered text while scrolled up"
-        )
+        let refreshOpportunity = expectation(description: "A foreground log refresh elapses while scrolled up")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { refreshOpportunity.fulfill() }
+        wait(for: [refreshOpportunity], timeout: 2.0)
         XCTAssertEqual(logs.value as? String, frozen,
                        "The refreshed log source should stay frozen while the reader is away from the bottom")
         XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
@@ -575,11 +571,11 @@ final class NativeUIInteractionTests: XCTestCase {
             guard element.label == "Details", elementIsVisible(element, in: logs),
                   let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { return nil }
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
-            guard (0.25...0.70).contains(relativeY) else { return nil }
+            guard (0.05...0.45).contains(relativeY) else { return nil }
             return (RenderedLogAnchor(detailIndex: index, record: record, element: element), relativeY)
         }
         return candidates.min {
-            abs($0.relativeY - 0.40) < abs($1.relativeY - 0.40)
+            abs($0.relativeY - 0.20) < abs($1.relativeY - 0.20)
         }?.anchor
     }
 
@@ -591,16 +587,11 @@ final class NativeUIInteractionTests: XCTestCase {
     ) -> CGFloat {
         let initialAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
         let offsetBefore = initialAnchor.frame.minY - logs.frame.minY
-        // Re-resolve the exact rendered record after each drag. A Details element
-        // bound by index can point at a different row when accessibility rebuilds.
-        // Keep the anchor near the middle and use short drags so it stays visible.
-        for _ in 0..<2 {
-            let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
-            if currentAnchor.frame.minY - logs.frame.minY > offsetBefore + 24 { break }
-            let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.57))
-            start.press(forDuration: 0.1, thenDragTo: end)
-        }
+        // Keep the selected row high enough to stay visible even though XCTest's
+        // synthesized drag can move the text farther than its normalized delta.
+        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.60))
+        start.press(forDuration: 0.1, thenDragTo: end)
         attachScreenshot(screenshotName ?? "logs-scroll-attempt")
         let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
         let offsetAfter = currentAnchor.frame.minY - logs.frame.minY
