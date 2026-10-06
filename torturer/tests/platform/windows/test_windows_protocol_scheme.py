@@ -79,8 +79,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
     def test_windows_probe_reports_main_window_handle_for_activation_checks(self) -> None:
         source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
-        self.assertIn("var window = process.MainWindowHandle;", source)
-        self.assertIn('windowHandle = window == IntPtr.Zero ? null : $"0x{window.ToInt64():X}"', source)
+        self.assertIn("var probeWindowHandle = process.MainWindowHandle;", source)
+        self.assertIn(
+            'windowHandle = probeWindowHandle == IntPtr.Zero ? null : $"0x{probeWindowHandle.ToInt64():X}"',
+            source,
+        )
 
     def test_cold_deep_link_uses_windows_shell_only_when_ui_is_stopped(self) -> None:
         controller = object.__new__(smoke.NativeUIController)
@@ -170,7 +173,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'throw new InvalidOperationException("More than one candidate UI process matches the executable")',
             'var identity = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);',
             'if (request.TryGetProperty("identity", out var prior) && prior.GetString() != identity)',
-            'windowHandle = window == IntPtr.Zero ? null : $"0x{window.ToInt64():X}"',
+            'windowHandle = probeWindowHandle == IntPtr.Zero ? null : $"0x{probeWindowHandle.ToInt64():X}"',
         ):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
