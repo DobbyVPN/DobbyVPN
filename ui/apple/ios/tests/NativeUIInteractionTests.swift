@@ -315,21 +315,16 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
         let detailElements = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
-        let targetError = try XCTUnwrap(
-            latestLogText.range(of: validationError, options: .backwards),
+        let targetRecord = try XCTUnwrap(
+            renderedLogRecord(containing: validationError, in: latestLogText),
             "The latest Paste validation record should remain in the frozen log view"
         )
-        let textBeforeTarget = String(latestLogText[..<targetError.lowerBound])
-        let targetDetailIndex = occurrences(of: "Details\n", in: textBeforeTarget) +
-            occurrences(of: "Hide details\n", in: textBeforeTarget)
-        let renderedError = try XCTUnwrap(
-            renderedLogRecord(atDetailIndex: targetDetailIndex, in: latestLogText),
-            "The latest validation event should have a readable rendered record"
-        )
-        XCTAssertTrue(
-            renderedError.contains(" · ERROR · App · native-ui\n\(validationError)\n"),
-            "The rendered log should show the severity and source beside its timestamp"
-        )
+        let targetDetailIndex = targetRecord.detailIndex
+        let renderedErrorLines = targetRecord.record.components(separatedBy: "\n")
+        XCTAssertTrue(renderedErrorLines.first?.hasSuffix(" · ERROR · App · native-ui") == true,
+                      "The selected validation message should follow its timestamp, severity, and source header; got: \(targetRecord.record)")
+        XCTAssertTrue(renderedErrorLines.contains(validationError),
+                      "The Details link should belong to the selected standalone validation message")
         let details = detailElements.element(boundBy: targetDetailIndex)
         XCTAssertTrue(details.waitForExistence(timeout: 10),
                       "The Paste validation record's Details control should be exposed by the log text view")
@@ -597,9 +592,10 @@ final class NativeUIInteractionTests: XCTestCase {
     ) -> CGFloat {
         let offsetBefore = anchor.element.frame.minY - logs.frame.minY
         let relativeY = (anchor.element.frame.midY - logs.frame.minY) / logs.frame.height
-        let startY = max(0.04, min(0.72, relativeY - 0.24))
-        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: startY))
-        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: min(0.94, startY + 0.12)))
+        let startY = max(0.05, min(0.55, relativeY - 0.20))
+        let endY = min(0.94, startY + 0.35)
+        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
         start.press(forDuration: 0.05, thenDragTo: end)
 
         let detailElements = logs.descendants(matching: .any)
@@ -641,24 +637,40 @@ final class NativeUIInteractionTests: XCTestCase {
 
     private func renderedLogRecord(atDetailIndex index: Int, in text: String) -> String? {
         guard index >= 0 else { return nil }
-        var searchStart = text.startIndex
-        var linkRange: Range<String.Index>?
-        for _ in 0...index {
-            let detailsRange = text.range(of: "Details\n", range: searchStart..<text.endIndex)
-            let hideRange = text.range(of: "Hide details\n", range: searchStart..<text.endIndex)
-            guard let next = [detailsRange, hideRange].compactMap({ $0 })
-                .min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
-            linkRange = next
-            searchStart = next.upperBound
+        let lines = text.components(separatedBy: "\n")
+        let links = lines.indices.filter { isDetailsControlLine(lines[$0]) }
+        guard links.indices.contains(index) else { return nil }
+        let linkIndex = links[index]
+        guard let headerIndex = (0..<linkIndex).last(where: { isTimestampHeader(lines[$0]) }) else { return nil }
+        return lines[headerIndex..<linkIndex].joined(separator: "\n").trimmingCharacters(in: .newlines)
+    }
+
+    private func renderedLogRecord(
+        containing message: String,
+        in text: String
+    ) -> (detailIndex: Int, record: String)? {
+        let lines = text.components(separatedBy: "\n")
+        guard let messageIndex = lines.lastIndex(of: message),
+              let headerIndex = (0..<messageIndex).last(where: { isTimestampHeader(lines[$0]) }) else { return nil }
+
+        let nextHeader = ((messageIndex + 1)..<lines.count).first(where: { isTimestampHeader(lines[$0]) })
+        let recordEnd = nextHeader ?? lines.count
+        guard let linkIndex = ((messageIndex + 1)..<recordEnd).first(where: { isDetailsControlLine(lines[$0]) }) else {
+            return nil
         }
-        guard let linkRange else { return nil }
-        let lines = String(text[..<linkRange.lowerBound]).components(separatedBy: "\n")
-        guard let headerIndex = lines.lastIndex(where: {
-            $0.range(
-                of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z · "#,
-                options: .regularExpression
-            ) != nil
-        }) else { return nil }
-        return lines[headerIndex...].joined(separator: "\n").trimmingCharacters(in: .newlines)
+        let detailIndex = lines[..<linkIndex].filter(isDetailsControlLine).count
+        let record = lines[headerIndex..<linkIndex].joined(separator: "\n").trimmingCharacters(in: .newlines)
+        return (detailIndex, record)
+    }
+
+    private func isTimestampHeader(_ line: String) -> Bool {
+        line.range(
+            of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z · "#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private func isDetailsControlLine(_ line: String) -> Bool {
+        line == "Details" || line == "Hide details"
     }
 }

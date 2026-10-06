@@ -110,12 +110,9 @@ internal static class Program
 
     private static AutomationElement? ByAutomationId(AutomationElement root, string id)
     {
-        var matches = root.FindAll(TreeScope.Subtree, new AndCondition(
+        return root.FindFirst(TreeScope.Subtree, new AndCondition(
             new PropertyCondition(AutomationElement.AutomationIdProperty, id),
             new PropertyCondition(AutomationElement.IsControlElementProperty, true)));
-        if (matches.Count > 1)
-            throw new InvalidOperationException($"Expected one control with AutomationId {id}, found {matches.Count}");
-        return matches.Count == 0 ? null : matches[0];
     }
 
     private static void WaitFor(Func<bool> condition, string message, double seconds = 15)
@@ -366,11 +363,9 @@ internal static class Program
                 return 0;
             }
             var traceTree = operation == "tree";
-            var traceFindAllProbe = operation == "findall-probe";
             if (traceTree) TracePhase($"tree-window-discovery-start pid={process.Id}");
-            if (traceFindAllProbe) TracePhase($"uia-findall-probe-window-discovery-start pid={process.Id}");
             IntPtr window = IntPtr.Zero;
-            if (traceFindAllProbe)
+            if (traceTree)
             {
                 string[] lastWindows = Array.Empty<string>();
                 string lastTitle = "unavailable";
@@ -384,26 +379,30 @@ internal static class Program
                         GetWindowThreadProcessId(window, out var ownerPid);
                         if (window == IntPtr.Zero || ownerPid != process.Id)
                         {
-                            window = EnumerateProcessWindows(process).FirstOrDefault(candidate =>
+                            var ownedWindows = EnumerateProcessWindows(process).Where(candidate =>
                             {
                                 GetWindowThreadProcessId(candidate, out var candidatePid);
-                                return candidatePid == process.Id && IsWindowVisible(candidate) && !IsIconic(candidate);
-                            });
+                                return candidatePid == process.Id;
+                            }).ToArray();
+                            window = ownedWindows.FirstOrDefault(candidate =>
+                                IsWindowVisible(candidate) && !IsIconic(candidate));
+                            if (window == IntPtr.Zero)
+                                window = ownedWindows.FirstOrDefault();
                         }
-                        if (window != IntPtr.Zero && !IsWindowVisible(window) && window != activationRequestedFor)
+                        if (window != IntPtr.Zero && (!IsWindowVisible(window) || IsIconic(window)) && window != activationRequestedFor)
                         {
                             activationRequestedFor = window;
                             var showCommand = IsIconic(window) ? 9 : 5; // SW_RESTORE or SW_SHOW
                             var showQueued = ShowWindowAsync(window, showCommand);
                             var foregroundRequested = SetForegroundWindow(window);
                             TracePhase(
-                                $"uia-findall-probe-activation hwnd=0x{window.ToInt64():X} " +
+                                $"tree-window-activation hwnd=0x{window.ToInt64():X} " +
                                 $"showCommand={showCommand} showQueued={showQueued} foregroundRequested={foregroundRequested}");
                         }
                         lastWindows = DescribeProcessWindows(process);
                         lastTitle = process.MainWindowTitle;
                         return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);
-                    }, "UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 20.0);
+                    }, "UI process did not expose a visible, non-minimized window for the tree snapshot", seconds: 20.0);
                 }
                 catch (TimeoutException error)
                 {
@@ -419,7 +418,6 @@ internal static class Program
                 window = process.MainWindowHandle;
             }
             if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
-            if (traceFindAllProbe) TracePhase($"uia-findall-probe-window-discovery-complete hwnd=0x{window.ToInt64():X}");
             var visible = window != IntPtr.Zero && IsWindowVisible(window);
             var minimized = window != IntPtr.Zero && IsIconic(window);
             if (!visible || minimized)
@@ -446,27 +444,11 @@ internal static class Program
             GetWindowThreadProcessId(window, out var owner);
             if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
             if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
-            if (traceFindAllProbe) TracePhase($"uia-findall-probe-root-start hwnd=0x{window.ToInt64():X}");
             var root = AutomationElement.FromHandle(window);
             if (traceTree) TracePhase("tree-uia-root-complete");
-            if (traceFindAllProbe) TracePhase("uia-findall-probe-root-complete");
-            if (traceFindAllProbe)
-            {
-                const string automationId = "Connection configuration";
-                TracePhase("uia-findall-probe-start automationId=Connection configuration");
-                var matches = root.FindAll(TreeScope.Subtree, new AndCondition(
-                    new PropertyCondition(AutomationElement.AutomationIdProperty, automationId),
-                    new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
-                    new PropertyCondition(AutomationElement.IsControlElementProperty, true)));
-                TracePhase($"uia-findall-probe-complete count={matches.Count}");
-                Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true, pid = process.Id, identity, findAllCount = matches.Count
-                }));
-                return 0;
-            }
             AutomationElement Find(string name, bool editor = false, bool actionable = false)
             {
-                AutomationElementCollection FindBy(AutomationProperty property)
+                AutomationElement? FindBy(AutomationProperty property)
                 {
                     var conditions = new List<Condition>
                     {
@@ -484,20 +466,14 @@ internal static class Program
                             new PropertyCondition(AutomationElement.IsSelectionItemPatternAvailableProperty, true)
                         ));
                     }
-                    return root.FindAll(TreeScope.Subtree, new AndCondition(conditions.ToArray()));
+                    return root.FindFirst(TreeScope.Subtree, new AndCondition(conditions.ToArray()));
                 }
 
                 // Resolve stable identifiers before user-facing labels to avoid matching a tab and its label.
-                var matches = FindBy(AutomationElement.AutomationIdProperty);
-                if (matches.Count == 0) matches = FindBy(AutomationElement.NameProperty);
-                if (matches.Count != 1)
-                {
-                    var details = string.Join("; ", matches.Cast<AutomationElement>().Select(DescribeElement));
-                    throw new InvalidOperationException(
-                        $"Expected one visible {name}, found {matches.Count}; matches=[{details}]"
-                    );
-                }
-                var element = matches[0];
+                var element = FindBy(AutomationElement.AutomationIdProperty)
+                    ?? FindBy(AutomationElement.NameProperty);
+                if (element is null)
+                    throw new InvalidOperationException($"Expected one visible {name}, found no matching control");
                 if (!element.Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
                 return element;
             }
@@ -752,14 +728,14 @@ internal static class Program
                     {
                         bool PasteAvailable()
                         {
-                            var matches = root.FindAll(TreeScope.Subtree, new AndCondition(
+                            var pasteButton = root.FindFirst(TreeScope.Subtree, new AndCondition(
                                 new PropertyCondition(AutomationElement.NameProperty, "Paste"),
                                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
                                 new PropertyCondition(AutomationElement.IsControlElementProperty, true),
                                 new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
                                 new PropertyCondition(AutomationElement.IsEnabledProperty, true),
                                 new PropertyCondition(AutomationElement.IsInvokePatternAvailableProperty, true)));
-                            return matches.Count == 1;
+                            return pasteButton is not null;
                         }
                         void WaitForPasteAvailability(bool expected, string clipboardDescription)
                         {

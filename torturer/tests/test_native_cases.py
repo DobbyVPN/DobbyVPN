@@ -19,7 +19,7 @@ class NativeCaseSelectionTests(unittest.TestCase):
     def test_a_lane_accepts_only_one_case(self):
         with self.assertRaisesRegex(ValueError, "one native case"):
             validate_native_cases(
-                "windows", "full", ["configure-tree", "findall-probe"]
+                "windows", "full", ["configure-tree", "another-case"]
             )
 
     def test_unsupported_case_and_setup_suite_are_rejected(self):

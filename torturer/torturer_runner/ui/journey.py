@@ -26,7 +26,6 @@ from torturer_runner.native_cases import (
     MACOS_CONFIGURE_STARTUP_CASE,
     NATIVE_CASE_SUITES,
     WINDOWS_CONFIGURE_TREE_CASE,
-    WINDOWS_FINDALL_PROBE_CASE,
     validate_native_cases,
 )
 
@@ -1372,7 +1371,6 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
     except ValueError as error:
         raise NativeUIJourneyError(str(error)) from error
     if selected not in {
-        (WINDOWS_FINDALL_PROBE_CASE,),
         (WINDOWS_CONFIGURE_TREE_CASE,),
         (MACOS_CONFIGURE_STARTUP_CASE,),
     }:
@@ -1405,18 +1403,12 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
             _smoke_timeout(args.timeout),
             helper=args.ui_helper,
             screenshot_dir=args.raw_log_dir / "screenshots",
-            native_cases=selected,
             expected_version=getattr(args, "candidate_version", None),
             expected_source_sha=getattr(args, "source_sha", None),
         )
         with ui.bounded_by(_smoke_timeout(args.timeout)):
             startup = ui.start()
-        if selected == (WINDOWS_FINDALL_PROBE_CASE,):
-            result = ui.native_case_results.get(WINDOWS_FINDALL_PROBE_CASE)
-            if not isinstance(result, dict):
-                raise NativeUIJourneyError("Windows UI Automation FindAll probe produced no result")
-            case_result: dict[str, object] = result
-        elif selected == (MACOS_CONFIGURE_STARTUP_CASE,):
+        if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
             configured = ui.configure()
             if configured.get("input_verified") is not True:
                 raise NativeUIJourneyError("macOS rendered Configure did not verify pasted input")

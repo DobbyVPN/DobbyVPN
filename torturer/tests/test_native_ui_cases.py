@@ -42,9 +42,8 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                     captured["fixture_closed"] = True
 
             class UI:
-                def __init__(self, platform, binary, source, timeout, *, helper, screenshot_dir, native_cases, **_kwargs):
-                    captured["ui_arguments"] = (platform, source, native_cases)
-                    self.native_case_results = {}
+                def __init__(self, platform, binary, source, timeout, *, helper, screenshot_dir, **_kwargs):
+                    captured["ui_arguments"] = (platform, source)
 
                 def bounded_by(self, _timeout):
                     return nullcontext()
@@ -83,7 +82,6 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             self.assertEqual(fixture_args[3], Path("native-helper"))
             ui_arguments = captured["ui_arguments"]
             self.assertEqual(ui_arguments[0], "macos")
-            self.assertEqual(ui_arguments[2], ("configure-startup",))
             self.assertEqual(
                 Path(ui_arguments[1]).read_text(encoding="utf-8"),
                 "https://127.0.0.1:49152/subscription",

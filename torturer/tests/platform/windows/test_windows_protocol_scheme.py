@@ -25,12 +25,11 @@ DESKTOP_SHUTDOWN_TEST = PRODUCT_ROOT / "core/clientserver/executor/process_test.
 TORTURER_ROOT = PRODUCT_ROOT / "torturer"
 if str(TORTURER_ROOT) not in sys.path:
     sys.path.insert(0, str(TORTURER_ROOT))
-from torturer_runner import local_vm, local_vm_windows  # noqa: E402
+from torturer_runner import local_vm  # noqa: E402
 from torturer_runner.ui import journey, smoke  # noqa: E402
 from torturer_runner.native_cases import (  # noqa: E402
     MACOS_CONFIGURE_STARTUP_CASE,
     WINDOWS_CONFIGURE_TREE_CASE,
-    WINDOWS_FINDALL_PROBE_CASE,
 )
 
 SPEC = importlib.util.spec_from_file_location("dobbyvpn_installer_migration_test", MIGRATION_PATH)
@@ -146,7 +145,12 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             '[DllImport("user32.dll")]\n    private static extern bool EnumThreadWindows(',
             'private static string[] DescribeProcessWindows(Process process)',
             '[DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);',
-            'uia-findall-probe-activation hwnd=0x',
+            'tree-window-activation hwnd=0x',
+            'if (traceTree)',
+            'WaitFor(() =>',
+            'return candidatePid == process.Id;',
+            'return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);',
+            '"UI process did not expose a visible, non-minimized window for the tree snapshot", seconds: 20.0);',
             'TracePhase("tree-uia-root-complete")',
             'TracePhase("tree-uia-walk-start")',
             'foreach (var element in Walk(root, trace: TracePhase))',
@@ -167,6 +171,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         ):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
+        self.assertEqual(source.count("root.FindFirst(TreeScope.Subtree, new AndCondition("), 3)
+        self.assertNotIn("FindAll(TreeScope", source)
         for assertion in (
             'if (request.TryGetProperty("pid", out var requestedPid))',
             'Process.GetProcessesByName(Path.GetFileNameWithoutExtension(expected))',
@@ -178,6 +184,25 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
         self.assertNotIn(".Current.CanResize", source)
+
+    def test_tree_discovery_prefers_visible_owned_window_before_activation_fallback(self) -> None:
+        source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
+        tree_discovery = source.split('if (traceTree)\n            {', 1)[1].split(
+            '\n            else\n            {', 1
+        )[0]
+
+        owned_windows = tree_discovery.index("var ownedWindows = EnumerateProcessWindows(process).Where(candidate =>")
+        ownership_filter = tree_discovery.index("return candidatePid == process.Id;", owned_windows)
+        visible_choice = tree_discovery.index(
+            "window = ownedWindows.FirstOrDefault(candidate =>", ownership_filter
+        )
+        fallback_choice = tree_discovery.index(
+            "window = ownedWindows.FirstOrDefault();", visible_choice
+        )
+        self.assertLess(owned_windows, ownership_filter)
+        self.assertLess(ownership_filter, visible_choice)
+        self.assertIn("IsWindowVisible(candidate) && !IsIconic(candidate)", tree_discovery[visible_choice:fallback_choice])
+        self.assertLess(visible_choice, fallback_choice)
 
     def test_native_ui_helper_reports_log_scroll_position(self) -> None:
         source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
@@ -207,77 +232,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         self.assertEqual(controller.last_paste_invoked_at_unix_ms, 123456)
         controller._call.assert_called_once_with("paste", source="C:/run/source.url")
 
-    def test_native_ui_findall_probe_targets_the_visible_control_and_flushes_markers(self) -> None:
-        source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
-
-        for assertion in (
-            'var traceFindAllProbe = operation == "findall-probe";',
-            'window = EnumerateProcessWindows(process).FirstOrDefault(candidate =>',
-            'WaitFor(() =>',
-            'return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);',
-            '"UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 20.0);',
-            'processTopLevelWindows=[{string.Join(" || ", lastWindows)}]',
-            'const string automationId = "Connection configuration";',
-            'TracePhase("uia-findall-probe-root-complete")',
-            'TracePhase("uia-findall-probe-start automationId=Connection configuration");',
-            'Console.Error.Flush();',
-            'root.FindAll(TreeScope.Subtree, new AndCondition(',
-            'new PropertyCondition(AutomationElement.AutomationIdProperty, automationId),',
-            'new PropertyCondition(AutomationElement.IsOffscreenProperty, false),',
-            'new PropertyCondition(AutomationElement.IsControlElementProperty, true)));',
-            'TracePhase($"uia-findall-probe-complete count={matches.Count}");',
-            'findAllCount = matches.Count',
-        ):
-            with self.subTest(assertion=assertion):
-                self.assertIn(assertion, source)
-
-    def test_windows_uia_findall_probe_isolated_from_startup_snapshot(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            helper = root / "NativeUI.exe"
-            helper.touch()
-            calls: list[str] = []
-            controller = smoke.NativeUIController(
-                "windows",
-                root / "DobbyVPN.exe",
-                root / "profile.txt",
-                30,
-                helper=helper,
-                screenshot_dir=root / "screenshots",
-                native_cases=(WINDOWS_FINDALL_PROBE_CASE,),
-            )
-            controller._alive = mock.Mock(return_value=False)
-
-            def call(operation: str, **_fields: object) -> dict[str, object]:
-                calls.append(operation)
-                if operation == "probe":
-                    controller.pid = 42
-                    controller.identity = "candidate-ui-instance"
-                    return {"alive": True, "pid": 42, "identity": controller.identity}
-                if operation == "findall-probe":
-                    return {"ready": True, "findAllCount": 1}
-                return {}
-
-            controller._call = call  # type: ignore[method-assign]
-
-            controller.snapshot = mock.Mock(
-                side_effect=AssertionError("probe must bypass tree snapshot")
-            )
-            controller.capture = mock.Mock(return_value={})
-            with mock.patch.object(smoke.os, "startfile", create=True) as shell_open:
-                controller.start()
-
-        shell_open.assert_called_once_with(str(root / "DobbyVPN.exe"))
-        self.assertEqual(calls, ["probe", "findall-probe"])
-        controller.snapshot.assert_not_called()
-        controller.capture.assert_not_called()
-        self.assertEqual(
-            controller.native_case_results[WINDOWS_FINDALL_PROBE_CASE]["findAllCount"],
-            1,
-        )
-
-    def test_windows_native_cases_are_command_selectors_and_probe_is_not_an_env_flag(self) -> None:
-        flag = "DOBBYVPN_WINDOWS_UIA_FINDALL_PROBE"
+    def test_windows_native_case_command_selects_configure_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "run"
@@ -289,28 +244,25 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             (source / "journey.py").touch()
             helper = root / "NativeUI.exe"
             helper.touch()
-            for selected in ("configure-tree", "findall-probe"):
-                command = local_vm._native_ui_command(
-                    run_dir,
-                    {"cli": "cli.exe", "ui": "ui.exe"},
-                    {"pid": 42, "binary": "service.exe", "pipe": "DobbyVPN.Control"},
-                    "windows",
-                    30,
-                    helper,
-                    native_cases=(selected,),
-                    source_sha="a" * 40,
-                )
-                self.assertEqual(
-                    [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--native-case"],
-                    [selected],
-                )
-                self.assertEqual(command[command.index("--candidate-version") + 1], "1.5.4")
-                self.assertEqual(command[command.index("--source-sha") + 1], "a" * 40)
-        self.assertNotIn(flag, local_vm_windows._NATIVE_UI_ENVIRONMENT)
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertNotIn(flag, local_vm._native_ui_environment("windows", {}))
+            selected = "configure-tree"
+            command = local_vm._native_ui_command(
+                run_dir,
+                {"cli": "cli.exe", "ui": "ui.exe"},
+                {"pid": 42, "binary": "service.exe", "pipe": "DobbyVPN.Control"},
+                "windows",
+                30,
+                helper,
+                native_cases=(selected,),
+                source_sha="a" * 40,
+            )
+            self.assertEqual(
+                [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--native-case"],
+                [selected],
+            )
+            self.assertEqual(command[command.index("--candidate-version") + 1], "1.5.4")
+            self.assertEqual(command[command.index("--source-sha") + 1], "a" * 40)
 
-    def test_windows_uia_findall_probe_allows_bounded_cold_window_startup(self) -> None:
+    def test_windows_tree_helper_allows_bounded_window_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             helper = root / "NativeUI.exe"
@@ -324,7 +276,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 screenshot_dir=root / "screenshots",
             )
             completed = subprocess.CompletedProcess(
-                [str(helper)], 0, b'{"ready":true,"findAllCount":1}', b""
+                [str(helper)], 0, b'{"ready":true}', b""
             )
             with (
                 mock.patch.object(
@@ -333,12 +285,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 ),
                 mock.patch.object(smoke, "_native_run", return_value=completed) as run,
             ):
-                response = controller._call("findall-probe")
+                controller._call("tree")
 
-        self.assertEqual(response["findAllCount"], 1)
         self.assertEqual(run.call_args.kwargs["timeout_seconds"], 30.0)
         request = json.loads(run.call_args.kwargs["input_bytes"])
-        self.assertEqual(request["operation"], "findall-probe")
+        self.assertEqual(request["operation"], "tree")
 
     def test_windows_about_matches_candidate_version_and_source_sha(self) -> None:
         commit = "a" * 40
@@ -377,12 +328,10 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 {"about_version": True, "about_source_commit": True},
             )
 
-    def test_native_case_driver_keeps_findall_separate_from_configure_tree_and_paste(self) -> None:
+    def test_native_case_driver_runs_configure_tree_and_macos_startup(self) -> None:
         class FakeController:
-            def __init__(self, *_args, native_cases=(), **_kwargs):
-                self.native_cases = native_cases
+            def __init__(self, *_args, **_kwargs):
                 self.operations: list[str] = []
-                self.native_case_results = {"findall-probe": {"ready": True, "findAllCount": 1}}
 
             @staticmethod
             def bounded_by(_timeout):
@@ -458,13 +407,10 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             windows, windows_controller = run_case("windows", WINDOWS_CONFIGURE_TREE_CASE)
             macos, macos_controller = run_case("macos", MACOS_CONFIGURE_STARTUP_CASE)
-            probe, probe_controller = run_case("windows", WINDOWS_FINDALL_PROBE_CASE)
         self.assertEqual(windows["coverage"]["native_cases"], [WINDOWS_CONFIGURE_TREE_CASE])
         self.assertEqual(windows_controller.operations, ["start-tree", "close", "collect"])
         self.assertEqual(macos["checks"][MACOS_CONFIGURE_STARTUP_CASE]["configure"]["input_verified"], True)
         self.assertEqual(macos_controller.operations, ["start-tree", "rendered-configure", "close", "collect"])
-        self.assertEqual(probe["checks"][WINDOWS_FINDALL_PROBE_CASE]["findAllCount"], 1)
-        self.assertEqual(probe_controller.operations, ["start-tree", "close", "collect"])
 
     def test_windows_native_ui_retains_window_readiness_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

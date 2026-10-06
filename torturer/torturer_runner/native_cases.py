@@ -10,7 +10,6 @@ IOS_RENDERER_SEVERITY_CASE = (
     "testSeverityColorsResolveForLightAndDarkAppearances"
 )
 IOS_LOGS_FREEZE_RESUME_CASE = "logs-freeze-resume"
-WINDOWS_FINDALL_PROBE_CASE = "findall-probe"
 WINDOWS_CONFIGURE_TREE_CASE = "configure-tree"
 ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE = "small-screen-log-viewport"
 MACOS_CONFIGURE_STARTUP_CASE = "configure-startup"
@@ -21,7 +20,6 @@ NATIVE_CASE_SUITES = {
     ("ios-simulator", IOS_RENDERER_SEVERITY_CASE): "mini",
     ("macos", MACOS_CONFIGURE_STARTUP_CASE): "full",
     ("windows", WINDOWS_CONFIGURE_TREE_CASE): "full",
-    ("windows", WINDOWS_FINDALL_PROBE_CASE): "full",
 }
 
 
