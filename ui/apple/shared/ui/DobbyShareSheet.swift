@@ -159,7 +159,6 @@ struct DobbyLogView: UIViewRepresentable {
         var lastClear = 0
         var isFollowing = true
         var updating = false
-        private var userScrolling = false
         var displayedEntries: [DobbyLogEntry] = []
         var expanded = Set<String>()
         var onFollowingChange: ((Bool) -> Void)?
@@ -175,23 +174,16 @@ struct DobbyLogView: UIViewRepresentable {
             return false
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard !updating, userScrolling else { return }
+            // Ignore programmatic layout and follow-to-bottom changes.
+            guard !updating, (scrollView.isDragging || scrollView.isDecelerating) else { return }
             updateFollowingState(for: scrollView)
-        }
-        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            userScrolling = true
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
             guard !decelerate else { return }
-            finishUserScroll(in: scrollView)
+            updateFollowingState(for: scrollView)
         }
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-            finishUserScroll(in: scrollView)
-        }
-        private func finishUserScroll(in scrollView: UIScrollView) {
-            guard userScrolling else { return }
             updateFollowingState(for: scrollView)
-            userScrolling = false
         }
         private func updateFollowingState(for scrollView: UIScrollView) {
             guard let logView = scrollView as? DobbyLogTextView, !logView.isRestoringReadingPosition else { return }
