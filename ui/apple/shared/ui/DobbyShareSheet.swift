@@ -119,6 +119,10 @@ struct DobbyLogView: UIViewRepresentable {
         view.adjustsFontForContentSizeCategory = true
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
+        view.panGestureRecognizer.addTarget(
+            context.coordinator,
+            action: #selector(Coordinator.handlePan(_:))
+        )
         context.coordinator.onFollowingChange = onFollowingChange
         view.updateFollowingAccessibilityHint(isFollowing: true)
         return view
@@ -184,6 +188,15 @@ struct DobbyLogView: UIViewRepresentable {
         }
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
             updateFollowingState(for: scrollView)
+        }
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .changed, .ended, .cancelled, .failed:
+                guard let scrollView = gesture.view as? UIScrollView else { return }
+                updateFollowingState(for: scrollView)
+            default:
+                return
+            }
         }
         private func updateFollowingState(for scrollView: UIScrollView) {
             guard let logView = scrollView as? DobbyLogTextView, !logView.isRestoringReadingPosition else { return }
