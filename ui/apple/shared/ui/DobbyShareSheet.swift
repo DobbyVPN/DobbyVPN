@@ -67,10 +67,7 @@ private final class DobbyLogTextView: UITextView {
         if sizeChanged && preservesReadingPosition { restoreReadingPosition() }
     }
 
-    func updateFollowingAccessibility(isFollowing: Bool) {
-        accessibilityLabel = isFollowing
-            ? NSLocalizedString("Connection logs", comment: "")
-            : NSLocalizedString("Connection logs, holding new entries", comment: "")
+    func updateFollowingAccessibilityHint(isFollowing: Bool) {
         accessibilityHint = isFollowing
             ? NSLocalizedString("Showing newest entries. Scroll up to pause automatic updates.", comment: "")
             : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
@@ -109,6 +106,7 @@ private final class DobbyLogTextView: UITextView {
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int
+    let onFollowingChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -121,12 +119,14 @@ struct DobbyLogView: UIViewRepresentable {
         view.adjustsFontForContentSizeCategory = true
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
-        view.updateFollowingAccessibility(isFollowing: true)
+        context.coordinator.onFollowingChange = onFollowingChange
+        view.updateFollowingAccessibilityHint(isFollowing: true)
         return view
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.onFollowingChange = onFollowingChange
         let cleared = clear != coordinator.lastClear
         if cleared {
             coordinator.isFollowing = true
@@ -135,7 +135,7 @@ struct DobbyLogView: UIViewRepresentable {
         if coordinator.isFollowing { coordinator.displayedEntries = entries }
         if let logView = view as? DobbyLogTextView {
             logView.preservesReadingPosition = !coordinator.isFollowing
-            logView.updateFollowingAccessibility(isFollowing: coordinator.isFollowing)
+            logView.updateFollowingAccessibilityHint(isFollowing: coordinator.isFollowing)
         }
         let attributed = logText(coordinator.displayedEntries, expanded: coordinator.expanded)
         let text = attributed.string
@@ -162,6 +162,7 @@ struct DobbyLogView: UIViewRepresentable {
         private var userScrolling = false
         var displayedEntries: [DobbyLogEntry] = []
         var expanded = Set<String>()
+        var onFollowingChange: ((Bool) -> Void)?
         func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
             guard let index = Int(url.lastPathComponent), displayedEntries.indices.contains(index) else { return false }
             let id = displayedEntries[index].id
@@ -198,9 +199,11 @@ struct DobbyLogView: UIViewRepresentable {
                 viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height,
                 contentHeight: scrollView.contentSize.height
             )
+            let changed = isFollowing != atBottom
             isFollowing = atBottom
             logView.preservesReadingPosition = !atBottom
-            logView.updateFollowingAccessibility(isFollowing: atBottom)
+            logView.updateFollowingAccessibilityHint(isFollowing: atBottom)
+            if changed { onFollowingChange?(atBottom) }
             if !atBottom { logView.captureReadingPosition() }
         }
     }

@@ -12,9 +12,8 @@ public struct DobbyRootView: View {
     @State private var showingAbout = false
     @State private var controlsHeight: CGFloat = 0
     @State private var canPaste = false
-#if os(macOS)
+    // The iOS log coordinator reports its state here for the visible status line.
     @State private var followingLogs = true
-#endif
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
 
@@ -229,7 +228,10 @@ public struct DobbyRootView: View {
             HStack {
                 Text("Logs").font(.headline)
                 Spacer()
-                Button("Clear") { model.clearLogs() }
+                Button("Clear") {
+                    followingLogs = true
+                    model.clearLogs()
+                }
                 Button {
                     model.prepareLogsExport { url in
                         exportedLogsURL = url
@@ -246,8 +248,15 @@ public struct DobbyRootView: View {
             }
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
+            Text(followingLogs ? "Following newest entries" : "Updates paused while reading")
+                .font(.caption2).foregroundStyle(.secondary)
+                .accessibilityIdentifier("Connection log following state")
 #if os(iOS)
-            DobbyLogView(entries: model.logEntries, clear: model.clearRevision)
+            DobbyLogView(
+                entries: model.logEntries,
+                clear: model.clearRevision,
+                onFollowingChange: { followingLogs = $0 }
+            )
                 .accessibilityIdentifier("Connection logs")
 #else
             DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
