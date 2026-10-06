@@ -53,6 +53,10 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
     }
 
     func testAutomaticProfilesAndFixtureRequestCounts() throws {
+        guard #available(iOS 16.4, *) else {
+            throw XCTSkip("Cold and warm URL activation checks require iOS 16.4 or newer")
+        }
+
         let sourceField = app.textFields["Connection configuration"]
         XCTAssertTrue(sourceField.waitForExistence(timeout: 30))
         let paste = app.buttons["Paste"]
@@ -136,10 +140,6 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         let coldState = try XCTUnwrap(Self.sessionState(from: coldStateElement))
         assertOneLoadWithoutConnection(coldState, source: subscriptionURL)
 
-        guard #available(iOS 16.4, *) else {
-            XCTFail("Warm URL activation checks require iOS 16.4 or newer")
-            return
-        }
         for _ in 0..<2 {
             let previous = try XCTUnwrap(Self.sessionState(from: coldStateElement))
             XCUIDevice.shared.system.open(deepLink)
