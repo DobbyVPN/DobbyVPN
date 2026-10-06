@@ -384,7 +384,7 @@ final class NativeUIInteractionTests: XCTestCase {
                       "The anchor should identify a specific rendered log record")
         let anchorOffsetBeforeScroll = positionAnchor.element.frame.minY - logs.frame.minY
         let anchorOffsetAfterScroll = scrollLogsAwayFromBottom(
-            logs, anchor: positionAnchor, screenshotName: "logs-freeze-scrolled"
+            logs, anchor: positionAnchor, dragEndY: 0.75, screenshotName: "logs-freeze-scrolled"
         )
         XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
                              "The gesture should move the identifiable record away from the bottom")
@@ -403,6 +403,7 @@ final class NativeUIInteractionTests: XCTestCase {
         let refreshOpportunity = expectation(description: "A foreground log refresh elapses while scrolled up")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { refreshOpportunity.fulfill() }
         wait(for: [refreshOpportunity], timeout: 2.0)
+        attachScreenshot("logs-freeze-after-refresh")
         XCTAssertEqual(logs.value as? String, frozen,
                        "The refreshed log source should stay frozen while the reader is away from the bottom")
         XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
@@ -583,14 +584,14 @@ final class NativeUIInteractionTests: XCTestCase {
     private func scrollLogsAwayFromBottom(
         _ logs: XCUIElement,
         anchor: RenderedLogAnchor,
+        dragEndY: CGFloat = 0.60,
         screenshotName: String? = nil
     ) -> CGFloat {
         let initialAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
         let offsetBefore = initialAnchor.frame.minY - logs.frame.minY
-        // The selected row is near the top, so a bounded longer drag can clear
-        // the follow threshold while keeping that same row in view.
+        // The freeze case needs a larger drag; its anchor is selected near the top.
         let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: dragEndY))
         start.press(forDuration: 0.1, thenDragTo: end)
         attachScreenshot(screenshotName ?? "logs-scroll-attempt")
         let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element

@@ -12,7 +12,9 @@ public struct DobbyRootView: View {
     @State private var showingAbout = false
     @State private var controlsHeight: CGFloat = 0
     @State private var canPaste = false
+#if os(macOS)
     @State private var followingLogs = true
+#endif
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
 
@@ -244,7 +246,11 @@ public struct DobbyRootView: View {
             }
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
+#if os(iOS)
+            DobbyLogView(entries: model.logEntries, clear: model.clearRevision)
+#else
             DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
+#endif
                 .accessibilityIdentifier("Connection logs")
         }
     }

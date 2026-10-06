@@ -99,10 +99,9 @@ private final class DobbyLogTextView: UITextView {
 
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
-    @Binding var following: Bool
     let clear: Int
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
         let view = DobbyLogTextView()
@@ -118,12 +117,14 @@ struct DobbyLogView: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
-        coordinator.parent = self
-        (view as? DobbyLogTextView)?.preservesReadingPosition = !following
-        if clear != coordinator.lastClear { resetLogPresentationForClear(following: $following, expanded: &coordinator.expanded) }
-        guard following else { return }
-        coordinator.entries = entries
-        let attributed = logText(entries, expanded: coordinator.expanded)
+        let cleared = clear != coordinator.lastClear
+        if cleared {
+            coordinator.isFollowing = true
+            coordinator.expanded.removeAll()
+        }
+        if coordinator.isFollowing { coordinator.displayedEntries = entries }
+        (view as? DobbyLogTextView)?.preservesReadingPosition = !coordinator.isFollowing
+        let attributed = logText(coordinator.displayedEntries, expanded: coordinator.expanded)
         let text = attributed.string
         coordinator.updating = true
         let offset = view.contentOffset
@@ -134,7 +135,7 @@ struct DobbyLogView: UIViewRepresentable {
             if NSMaxRange(selection) <= view.textStorage.length { view.selectedRange = selection }
         }
         view.layoutIfNeeded()
-        if following || clear != coordinator.lastClear {
+        if coordinator.isFollowing || cleared {
             view.scrollRangeToVisible(NSRange(location: view.textStorage.length, length: 0))
         } else { view.setContentOffset(offset, animated: false) }
         coordinator.lastClear = clear
@@ -142,52 +143,44 @@ struct DobbyLogView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
-        var parent: DobbyLogView
         var lastClear = 0
+        var isFollowing = true
         var updating = false
-        private var userScrolling = false
-        var entries: [DobbyLogEntry] = []
+        var displayedEntries: [DobbyLogEntry] = []
         var expanded = Set<String>()
-        init(_ parent: DobbyLogView) { self.parent = parent }
         func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-            guard let index = Int(url.lastPathComponent), entries.indices.contains(index) else { return false }
-            let id = entries[index].id
+            guard let index = Int(url.lastPathComponent), displayedEntries.indices.contains(index) else { return false }
+            let id = displayedEntries[index].id
             if !expanded.insert(id).inserted { expanded.remove(id) }
             updating = true
             let offset = textView.contentOffset
-            textView.attributedText = logText(entries, expanded: expanded)
+            textView.attributedText = logText(displayedEntries, expanded: expanded)
             textView.setContentOffset(offset, animated: false)
             updating = false
             return false
         }
-        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            userScrolling = true
-        }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard !updating, userScrolling else { return }
+            let panState = scrollView.panGestureRecognizer.state
+            guard !updating,
+                  panState == .began || panState == .changed || scrollView.isDecelerating else { return }
             updateFollowingState(for: scrollView)
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
             guard !decelerate else { return }
-            finishUserScroll(in: scrollView)
+            updateFollowingState(for: scrollView)
         }
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-            finishUserScroll(in: scrollView)
-        }
-        private func finishUserScroll(in scrollView: UIScrollView) {
-            guard userScrolling else { return }
             updateFollowingState(for: scrollView)
-            userScrolling = false
         }
         private func updateFollowingState(for scrollView: UIScrollView) {
-            guard let logView = scrollView as? DobbyLogTextView,
-                  !logView.isRestoringReadingPosition else { return }
+            guard let logView = scrollView as? DobbyLogTextView, !logView.isRestoringReadingPosition else { return }
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height,
                 contentHeight: scrollView.contentSize.height
             )
-            if parent.following != atBottom { parent.following = atBottom }
-            if !atBottom { (scrollView as? DobbyLogTextView)?.captureReadingPosition() }
+            isFollowing = atBottom
+            logView.preservesReadingPosition = !atBottom
+            if !atBottom { logView.captureReadingPosition() }
         }
     }
 }
