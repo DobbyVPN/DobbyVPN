@@ -188,7 +188,9 @@ def xcodebuild_ui_test_without_building_command(
             raise IOSSimulatorContractError("XCTest environment variable name is invalid")
         if not isinstance(value, str) or "\x00" in value:
             raise IOSSimulatorContractError("XCTest environment variable value is invalid")
-        environment_arguments.append(f"{key}={value}")
+        # Xcode only forwards TEST_RUNNER_* variables from its own process
+        # environment into XCTest, stripping this prefix for the test code.
+        environment_arguments.append(f"TEST_RUNNER_{key}={value}")
     return ["/usr/bin/env", *environment_arguments, *command]
 
 

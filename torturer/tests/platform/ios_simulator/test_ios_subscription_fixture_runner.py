@@ -56,10 +56,21 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
         self.assertEqual(
             command[1:4],
             [
-                "DOBBY_IOS_TEST_FIXTURE_REQUIRED=1",
-                "DOBBY_IOS_TEST_SUBSCRIPTION_URL=" + fixture.url,
-                "DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE=1",
+                "TEST_RUNNER_DOBBY_IOS_TEST_FIXTURE_REQUIRED=1",
+                "TEST_RUNNER_DOBBY_IOS_TEST_SUBSCRIPTION_URL=" + fixture.url,
+                "TEST_RUNNER_DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE=1",
             ],
+        )
+        self.assertFalse(
+            any(
+                argument.startswith((
+                    "DOBBY_IOS_TEST_FIXTURE_REQUIRED=",
+                    "DOBBY_IOS_TEST_SUBSCRIPTION_URL=",
+                    "DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE=",
+                ))
+                for argument in command
+            ),
+            "fixture values must reach XCTest through Xcode's TEST_RUNNER_ prefix",
         )
         self.assertIn(
             "-only-testing:iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
