@@ -727,7 +727,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     }
                 }
             }
-            LogsPane(controller, Modifier.weight(1f))
+            LogsPane(controller, Modifier.weight(1f).traceComposeConstraints("logs-pane"))
         }
     }
 }
@@ -763,9 +763,16 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
     val warningColor = (if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFFFFD084)
         else androidx.compose.ui.graphics.Color(0xFF8A5A00)).toArgb()
     val errorColor = colors.error.toArgb()
-    Column(modifier.fillMaxWidth()) {
-        Text("Logs", style = MaterialTheme.typography.titleMedium)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+    Column(modifier.fillMaxWidth().traceComposeConstraints("logs-content-column")) {
+        Text(
+            "Logs",
+            modifier = Modifier.traceComposeConstraints("logs-header"),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Row(
+            Modifier.fillMaxWidth().traceComposeConstraints("logs-actions-row"),
+            horizontalArrangement = Arrangement.End,
+        ) {
             TextButton(onClick = controller::clearLogs) { Text("Clear") }
             TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
         }

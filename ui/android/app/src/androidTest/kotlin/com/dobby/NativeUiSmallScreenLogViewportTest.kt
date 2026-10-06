@@ -102,6 +102,12 @@ class NativeUiSmallScreenLogViewportTest {
             check(controlsMeasurement?.contains("measured=") == true) {
                 "ANDROID_CONNECTION_CONTROLS_MEASUREMENT_MISSING trace=$layoutTrace"
             }
+            check(
+                layoutTrace.contains("logs-pane incoming=") &&
+                    layoutTrace.contains("logs-content-column incoming="),
+            ) {
+                "ANDROID_LOGS_PANE_MEASUREMENTS_MISSING trace=$layoutTrace"
+            }
             val visibleMessage = seedDiagnosticRows()
             assertLogPaneUsable(visibleMessage)
             assertPrimaryConnectionActionReachable()
@@ -270,9 +276,10 @@ class NativeUiSmallScreenLogViewportTest {
             if (ready) return
             Thread.sleep(100)
         }
+        val layoutTrace = device.executeShellCommand("logcat -d -s DobbyComposeLayout:I")
         throw AssertionError(
             "ANDROID_LOGS_NOT_VISIBLE_ON_SMALL_SCREEN display=${device.displayWidth}x${device.displayHeight} " +
-                "ancestor_chain=$lastLayout",
+                "ancestor_chain=$lastLayout layout_trace=$layoutTrace",
         )
     }
 

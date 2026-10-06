@@ -335,7 +335,7 @@ struct DobbyLogView: UIViewRepresentable {
             ].joined(separator: " "))
         }
 
-        func effectiveContentHeight(for logView: DobbyLogTextView) -> CGFloat {
+        fileprivate func effectiveContentHeight(for logView: DobbyLogTextView) -> CGFloat {
             let measured = logView.contentSize.height
             let emptyTextHeight = logView.textContainerInset.top + logView.textContainerInset.bottom
             if logView.textStorage.length == 0 || measured > emptyTextHeight + 1 {
