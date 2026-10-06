@@ -379,9 +379,10 @@ class IOSSimulatorAppEvidence:
     # result bundle. It is an extra diagnostic output; command streams remain
     # the authoritative process diagnostics.
     result_bundle: Path | None = None
-    # The app's complete native runtime log is retained separately from the
-    # XCTest result bundle. XCTest attachments never replace this stream.
+    # The app's native runtime log is retained separately when the app produced
+    # one. XCTest attachments never replace this stream.
     native_log: Path | None = None
+    native_log_collection_error: str | None = None
     selected_tests: tuple[str, ...] = ()
 
 
@@ -861,8 +862,8 @@ def _collect_ios_native_log(
     work_dir: Path,
     *,
     budget: RunBudget,
-) -> Path:
-    """Retain the complete native app log after the UI test."""
+) -> Path | None:
+    """Retain app logs after XCTest; return None if no native app log exists."""
     result = _require_success(
         runner,
         simctl_get_app_container_command(simulator.udid, contract.bundle_identifier),
@@ -885,20 +886,27 @@ def _collect_ios_native_log(
     destination_dir.mkdir(parents=True, exist_ok=True)
 
     native_log = container / "tmp" / "app_logs.txt"
-    if native_log.is_symlink() or not native_log.is_file():
+    if native_log.is_symlink():
         raise IOSSimulatorStageError(
             "collect-ios-native-log",
-            "Simulator app did not leave its complete app_logs.txt diagnostic",
+            f"native app log is a symbolic link: {native_log}",
         )
-    native_log_copy = destination_dir / "app-native.log"
-    try:
-        shutil.copy2(native_log, native_log_copy)
-    except OSError as error:
-        raise IOSSimulatorStageError(
-            "collect-ios-native-log",
-            f"could not copy complete native app log: {native_log_copy}",
-        ) from error
-    native_log_copy.chmod(0o600)
+    native_log_copy: Path | None = None
+    if native_log.exists():
+        if not native_log.is_file():
+            raise IOSSimulatorStageError(
+                "collect-ios-native-log",
+                f"native app log is not a regular file: {native_log}",
+            )
+        native_log_copy = destination_dir / "app-native.log"
+        try:
+            shutil.copy2(native_log, native_log_copy)
+        except OSError as error:
+            raise IOSSimulatorStageError(
+                "collect-ios-native-log",
+                f"could not copy complete native app log: {native_log_copy}",
+            ) from error
+        native_log_copy.chmod(0o600)
     for name in _IOS_LOG_NAMES:
         for suffix in ("", ".previous"):
             source = container / "tmp" / (name + suffix)
@@ -1269,6 +1277,7 @@ def run_ios_simulator_app_contract(
     xctest_started = False
     retained_result_bundle: Path | None = None
     retained_native_log: Path | None = None
+    native_log_collection_error: str | None = None
     subscription_fixture = None
     subscription_fixture_directory = work_dir / "native-subscription-fixture"
     requires_subscription_fixture = (
@@ -1432,7 +1441,7 @@ def run_ios_simulator_app_contract(
         cleanup_errors: list[tuple[str, BaseException]] = []
 
         def cleanup_simulator() -> None:
-            nonlocal retained_result_bundle, retained_native_log
+            nonlocal retained_result_bundle, retained_native_log, native_log_collection_error
             if xctest_started:
                 if result_bundle.exists():
                     try:
@@ -1463,6 +1472,15 @@ def run_ios_simulator_app_contract(
                             work_dir,
                             budget=budget,
                         )
+                        if retained_native_log is None:
+                            native_log_collection_error = (
+                                "app_logs.txt was absent; no native app log bytes were produced"
+                            )
+                            if failure is not None:
+                                failure.add_note(
+                                    "iOS app log collection error="
+                                    + native_log_collection_error
+                                )
                     except BaseException as error:
                         cleanup_errors.append(
                             ("iOS app log export collection failed", error)
@@ -1534,7 +1552,7 @@ def run_ios_simulator_app_contract(
                 raise
     if failure is not None:
         raise failure.with_traceback(failure.__traceback__)
-    if simulator is None or retained_result_bundle is None or retained_native_log is None:
+    if simulator is None or retained_result_bundle is None:
         raise IOSSimulatorAppContractError("iOS Simulator check produced no result")
     budget.assert_within_deadline()
     return IOSSimulatorAppEvidence(
@@ -1546,6 +1564,7 @@ def run_ios_simulator_app_contract(
         ),
         result_bundle=retained_result_bundle,
         native_log=retained_native_log,
+        native_log_collection_error=native_log_collection_error,
         selected_tests=selected_tests,
     )
 

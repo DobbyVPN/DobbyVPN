@@ -63,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(f"error: {error}", file=sys.stderr)
         return 1
+    if evidence.native_log_collection_error is not None:
+        print(
+            "iOS app log export collection error: "
+            + evidence.native_log_collection_error,
+            file=sys.stderr,
+        )
     print(
         "iOS-Simulator SwiftUI XCTest UI mini contract passed: "
         f"{evidence.simulator.name} ({evidence.simulator.runtime}); "

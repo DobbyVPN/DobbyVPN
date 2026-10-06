@@ -30,7 +30,10 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         contract = object()
         runner = object()
         budget = object()
-        evidence = SimpleNamespace(simulator=SimpleNamespace(name="iPhone", runtime="iOS 18"))
+        evidence = SimpleNamespace(
+            simulator=SimpleNamespace(name="iPhone", runtime="iOS 18"),
+            native_log_collection_error=None,
+        )
         args = [
             "--candidate-root", "candidate",
             "--work-dir", "work",

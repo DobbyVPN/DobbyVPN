@@ -184,16 +184,21 @@ class TimingProgressTests(unittest.TestCase):
                 mock.patch.object(
                     ios_simulator_app,
                     "_collect_ios_native_log",
-                    return_value=root / "native.log",
+                    return_value=None,
                 ),
                 redirect_stdout(events_output),
             ):
-                ios_simulator_app.run_ios_simulator_app_contract(
+                evidence = ios_simulator_app.run_ios_simulator_app_contract(
                     candidate_root=root / "candidate",
                     work_dir=work_dir,
                     runner=Runner(),
                 )
 
+        self.assertIsNone(evidence.native_log)
+        self.assertEqual(
+            evidence.native_log_collection_error,
+            "app_logs.txt was absent; no native app log bytes were produced",
+        )
         events = _json_events(events_output.getvalue())
         finish_events = [event for event in events if event["event"] == "stage-finish"]
         self.assertEqual(

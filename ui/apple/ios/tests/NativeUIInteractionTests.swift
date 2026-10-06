@@ -590,35 +590,22 @@ final class NativeUIInteractionTests: XCTestCase {
         screenshotName: String? = nil
     ) -> CGFloat {
         let offsetBefore = anchor.element.frame.minY - logs.frame.minY
-        let detailElements = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
-        let currentAnchor = detailElements.element(boundBy: anchor.detailIndex)
+        let currentAnchor = anchor.element
 
         // Use a measured short drag: tiny drags stay inside the follow threshold,
         // while a full swipe can throw a bottom row completely out of view.
-        var scrollSettled = false
         for _ in 0..<3 {
+            if currentAnchor.frame.minY - logs.frame.minY > offsetBefore + 24 { break }
             let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
             let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
             start.press(forDuration: 0.1, thenDragTo: end)
-
-            let movedIntoReadingArea = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                self.elementIsVisible(currentAnchor, in: logs)
-                    && currentAnchor.frame.minY - logs.frame.minY > offsetBefore + 24
-            }, object: logs)
-            if XCTWaiter.wait(for: [movedIntoReadingArea], timeout: 1) == .completed {
-                scrollSettled = true
-                break
-            }
         }
         attachScreenshot(screenshotName ?? "logs-scroll-attempt")
-        XCTAssertTrue(scrollSettled,
-                       "A downward scroll should move the same rendered row away from the bottom; " +
-                           "before=\(offsetBefore), after=\(currentAnchor.frame.minY - logs.frame.minY), " +
-                           "viewport=\(logs.frame)")
         let offsetAfter = currentAnchor.frame.minY - logs.frame.minY
         XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
                              "The downward drag should move the reader more than the follow threshold")
+        XCTAssertTrue(elementIsVisible(currentAnchor, in: logs),
+                      "The same log row should remain visible after scrolling away from the bottom")
         XCTAssertTrue((logs.value as? String ?? "").contains(anchor.record),
                       "The anchored record should remain in the rendered log text")
         return offsetAfter

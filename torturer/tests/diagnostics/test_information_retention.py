@@ -534,6 +534,38 @@ class InformationRetentionTests(unittest.TestCase):
             for filename in retained_names:
                 self.assertEqual((root / "collected" / filename).read_bytes(), payload)
 
+    def test_ios_ui_log_collection_reports_absent_native_log_without_placeholder(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            container = root / "container"
+            temporary = container / "tmp"
+            temporary.mkdir(parents=True)
+            payloads = {
+                "ui_diagnostics.jsonl": b'{"event":"ui.failure"}\n',
+                "go_tunnel_logs.jsonl.stderr": b'{"event":"stderr.capture"}\n',
+            }
+            for filename, payload in payloads.items():
+                (temporary / filename).write_bytes(payload)
+
+            with mock.patch.object(
+                ios_simulator_app,
+                "_require_success",
+                return_value=SimpleNamespace(stdout=str(container)),
+            ):
+                native_log = ios_simulator_app._collect_ios_native_log(
+                    mock.Mock(),
+                    SimpleNamespace(udid="11111111-1111-1111-1111-111111111111"),
+                    SimpleNamespace(bundle_identifier="vpn.dobby.app"),
+                    root / "work",
+                    budget=mock.Mock(),
+                )
+
+            collected = root / "work/diagnostics/ios-simulator"
+            self.assertIsNone(native_log)
+            self.assertFalse((collected / "app-native.log").exists())
+            for filename, payload in payloads.items():
+                self.assertEqual((collected / filename).read_bytes(), payload)
+
     def test_native_ui_log_collection_preserves_raw_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
