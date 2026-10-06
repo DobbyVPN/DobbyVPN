@@ -342,6 +342,8 @@ class NativeUiInstrumentedTest {
         check(originalScale.toFloatOrNull() != null) { "ANDROID_FONT_SCALE_UNAVAILABLE:$originalScale" }
         val originalDisplaySize = device.executeShellCommand("wm size")
         val overrideSize = Regex("Override size: (\\d+x\\d+)").find(originalDisplaySize)?.groupValues?.get(1)
+        val originalDisplayDensity = device.executeShellCommand("wm density")
+        val overrideDensity = Regex("Override density: (\\d+)").find(originalDisplayDensity)?.groupValues?.get(1)
         try {
             device.setOrientationLeft()
             device.waitForIdle()
@@ -367,9 +369,14 @@ class NativeUiInstrumentedTest {
             val activityBeforeSmallScreenChange = currentMainActivity()
                 ?: throw AssertionError("ANDROID_ACTIVITY_MISSING_BEFORE_SMALL_SCREEN_RESIZE")
             device.executeShellCommand("wm size 360x640")
-            waitForActivityReplacement(activityBeforeSmallScreenChange, 10_000)
-            check(device.displayWidth <= 360 && device.displayHeight <= 640) {
-                "ANDROID_SMALL_SCREEN_OVERRIDE_NOT_APPLIED ${device.displayWidth}x${device.displayHeight}"
+            device.executeShellCommand("wm density 160")
+            waitForCompactDisplayConfiguration(activityBeforeSmallScreenChange, 10_000)
+            val metrics = currentMainActivity()?.resources?.displayMetrics
+            check(device.displayWidth == 360 && device.displayHeight == 640 &&
+                    metrics != null && metrics.densityDpi == 160 && metrics.widthPixels == 360 && metrics.heightPixels == 640) {
+                "ANDROID_SMALL_SCREEN_LOGICAL_SIZE_NOT_APPLIED " +
+                    "display=${device.displayWidth}x${device.displayHeight} " +
+                    "metrics=${metrics?.widthPixels}x${metrics?.heightPixels}@${metrics?.densityDpi}dpi"
             }
             // Resolve the controls viewport from the replacement Activity after
             // Android has applied the display-size configuration change.
@@ -378,6 +385,7 @@ class NativeUiInstrumentedTest {
         } finally {
             device.executeShellCommand("settings put system font_scale $originalScale")
             device.executeShellCommand(if (overrideSize == null) "wm size reset" else "wm size $overrideSize")
+            device.executeShellCommand(if (overrideDensity == null) "wm density reset" else "wm density $overrideDensity")
             device.unfreezeRotation()
             device.setOrientationNatural()
             device.waitForIdle()
@@ -1105,17 +1113,25 @@ class NativeUiInstrumentedTest {
         return activity
     }
 
-    private fun waitForActivityReplacement(previous: MainActivity, timeoutMillis: Long) {
+    private fun waitForCompactDisplayConfiguration(previous: MainActivity, timeoutMillis: Long) {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (System.currentTimeMillis() < deadline) {
             val current = currentMainActivity()
-            if (current != null && current !== previous) {
+            val metrics = current?.resources?.displayMetrics
+            if (current != null && current !== previous && metrics != null && metrics.densityDpi == 160 &&
+                metrics.widthPixels == 360 && metrics.heightPixels == 640 &&
+                device.displayWidth == 360 && device.displayHeight == 640) {
                 device.waitForIdle()
                 return
             }
             Thread.sleep(50)
         }
-        throw AssertionError("ANDROID_CONFIGURATION_RELAUNCH_TIMEOUT")
+        val metrics = currentMainActivity()?.resources?.displayMetrics
+        throw AssertionError(
+            "ANDROID_COMPACT_DISPLAY_CONFIGURATION_TIMEOUT " +
+                "display=${device.displayWidth}x${device.displayHeight} " +
+                "metrics=${metrics?.widthPixels}x${metrics?.heightPixels}@${metrics?.densityDpi}dpi",
+        )
     }
 
     private fun scrollControlsToConnectionAction() {

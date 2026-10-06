@@ -81,32 +81,21 @@ class NativeUiSmallScreenLogViewportTest {
         val originalDisplaySize = device.executeShellCommand("wm size")
         val originalOverride = Regex("Override size: (\\d+x\\d+)")
             .find(originalDisplaySize)?.groupValues?.get(1)
+        val originalDisplayDensity = device.executeShellCommand("wm density")
+        val originalDensityOverride = Regex("Override density: (\\d+)")
+            .find(originalDisplayDensity)?.groupValues?.get(1)
         try {
             val before = MainActivity.current
                 ?: throw AssertionError("ANDROID_ACTIVITY_MISSING_BEFORE_SMALL_SCREEN_RESIZE")
             device.executeShellCommand("wm size 360x640")
-            waitForActivityReplacement(before, 10_000)
-            check(MainActivity.current?.intent?.getBooleanExtra("dobbyvpn.traceComposeLayout", false) == true) {
-                "ANDROID_LAYOUT_TRACE_EXTRA_LOST_AFTER_CONFIGURATION_CHANGE"
-            }
-            check(device.displayWidth <= 360 && device.displayHeight <= 640) {
-                "ANDROID_SMALL_SCREEN_OVERRIDE_NOT_APPLIED ${device.displayWidth}x${device.displayHeight}"
-            }
-            val layoutTrace = device.executeShellCommand("logcat -d -s DobbyComposeLayout:I")
-            check(layoutTrace.contains("logs-android-view incoming=")) {
-                "ANDROID_LAYOUT_TRACE_MEASUREMENTS_MISSING trace=$layoutTrace"
-            }
-            val controlsMeasurement = layoutTrace.lineSequence().lastOrNull {
-                it.contains("connection-controls incoming=")
-            }
-            check(controlsMeasurement?.contains("measured=") == true) {
-                "ANDROID_CONNECTION_CONTROLS_MEASUREMENT_MISSING trace=$layoutTrace"
-            }
-            check(
-                layoutTrace.contains("logs-pane incoming=") &&
-                    layoutTrace.contains("logs-content-column incoming="),
-            ) {
-                "ANDROID_LOGS_PANE_MEASUREMENTS_MISSING trace=$layoutTrace"
+            device.executeShellCommand("wm density 160")
+            waitForCompactDisplayConfiguration(before, 10_000)
+            val metrics = MainActivity.current?.resources?.displayMetrics
+            check(device.displayWidth == 360 && device.displayHeight == 640 &&
+                    metrics != null && metrics.densityDpi == 160 && metrics.widthPixels == 360 && metrics.heightPixels == 640) {
+                "ANDROID_SMALL_SCREEN_LOGICAL_SIZE_NOT_APPLIED " +
+                    "display=${device.displayWidth}x${device.displayHeight} " +
+                    "metrics=${metrics?.widthPixels}x${metrics?.heightPixels}@${metrics?.densityDpi}dpi"
             }
             val visibleMessage = seedDiagnosticRows()
             assertLogPaneUsable(visibleMessage)
@@ -118,6 +107,9 @@ class NativeUiSmallScreenLogViewportTest {
             device.executeShellCommand(
                 if (originalOverride == null) "wm size reset" else "wm size $originalOverride",
             )
+            device.executeShellCommand(
+                if (originalDensityOverride == null) "wm density reset" else "wm density $originalDensityOverride",
+            )
             device.unfreezeRotation()
             device.setOrientationNatural()
             device.waitForIdle()
@@ -127,11 +119,7 @@ class NativeUiSmallScreenLogViewportTest {
     private fun launch() {
         val intent = Intent(instrumentation.targetContext, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            .putExtra("dobbyvpn.traceComposeLayout", true)
-        val launched = instrumentation.startActivitySync(intent)
-        check(launched.intent.getBooleanExtra("dobbyvpn.traceComposeLayout", false)) {
-            "ANDROID_LAYOUT_TRACE_EXTRA_NOT_DELIVERED_TO_ACTIVITY"
-        }
+        instrumentation.startActivitySync(intent)
         val deadline = System.currentTimeMillis() + 10_000
         while (System.currentTimeMillis() < deadline) {
             if (device.currentPackageName == packageName && MainActivity.current?.hasWindowFocus() == true) {
@@ -140,10 +128,7 @@ class NativeUiSmallScreenLogViewportTest {
             }
             Thread.sleep(100)
         }
-        throw AssertionError(
-            "ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT extra=" +
-                launched.intent.getBooleanExtra("dobbyvpn.traceComposeLayout", false),
-        )
+        throw AssertionError("ANDROID_LAUNCH_ACTIVITY_FOREGROUND_TIMEOUT")
     }
 
     private fun waitForOneOf(labels: Array<String>, timeoutMillis: Long) {
@@ -169,17 +154,25 @@ class NativeUiSmallScreenLogViewportTest {
         return null
     }
 
-    private fun waitForActivityReplacement(previous: MainActivity, timeoutMillis: Long) {
+    private fun waitForCompactDisplayConfiguration(previous: MainActivity, timeoutMillis: Long) {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (System.currentTimeMillis() < deadline) {
             val current = MainActivity.current
-            if (current != null && current !== previous) {
+            val metrics = current?.resources?.displayMetrics
+            if (current != null && current !== previous && metrics != null && metrics.densityDpi == 160 &&
+                metrics.widthPixels == 360 && metrics.heightPixels == 640 &&
+                device.displayWidth == 360 && device.displayHeight == 640) {
                 device.waitForIdle()
                 return
             }
             Thread.sleep(50)
         }
-        throw AssertionError("ANDROID_CONFIGURATION_RELAUNCH_TIMEOUT")
+        val metrics = MainActivity.current?.resources?.displayMetrics
+        throw AssertionError(
+            "ANDROID_COMPACT_DISPLAY_CONFIGURATION_TIMEOUT " +
+                "display=${device.displayWidth}x${device.displayHeight} " +
+                "metrics=${metrics?.widthPixels}x${metrics?.heightPixels}@${metrics?.densityDpi}dpi",
+        )
     }
 
     private fun seedDiagnosticRows(): String {
@@ -276,10 +269,9 @@ class NativeUiSmallScreenLogViewportTest {
             if (ready) return
             Thread.sleep(100)
         }
-        val layoutTrace = device.executeShellCommand("logcat -d -s DobbyComposeLayout:I")
         throw AssertionError(
             "ANDROID_LOGS_NOT_VISIBLE_ON_SMALL_SCREEN display=${device.displayWidth}x${device.displayHeight} " +
-                "ancestor_chain=$lastLayout layout_trace=$layoutTrace",
+                "ancestor_chain=$lastLayout",
         )
     }
 

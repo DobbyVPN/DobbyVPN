@@ -23,7 +23,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -41,39 +40,6 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-
-private const val COMPOSE_LAYOUT_TRACE_EXTRA = "dobbyvpn.traceComposeLayout"
-
-private object ComposeLayoutTrace {
-    private val lastMeasurements = mutableMapOf<String, String>()
-
-    @Volatile
-    var enabled = false
-
-    fun configure(intent: Intent) {
-        enabled = intent.getBooleanExtra(COMPOSE_LAYOUT_TRACE_EXTRA, false)
-        if (enabled) android.util.Log.i("DobbyComposeLayout", "trace-enabled=true")
-    }
-
-    @Synchronized
-    fun record(name: String, measurement: String) {
-        if (lastMeasurements.put(name, measurement) != measurement) {
-            android.util.Log.i("DobbyComposeLayout", "$name $measurement")
-        }
-    }
-}
-
-private fun Modifier.traceComposeConstraints(name: String): Modifier = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    if (ComposeLayoutTrace.enabled) {
-        ComposeLayoutTrace.record(
-            name,
-            "incoming=$constraints boundedHeight=${constraints.hasBoundedHeight} " +
-                "measured=${placeable.width}x${placeable.height}",
-        )
-    }
-    layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
-}
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -95,7 +61,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         current = this
-        ComposeLayoutTrace.configure(intent)
         NativeGoSession.attach(this)
         controller = SessionController(this, savedInstanceState?.getBundle(LOG_VIEW_STATE))
         if (intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
@@ -118,7 +83,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        ComposeLayoutTrace.configure(intent)
         if (intent.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
     }
 
@@ -662,12 +626,11 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         session.failure.isNotEmpty() -> "Failed"
         else -> "Disconnected"
     }
-    BoxWithConstraints(modifier.traceComposeConstraints("connection-box").fillMaxSize().padding(horizontal = 16.dp)) {
+    BoxWithConstraints(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         val controlsHeight = maxHeight * 0.5f
-        Column(Modifier.traceComposeConstraints("connection-column").fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(
                 Modifier.heightIn(max = controlsHeight)
-                    .traceComposeConstraints("connection-controls")
                     .clipToBounds().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -727,7 +690,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     }
                 }
             }
-            LogsPane(controller, Modifier.weight(1f).traceComposeConstraints("logs-pane"))
+            LogsPane(controller, Modifier.weight(1f))
         }
     }
 }
@@ -763,14 +726,13 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
     val warningColor = (if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFFFFD084)
         else androidx.compose.ui.graphics.Color(0xFF8A5A00)).toArgb()
     val errorColor = colors.error.toArgb()
-    Column(modifier.fillMaxWidth().traceComposeConstraints("logs-content-column")) {
+    Column(modifier.fillMaxWidth()) {
         Text(
             "Logs",
-            modifier = Modifier.traceComposeConstraints("logs-header"),
             style = MaterialTheme.typography.titleMedium,
         )
         Row(
-            Modifier.fillMaxWidth().traceComposeConstraints("logs-actions-row"),
+            Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End,
         ) {
             TextButton(onClick = controller::clearLogs) { Text("Clear") }
@@ -782,7 +744,6 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         AndroidView(
             factory = { controller.createLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f)
-                .traceComposeConstraints("logs-android-view")
                 .clipToBounds(),
             update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
         )
