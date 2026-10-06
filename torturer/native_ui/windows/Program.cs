@@ -510,7 +510,7 @@ internal static class Program
             if (operation == "logs")
             {
                 var logRoot = Find("Backend logs");
-                var entries = Walk(logRoot, includeLogs: true)
+                var entries = Walk(logRoot)
                     .Where(element => element.Current.ControlType == ControlType.Text)
                     .Select(element =>
                     {
@@ -528,7 +528,7 @@ internal static class Program
                     .ToArray();
                 string expandedRecord = "";
                 var expansionVerified = false;
-                var details = Walk(logRoot, includeLogs: true).FirstOrDefault(element =>
+                var details = Walk(logRoot).FirstOrDefault(element =>
                     element.Current.Name == "Details" &&
                     element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _));
                 if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
@@ -538,7 +538,7 @@ internal static class Program
                     try
                     {
                         if (!wasExpanded) control.Expand();
-                        expandedRecord = Walk(logRoot, includeLogs: true)
+                        expandedRecord = Walk(logRoot)
                             .Where(element => element.Current.ControlType == ControlType.Text)
                             .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
                                 ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
@@ -561,7 +561,7 @@ internal static class Program
             }
             if (operation == "select-log-text")
             {
-                var entry = Walk(Find("Backend logs"), includeLogs: true)
+                var entry = Walk(Find("Backend logs"))
                     .Where(element => element.Current.ControlType == ControlType.Text && !element.Current.IsOffscreen)
                     .FirstOrDefault(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) &&
                         ((TextPattern)pattern).DocumentRange.GetText(-1).Contains(" · ", StringComparison.Ordinal));
@@ -585,7 +585,7 @@ internal static class Program
                 var position = scroll.Current.VerticalScrollPercent;
                 if (position < 0)
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll position");
-                var firstVisibleRecord = Walk(logRoot, includeLogs: true)
+                var firstVisibleRecord = Walk(logRoot)
                     .Where(element => element.Current.ControlType == ControlType.Text && !element.Current.IsOffscreen)
                     .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
                         ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
@@ -624,25 +624,33 @@ internal static class Program
                 string[] help_texts;
                 try
                 {
-                    TracePhase("tree-uia-walk-start");
-                    var elements = new List<AutomationElement>();
-                    var nodeIndex = 0;
-                    foreach (var element in Walk(root, trace: TracePhase))
+                    TracePhase("tree-uia-findall-start");
+                    var controlView = new PropertyCondition(
+                        AutomationElement.IsControlElementProperty,
+                        true);
+                    var foundElements = root.FindAll(TreeScope.Subtree, controlView);
+                    TracePhase($"tree-uia-findall-complete elements={foundElements.Count}");
+                    if (foundElements.Count > 8192)
+                        throw new InvalidOperationException("Accessibility tree exceeds 8192 elements");
+
+                    var visibleElements = new List<AutomationElement>();
+                    for (var elementIndex = 0; elementIndex < foundElements.Count; elementIndex++)
                     {
-                        nodeIndex++;
-                        TracePhase($"tree-uia-walk-node={nodeIndex}-current-start");
+                        var nodeIndex = elementIndex + 1;
+                        var element = foundElements[elementIndex];
+                        TracePhase($"tree-uia-findall-node={nodeIndex}-current-start");
                         var current = element.Current;
-                        TracePhase($"tree-uia-walk-node={nodeIndex}-current-complete");
-                        TracePhase($"tree-uia-walk-node={nodeIndex}-is-offscreen-start");
+                        TracePhase($"tree-uia-findall-node={nodeIndex}-current-complete");
+                        TracePhase($"tree-uia-findall-node={nodeIndex}-is-offscreen-start");
                         var isOffscreen = current.IsOffscreen;
-                        TracePhase($"tree-uia-walk-node={nodeIndex}-is-offscreen-complete offscreen={isOffscreen}");
-                        if (!isOffscreen) elements.Add(element);
+                        TracePhase($"tree-uia-findall-node={nodeIndex}-is-offscreen-complete offscreen={isOffscreen}");
+                        if (!isOffscreen) visibleElements.Add(element);
                     }
-                    TracePhase($"tree-uia-walk-complete elements={elements.Count}");
-                    enabled_controls = elements.Where(e => e.Current.IsEnabled).SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray();
-                    labels = elements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
+                    TracePhase($"tree-uia-findall-visible-complete elements={visibleElements.Count}");
+                    enabled_controls = visibleElements.Where(e => e.Current.IsEnabled).SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray();
+                    labels = visibleElements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
                         .Where(s => s.Length > 0).Distinct().ToArray();
-                    help_texts = elements.Select(e => e.Current.HelpText)
+                    help_texts = visibleElements.Select(e => e.Current.HelpText)
                         .Where(s => s.Length > 0).Distinct().ToArray();
                 }
                 catch (ElementNotAvailableException error)
@@ -880,51 +888,21 @@ internal static class Program
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 
-    private static IEnumerable<AutomationElement> Walk(
-        AutomationElement root,
-        bool includeLogs = false,
-        Action<string>? trace = null)
+    private static IEnumerable<AutomationElement> Walk(AutomationElement root)
     {
         var queue = new Queue<AutomationElement>();
         queue.Enqueue(root);
         int count = 0;
-        int edgeCount = 0;
         while (queue.Count > 0)
         {
             if (++count > 8192) throw new InvalidOperationException("Accessibility tree exceeds 8192 elements");
             var element = queue.Dequeue();
             yield return element;
-            // Control discovery does not need mutable log records or their Details children.
-            if (!includeLogs)
-            {
-                trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-start");
-                var automationId = element.Current.AutomationId;
-                trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-complete id={automationId}");
-                if (automationId == "Backend logs") continue;
-
-                trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-start");
-                var controlTypeValue = element.Current.ControlType;
-                var controlType = controlTypeValue.ProgrammaticName;
-                trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-complete type={controlType}");
-                // The Windows title bar is system chrome; its provider threw
-                // E_UNEXPECTED while enumerating descendants on the test host.
-                if (controlTypeValue == ControlType.TitleBar)
-                {
-                    trace?.Invoke($"tree-uia-walk-node={count}-skip-titlebar-descendants");
-                    continue;
-                }
-            }
-
-            trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-start");
             var child = TreeWalker.ControlViewWalker.GetFirstChild(element);
-            trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-complete has-child={child is not null}");
             while (child is not null)
             {
                 queue.Enqueue(child);
-                var currentEdge = ++edgeCount;
-                trace?.Invoke($"tree-uia-edge={currentEdge}-get-next-sibling-start from-node={count}");
                 child = TreeWalker.ControlViewWalker.GetNextSibling(child);
-                trace?.Invoke($"tree-uia-edge={currentEdge}-get-next-sibling-complete has-sibling={child is not null}");
             }
         }
     }

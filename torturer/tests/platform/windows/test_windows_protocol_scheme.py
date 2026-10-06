@@ -271,23 +271,14 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);',
             '"UI process did not expose a visible, non-minimized window for the tree snapshot", seconds: 20.0);',
             'TracePhase("tree-uia-root-complete")',
-            'TracePhase("tree-uia-walk-start")',
-            'foreach (var element in Walk(root, trace: TracePhase))',
+            'TracePhase("tree-uia-findall-start")',
+            'var controlView = new PropertyCondition(\n                        AutomationElement.IsControlElementProperty,\n                        true);',
+            'var foundElements = root.FindAll(TreeScope.Subtree, controlView);',
+            'TracePhase($"tree-uia-findall-complete elements={foundElements.Count}");',
+            'if (foundElements.Count > 8192)',
             'catch (COMException error) when (error.HResult == unchecked((int)0x8000FFFF))',
             'uiaError = error.ToString()',
             'var isOffscreen = current.IsOffscreen;',
-            'trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-start");',
-            'trace?.Invoke($"tree-uia-walk-node={count}-current-automation-id-complete id={automationId}");',
-            'trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-start");',
-            'var controlTypeValue = element.Current.ControlType;',
-            'var controlType = controlTypeValue.ProgrammaticName;',
-            'trace?.Invoke($"tree-uia-walk-node={count}-current-control-type-complete type={controlType}");',
-            'if (controlTypeValue == ControlType.TitleBar)',
-            'trace?.Invoke($"tree-uia-walk-node={count}-skip-titlebar-descendants");',
-            'trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-start");',
-            'trace?.Invoke($"tree-uia-walk-node={count}-get-first-child-complete has-child={child is not null}");',
-            'trace?.Invoke($"tree-uia-edge={currentEdge}-get-next-sibling-start from-node={count}");',
-            'trace?.Invoke($"tree-uia-edge={currentEdge}-get-next-sibling-complete has-sibling={child is not null}");',
             '((WindowPattern)windowPattern).Current.CanMaximize',
             '"Could not restore native window bounds after narrow-window test"',
             'originalBounds.Right - originalBounds.Left',
@@ -296,7 +287,10 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
         self.assertEqual(source.count("root.FindFirst(TreeScope.Subtree, new AndCondition("), 3)
-        self.assertNotIn("FindAll(TreeScope", source)
+        tree_operation = source.split('if (operation == "tree")', 1)[1].split(
+            "long? pasteInvokedAtUnixMs", 1
+        )[0]
+        self.assertNotIn("Walk(root", tree_operation)
         for assertion in (
             'if (request.TryGetProperty("pid", out var requestedPid))',
             'Process.GetProcessesByName(Path.GetFileNameWithoutExtension(expected))',
