@@ -32,8 +32,11 @@ final class NativeUIInteractionTests: XCTestCase {
         app.buttons["Done"].tap()
         XCTAssertEqual(configuration.value as? String, "invalidprofile")
         XCTAssertFalse(app.buttons["VPN connection action"].isEnabled)
-        XCTAssertTrue(app.staticTexts["Error"].waitForExistence(timeout: 30))
-        attachScreenshot("failure")
+        XCTAssertTrue(
+            app.staticTexts["Disconnected"].waitForExistence(timeout: 10),
+            "An unsupported typed URL should remain disconnected without starting a fetch or connection"
+        )
+        attachScreenshot("invalid-source")
         XCTAssertEqual(configuration.value as? String, "invalidprofile")
 
         configuration.tap()
@@ -77,7 +80,7 @@ final class NativeUIInteractionTests: XCTestCase {
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
         let populated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", ""), object: logs)
-        XCTAssertEqual(XCTWaiter.wait(for: [populated], timeout: 10), .completed, "The prior error should be visible before clearing")
+        XCTAssertEqual(XCTWaiter.wait(for: [populated], timeout: 10), .completed, "Retained records should be visible before clearing")
         let clearSentinel = "Paste an HTTPS subscription URL with a host"
         UIPasteboard.general.string = "http://example.invalid/clear-sentinel"
         let sentinelCount = occurrences(of: clearSentinel, in: logs.value as? String ?? "")
@@ -290,7 +293,8 @@ final class NativeUIInteractionTests: XCTestCase {
             validationError, atLeast: expectedErrorCount, in: logs, timeout: 20
         ))
 
-        for _ in 0..<3 {
+        // The compact Simulator viewport needs enough records to produce a real scroll range.
+        for _ in 0..<7 {
             configuration.tap()
             configuration.typeText("x")
             dismissConfigurationKeyboard()
@@ -304,12 +308,12 @@ final class NativeUIInteractionTests: XCTestCase {
 
         let enoughEntries = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
-            return self.occurrences(of: validationError, in: text) >= 4
+            return self.occurrences(of: validationError, in: text) >= 8
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
         let beforeScroll = try XCTUnwrap(logs.value as? String)
         let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
-        XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 4)
+        XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 8)
 
         let latestLogText = try XCTUnwrap(logs.value as? String)
         XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
