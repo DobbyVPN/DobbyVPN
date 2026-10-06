@@ -393,11 +393,20 @@ final class NativeUIInteractionTests: XCTestCase {
         let frozen = try XCTUnwrap(logs.value as? String)
         assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen)
 
+        let anchorOffsetBeforeConfiguration = positionAnchor.element.frame.minY - logs.frame.minY
         configuration.tap()
         configuration.typeText("x")
         dismissConfigurationKeyboard()
         XCTAssertEqual(logs.value as? String, frozen,
                        "Editing the configuration should not move the frozen log view")
+        XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
+                      "The same log record should remain visible after dismissing the configuration keyboard")
+        XCTAssertEqual(
+            positionAnchor.element.frame.minY - logs.frame.minY,
+            anchorOffsetBeforeConfiguration,
+            accuracy: 2,
+            "Showing and dismissing the configuration keyboard must preserve the frozen reading position"
+        )
         let anchorOffsetBeforeRefresh = positionAnchor.element.frame.minY - logs.frame.minY
         paste.tap()
         let refreshOpportunity = expectation(description: "A foreground log refresh elapses while scrolled up")

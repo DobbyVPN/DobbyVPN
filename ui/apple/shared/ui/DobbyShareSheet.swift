@@ -146,6 +146,7 @@ struct DobbyLogView: UIViewRepresentable {
         var lastClear = 0
         var isFollowing = true
         var updating = false
+        private var userScrolling = false
         var displayedEntries: [DobbyLogEntry] = []
         var expanded = Set<String>()
         func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
@@ -160,17 +161,23 @@ struct DobbyLogView: UIViewRepresentable {
             return false
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            let panState = scrollView.panGestureRecognizer.state
-            guard !updating,
-                  panState == .began || panState == .changed || scrollView.isDecelerating else { return }
+            guard !updating, userScrolling else { return }
             updateFollowingState(for: scrollView)
+        }
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            userScrolling = true
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
             guard !decelerate else { return }
-            updateFollowingState(for: scrollView)
+            finishUserScroll(in: scrollView)
         }
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            finishUserScroll(in: scrollView)
+        }
+        private func finishUserScroll(in scrollView: UIScrollView) {
+            guard userScrolling else { return }
             updateFollowingState(for: scrollView)
+            userScrolling = false
         }
         private func updateFollowingState(for scrollView: UIScrollView) {
             guard let logView = scrollView as? DobbyLogTextView, !logView.isRestoringReadingPosition else { return }
