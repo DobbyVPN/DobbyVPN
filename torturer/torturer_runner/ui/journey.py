@@ -26,6 +26,7 @@ from torturer_runner.native_cases import (
     MACOS_CONFIGURE_STARTUP_CASE,
     NATIVE_CASE_SUITES,
     WINDOWS_CONFIGURE_TREE_CASE,
+    WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,
     validate_native_cases,
 )
 
@@ -1531,6 +1532,7 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
         raise NativeUIJourneyError(str(error)) from error
     if selected not in {
         (WINDOWS_CONFIGURE_TREE_CASE,),
+        (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,),
         (MACOS_CONFIGURE_STARTUP_CASE,),
     }:
         raise NativeUIJourneyError("unsupported desktop native case selection")
@@ -1585,7 +1587,10 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
         if args.platform == "windows":
             ui.enable_windows_crash_diagnostics()
         with ui.bounded_by(_smoke_timeout(args.timeout)):
-            startup = ui.start(windows_uia_diagnostics=args.platform == "windows")
+            if selected == (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,):
+                startup = ui.start(windows_no_uia_hold_seconds=20)
+            else:
+                startup = ui.start(windows_uia_diagnostics=args.platform == "windows")
         if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
             configured = ui.configure()
             if configured.get("input_verified") is not True:
@@ -1759,6 +1764,8 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
                 },
                 "fixture_requests": fixture_stats,
             }
+        elif selected == (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,):
+            case_result = {"windows_no_uia_hold": startup}
         else:
             case_result = {"configure_tree": startup}
             if ui.windows_uia_diagnostics is not None:

@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -624,9 +625,19 @@ private fun DobbyApp(controller: SessionController) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
-            TopAppBar(title = { Text("DobbyVPN") }, actions = {
-                TextButton(onClick = { controller.show("about") }) { Text("About") }
-            })
+            TopAppBar(
+                title = {
+                    Text(
+                        "DobbyVPN",
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                actions = {
+                    TextButton(onClick = { controller.show("about") }) { Text("About") }
+                },
+            )
         },
     ) { padding ->
         if (controller.state.screen == "about") {

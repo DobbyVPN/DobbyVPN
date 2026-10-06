@@ -29,6 +29,7 @@ from torturer_runner import local_vm  # noqa: E402
 from torturer_runner.ui import journey, smoke  # noqa: E402
 from torturer_runner.native_cases import (  # noqa: E402
     WINDOWS_CONFIGURE_TREE_CASE,
+    WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,
 )
 
 SPEC = importlib.util.spec_from_file_location("dobbyvpn_installer_migration_test", MIGRATION_PATH)
@@ -211,6 +212,49 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 (Path(directory) / "windows-configure-tree-diagnostics.json").read_text(encoding="utf-8")
             )
             self.assertEqual(retained["post_probe_process"], {"alive": True, "pid": 42})
+
+    def test_windows_no_uia_hold_uses_only_win32_process_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = object.__new__(smoke.NativeUIController)
+            controller.logs = Path(directory)
+            controller._call = mock.Mock(side_effect=(
+                {"ready": True, "pid": 42, "windowHandle": "0x100"},
+                {"alive": True, "pid": 42, "identity": "candidate-ui-instance"},
+            ))
+
+            result = controller._run_windows_no_uia_hold(0)
+
+            self.assertEqual(
+                [call.args[0] for call in controller._call.call_args_list],
+                ["windows-baseline", "probe"],
+            )
+            self.assertEqual(result["automation_queries"], 0)
+            self.assertEqual(result["complete"], True)
+            self.assertEqual(len(result["process_probes"]), 1)
+            retained = json.loads(
+                (Path(directory) / "windows-configure-tree-no-uia-diagnostics.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertEqual(retained["complete"], True)
+
+    def test_windows_no_uia_hold_retains_a_failed_process_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = object.__new__(smoke.NativeUIController)
+            controller.logs = Path(directory)
+            controller._call = mock.Mock(side_effect=(
+                {"ready": True, "pid": 42, "windowHandle": "0x100"},
+                {"alive": False, "pid": 42, "identity": "candidate-ui-instance"},
+            ))
+
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "not alive"):
+                controller._run_windows_no_uia_hold(0)
+
+            retained = json.loads(
+                (Path(directory) / "windows-configure-tree-no-uia-diagnostics.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertEqual(retained["complete"], False)
+            self.assertEqual(retained["process_probes"][0]["alive"], False)
 
     def test_windows_wer_collection_retains_event_streams_and_dump_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -682,6 +726,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             def __init__(self, *_args, **_kwargs):
                 self.operations: list[str] = []
                 self.windows_uia_diagnostics = None
+                self.windows_no_uia_diagnostics = None
 
             @staticmethod
             def bounded_by(_timeout):
@@ -690,7 +735,21 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             def enable_windows_crash_diagnostics(self):
                 self.operations.append("enable-wer")
 
-            def start(self, *, windows_uia_diagnostics=False):
+            def start(
+                self,
+                *,
+                windows_uia_diagnostics=False,
+                windows_no_uia_hold_seconds=None,
+            ):
+                if windows_no_uia_hold_seconds is not None:
+                    self.operations.append(
+                        f"start-no-uia-hold={windows_no_uia_hold_seconds}"
+                    )
+                    self.windows_no_uia_diagnostics = {
+                        "complete": True,
+                        "automation_queries": 0,
+                    }
+                    return self.windows_no_uia_diagnostics
                 self.operations.append(f"start-tree-uia-diagnostics={windows_uia_diagnostics}")
                 if windows_uia_diagnostics:
                     self.windows_uia_diagnostics = {"uia_probe": {"found": True}}
@@ -737,7 +796,9 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             profile = root / "profile"
             profile.write_bytes(b"disposable profile bytes")
 
-            def run_case() -> tuple[dict, FakeController]:
+            def run_case(
+                selected_case=WINDOWS_CONFIGURE_TREE_CASE,
+            ) -> tuple[dict, FakeController]:
                 constructed: list[FakeController] = []
 
                 def factory(*args, **kwargs):
@@ -754,7 +815,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 ):
                     result = journey.run_native_cases(SimpleNamespace(
                         platform="windows",
-                        native_cases=[WINDOWS_CONFIGURE_TREE_CASE],
+                        native_cases=[selected_case],
                         raw_log_dir=root / "logs",
                         ui=Path("app"),
                         profile=profile,
@@ -764,6 +825,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 return result, constructed[0]
 
             windows, windows_controller = run_case()
+            no_uia, no_uia_controller = run_case(WINDOWS_CONFIGURE_TREE_NO_UIA_CASE)
         self.assertEqual(windows["coverage"]["native_cases"], [WINDOWS_CONFIGURE_TREE_CASE])
         self.assertEqual(
             windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["windows_uia_diagnostics"]["uia_probe"]["found"],
@@ -771,6 +833,18 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         )
         self.assertEqual(windows_controller.operations, [
             "enable-wer", "start-tree-uia-diagnostics=True", "close", "collect", "restore-wer",
+        ])
+        self.assertEqual(
+            no_uia["coverage"]["native_cases"],
+            [WINDOWS_CONFIGURE_TREE_NO_UIA_CASE],
+        )
+        self.assertEqual(
+            no_uia["checks"][WINDOWS_CONFIGURE_TREE_NO_UIA_CASE]
+            ["windows_no_uia_hold"]["automation_queries"],
+            0,
+        )
+        self.assertEqual(no_uia_controller.operations, [
+            "enable-wer", "start-no-uia-hold=20", "close", "collect", "restore-wer",
         ])
 
     def test_windows_native_ui_retains_window_readiness_diagnostics(self) -> None:

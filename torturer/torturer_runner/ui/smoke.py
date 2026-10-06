@@ -277,6 +277,7 @@ class NativeUIController:
         self.cleared_record: str | None = None
         self.log_resize_verified = False
         self.windows_uia_diagnostics: dict[str, object] | None = None
+        self.windows_no_uia_diagnostics: dict[str, object] | None = None
         self._windows_local_dumps: _WindowsLocalDumps | None = None
         self._windows_wer_started_at_utc: datetime | None = None
         self._windows_wer_dump_dir: Path | None = None
@@ -351,11 +352,23 @@ class NativeUIController:
         import_url: str | None = None,
         *,
         windows_uia_diagnostics: bool = False,
+        windows_no_uia_hold_seconds: float | None = None,
     ) -> dict:
         if self.process is not None or self._alive():
             raise NativeUISmokeError("native UI is already running")
         if windows_uia_diagnostics and (self.platform != "windows" or import_url is not None):
             raise ValueError("Windows startup diagnostics require a cold Windows launch")
+        if windows_no_uia_hold_seconds is not None and (
+            self.platform != "windows"
+            or import_url is not None
+            or windows_uia_diagnostics
+            or not math.isfinite(windows_no_uia_hold_seconds)
+            or not 0 <= windows_no_uia_hold_seconds <= 30
+        ):
+            raise ValueError(
+                "Windows no-UIA stability check requires a cold launch "
+                "and a hold from 0 to 30 seconds"
+            )
         if self.platform == "macos":
             self._call("preflight")
             if self._call("probe").get("alive"):
@@ -418,6 +431,12 @@ class NativeUIController:
                 return response.get("alive") is True and self.identity is not None
 
             self._wait(identified, "native UI process identity unavailable")
+
+        if windows_no_uia_hold_seconds is not None:
+            self.windows_no_uia_diagnostics = self._run_windows_no_uia_hold(
+                windows_no_uia_hold_seconds
+            )
+            return self.windows_no_uia_diagnostics
 
         if windows_uia_diagnostics:
             self.windows_uia_diagnostics = self._run_windows_uia_diagnostics()
@@ -494,6 +513,47 @@ class NativeUIController:
         path = self.logs / "windows-configure-tree-diagnostics.json"
         path.write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
         return diagnostics
+
+    def _run_windows_no_uia_hold(self, hold_seconds: float) -> dict[str, object]:
+        """Check launch stability using only Win32 process/window probes."""
+        diagnostics: dict[str, object] = {
+            "started_at_utc": datetime.now(timezone.utc).isoformat(),
+            "hold_seconds": hold_seconds,
+            "automation_queries": 0,
+            "process_probes": [],
+        }
+        path = self.logs / "windows-configure-tree-no-uia-diagnostics.json"
+        probes: list[dict[str, object]] = []
+        try:
+            baseline = self._call("windows-baseline")
+            diagnostics["win32_baseline"] = baseline
+            if baseline.get("ready") is not True:
+                raise NativeUISmokeError(
+                    "no-UIA stability check did not obtain a healthy Win32 window baseline"
+                )
+
+            deadline = time.monotonic() + hold_seconds
+            while True:
+                probe = self._call("probe")
+                probes.append({"at_utc": datetime.now(timezone.utc).isoformat(), **probe})
+                diagnostics["process_probes"] = probes
+                if probe.get("alive") is not True:
+                    raise NativeUISmokeError(
+                        "Windows UI process was not alive during the no-UIA hold"
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(1.0, remaining))
+            diagnostics["complete"] = True
+            return diagnostics
+        except Exception as error:
+            diagnostics["failure"] = "".join(traceback.format_exception(error))
+            diagnostics["complete"] = False
+            raise
+        finally:
+            diagnostics["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
+            path.write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
 
     def _open_link(self, link: str) -> None:
         if self.platform == "windows":

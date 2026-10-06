@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from torturer_runner.native_cases import validate_native_cases
+from torturer_runner.native_cases import (
+    WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,
+    validate_native_cases,
+)
 
 
 class NativeCaseSelectionTests(unittest.TestCase):
@@ -15,11 +18,15 @@ class NativeCaseSelectionTests(unittest.TestCase):
             validate_native_cases("windows", "full", ["configure-tree"]),
             ("configure-tree",),
         )
+        self.assertEqual(
+            validate_native_cases("windows", "full", [WINDOWS_CONFIGURE_TREE_NO_UIA_CASE]),
+            (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,),
+        )
 
     def test_a_lane_accepts_only_one_case(self):
         with self.assertRaisesRegex(ValueError, "one native case"):
             validate_native_cases(
-                "windows", "full", ["configure-tree", "another-case"]
+                "windows", "full", ["configure-tree", "configure-tree-no-uia"]
             )
 
     def test_unsupported_case_and_setup_suite_are_rejected(self):

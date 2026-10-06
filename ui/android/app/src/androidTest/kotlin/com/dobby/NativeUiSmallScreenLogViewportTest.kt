@@ -15,6 +15,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.ui.MainActivity
 import java.io.File
 import java.io.FileOutputStream
@@ -101,8 +102,12 @@ class NativeUiSmallScreenLogViewportTest {
             check(controlsMeasurement?.contains("measured=") == true) {
                 "ANDROID_CONNECTION_CONTROLS_MEASUREMENT_MISSING trace=$layoutTrace"
             }
-            assertLogPaneUsable()
+            val visibleMessage = seedDiagnosticRows()
+            assertLogPaneUsable(visibleMessage)
+            assertPrimaryConnectionActionReachable()
             captureScreenshot("small-screen-log-viewport")
+            requireObject("Clear").click()
+            waitForLogMessageAbsent(visibleMessage)
         } finally {
             device.executeShellCommand(
                 if (originalOverride == null) "wm size reset" else "wm size $originalOverride",
@@ -171,7 +176,49 @@ class NativeUiSmallScreenLogViewportTest {
         throw AssertionError("ANDROID_CONFIGURATION_RELAUNCH_TIMEOUT")
     }
 
-    private fun assertLogPaneUsable() {
+    private fun seedDiagnosticRows(): String {
+        val clearMarker = "small-screen-log-viewport-clear-${System.nanoTime()}"
+        NativeVpnBridge.recordDiagnostic(
+            instrumentation.targetContext,
+            "ui.test.small_screen.clear",
+            clearMarker,
+        )
+        waitForLogMessage(clearMarker)
+        requireObject("Clear").click()
+        waitForLogMessageAbsent(clearMarker)
+
+        val prefix = "small-screen-log-viewport-row"
+        val messages = (0 until 8).map { index -> "$prefix-${index.toString().padStart(2, '0')}" }
+        messages.forEach { message ->
+            NativeVpnBridge.recordDiagnostic(
+                instrumentation.targetContext,
+                "ui.test.small_screen.row",
+                message,
+            )
+        }
+        waitForLogMessage(messages.last())
+        return messages.last()
+    }
+
+    private fun waitForLogMessage(message: String) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            if (waitForObject("Connection logs", 100)?.text.orEmpty().contains(message)) return
+            Thread.sleep(50)
+        }
+        throw AssertionError("ANDROID_SMALL_SCREEN_LOG_MESSAGE_NOT_RENDERED message=$message")
+    }
+
+    private fun waitForLogMessageAbsent(message: String) {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            if (!waitForObject("Connection logs", 100)?.text.orEmpty().contains(message)) return
+            Thread.sleep(50)
+        }
+        throw AssertionError("ANDROID_SMALL_SCREEN_LOG_MESSAGE_NOT_CLEARED message=$message")
+    }
+
+    private fun assertLogPaneUsable(expectedVisibleMessage: String) {
         var lastLayout = "log view not found"
         val deadline = System.nanoTime() + 5_000_000_000L
         while (System.nanoTime() < deadline) {
@@ -192,7 +239,33 @@ class NativeUiSmallScreenLogViewportTest {
                         && view.getGlobalVisibleRect(textVisible) && textVisible.height() >= 24
                         && viewport.height >= 24
                         && viewport.getGlobalVisibleRect(viewportVisible) && viewportVisible.height() >= 24
-                lastLayout = if (view == null) "log view not found" else describeViewChain(view)
+                var messageVisible = false
+                if (ready && view != null && viewport != null
+                    && textVisible.intersect(viewportVisible)
+                ) {
+                    val text = view.text?.toString().orEmpty()
+                    val messageStart = text.indexOf(expectedVisibleMessage)
+                    val layout = view.layout
+                    if (messageStart >= 0 && layout != null) {
+                        val firstLine = layout.getLineForOffset(messageStart)
+                        val lastLine = layout.getLineForOffset(messageStart + expectedVisibleMessage.length - 1)
+                        val viewportLocation = IntArray(2)
+                        viewport.getLocationOnScreen(viewportLocation)
+                        val visibleContentTop = viewport.scrollY + textVisible.top - viewportLocation[1]
+                        val visibleContentBottom = viewport.scrollY + textVisible.bottom - viewportLocation[1]
+                        val textTop = view.top + view.extendedPaddingTop - view.scrollY
+                        messageVisible = (firstLine..lastLine).all { line ->
+                            val lineTop = textTop + layout.getLineTop(line)
+                            val lineBottom = textTop + layout.getLineBottom(line)
+                            lineTop >= visibleContentTop && lineBottom <= visibleContentBottom
+                        }
+                    }
+                }
+                ready = ready && messageVisible
+                lastLayout = if (view == null) "log view not found" else
+                    "${describeViewChain(view)} expected=$expectedVisibleMessage " +
+                        "rendered=${view.text?.toString()?.contains(expectedVisibleMessage)} " +
+                        "fully_visible=$messageVisible"
             }
             if (ready) return
             Thread.sleep(100)
@@ -201,6 +274,29 @@ class NativeUiSmallScreenLogViewportTest {
             "ANDROID_LOGS_NOT_VISIBLE_ON_SMALL_SCREEN display=${device.displayWidth}x${device.displayHeight} " +
                 "ancestor_chain=$lastLayout",
         )
+    }
+
+    private fun assertPrimaryConnectionActionReachable() {
+        // This case has no subscription fixture, so it verifies that the
+        // primary action remains fully visible and accessible without starting a VPN.
+        val action = requireObject("VPN connection action")
+        val autoConnectLabel = requireObject("Auto connect")
+        val title = requireObject("DobbyVPN")
+        val screen = Rect(0, 0, device.displayWidth, device.displayHeight)
+        val minimumActionHeight = (40 * instrumentation.targetContext.resources.displayMetrics.density).toInt()
+        check(screen.contains(action.visibleBounds)
+                && action.visibleBounds.height() >= minimumActionHeight
+                && screen.contains(autoConnectLabel.visibleBounds)
+                && action.visibleBounds.contains(autoConnectLabel.visibleBounds)) {
+            "ANDROID_PRIMARY_CONNECTION_ACTION_NOT_REACHABLE_ON_SMALL_SCREEN " +
+                "action=${action.visibleBounds} label=${autoConnectLabel.visibleBounds} screen=$screen " +
+                "minimum_action_height=$minimumActionHeight"
+        }
+        val maximumTitleHeight = (40 * instrumentation.targetContext.resources.displayMetrics.density).toInt()
+        check(!title.visibleBounds.isEmpty && title.visibleBounds.height() <= maximumTitleHeight) {
+            "ANDROID_APP_TITLE_WRAPS_ON_SMALL_SCREEN bounds=${title.visibleBounds} " +
+                "maximum_height=$maximumTitleHeight"
+        }
     }
 
     private fun describeViewChain(view: View): String {

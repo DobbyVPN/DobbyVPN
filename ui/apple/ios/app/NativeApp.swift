@@ -57,17 +57,20 @@ private struct SimulatorTestSessionStateView: View {
 final class SimulatorLogScrollDiagnostics: ObservableObject {
     static let shared = SimulatorLogScrollDiagnostics()
     static let environmentKey = "DOBBY_IOS_TEST_LOG_SCROLL_TRACE"
+    private static let maximumRecords = 96
 
     let isEnabled: Bool
     @Published private(set) var value = ""
+    private var records: [String] = []
 
     private init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         isEnabled = environment[Self.environmentKey] == "1"
     }
 
     func append(_ record: String) {
-        guard isEnabled else { return }
-        value += value.isEmpty ? record : "\n\(record)"
+        guard isEnabled, records.count < Self.maximumRecords else { return }
+        records.append(record)
+        value = records.joined(separator: "\n")
     }
 }
 
