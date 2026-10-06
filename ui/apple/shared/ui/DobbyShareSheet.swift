@@ -214,12 +214,9 @@ struct DobbyLogView: UIViewRepresentable {
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
             guard scrollView is DobbyLogTextView else { return }
-            var update: FollowingUpdate?
-            let accepted = isUserDragging && !decelerate
-            if accepted {
-                isUserDragging = false
-                update = updateFollowingState(for: scrollView)
-            }
+            let accepted = isUserDragging && !updating
+            isUserDragging = false
+            let update = accepted ? updateFollowingState(for: scrollView) : nil
             recordScrollDiagnostic(
                 "didEndDragging(decelerate=\(decelerate))",
                 for: scrollView,
@@ -240,7 +237,8 @@ struct DobbyLogView: UIViewRepresentable {
                   !logView.isRestoringReadingPosition else { return nil }
             let previous = isFollowing
             let atBottom = shouldFollowLogUpdates(
-                viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height,
+                viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height
+                    - scrollView.adjustedContentInset.bottom,
                 contentHeight: scrollView.contentSize.height
             )
             let changed = isFollowing != atBottom
@@ -265,7 +263,8 @@ struct DobbyLogView: UIViewRepresentable {
         ) {
             guard let logView = scrollView as? DobbyLogTextView,
                   let onScrollDiagnostic else { return }
-            let viewportBottom = scrollView.contentOffset.y + scrollView.bounds.height
+            let rawViewportBottom = scrollView.contentOffset.y + scrollView.bounds.height
+            let viewportBottom = rawViewportBottom - scrollView.adjustedContentInset.bottom
             let distanceToBottom = scrollView.contentSize.height - viewportBottom
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: viewportBottom,
@@ -285,7 +284,10 @@ struct DobbyLogView: UIViewRepresentable {
                 "offsetY=\(number(scrollView.contentOffset.y))",
                 "viewportHeight=\(number(scrollView.bounds.height))",
                 "contentHeight=\(number(scrollView.contentSize.height))",
-                "viewportBottom=\(number(viewportBottom))",
+                "contentInsetBottom=\(number(scrollView.contentInset.bottom))",
+                "adjustedContentInsetBottom=\(number(scrollView.adjustedContentInset.bottom))",
+                "rawViewportBottom=\(number(rawViewportBottom))",
+                "adjustedViewportBottom=\(number(viewportBottom))",
                 "distanceToBottom=\(number(distanceToBottom))",
                 "atBottom=\(atBottom)",
                 "followingBefore=\(update?.previous ?? isFollowing)",
