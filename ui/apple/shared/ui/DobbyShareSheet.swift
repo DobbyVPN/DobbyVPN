@@ -174,8 +174,12 @@ struct DobbyLogView: UIViewRepresentable {
             return false
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            // Programmatic content updates are fenced by `updating`.
-            guard !updating else { return }
+            guard !updating,
+                  let logView = scrollView as? DobbyLogTextView
+            else { return }
+            let panState = logView.panGestureRecognizer.state
+            let userIsScrolling = panState == .began || panState == .changed || scrollView.isDecelerating
+            guard userIsScrolling else { return }
             updateFollowingState(for: scrollView)
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {

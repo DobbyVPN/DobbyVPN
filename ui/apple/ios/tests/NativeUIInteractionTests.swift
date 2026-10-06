@@ -326,6 +326,8 @@ final class NativeUIInteractionTests: XCTestCase {
             return self.occurrences(of: validationError, in: text) >= 8
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
+        XCTAssertEqual(followingState.label, followingLabel,
+                       "Programmatic log updates should keep the view following newest entries")
         let beforeScroll = try XCTUnwrap(logs.value as? String)
         let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
         XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 8)
