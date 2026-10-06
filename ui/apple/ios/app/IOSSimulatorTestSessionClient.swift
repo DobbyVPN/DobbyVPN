@@ -113,7 +113,15 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
             return failure("NOT_FOUND", "Simulator test session is no longer available")
         }
         let configured = !profiles.isEmpty
-        let active = state == "CONNECTED" && activeProfile != nil
+        let active: Bool
+        let activeProfileValue: Any
+        if state == "CONNECTED", let activeProfile {
+            active = true
+            activeProfileValue = activeProfile.json
+        } else {
+            active = false
+            activeProfileValue = NSNull()
+        }
         let result: [String: Any] = [
             "session_id": sessionID,
             "sequence": sequence,
@@ -123,7 +131,7 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
             "configured": configured,
             "source_url": sourceURL,
             "source_error": "",
-            "active_profile": active ? activeProfile!.json : NSNull(),
+            "active_profile": activeProfileValue,
             "last_failure": NSNull(),
             "recovering": false,
             "digest": digest,
@@ -198,9 +206,21 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
             return failure("STALE_SEQUENCE", "Simulator test selection no longer matches the loaded profiles")
         }
         let mode = parameters["mode"] as? String ?? ""
-        let index = integer(parameters["index"]) ?? 0
-        let selected = mode == "AUTO_SELECT" ? 0 : index
-        guard (mode == "AUTO_SELECT" || mode == "PROFILE_INDEX"), profiles.indices.contains(selected) else {
+        let selected: Int
+        switch mode {
+        case "AUTO_SELECT":
+            selected = 0
+        case "PROFILE_INDEX":
+            guard let requestedIndex = integer(parameters["index"]),
+                  requestedIndex >= 0,
+                  requestedIndex < Int64(profiles.count) else {
+                return failure("INVALID_ARGUMENT", "Simulator test profile selection is invalid")
+            }
+            selected = Int(requestedIndex)
+        default:
+            return failure("INVALID_ARGUMENT", "Simulator test profile selection is invalid")
+        }
+        guard profiles.indices.contains(selected) else {
             return failure("INVALID_ARGUMENT", "Simulator test profile selection is invalid")
         }
         startRequests += 1
@@ -266,8 +286,15 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
     /// Parse only TOML array-table headers and descriptions for rendered UI
     /// fixtures. Production profile validation remains owned by the Go parser.
     private func parseProfileSummaries(_ data: Data) -> [Profile]? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        let headerPattern = try! NSRegularExpression(pattern: #"(?m)^\s*\[\[(Outline|Xray|TrustTunnel)\]\]\s*$"#)
+        guard let text = String(data: data, encoding: .utf8),
+              let headerPattern = try? NSRegularExpression(
+                pattern: #"(?m)^\s*\[\[(Outline|Xray|TrustTunnel)\]\]\s*$"#
+              ),
+              let descriptionPattern = try? NSRegularExpression(
+                pattern: #"(?m)^\s*Description\s*=\s*"([^"]*)"\s*$"#
+              ) else {
+            return nil
+        }
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
         let headers = headerPattern.matches(in: text, range: fullRange)
         guard !headers.isEmpty else { return nil }
@@ -277,7 +304,6 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
             let sectionStart = NSMaxRange(match.range)
             let sectionEnd = offset + 1 < headers.count ? headers[offset + 1].range.location : fullRange.length
             let section = (text as NSString).substring(with: NSRange(location: sectionStart, length: max(0, sectionEnd - sectionStart)))
-            let descriptionPattern = try! NSRegularExpression(pattern: #"(?m)^\s*Description\s*=\s*"([^"]*)"\s*$"#)
             let descriptionRange = NSRange(section.startIndex..<section.endIndex, in: section)
             let descriptionMatch = descriptionPattern.firstMatch(in: section, range: descriptionRange)
             let description = descriptionMatch.map { (section as NSString).substring(with: $0.range(at: 1)) } ?? ""
