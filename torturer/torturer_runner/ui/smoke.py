@@ -215,8 +215,8 @@ class NativeUIController:
                 command.append(link)
             with Path(str(prefix) + ".launcher.stdout.log").open("xb") as stdout, Path(str(prefix) + ".launcher.stderr.log").open("xb") as stderr:
                 self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
-        elif self.platform == "windows" and link is not None:
-            os.startfile(link)  # type: ignore[attr-defined]
+        elif self.platform == "windows":
+            os.startfile(link if link is not None else str(self.binary))  # type: ignore[attr-defined]
             self.process = None
             time.sleep(0.25)
         else:

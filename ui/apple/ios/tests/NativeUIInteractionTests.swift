@@ -94,7 +94,8 @@ final class NativeUIInteractionTests: XCTestCase {
         let clearAnchorOffset = scrollLogsAwayFromBottom(logs, anchor: clearAnchor)
         XCTAssertTrue(logs.value as? String == renderedBeforeClear,
                       "Scrolling to an older record should not change the rendered entries")
-        XCTAssertTrue(clearAnchor.element.isHittable)
+        XCTAssertTrue(elementIsVisible(clearAnchor.element, in: logs),
+                      "The anchored rendered row should remain inside the log viewport")
         XCTAssertGreaterThan(clearAnchorOffset, clearAnchorOffsetBeforeScroll + 24,
                              "The reading position should be away from the bottom before Clear")
         app.buttons["Clear"].tap()
@@ -398,7 +399,7 @@ final class NativeUIInteractionTests: XCTestCase {
         )
         XCTAssertEqual(logs.value as? String, frozen,
                        "The refreshed log source should stay frozen while the reader is away from the bottom")
-        XCTAssertTrue(positionAnchor.element.isHittable,
+        XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
                       "The same rendered record should remain visible after a refresh while scrolled up")
         XCTAssertEqual(
             positionAnchor.element.frame.minY - logs.frame.minY,
@@ -411,7 +412,7 @@ final class NativeUIInteractionTests: XCTestCase {
         app.buttons["Done"].tap()
         XCTAssertEqual(logs.value as? String, frozen,
                        "Opening and dismissing About must not change the frozen log entries")
-        XCTAssertTrue(positionAnchor.element.isHittable,
+        XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
                       "The same rendered record should remain visible after About is dismissed")
         XCTAssertEqual(
             positionAnchor.element.frame.minY - logs.frame.minY,
@@ -429,7 +430,7 @@ final class NativeUIInteractionTests: XCTestCase {
                        "A live rotation must not replace frozen log entries")
         XCTAssertTrue(frozen.contains(positionAnchor.record))
         let landscapeAnchor = try XCTUnwrap(detailElement(for: positionAnchor, in: logs))
-        XCTAssertTrue(landscapeAnchor.isHittable,
+        XCTAssertTrue(elementIsVisible(landscapeAnchor, in: logs),
                       "The same rendered record should stay visible in landscape")
         XCUIDevice.shared.orientation = .portrait
         let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -441,7 +442,7 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(frozen.contains(positionAnchor.record))
         attachScreenshot("logs-freeze-returned-to-portrait")
         let portraitAnchor = try XCTUnwrap(detailElement(for: positionAnchor, in: logs))
-        XCTAssertTrue(portraitAnchor.isHittable,
+        XCTAssertTrue(elementIsVisible(portraitAnchor, in: logs),
                       "The same rendered record should stay visible after returning to portrait")
 
         for _ in 0..<8 { logs.swipeUp() }
@@ -543,7 +544,8 @@ final class NativeUIInteractionTests: XCTestCase {
         let details = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
             .allElementsBoundByIndex
-        for (index, element) in details.enumerated() where element.label == "Details" && element.isHittable {
+        for (index, element) in details.enumerated() where element.label == "Details" {
+            guard elementIsVisible(element, in: logs) else { continue }
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
             guard (0.15...0.38).contains(relativeY),
                   let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { continue }
@@ -567,7 +569,7 @@ final class NativeUIInteractionTests: XCTestCase {
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
         let currentAnchor = detailElements.element(boundBy: anchor.detailIndex)
         let movedIntoReadingArea = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            currentAnchor.isHittable
+            self.elementIsVisible(currentAnchor, in: logs)
                 && currentAnchor.frame.minY - logs.frame.minY > offsetBefore + 24
         }, object: logs)
         let scrollSettled = XCTWaiter.wait(for: [movedIntoReadingArea], timeout: 5)
@@ -580,6 +582,13 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue((logs.value as? String ?? "").contains(anchor.record),
                       "The anchored record should remain in the rendered log text")
         return offsetAfter
+    }
+
+    private func elementIsVisible(_ element: XCUIElement, in logs: XCUIElement) -> Bool {
+        let frame = element.frame
+        guard !frame.isNull, frame.width > 0, frame.height > 0 else { return false }
+        let visibleFrame = frame.intersection(logs.frame)
+        return !visibleFrame.isNull && visibleFrame.width > 0 && visibleFrame.height > 0
     }
 
     private func detailElement(for anchor: RenderedLogAnchor, in logs: XCUIElement) -> XCUIElement? {

@@ -655,7 +655,9 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         val controlsHeight = maxHeight * 0.5f
         Column(Modifier.traceComposeConstraints("connection-column").fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(
-                Modifier.heightIn(max = controlsHeight).clipToBounds().verticalScroll(rememberScrollState()),
+                Modifier.weight(2f, fill = false).heightIn(max = controlsHeight)
+                    .traceComposeConstraints("connection-controls")
+                    .clipToBounds().verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 OutlinedTextField(
@@ -714,7 +716,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     }
                 }
             }
-            LogsPane(controller)
+            LogsPane(controller, Modifier.weight(3f))
         }
     }
 }
@@ -742,7 +744,7 @@ private fun AboutScreen(controller: SessionController, modifier: Modifier) {
 }
 
 @Composable
-private fun ColumnScope.LogsPane(controller: SessionController) {
+private fun LogsPane(controller: SessionController, modifier: Modifier) {
     val state = controller.state
     val colors = MaterialTheme.colorScheme
     val normalColor = colors.onSurface.toArgb()
@@ -750,7 +752,7 @@ private fun ColumnScope.LogsPane(controller: SessionController) {
     val warningColor = (if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFFFFD084)
         else androidx.compose.ui.graphics.Color(0xFF8A5A00)).toArgb()
     val errorColor = colors.error.toArgb()
-    Column(Modifier.fillMaxWidth()) {
+    Column(modifier.fillMaxWidth()) {
         Text("Logs", style = MaterialTheme.typography.titleMedium)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             TextButton(onClick = controller::clearLogs) { Text("Clear") }

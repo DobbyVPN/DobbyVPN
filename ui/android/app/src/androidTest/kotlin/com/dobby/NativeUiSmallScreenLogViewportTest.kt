@@ -95,6 +95,12 @@ class NativeUiSmallScreenLogViewportTest {
             check(layoutTrace.contains("logs-android-view incoming=")) {
                 "ANDROID_LAYOUT_TRACE_MEASUREMENTS_MISSING trace=$layoutTrace"
             }
+            val controlsMeasurement = layoutTrace.lineSequence().lastOrNull {
+                it.contains("connection-controls incoming=")
+            }
+            check(controlsMeasurement?.contains("measured=") == true) {
+                "ANDROID_CONNECTION_CONTROLS_MEASUREMENT_MISSING trace=$layoutTrace"
+            }
             assertLogPaneUsable()
             captureScreenshot("small-screen-log-viewport")
         } finally {

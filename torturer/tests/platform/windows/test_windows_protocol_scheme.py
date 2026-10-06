@@ -230,12 +230,10 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 side_effect=AssertionError("probe must bypass tree snapshot")
             )
             controller.capture = mock.Mock(return_value={})
-            launcher = mock.Mock(pid=42)
-            launcher.poll.return_value = None
-
-            with mock.patch.object(smoke.subprocess, "Popen", return_value=launcher):
+            with mock.patch.object(smoke.os, "startfile", create=True) as shell_open:
                 controller.start()
 
+        shell_open.assert_called_once_with(str(root / "DobbyVPN.exe"))
         self.assertEqual(calls, ["probe", "findall-probe"])
         controller.snapshot.assert_not_called()
         controller.capture.assert_not_called()
