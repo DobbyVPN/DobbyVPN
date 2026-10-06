@@ -74,6 +74,7 @@ _INSTRUMENTATION_CLASS = "com.dobby.NativeUiHostedProfileTest"
 _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _ALLOWED_OPERATIONS = {
     "configure",
+    "consent_grant_selection",
     "connect",
     "observe_tunnel",
     "observe_routing_identity",
@@ -103,6 +104,7 @@ _MIN_CLEANUP_RESERVE_SECONDS = 10.0
 _MAX_CLEANUP_RESERVE_SECONDS = 30.0
 _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
+_CONSENT_N11_MAX_SECONDS = 300.0
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -236,7 +238,7 @@ class AndroidAdapter:
     """Run canonical scenarios through DobbyVPN Android instrumentation."""
 
     adapter_id = "hosted-android-app"
-    adapter_version = "v7"
+    adapter_version = "v8"
 
     def __init__(
         self,
@@ -250,6 +252,8 @@ class AndroidAdapter:
         download_url: str | None = None,
         upload_url: str | None = None,
         ui_mode: str = "protocol-matrix",
+        app_apk: Path | None = None,
+        test_companion_apk: Path | None = None,
         **kwargs: object,
     ) -> None:
         if kwargs:
@@ -264,6 +268,12 @@ class AndroidAdapter:
             raise AdapterError(
                 "ANDROID_UI_MODE_INVALID: expected protocol-matrix or gui-auto"
             )
+        if (app_apk is None) != (test_companion_apk is None):
+            raise AdapterError("ANDROID_APK_PAIR_REQUIRED")
+        self.app_apk = self._candidate_apk(app_apk, "ANDROID_APP_APK_UNAVAILABLE")
+        self.test_companion_apk = self._candidate_apk(
+            test_companion_apk, "ANDROID_TEST_COMPANION_APK_UNAVAILABLE"
+        )
         endpoint_values = (identity_url, latency_url, download_url, upload_url)
         if not all(value is not None for value in endpoint_values):
             raise AdapterError("ENDPOINTS_REQUIRED")
@@ -300,6 +310,15 @@ class AndroidAdapter:
         self._subscription_fixture = None
         self._process_cold_import_queued = False
         self._diagnostic_collection_sequence = 0
+
+    @staticmethod
+    def _candidate_apk(path: Path | None, failure_code: str) -> Path | None:
+        if path is None:
+            return None
+        candidate = path.resolve()
+        if not candidate.is_file():
+            raise AdapterError(failure_code)
+        return candidate
 
     @property
     def coverage_lane(self) -> str:
@@ -354,6 +373,144 @@ class AndroidAdapter:
         ):
             raise AdapterError("ANDROID_GUI_CONNECTION_INVALID")
         self._selected_connection = connection
+
+    def run_unchanged_consent_selection(
+        self, *, deadline: float | None
+    ) -> dict[str, object]:
+        """Prove rendered nondefault selection survives a fresh VPN grant.
+
+        The exact candidate APK pair is uninstalled and reinstalled before the
+        case so prior runs cannot supply VPN consent. The same pair is
+        reinstalled after the case to restore a pending-consent boundary for
+        the existing deny/stale-consent journey.
+        """
+
+        if self.ui_mode != "gui-auto":
+            raise ScenarioExecutionError("ANDROID_CONSENT_N11_REQUIRES_GUI_AUTO")
+        if self.app_apk is None or self.test_companion_apk is None:
+            raise ScenarioExecutionError("ANDROID_CONSENT_APK_PATHS_REQUIRED")
+        started = time.monotonic()
+        phase_deadline = started + _CONSENT_N11_MAX_SECONDS
+        if deadline is not None:
+            phase_deadline = min(phase_deadline, deadline)
+        if phase_deadline <= started + 10.0:
+            raise ScenarioExecutionError("HOSTED_LANE_DEADLINE_EXCEEDED_BEFORE_ANDROID_CONSENT_N11")
+        cleanup_deadline = phase_deadline
+        work_deadline = phase_deadline - min(
+            _MAX_CLEANUP_RESERVE_SECONDS,
+            max(_MIN_CLEANUP_RESERVE_SECONDS, _CONSENT_N11_MAX_SECONDS * _CLEANUP_RESERVE_FRACTION),
+        )
+        scenario = select_scenarios(scenario_ids=["functional.configure"])[0]
+        steps = (
+            ScenarioStep(id="configure", operation="configure", timeout_seconds=90),
+            ScenarioStep(
+                id="consent-grant-selection",
+                operation="consent_grant_selection",
+                timeout_seconds=120,
+            ),
+        )
+        device_files: list[str] = []
+        primary_error: BaseException | None = None
+        selection: Mapping[str, object] | None = None
+        self._progress_scenario_id = "android.n11-consent-grant-selection"
+        try:
+            self._install_fresh_apk_pair(work_deadline)
+            observation = self._execute_phase(
+                scenario,
+                steps,
+                work_deadline,
+                device_files,
+            )
+            self._validate_gui_observation(scenario, observation, steps=steps)
+            if not (
+                observation.configured
+                and observation.connected
+                and observation.vpn_consent_handled
+                and observation.disconnect_clean
+                and observation.final_disconnect_clean
+                and observation.cleanup_verified
+            ):
+                raise ScenarioExecutionError(
+                    "ANDROID_CONSENT_N11_LIFECYCLE_OBSERVATION_INVALID"
+                )
+            selection = observation.consent_grant_selection
+            if selection is None:
+                raise ScenarioExecutionError("ANDROID_CONSENT_N11_OBSERVATION_MISSING")
+        except BaseException as error:
+            primary_error = error
+            self._collect_functional_failure_diagnostics(
+                error,
+                "android.n11-consent-grant-selection",
+                cleanup_deadline,
+            )
+            raise
+        finally:
+            cleanup_error = self._cleanup_device(
+                tuple(device_files), cleanup_deadline
+            )
+            scratch_error = self._cleanup_local_scratch()
+            self._active_controls = ()
+            self._progress_scenario_id = None
+            if primary_error is not None:
+                if cleanup_error is not None:
+                    add_exception_notes(primary_error, "android_n11_cleanup", cleanup_error)
+                if scratch_error is not None:
+                    add_exception_notes(primary_error, "android_n11_scratch_cleanup", scratch_error)
+            elif cleanup_error is not None:
+                if scratch_error is not None:
+                    add_exception_notes(cleanup_error, "android_n11_scratch_cleanup", scratch_error)
+                self._collect_functional_failure_diagnostics(
+                    cleanup_error,
+                    "android.n11-consent-grant-selection",
+                    cleanup_deadline,
+                )
+                raise cleanup_error
+            elif scratch_error is not None:
+                self._collect_functional_failure_diagnostics(
+                    scratch_error,
+                    "android.n11-consent-grant-selection",
+                    cleanup_deadline,
+                )
+                raise scratch_error
+
+        self._install_fresh_apk_pair(cleanup_deadline)
+        if selection is None:
+            raise ScenarioExecutionError("ANDROID_CONSENT_N11_OBSERVATION_MISSING")
+        return {"passed": True, **dict(selection)}
+
+    def _install_fresh_apk_pair(self, deadline: float) -> None:
+        """Reset VPN consent by reinstalling this run's exact APK pair."""
+
+        if self.app_apk is None or self.test_companion_apk is None:
+            raise ScenarioExecutionError("ANDROID_CONSENT_APK_PATHS_REQUIRED")
+        for package in ("com.dobby.vpn.test", _PACKAGE_NAME):
+            self._adb(
+                ("uninstall", package),
+                min(30.0, _remaining(deadline, "ANDROID_N11_APK_UNINSTALL_TIMEOUT")),
+                "ANDROID_N11_APK_UNINSTALL_FAILED",
+            )
+        for package, apk, install_args in (
+            (_PACKAGE_NAME, self.app_apk, ("install", "--no-incremental", "-r", "-t")),
+            (
+                "com.dobby.vpn.test",
+                self.test_companion_apk,
+                ("install", "--no-incremental", "-r", "-t"),
+            ),
+        ):
+            self._adb(
+                (*install_args, str(apk)),
+                min(45.0, _remaining(deadline, "ANDROID_N11_APK_INSTALL_TIMEOUT")),
+                "ANDROID_N11_APK_INSTALL_FAILED",
+            )
+            installed = self._adb(
+                ("shell", "pm", "path", package),
+                min(15.0, _remaining(deadline, "ANDROID_N11_APK_VERIFY_TIMEOUT")),
+                "ANDROID_N11_APK_VERIFY_FAILED",
+            )
+            if not installed.stdout_text.strip().startswith("package:"):
+                failure = ScenarioExecutionError("ANDROID_N11_APK_VERIFY_FAILED")
+                _append_command_result_notes(failure, installed)
+                raise failure
 
     def _validate_observation_identity(
         self, observation: AndroidProfileObservation

@@ -49,6 +49,12 @@ internal static class Program
         Console.Error.Flush();
     }
 
+    private static string UtcTimestamp() =>
+        DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+
+    private static string ElapsedMilliseconds(long started) =>
+        Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString("F3", CultureInfo.InvariantCulture);
+
     private static string NormalizeLineEndings(string value) =>
         value.Replace("\r\n", "\n").Replace('\r', '\n');
 
@@ -363,8 +369,14 @@ internal static class Program
                 return 0;
             }
             var traceTree = operation == "tree";
-            var activateAndDiscoverWindow = traceTree || operation == "resize-window";
+            var traceWin32Baseline = operation == "windows-baseline";
+            var traceUiaProbe = operation == "uia-connection-configuration";
+            var traceWindow = traceTree || traceWin32Baseline || traceUiaProbe;
+            var activateAndDiscoverWindow = traceWindow || operation == "resize-window";
+            var baselineStarted = traceWin32Baseline ? Stopwatch.GetTimestamp() : 0;
             if (traceTree) TracePhase($"tree-window-discovery-start pid={process.Id}");
+            if (traceWin32Baseline)
+                TracePhase($"configure-tree-win32-baseline-start utc={UtcTimestamp()} pid={process.Id}");
             IntPtr window = IntPtr.Zero;
             if (activateAndDiscoverWindow)
             {
@@ -419,6 +431,8 @@ internal static class Program
                 window = process.MainWindowHandle;
             }
             if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
+            if (traceWin32Baseline)
+                TracePhase($"configure-tree-win32-baseline-window-discovery-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
             var visible = window != IntPtr.Zero && IsWindowVisible(window);
             var minimized = window != IntPtr.Zero && IsIconic(window);
             if (!visible || minimized)
@@ -439,14 +453,70 @@ internal static class Program
                     mainWindowTitle = process.MainWindowTitle,
                     windowDescription = window == IntPtr.Zero ? "unavailable" : DescribeWindow(window),
                     processTopLevelWindows = DescribeProcessWindows(process),
+                    executablePath = process.MainModule?.FileName,
+                    processStartUtc = process.StartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+                }));
+                if (traceWin32Baseline)
+                    TracePhase($"configure-tree-win32-baseline-incomplete utc={UtcTimestamp()} elapsed_ms={ElapsedMilliseconds(baselineStarted)}");
+                return 0;
+            }
+            var windowThreadId = GetWindowThreadProcessId(window, out var owner);
+            if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
+            if (traceWin32Baseline)
+            {
+                var boundsAvailable = GetWindowRect(window, out var bounds);
+                var boundsText = boundsAvailable
+                    ? $"{bounds.Left},{bounds.Top} {bounds.Right - bounds.Left}x{bounds.Bottom - bounds.Top}"
+                    : "unavailable";
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    ready = true,
+                    pid = process.Id,
+                    identity,
+                    executablePath = process.MainModule?.FileName,
+                    processStartUtc = process.StartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+                    sessionId = process.SessionId,
+                    threadCount = process.Threads.Count,
+                    workingSetBytes = process.WorkingSet64,
+                    windowHandle = $"0x{window.ToInt64():X}",
+                    windowThreadId,
+                    ownerPid = owner,
+                    visible,
+                    minimized,
+                    mainWindowTitle = process.MainWindowTitle,
+                    windowBounds = boundsText,
+                    windowDescription = DescribeWindow(window),
+                    processTopLevelWindows = DescribeProcessWindows(process),
+                }));
+                TracePhase($"configure-tree-win32-baseline-complete utc={UtcTimestamp()} elapsed_ms={ElapsedMilliseconds(baselineStarted)} hwnd=0x{window.ToInt64():X}");
+                return 0;
+            }
+            if (traceUiaProbe)
+                TracePhase($"configure-tree-uia-root-start utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
+            if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
+            var root = AutomationElement.FromHandle(window);
+            if (traceUiaProbe)
+                TracePhase($"configure-tree-uia-root-complete utc={UtcTimestamp()}");
+            if (traceTree) TracePhase("tree-uia-root-complete");
+            if (traceUiaProbe)
+            {
+                var queryStarted = Stopwatch.GetTimestamp();
+                TracePhase($"configure-tree-uia-connection-configuration-start utc={UtcTimestamp()}");
+                var element = ByAutomationId(root, "Connection configuration");
+                TracePhase(
+                    $"configure-tree-uia-connection-configuration-complete utc={UtcTimestamp()} " +
+                    $"elapsed_ms={ElapsedMilliseconds(queryStarted)} found={element is not null}");
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    ready = element is not null,
+                    pid = process.Id,
+                    identity,
+                    windowHandle = $"0x{window.ToInt64():X}",
+                    query = "ByAutomationId(Connection configuration)",
+                    found = element is not null,
                 }));
                 return 0;
             }
-            GetWindowThreadProcessId(window, out var owner);
-            if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
-            if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
-            var root = AutomationElement.FromHandle(window);
-            if (traceTree) TracePhase("tree-uia-root-complete");
             if (operation == "resize-window")
             {
                 if (!GetWindowRect(window, out var original))

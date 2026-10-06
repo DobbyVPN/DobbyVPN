@@ -86,6 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--raw-log-dir", type=Path)
     parser.add_argument("--adb", type=Path)
+    parser.add_argument("--app-apk", type=Path)
+    parser.add_argument("--test-companion-apk", type=Path)
     parser.add_argument("--scenario", action="append", dest="scenario_ids", help="Run one canonical scenario; repeat to select a diagnostic subset.")
     parser.add_argument("--service-pid", type=int)
     parser.add_argument("--service-binary", type=Path)
@@ -103,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     # adapter, or doing any candidate setup.  In particular, Android full is
     # a physical-device extension and must not silently become mini.
     validate_suite(args.suite, platform=args.platform, entrypoint="hosted")
+    if args.platform == "android" and (
+        args.app_apk is None or args.test_companion_apk is None
+    ):
+        raise ValueError("ANDROID_CONSENT_APK_PATHS_REQUIRED")
     selected_scenarios = select_scenarios(
         suite=args.suite,
         scenario_ids=args.scenario_ids,
@@ -143,10 +149,15 @@ def main(argv: list[str] | None = None) -> int:
                 adb=args.adb,
                 source_sha=source_sha,
                 android_ui_mode="gui-auto",
+                app_apk=args.app_apk,
+                test_companion_apk=args.test_companion_apk,
             )
             set_progress_sink = getattr(adapter, "set_progress_sink", None)
             if callable(set_progress_sink):
                 set_progress_sink(_emit_progress_event)
+            consent_grant_selection = adapter.run_unchanged_consent_selection(
+                deadline=lane_deadline,
+            )
             finalization_attempted = True
             ui_connections, ui_results = _execute_lane(
                 engine,
@@ -161,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
                 "required": True,
                 "connection": ui_connections[0].to_dict(),
                 "scenarios": ui_results,
+                "consent_grant_selection": consent_grant_selection,
             }
             adapter = adapter_for_platform(
                 args.platform,
@@ -214,11 +226,15 @@ def main(argv: list[str] | None = None) -> int:
             ui_passed = bool(ui_results) and all(
                 isinstance(item, dict) and item.get("outcome") == "passed"
                 for item in ui_results
-            )
+            ) and rendered_ui.get("consent_grant_selection", {}).get("passed") is True
             rendered_ui["passed"] = ui_passed
             coverage["rendered_ui_required"] = True
             coverage["rendered_ui_passed"] = ui_passed
             coverage["rendered_ui_scenario_count"] = len(ui_results)
+            coverage["rendered_ui_consent_grant_selection_required"] = True
+            coverage["rendered_ui_consent_grant_selection_passed"] = (
+                rendered_ui.get("consent_grant_selection", {}).get("passed") is True
+            )
             if not ui_passed:
                 coverage["status"] = "coverage-contract-failed"
                 coverage["complete"] = False

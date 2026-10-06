@@ -572,6 +572,8 @@ class InformationRetentionTests(unittest.TestCase):
             controller = object.__new__(native_ui_smoke.NativeUIController)
             controller.platform = "windows"
             controller.logs = root / "collected"
+            controller._windows_wer_started_at_utc = None
+            controller._windows_wer_dump_dir = None
             controller.logs.mkdir()
             source = root / "DobbyVPN/Logs/ui_diagnostics.jsonl"
             with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(root)}):
@@ -596,6 +598,8 @@ class InformationRetentionTests(unittest.TestCase):
             controller = object.__new__(native_ui_smoke.NativeUIController)
             controller.platform = "macos"
             controller.logs = root / "collected"
+            controller._windows_wer_started_at_utc = None
+            controller._windows_wer_dump_dir = None
             controller.logs.mkdir()
             with (
                 mock.patch.dict(os.environ, {"HOME": str(root / "disposable")}),

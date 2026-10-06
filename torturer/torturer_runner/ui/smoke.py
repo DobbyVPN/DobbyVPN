@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 
 # Also importable by the standalone diagnostic test loader.
 _TORTURER_ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +99,155 @@ def _native_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[byt
     return result
 
 
+_WINDOWS_WER_PATH = r"SOFTWARE\Microsoft\Windows\Windows Error Reporting"
+_WINDOWS_LOCAL_DUMPS_PATH = _WINDOWS_WER_PATH + r"\LocalDumps"
+_WINDOWS_LOCAL_DUMPS_VALUES = ("DumpFolder", "DumpType", "DumpCount")
+
+
+class _WindowsLocalDumps:
+    """Temporarily enable per-executable WER dumps and restore prior values."""
+
+    def __init__(self, registry=None) -> None:
+        if registry is None:
+            import winreg as registry
+        self.registry = registry
+        self._key_states: dict[str, tuple[bool, dict[str, tuple[object, int] | None]]] = {}
+        self._wer_path_existed = False
+        self._local_dumps_path_existed = False
+        self._active = False
+
+    def _access(self, flags: int) -> int:
+        return flags | self.registry.KEY_WOW64_64KEY
+
+    def _key_exists(self, path: str) -> bool:
+        try:
+            key = self.registry.OpenKey(
+                self.registry.HKEY_LOCAL_MACHINE,
+                path,
+                0,
+                self._access(self.registry.KEY_READ),
+            )
+        except FileNotFoundError:
+            return False
+        key.Close()
+        return True
+
+    def _snapshot(self, executable: str) -> tuple[bool, dict[str, tuple[object, int] | None]]:
+        path = _WINDOWS_LOCAL_DUMPS_PATH + "\\" + executable
+        try:
+            key = self.registry.OpenKey(
+                self.registry.HKEY_LOCAL_MACHINE,
+                path,
+                0,
+                self._access(self.registry.KEY_READ),
+            )
+        except FileNotFoundError:
+            return False, {name: None for name in _WINDOWS_LOCAL_DUMPS_VALUES}
+        values: dict[str, tuple[object, int] | None] = {}
+        with key:
+            for name in _WINDOWS_LOCAL_DUMPS_VALUES:
+                try:
+                    value, value_type = self.registry.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    values[name] = None
+                else:
+                    values[name] = (value, value_type)
+        return True, values
+
+    def enable(self, executable_names: tuple[str, ...], dump_folder: Path) -> None:
+        if self._active:
+            raise NativeUISmokeError("Windows LocalDumps capture is already active")
+        if not executable_names or len(set(executable_names)) != len(executable_names):
+            raise ValueError("Windows LocalDumps executable names must be non-empty and unique")
+        if any(Path(name).name != name or not name.lower().endswith(".exe") for name in executable_names):
+            raise ValueError("Windows LocalDumps executable name is invalid")
+
+        self._wer_path_existed = self._key_exists(_WINDOWS_WER_PATH)
+        self._local_dumps_path_existed = self._key_exists(_WINDOWS_LOCAL_DUMPS_PATH)
+        for executable in executable_names:
+            self._key_states[executable] = self._snapshot(executable)
+        self._active = True
+        try:
+            for executable in executable_names:
+                path = _WINDOWS_LOCAL_DUMPS_PATH + "\\" + executable
+                with self.registry.CreateKeyEx(
+                    self.registry.HKEY_LOCAL_MACHINE,
+                    path,
+                    0,
+                    self._access(self.registry.KEY_READ | self.registry.KEY_WRITE),
+                ) as key:
+                    self.registry.SetValueEx(
+                        key,
+                        "DumpFolder",
+                        0,
+                        self.registry.REG_EXPAND_SZ,
+                        str(dump_folder),
+                    )
+                    self.registry.SetValueEx(key, "DumpType", 0, self.registry.REG_DWORD, 1)
+                    self.registry.SetValueEx(key, "DumpCount", 0, self.registry.REG_DWORD, 1)
+        except Exception as error:
+            try:
+                self.restore()
+            except Exception as cleanup_error:
+                add_exception_notes(error, "LocalDumps setup rollback", cleanup_error)
+            raise
+
+    def _delete_key(self, path: str) -> None:
+        try:
+            self.registry.DeleteKeyEx(
+                self.registry.HKEY_LOCAL_MACHINE,
+                path,
+                self.registry.KEY_WOW64_64KEY,
+                0,
+            )
+        except FileNotFoundError:
+            pass
+
+    def restore(self) -> None:
+        if not self._active:
+            return
+        errors: list[str] = []
+        for executable, (key_existed, values) in reversed(tuple(self._key_states.items())):
+            path = _WINDOWS_LOCAL_DUMPS_PATH + "\\" + executable
+            try:
+                if key_existed:
+                    with self.registry.CreateKeyEx(
+                        self.registry.HKEY_LOCAL_MACHINE,
+                        path,
+                        0,
+                        self._access(self.registry.KEY_READ | self.registry.KEY_WRITE),
+                    ) as key:
+                        for name in _WINDOWS_LOCAL_DUMPS_VALUES:
+                            prior = values[name]
+                            if prior is None:
+                                try:
+                                    self.registry.DeleteValue(key, name)
+                                except FileNotFoundError:
+                                    pass
+                            else:
+                                value, value_type = prior
+                                self.registry.SetValueEx(key, name, 0, value_type, value)
+                else:
+                    self._delete_key(path)
+            except Exception as error:
+                errors.append(f"{executable}: {type(error).__name__}: {error}")
+
+        if not self._local_dumps_path_existed:
+            try:
+                self._delete_key(_WINDOWS_LOCAL_DUMPS_PATH)
+            except Exception as error:
+                errors.append(f"LocalDumps key: {type(error).__name__}: {error}")
+        if not self._wer_path_existed:
+            try:
+                self._delete_key(_WINDOWS_WER_PATH)
+            except Exception as error:
+                errors.append(f"Windows Error Reporting key: {type(error).__name__}: {error}")
+        if errors:
+            raise NativeUISmokeError("Windows LocalDumps restoration failed: " + "; ".join(errors))
+        self._active = False
+        self._key_states.clear()
+
+
 class NativeUIController:
     def __init__(self, platform: str, binary: Path, profile: Path, timeout: float,
                  *, helper: Path, screenshot_dir: Path,
@@ -125,6 +276,10 @@ class NativeUIController:
         self.reconnecting_seen = False
         self.cleared_record: str | None = None
         self.log_resize_verified = False
+        self.windows_uia_diagnostics: dict[str, object] | None = None
+        self._windows_local_dumps: _WindowsLocalDumps | None = None
+        self._windows_wer_started_at_utc: datetime | None = None
+        self._windows_wer_dump_dir: Path | None = None
 
     @property
     def timeout(self) -> float:
@@ -151,7 +306,9 @@ class NativeUIController:
             request["identity"] = self.identity
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
-        operation_limit = 30.0 if self.platform == "windows" and operation in {"tree", "resize-window"} else 10.0
+        operation_limit = 30.0 if self.platform == "windows" and operation in {
+            "tree", "resize-window", "windows-baseline", "uia-connection-configuration",
+        } else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}
         if self.platform == "windows":
@@ -189,9 +346,16 @@ class NativeUIController:
                     raise NativeUISmokeError(message)
                 time.sleep(min(0.1, self.timeout))
 
-    def start(self, import_url: str | None = None) -> dict:
+    def start(
+        self,
+        import_url: str | None = None,
+        *,
+        windows_uia_diagnostics: bool = False,
+    ) -> dict:
         if self.process is not None or self._alive():
             raise NativeUISmokeError("native UI is already running")
+        if windows_uia_diagnostics and (self.platform != "windows" or import_url is not None):
+            raise ValueError("Windows startup diagnostics require a cold Windows launch")
         if self.platform == "macos":
             self._call("preflight")
             if self._call("probe").get("alive"):
@@ -255,6 +419,9 @@ class NativeUIController:
 
             self._wait(identified, "native UI process identity unavailable")
 
+        if windows_uia_diagnostics:
+            self.windows_uia_diagnostics = self._run_windows_uia_diagnostics()
+
         def ready():
             code = None if self.process is None else self.process.poll()
             if code is not None and (self.platform == "windows" or code != 0):
@@ -274,6 +441,59 @@ class NativeUIController:
         self._call("focus")
         self.capture("startup")
         return self.snapshot()
+
+    def enable_windows_crash_diagnostics(self) -> None:
+        if self.platform != "windows":
+            raise ValueError("Windows crash diagnostics require the Windows platform")
+        if self._windows_local_dumps is not None:
+            raise NativeUISmokeError("Windows crash diagnostics are already enabled")
+        dump_dir = self.logs / "windows-wer-dumps"
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        local_dumps = _WindowsLocalDumps()
+        self._windows_local_dumps = local_dumps
+        self._windows_wer_dump_dir = dump_dir
+        local_dumps.enable((self.executable.name, self.helper.name), dump_dir)
+        self._windows_wer_started_at_utc = datetime.now(timezone.utc)
+
+    def restore_windows_crash_diagnostics(self) -> None:
+        if self._windows_local_dumps is None:
+            return
+        self._windows_local_dumps.restore()
+        self._windows_local_dumps = None
+
+    def _run_windows_uia_diagnostics(self) -> dict[str, object]:
+        diagnostics: dict[str, object] = {
+            "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            baseline = self._call("windows-baseline")
+            diagnostics["win32_baseline"] = baseline
+        except Exception as error:
+            diagnostics["win32_baseline_exception"] = "".join(
+                traceback.format_exception(error)
+            )
+            baseline = None
+
+        if isinstance(baseline, dict) and baseline.get("ready") is True:
+            try:
+                diagnostics["uia_probe"] = self._call("uia-connection-configuration")
+            except Exception as error:
+                diagnostics["uia_probe_exception"] = "".join(
+                    traceback.format_exception(error)
+                )
+        else:
+            diagnostics["uia_probe"] = "not-run: no healthy Win32 window baseline"
+
+        try:
+            diagnostics["post_probe_process"] = self._call("probe")
+        except Exception as error:
+            diagnostics["post_probe_process_exception"] = "".join(
+                traceback.format_exception(error)
+            )
+
+        path = self.logs / "windows-configure-tree-diagnostics.json"
+        path.write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
+        return diagnostics
 
     def _open_link(self, link: str) -> None:
         if self.platform == "windows":
@@ -826,6 +1046,120 @@ class NativeUIController:
                 continue
             with source, (self.logs / retained.name).open("wb") as destination:
                 shutil.copyfileobj(source, destination)
+        if self._windows_wer_started_at_utc is not None:
+            collection_error: BaseException | None = None
+            try:
+                self._collect_windows_crash_diagnostics()
+            except BaseException as error:
+                collection_error = error
+            try:
+                self._write_windows_wer_dump_inventory()
+            except BaseException as error:
+                if collection_error is None:
+                    collection_error = error
+                else:
+                    add_exception_notes(collection_error, "WER dump inventory", error)
+            if collection_error is not None:
+                raise collection_error
+
+    def _collect_windows_crash_diagnostics(self) -> None:
+        if self._windows_wer_started_at_utc is None or self._windows_wer_dump_dir is None:
+            return
+        script = r"""$ErrorActionPreference = "Stop"
+$since = [DateTimeOffset]::Parse($env:DOBBYVPN_NATIVE_UI_WER_SINCE_UTC).UtcDateTime
+$pattern = '(?i)(DobbyVPN\.exe|NativeUI\.exe)'
+$deadline = [DateTime]::UtcNow.AddSeconds(3)
+$events = @()
+do {
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{
+            LogName = 'Application'
+            Id = @(1000, 1001)
+            StartTime = $since
+        } -ErrorAction Stop | Where-Object { $_.Message -match $pattern })
+    } catch {
+        if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') {
+            [Console]::Error.WriteLine(($_ | Out-String))
+            exit 1
+        }
+        $events = @()
+    }
+    if ($events.Count -gt 0 -or [DateTime]::UtcNow -ge $deadline) { break }
+    Start-Sleep -Milliseconds 250
+} while ($true)
+if ($events.Count -eq 0) {
+    [Console]::Out.WriteLine("wer_application_events=none since_utc=" + $since.ToString("o"))
+} else {
+    foreach ($event in $events) { [Console]::Out.WriteLine($event.ToXml()) }
+}
+"""
+        environment = os.environ.copy()
+        environment["DOBBYVPN_NATIVE_UI_WER_SINCE_UTC"] = (
+            self._windows_wer_started_at_utc.isoformat()
+        )
+        deadline = time.monotonic() + 10.0
+        spawn, terminate, close = _windows_job_capture_callbacks(deadline)
+        command = [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ]
+        try:
+            result = _native_run(
+                command,
+                timeout_seconds=7.0,
+                cwd=self.logs,
+                env=environment,
+                termination_grace_seconds=1.0,
+                cleanup_timeout_seconds=2.0,
+                popen_factory=spawn,
+                terminate=terminate,
+                close_boundary=close,
+            )
+        except BaseException as error:
+            self._write_windows_wer_streams(
+                getattr(error, "stdout", None),
+                getattr(error, "stderr", None),
+            )
+            raise
+        self._write_windows_wer_streams(result.stdout, result.stderr)
+        if result.returncode:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                result.stdout,
+                result.stderr,
+            )
+
+    def _write_windows_wer_streams(self, stdout: bytes | None, stderr: bytes | None) -> None:
+        if stdout:
+            (self.logs / "windows-wer-application-events.stdout.log").write_bytes(stdout)
+        if stderr:
+            (self.logs / "windows-wer-application-events.stderr.log").write_bytes(stderr)
+
+    def _write_windows_wer_dump_inventory(self) -> None:
+        assert self._windows_wer_dump_dir is not None
+        dumps = sorted(
+            path for path in self._windows_wer_dump_dir.iterdir()
+            if path.is_file() and path.suffix.casefold() == ".dmp"
+        )
+        lines = [f"wer_dump_directory={self._windows_wer_dump_dir}"]
+        if not dumps:
+            lines.append("wer_dump_files=none")
+        else:
+            for path in dumps:
+                metadata = path.stat()
+                modified = datetime.fromtimestamp(metadata.st_mtime, timezone.utc).isoformat()
+                lines.append(
+                    f"wer_dump_file={path} bytes={metadata.st_size} modified_utc={modified}"
+                )
+        (self.logs / "windows-wer-dump-inventory.log").write_text(
+            "\n".join(lines) + "\n",
+            encoding="utf-8",
+        )
 
     def close_for_cleanup(self) -> None:
         if self.process is None and not self._alive():

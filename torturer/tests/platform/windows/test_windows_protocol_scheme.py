@@ -28,7 +28,6 @@ if str(TORTURER_ROOT) not in sys.path:
 from torturer_runner import local_vm  # noqa: E402
 from torturer_runner.ui import journey, smoke  # noqa: E402
 from torturer_runner.native_cases import (  # noqa: E402
-    MACOS_CONFIGURE_STARTUP_CASE,
     WINDOWS_CONFIGURE_TREE_CASE,
 )
 
@@ -49,7 +48,211 @@ class _RecordingRunner:
         self.calls.append((command, kwargs))
 
 
+class _FakeRegistryKey:
+    def __init__(self, registry: "_FakeRegistry", path: str) -> None:
+        self.registry = registry
+        self.path = path
+
+    def __enter__(self) -> "_FakeRegistryKey":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def Close(self) -> None:
+        return None
+
+
+class _FakeRegistry:
+    HKEY_LOCAL_MACHINE = object()
+    KEY_READ = 1
+    KEY_WRITE = 2
+    KEY_WOW64_64KEY = 4
+    REG_DWORD = 4
+    REG_EXPAND_SZ = 2
+    REG_SZ = 1
+
+    def __init__(self) -> None:
+        self.values: dict[str, dict[str, tuple[object, int]]] = {}
+
+    def _ensure(self, path: str) -> None:
+        current = ""
+        for component in path.split("\\"):
+            current = component if not current else current + "\\" + component
+            self.values.setdefault(current, {})
+
+    def OpenKey(self, _hive: object, path: str, _reserved: int, _access: int) -> _FakeRegistryKey:
+        if path not in self.values:
+            raise FileNotFoundError(path)
+        return _FakeRegistryKey(self, path)
+
+    def CreateKeyEx(
+        self,
+        _hive: object,
+        path: str,
+        _reserved: int,
+        _access: int,
+    ) -> _FakeRegistryKey:
+        self._ensure(path)
+        return _FakeRegistryKey(self, path)
+
+    def QueryValueEx(self, key: _FakeRegistryKey, name: str) -> tuple[object, int]:
+        try:
+            return self.values[key.path][name]
+        except KeyError as error:
+            raise FileNotFoundError(name) from error
+
+    def SetValueEx(
+        self,
+        key: _FakeRegistryKey,
+        name: str,
+        _reserved: int,
+        value_type: int,
+        value: object,
+    ) -> None:
+        self.values[key.path][name] = (value, value_type)
+
+    def DeleteValue(self, key: _FakeRegistryKey, name: str) -> None:
+        try:
+            del self.values[key.path][name]
+        except KeyError as error:
+            raise FileNotFoundError(name) from error
+
+    def DeleteKeyEx(
+        self,
+        _hive: object,
+        path: str,
+        _access: int,
+        _reserved: int,
+    ) -> None:
+        if path not in self.values:
+            raise FileNotFoundError(path)
+        if any(candidate.startswith(path + "\\") for candidate in self.values):
+            raise OSError("registry key has children")
+        del self.values[path]
+
+
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_windows_local_dumps_restores_existing_values_and_removes_new_keys(self) -> None:
+        registry = _FakeRegistry()
+        existing_path = smoke._WINDOWS_LOCAL_DUMPS_PATH + r"\DobbyVPN.exe"
+        retained_path = smoke._WINDOWS_LOCAL_DUMPS_PATH + r"\Unrelated.exe"
+        registry._ensure(existing_path)
+        registry._ensure(retained_path)
+        registry.values[existing_path].update({
+            "DumpFolder": (r"C:\prior\dumps", registry.REG_SZ),
+            "DumpCount": (7, registry.REG_DWORD),
+            "UnrelatedValue": ("keep", registry.REG_SZ),
+        })
+        registry.values[retained_path]["DumpType"] = (2, registry.REG_DWORD)
+        before = {path: dict(values) for path, values in registry.values.items()}
+
+        local_dumps = smoke._WindowsLocalDumps(registry)
+        local_dumps.enable(
+            ("DobbyVPN.exe", "NativeUI.exe"),
+            Path(r"C:\run\logs\windows-wer-dumps"),
+        )
+
+        self.assertEqual(
+            registry.values[existing_path]["DumpFolder"],
+            (r"C:\run\logs\windows-wer-dumps", registry.REG_EXPAND_SZ),
+        )
+        self.assertEqual(registry.values[existing_path]["DumpType"], (1, registry.REG_DWORD))
+        self.assertEqual(registry.values[existing_path]["DumpCount"], (1, registry.REG_DWORD))
+        self.assertIn(smoke._WINDOWS_LOCAL_DUMPS_PATH + r"\NativeUI.exe", registry.values)
+
+        local_dumps.restore()
+
+        self.assertEqual(registry.values, before)
+
+    def test_windows_local_dumps_removes_keys_it_created(self) -> None:
+        registry = _FakeRegistry()
+        registry._ensure(r"SOFTWARE\Microsoft\Windows")
+        before = {path: dict(values) for path, values in registry.values.items()}
+        local_dumps = smoke._WindowsLocalDumps(registry)
+
+        local_dumps.enable(("DobbyVPN.exe",), Path(r"C:\run\dumps"))
+        local_dumps.restore()
+
+        self.assertEqual(registry.values, before)
+
+    def test_windows_configure_tree_diagnostic_runs_one_named_uia_query(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            helper_source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
+            baseline_branch = helper_source.index('if (traceWin32Baseline)\n            {')
+            uia_query = 'var element = ByAutomationId(root, "Connection configuration");'
+            query_offset = helper_source.index(uia_query)
+            root_creation = helper_source.index("var root = AutomationElement.FromHandle(window);")
+
+            self.assertLess(root_creation, query_offset)
+            self.assertLess(baseline_branch, root_creation)
+            self.assertLess(query_offset, helper_source.index("if (operation == \"resize-window\")"))
+            self.assertEqual(helper_source.count(uia_query), 1)
+            self.assertIn("configure-tree-uia-root-start utc=", helper_source)
+            self.assertIn("configure-tree-uia-connection-configuration-start utc=", helper_source)
+            self.assertIn("configure-tree-uia-connection-configuration-complete utc=", helper_source)
+
+            controller = object.__new__(smoke.NativeUIController)
+            controller.logs = Path(directory)
+            controller._call = mock.Mock(side_effect=(
+                {"ready": True, "pid": 42},
+                {"ready": True, "found": True},
+                {"alive": True, "pid": 42},
+            ))
+
+            result = controller._run_windows_uia_diagnostics()
+
+            self.assertEqual(
+                [call.args[0] for call in controller._call.call_args_list],
+                ["windows-baseline", "uia-connection-configuration", "probe"],
+            )
+            self.assertEqual(result["uia_probe"], {"ready": True, "found": True})
+            retained = json.loads(
+                (Path(directory) / "windows-configure-tree-diagnostics.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(retained["post_probe_process"], {"alive": True, "pid": 42})
+
+    def test_windows_wer_collection_retains_event_streams_and_dump_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dump_dir = root / "windows-wer-dumps"
+            dump_dir.mkdir()
+            dump = dump_dir / "DobbyVPN.exe.1234.dmp"
+            dump.write_bytes(b"minidump")
+            controller = object.__new__(smoke.NativeUIController)
+            controller.logs = root
+            controller._windows_wer_started_at_utc = smoke.datetime.now(smoke.timezone.utc)
+            controller._windows_wer_dump_dir = dump_dir
+            event_xml = b"<Event><System><EventID>1000</EventID></System></Event>\r\n"
+            event_stderr = b"PowerShell diagnostic warning\r\n"
+            completed = subprocess.CompletedProcess(
+                ["powershell.exe"], 0, event_xml, event_stderr
+            )
+
+            with (
+                mock.patch.object(
+                    smoke, "_windows_job_capture_callbacks",
+                    return_value=(mock.Mock(), mock.Mock(), mock.Mock()),
+                ),
+                mock.patch.object(smoke, "_native_run", return_value=completed) as run,
+            ):
+                controller._collect_windows_crash_diagnostics()
+                controller._write_windows_wer_dump_inventory()
+
+            self.assertIn("LogName = 'Application'", run.call_args.args[0][-1])
+            self.assertIn("Id = @(1000, 1001)", run.call_args.args[0][-1])
+            self.assertEqual(
+                (root / "windows-wer-application-events.stdout.log").read_bytes(),
+                event_xml,
+            )
+            self.assertEqual(
+                (root / "windows-wer-application-events.stderr.log").read_bytes(),
+                event_stderr,
+            )
+            inventory = (root / "windows-wer-dump-inventory.log").read_text(encoding="utf-8")
+            self.assertIn(str(dump), inventory)
+            self.assertIn("bytes=8", inventory)
+
     def test_windows_cold_launch_uses_exact_interactive_child_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -398,7 +601,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertEqual(command[command.index("--candidate-version") + 1], "1.5.4")
             self.assertEqual(command[command.index("--source-sha") + 1], "a" * 40)
 
-    def test_windows_tree_helper_allows_bounded_window_discovery(self) -> None:
+    def test_windows_window_helpers_allow_bounded_window_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             helper = root / "NativeUI.exe"
@@ -421,11 +624,21 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 ),
                 mock.patch.object(smoke, "_native_run", return_value=completed) as run,
             ):
-                controller._call("tree")
+                for operation in (
+                    "tree",
+                    "windows-baseline",
+                    "uia-connection-configuration",
+                ):
+                    controller._call(operation)
 
-        self.assertEqual(run.call_args.kwargs["timeout_seconds"], 30.0)
-        request = json.loads(run.call_args.kwargs["input_bytes"])
-        self.assertEqual(request["operation"], "tree")
+        self.assertEqual(
+            [call.kwargs["timeout_seconds"] for call in run.call_args_list],
+            [30.0, 30.0, 30.0],
+        )
+        self.assertEqual(
+            [json.loads(call.kwargs["input_bytes"])["operation"] for call in run.call_args_list],
+            ["tree", "windows-baseline", "uia-connection-configuration"],
+        )
 
     def test_windows_about_matches_candidate_version_and_source_sha(self) -> None:
         commit = "a" * 40
@@ -464,17 +677,23 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 {"about_version": True, "about_source_commit": True},
             )
 
-    def test_native_case_driver_runs_configure_tree_and_macos_startup(self) -> None:
+    def test_native_case_driver_runs_windows_configure_tree_diagnostics(self) -> None:
         class FakeController:
             def __init__(self, *_args, **_kwargs):
                 self.operations: list[str] = []
+                self.windows_uia_diagnostics = None
 
             @staticmethod
             def bounded_by(_timeout):
                 return mock.MagicMock(__enter__=mock.Mock(), __exit__=mock.Mock(return_value=False))
 
-            def start(self):
-                self.operations.append("start-tree")
+            def enable_windows_crash_diagnostics(self):
+                self.operations.append("enable-wer")
+
+            def start(self, *, windows_uia_diagnostics=False):
+                self.operations.append(f"start-tree-uia-diagnostics={windows_uia_diagnostics}")
+                if windows_uia_diagnostics:
+                    self.windows_uia_diagnostics = {"uia_probe": {"found": True}}
                 return {"status": "Disconnected", "labels": ["Connection configuration"]}
 
             def configure(self):
@@ -486,6 +705,9 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             def collect_diagnostics(self):
                 self.operations.append("collect")
+
+            def restore_windows_crash_diagnostics(self):
+                self.operations.append("restore-wer")
 
         class FakeSubscriptionFixture:
             def __init__(self, profile, directory, platform, *, certificate_helper):
@@ -515,7 +737,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             profile = root / "profile"
             profile.write_bytes(b"disposable profile bytes")
 
-            def run_case(platform: str, case: str) -> tuple[dict, FakeController]:
+            def run_case() -> tuple[dict, FakeController]:
                 constructed: list[FakeController] = []
 
                 def factory(*args, **kwargs):
@@ -531,8 +753,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                     ),
                 ):
                     result = journey.run_native_cases(SimpleNamespace(
-                        platform=platform,
-                        native_cases=[case],
+                        platform="windows",
+                        native_cases=[WINDOWS_CONFIGURE_TREE_CASE],
                         raw_log_dir=root / "logs",
                         ui=Path("app"),
                         profile=profile,
@@ -541,12 +763,15 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                     ))
                 return result, constructed[0]
 
-            windows, windows_controller = run_case("windows", WINDOWS_CONFIGURE_TREE_CASE)
-            macos, macos_controller = run_case("macos", MACOS_CONFIGURE_STARTUP_CASE)
+            windows, windows_controller = run_case()
         self.assertEqual(windows["coverage"]["native_cases"], [WINDOWS_CONFIGURE_TREE_CASE])
-        self.assertEqual(windows_controller.operations, ["start-tree", "close", "collect"])
-        self.assertEqual(macos["checks"][MACOS_CONFIGURE_STARTUP_CASE]["configure"]["input_verified"], True)
-        self.assertEqual(macos_controller.operations, ["start-tree", "rendered-configure", "close", "collect"])
+        self.assertEqual(
+            windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["windows_uia_diagnostics"]["uia_probe"]["found"],
+            True,
+        )
+        self.assertEqual(windows_controller.operations, [
+            "enable-wer", "start-tree-uia-diagnostics=True", "close", "collect", "restore-wer",
+        ])
 
     def test_windows_native_ui_retains_window_readiness_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

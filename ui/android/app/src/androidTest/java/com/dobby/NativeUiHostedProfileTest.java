@@ -100,6 +100,7 @@ public final class NativeUiHostedProfileTest {
     private static final String GUI_AUTO_PROTOCOL = "AUTO";
     private static final String CONNECTION_ACTION_LABEL = "VPN connection action";
     private static final String START_MODE_PROFILE_INDEX = "PROFILE_INDEX";
+    private static final String CONSENT_GRANT_SELECTION_OPERATION = "consent_grant_selection";
     private static final Class<AndroidNetworkProbeMain> NETWORK_PROBE_CLASS =
             AndroidNetworkProbeMain.class;
     private static final long POLL_MILLIS = 100L;
@@ -151,6 +152,16 @@ public final class NativeUiHostedProfileTest {
             "ANDROID_LAUNCH_ACTIVITY_INTERRUPTED",
             "ANDROID_LAUNCH_ACTIVITY_RESUME_TIMEOUT",
             "ANDROID_VPN_CONSENT_TIMEOUT",
+            "ANDROID_VPN_CONSENT_NOT_FRESH_AFTER_APK_REINSTALL",
+            "ANDROID_VPN_CONSENT_NOT_FRESH_BEFORE_DENY_STALE_CASE",
+            "ANDROID_VPN_CONSENT_NONDEFAULT_PROFILE_UNAVAILABLE",
+            "ANDROID_VPN_CONSENT_SOURCE_CHANGED",
+            "ANDROID_VPN_CONSENT_DIGEST_CHANGED",
+            "ANDROID_VPN_CONSENT_PROFILE_IDENTITY_MISMATCH",
+            "ANDROID_VPN_CONSENT_SELECTION_MODE_MISMATCH",
+            "ANDROID_VPN_CONSENT_GENERATION_INVALID",
+            "ANDROID_VPN_CONSENT_TUNNEL_MISSING",
+            "ANDROID_VPN_CONSENT_DISCONNECT_FAILED",
             "ANDROID_NETWORK_IDENTITY_UNAVAILABLE",
             "ANDROID_NETWORK_INTERFACE_UNAVAILABLE",
             "ANDROID_VPN_DNS_UNSUPPORTED_ADDRESS_FAMILY",
@@ -419,6 +430,24 @@ public final class NativeUiHostedProfileTest {
                             observation.put("connected", connected);
                             observation.put("connection", selectedConnection(observation, index));
                         }
+                        break;
+                    }
+                    case CONSENT_GRANT_SELECTION_OPERATION: {
+                        if (!guiAuto) {
+                            throw new IllegalStateException("ANDROID_CONSENT_N11_REQUIRES_GUI_AUTO");
+                        }
+                        if (!configured) {
+                            throw new IllegalStateException("ANDROID_CONNECT_BEFORE_CONFIGURE");
+                        }
+                        JSONObject selection = verifyUnchangedConsentProfileSelection(
+                                operationTimeout(operation), name);
+                        observation.put("consent_grant_selection", selection);
+                        observation.put("connected", true);
+                        observation.put("disconnect_clean", selection.getBoolean("disconnect_clean"));
+                        observation.put("final_disconnect_clean", selection.getBoolean("disconnect_clean"));
+                        observation.put("cleanup_verified", selection.getBoolean("disconnect_clean"));
+                        observation.put("gui_auto_verified", true);
+                        observation.put("vpn_consent_handled", true);
                         break;
                     }
                     case "observe_tunnel":
@@ -1130,7 +1159,8 @@ public final class NativeUiHostedProfileTest {
             throws Exception {
         for (int index = start; index < operations.length(); index++) {
             String operation = operations.getJSONObject(index).getString("operation");
-            if ("connect".equals(operation) || "reconnect".equals(operation)) {
+            if ("connect".equals(operation) || "reconnect".equals(operation)
+                    || CONSENT_GRANT_SELECTION_OPERATION.equals(operation)) {
                 return true;
             }
         }
@@ -1230,7 +1260,11 @@ public final class NativeUiHostedProfileTest {
     }
 
     private boolean verifyManualConsent(long timeout) throws Exception {
-        if (VpnService.prepare(context) == null) return false;
+        if (VpnService.prepare(context) == null) {
+            throw new IllegalStateException(
+                    "ANDROID_VPN_CONSENT_NOT_FRESH_BEFORE_DENY_STALE_CASE: "
+                            + "the run APKs must be reinstalled before deny/stale assertions");
+        }
         long deadline = System.currentTimeMillis() + timeout;
         JSONObject initial = snapshotResult("");
         int count = initial.getJSONArray("profiles").length();
@@ -1271,6 +1305,109 @@ public final class NativeUiHostedProfileTest {
         }
         markProgress("configure", "manual-consent-denied-currentness-granted", "completed");
         return true;
+    }
+
+    private JSONObject verifyUnchangedConsentProfileSelection(long timeout, String operation)
+            throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
+        markProgress(operation, "fresh-permission-check", "started");
+        if (VpnService.prepare(context) == null) {
+            throw new IllegalStateException(
+                    "ANDROID_VPN_CONSENT_NOT_FRESH_AFTER_APK_REINSTALL: "
+                            + "VpnService.prepare returned null after reinstalling the run APKs; "
+                            + "refusing to substitute another permission path");
+        }
+        JSONObject before = snapshotResult("");
+        String source = before.optString("source_url");
+        if (!launchSubscriptionURL.equals(source)) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_SOURCE_CHANGED");
+        }
+        if (awaitVpnNetwork(false, NETWORK_RECOVERY_TIMEOUT_MILLIS) != null) {
+            throw new IllegalStateException("ANDROID_STALE_VPN_NETWORK");
+        }
+        awaitValidatedPhysicalNetwork(
+                remainingTimeout(deadline, "ANDROID_PHYSICAL_NETWORK_NOT_VALIDATED"));
+        JSONArray profiles = before.getJSONArray("profiles");
+        if (profiles.length() < 2) {
+            throw new IllegalStateException(
+                    "ANDROID_VPN_CONSENT_NONDEFAULT_PROFILE_UNAVAILABLE: "
+                            + "the adapter-prepared profile inventory has fewer than two entries");
+        }
+        int target = 1;
+        JSONObject expectedProfile = profiles.getJSONObject(target);
+        String control = "Profile " + (target + 1) + " action";
+        markProgress(operation, "fresh-permission-check", "completed");
+        markProgress(operation, "profile-selection", "started");
+        tapEnabledControl(control, deadline);
+        markProgress(operation, "profile-selection", "completed");
+        if (VpnService.prepare(context) == null) {
+            throw new IllegalStateException(
+                    "ANDROID_VPN_CONSENT_NOT_FRESH_AFTER_APK_REINSTALL: "
+                            + "VPN permission changed before the consent action");
+        }
+        markProgress(operation, "consent", "started");
+        acceptVpnConsent(
+                remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"), operation);
+        if (VpnService.prepare(context) != null) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_TIMEOUT");
+        }
+        markProgress(operation, "consent", "completed");
+        markProgress(operation, "connected-state", "started");
+        JSONObject connected = awaitSelection(
+                before.getLong("generation"), "PROFILE_INDEX", target, deadline);
+        markProgress(operation, "connected-state", "completed");
+        if (!"CONNECTED".equals(connected.optString("state"))
+                || !source.equals(connected.optString("source_url"))) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_SOURCE_CHANGED");
+        }
+        String digest = before.getString("digest");
+        if (!digest.equals(connected.optString("digest"))
+                || !digest.equals(connected.optString("active_digest"))) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_DIGEST_CHANGED");
+        }
+        if (!"PROFILE_INDEX".equals(connected.optString("active_mode"))) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_SELECTION_MODE_MISMATCH");
+        }
+        JSONObject activeProfile = connected.getJSONObject("active_profile");
+        if (activeProfile.getInt("index") != target
+                || activeProfile.getInt("index") != expectedProfile.getInt("index")
+                || !activeProfile.getString("protocol").equals(
+                        expectedProfile.getString("protocol"))
+                || !activeProfile.getString("description").equals(
+                        expectedProfile.getString("description"))) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_PROFILE_IDENTITY_MISMATCH");
+        }
+        long generation = connected.getLong("generation");
+        if (generation <= before.getLong("generation")) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_GENERATION_INVALID");
+        }
+        if (awaitVpnNetwork(true, remainingTimeout(
+                deadline, "ANDROID_VPN_CONSENT_TUNNEL_MISSING")) == null) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_TUNNEL_MISSING");
+        }
+        markProgress(operation, "disconnect", "started");
+        disconnectThroughRenderedUI(
+                remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
+        boolean vpnRemoved = awaitVpnNetwork(
+                false, remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT")) == null;
+        JSONObject stopped = snapshotResult("");
+        if (!vpnRemoved || !"IDLE".equals(stopped.optString("state"))
+                || stopped.getLong("generation") != generation
+                || !source.equals(stopped.optString("source_url"))
+                || !digest.equals(stopped.optString("digest"))) {
+            throw new IllegalStateException("ANDROID_VPN_CONSENT_DISCONNECT_FAILED");
+        }
+        markProgress(operation, "disconnect", "completed");
+        return new JSONObject()
+                .put("source_verified", true)
+                .put("digest_verified", true)
+                .put("profile_identity_verified", true)
+                .put("mode", "PROFILE_INDEX")
+                .put("index", target)
+                .put("protocol", expectedProfile.getString("protocol"))
+                .put("generation", generation)
+                .put("generation_advanced", true)
+                .put("disconnect_clean", true);
     }
 
     private boolean verifySubscriptionControls(String subscriptionURL, long timeout) throws Exception {

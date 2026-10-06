@@ -183,7 +183,12 @@ struct DobbyLogView: UIViewRepresentable {
             updating = true
             let offset = textView.contentOffset
             textView.attributedText = logText(displayedEntries, expanded: expanded)
-            textView.setContentOffset(offset, animated: false)
+            textView.layoutIfNeeded()
+            if isFollowing {
+                textView.scrollRangeToVisible(NSRange(location: textView.textStorage.length, length: 0))
+            } else {
+                textView.setContentOffset(offset, animated: false)
+            }
             updating = false
             return false
         }

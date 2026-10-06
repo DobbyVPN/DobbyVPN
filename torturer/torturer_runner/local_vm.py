@@ -1619,6 +1619,12 @@ def _functional_command(
             if not isinstance(source_sha, str) or _SOURCE_SHA.fullmatch(source_sha) is None:
                 raise LocalVMError("prepared Android candidate source SHA is invalid")
             command.extend(("--source-sha", source_sha))
+        if not scenarios:
+            app_apk = descriptor.get("app")
+            test_companion_apk = descriptor.get("test_companion")
+            if not isinstance(app_apk, str) or not isinstance(test_companion_apk, str):
+                raise LocalVMError("prepared Android candidate APK paths are incomplete")
+            command.extend(("--app-apk", app_apk, "--test-companion-apk", test_companion_apk))
     else:
         command.extend(("--cli", str(_candidate_path(descriptor, "cli")),))
         runtime = descriptor.get("runtime", {})

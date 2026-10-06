@@ -84,17 +84,41 @@ class AndroidLocalQualificationDispatchTests(unittest.TestCase):
             self.assertIn(("--source-sha", SOURCE_SHA), list(zip(command, command[1:])))
             self.assertIn(("--profile", str(run_dir / "profile")), list(zip(command, command[1:])))
             self.assertIn(("--adb", "/sdk/platform-tools/adb"), list(zip(command, command[1:])))
+            self.assertIn(("--app-apk", str(run_dir / "app.apk")), list(zip(command, command[1:])))
+            self.assertIn(
+                ("--test-companion-apk", str(run_dir / "test.apk")),
+                list(zip(command, command[1:])),
+            )
 
             modes: list[str] = []
             factory_arguments: list[dict[str, object]] = []
+            prelude_events: list[str] = []
 
             def adapter_for_platform(_platform, **kwargs):
                 mode = kwargs["android_ui_mode"]
                 modes.append(mode)
                 factory_arguments.append(kwargs)
-                return SimpleNamespace(ui_mode=mode)
+                adapter = SimpleNamespace(ui_mode=mode)
+                if mode == "gui-auto":
+                    adapter.run_unchanged_consent_selection = lambda **_kwargs: (
+                        prelude_events.append("consent-grant-selection")
+                        or {
+                            "passed": True,
+                            "source_verified": True,
+                            "digest_verified": True,
+                            "profile_identity_verified": True,
+                            "mode": "PROFILE_INDEX",
+                            "index": 1,
+                            "protocol": "XRAY",
+                            "generation": 2,
+                            "generation_advanced": True,
+                            "disconnect_clean": True,
+                        }
+                    )
+                return adapter
 
             def execute_lane(_engine, scenarios, adapter, _provenance, **_kwargs):
+                prelude_events.append(f"lane-{adapter.ui_mode}")
                 if adapter.ui_mode == "gui-auto":
                     connections = (ConnectionIdentity(index=0, protocol="AUTO"),)
                 else:
@@ -125,9 +149,19 @@ class AndroidLocalQualificationDispatchTests(unittest.TestCase):
             self.assertEqual(modes, ["gui-auto", "protocol-matrix"])
             self.assertEqual([item["source_sha"] for item in factory_arguments], [SOURCE_SHA, SOURCE_SHA])
             self.assertEqual([item["profile"] for item in factory_arguments], [run_dir / "profile"] * 2)
+            self.assertEqual(factory_arguments[0]["app_apk"], run_dir / "app.apk")
+            self.assertEqual(
+                factory_arguments[0]["test_companion_apk"], run_dir / "test.apk"
+            )
+            self.assertEqual(
+                prelude_events,
+                ["consent-grant-selection", "lane-gui-auto", "lane-protocol-matrix"],
+            )
             self.assertTrue(output["rendered_ui"]["passed"])
+            self.assertTrue(output["rendered_ui"]["consent_grant_selection"]["passed"])
             self.assertEqual(output["rendered_ui"]["connection"]["protocol"], "AUTO")
             self.assertTrue(output["coverage"]["complete"])
+            self.assertTrue(output["coverage"]["rendered_ui_consent_grant_selection_passed"])
             self.assertEqual(output["coverage"]["connection_count"], 4)
 
     def test_focused_android_diagnostic_keeps_local_runner_and_source_identity(self) -> None:

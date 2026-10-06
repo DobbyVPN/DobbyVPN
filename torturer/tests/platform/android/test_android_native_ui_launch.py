@@ -53,6 +53,108 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertEqual(first_command["process_cold_import_request_count"], 3)
             self.assertNotIn("process_cold_import", second_command)
 
+    def test_consent_n11_command_dispatches_rendered_selection_after_configure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = object.__new__(AndroidAdapter)
+            adapter.ui_mode = "gui-auto"
+            adapter.runner = SimpleNamespace(raw_directory=root)
+            adapter._active_controls = ()
+            adapter._scratch_files = set()
+            adapter._selected_connection = None
+            adapter.source_sha = None
+            adapter.identity_url = None
+            adapter.latency_url = None
+            adapter.download_url = None
+            adapter.upload_url = None
+            adapter._process_cold_import_queued = False
+            adapter._subscription_fixture = SimpleNamespace(
+                url="https://127.0.0.1:54432/subscription",
+                control_url="https://127.0.0.1:54432/control",
+                control_key="fixture-key",
+                control_stats=lambda: {"subscription_gets": 0},
+            )
+            steps = (
+                SimpleNamespace(id="configure", operation="configure", timeout_seconds=90),
+                SimpleNamespace(
+                    id="consent-grant-selection",
+                    operation="consent_grant_selection",
+                    timeout_seconds=120,
+                ),
+            )
+
+            command_file, _, _ = adapter._write_command(SimpleNamespace(), steps=steps)
+
+            command = json.loads(command_file.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["operation"] for item in command["operations"]],
+                ["configure", "consent_grant_selection"],
+            )
+            self.assertTrue(command["process_cold_import"])
+            self.assertEqual(command["process_cold_import_request_count"], 0)
+
+    def test_consent_n11_reinstalls_exact_apk_pair_around_rendered_case(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_apk = root / "app.apk"
+            companion_apk = root / "test.apk"
+            app_apk.write_bytes(b"app")
+            companion_apk.write_bytes(b"test")
+            adapter = object.__new__(AndroidAdapter)
+            adapter.ui_mode = "gui-auto"
+            adapter.app_apk = app_apk
+            adapter.test_companion_apk = companion_apk
+            adapter._progress_scenario_id = None
+            adapter._active_controls = ()
+            adapter._scratch_files = set()
+            adapter._diagnostic_collection_sequence = 0
+            adapter._connections = ()
+            adapter._subscription_fixture = None
+            adapter._process_cold_import_queued = False
+            events: list[str] = []
+            expected = {
+                "source_verified": True,
+                "digest_verified": True,
+                "profile_identity_verified": True,
+                "mode": "PROFILE_INDEX",
+                "index": 1,
+                "protocol": "XRAY",
+                "generation": 2,
+                "generation_advanced": True,
+                "disconnect_clean": True,
+            }
+
+            def execute_phase(_scenario, steps, _deadline, _device_files):
+                events.append("rendered-case")
+                self.assertEqual(
+                    [step.operation for step in steps],
+                    ["configure", "consent_grant_selection"],
+                )
+                return SimpleNamespace(
+                    configured=True,
+                    connected=True,
+                    vpn_consent_handled=True,
+                    disconnect_clean=True,
+                    final_disconnect_clean=True,
+                    cleanup_verified=True,
+                    consent_grant_selection=expected,
+                    gui_auto_verified=True,
+                )
+
+            adapter._install_fresh_apk_pair = lambda _deadline: events.append("install")
+            adapter._execute_phase = execute_phase
+            adapter._validate_gui_observation = lambda *_args, **_kwargs: None
+            adapter._cleanup_device = lambda *_args: events.append("cleanup")
+            adapter._cleanup_local_scratch = lambda: None
+            adapter._collect_functional_failure_diagnostics = lambda *_args: None
+
+            result = adapter.run_unchanged_consent_selection(
+                deadline=time.monotonic() + 240,
+            )
+
+            self.assertEqual(events, ["install", "rendered-case", "cleanup", "install"])
+            self.assertEqual(result, {"passed": True, **expected})
+
     def test_hosted_valid_import_launches_after_force_stop_before_instrumentation(self) -> None:
         adapter = object.__new__(AndroidAdapter)
         adapter.ui_mode = "gui-auto"

@@ -1540,6 +1540,7 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
     os.environ["DOBBYVPN_NATIVE_UI_LOG_DIR"] = str(args.raw_log_dir)
     ui: smoke.NativeUIController | None = None
     subscription = None
+    base: Any | None = None
     primary: BaseException | None = None
     try:
         profile = args.profile
@@ -1555,6 +1556,22 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
             url = subscription.start()
             profile = subscription.directory / "source.url"
             profile.write_text(url, encoding="utf-8")
+            base = adapter_for_platform(
+                args.platform,
+                cli=args.cli,
+                profile=args.profile,
+                runner=SubprocessRunner(args.raw_log_dir),
+                local_mode=True,
+                service_pid=args.service_pid,
+                service_binary=args.service_binary,
+                service_socket=Path(args.service_socket) if args.service_socket else None,
+                service_pipe=args.service_pipe,
+                service_library_path=args.service_library_path,
+                service_pid_file=args.service_pid_file,
+                service_identity_file=args.service_identity_file,
+                network_interface=args.network_interface,
+                routing_firewall_helper=args.routing_firewall_helper,
+            )
         ui = smoke.NativeUIController(
             args.platform,
             args.ui,
@@ -1565,8 +1582,10 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
             expected_version=getattr(args, "candidate_version", None),
             expected_source_sha=getattr(args, "source_sha", None),
         )
+        if args.platform == "windows":
+            ui.enable_windows_crash_diagnostics()
         with ui.bounded_by(_smoke_timeout(args.timeout)):
-            startup = ui.start()
+            startup = ui.start(windows_uia_diagnostics=args.platform == "windows")
         if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
             configured = ui.configure()
             if configured.get("input_verified") is not True:
@@ -1582,13 +1601,168 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
                 raise NativeUIJourneyError(
                     "macOS rendered Configure did not complete exactly one fixture request"
                 )
+            if base is None or subscription is None:
+                raise NativeUIJourneyError("macOS Configure case has no service adapter or disposable fixture")
+
+            saved_source = profile.read_text(encoding="utf-8").strip()
+            configured_snapshot = base._snapshot(
+                min(30.0, args.timeout), "NATIVE_CASE_CONFIGURED_SNAPSHOT_FAILED"
+            )
+
+            def require_disconnected_without_generation(
+                snapshot: dict[str, object], context: str
+            ) -> None:
+                if (
+                    snapshot.get("state") not in {"IDLE", "CONFIGURED"}
+                    or type(snapshot.get("generation")) is not int
+                    or snapshot.get("generation") != 0
+                    or snapshot.get("active_profile") is not None
+                    or snapshot.get("pending_target") is not None
+                    or snapshot.get("cleanup_complete") is not True
+                ):
+                    raise NativeUIJourneyError(
+                        f"{context} did not remain disconnected without a connection generation"
+                    )
+
+            configured_profiles = configured_snapshot.get("profiles")
+            if (
+                configured_snapshot.get("configured") is not True
+                or configured_snapshot.get("source_url") != saved_source
+                or not isinstance(configured_profiles, list)
+                or len(configured_profiles) < 2
+            ):
+                raise NativeUIJourneyError(
+                    "macOS rendered Configure did not create the accepted disposable inventory"
+                )
+            require_disconnected_without_generation(
+                configured_snapshot, "initial saved URL configuration"
+            )
+
+            requests_before_restore = fixture_stats["subscription_gets"]
+            ui.close()
+            restart = _restart_service_for_native_ui(base, args.timeout)
+            if restart.get("process_loss_verified") is not True:
+                raise NativeUIJourneyError(
+                    "macOS service-only restart was not verified"
+                )
+            unconfigured = base._snapshot(
+                min(30.0, args.timeout), "NATIVE_CASE_RESTORE_EMPTY_SNAPSHOT_FAILED"
+            )
+            if (
+                unconfigured.get("configured") is not False
+                or unconfigured.get("profiles")
+                or unconfigured.get("source_url") != saved_source
+            ):
+                raise NativeUIJourneyError(
+                    "service restart did not leave the saved URL with an empty accepted inventory"
+                )
+            require_disconnected_without_generation(
+                unconfigured, "service restart with an empty accepted inventory"
+            )
+
+            # Relaunch without passing a URL or pressing Paste. The frontend
+            # must restore the accepted source URL from the restarted service.
+            with ui.bounded_by(_smoke_timeout(args.timeout)):
+                ui.start()
+            deadline = time.monotonic() + args.timeout
+            restored_inventory: dict[str, object] = {}
+            expected_requests = requests_before_restore + 1
+            while time.monotonic() < deadline:
+                restored_inventory = base._snapshot(
+                    min(30.0, max(0.1, deadline - time.monotonic())),
+                    "NATIVE_CASE_RESTORE_INVENTORY_STATUS_FAILED",
+                )
+                restore_stats = subscription.control_stats()
+                if restore_stats.get("subscription_gets", 0) > expected_requests:
+                    raise NativeUIJourneyError(
+                        "saved URL restoration fetched the subscription more than once"
+                    )
+                if (
+                    restored_inventory.get("configured") is True
+                    and restored_inventory.get("source_url") == saved_source
+                    and restore_stats.get("subscription_gets") == expected_requests
+                    and restore_stats.get("in_flight_gets") == 0
+                ):
+                    break
+                if restored_inventory.get("state") == "FAILED":
+                    raise NativeUIJourneyError(
+                        "frontend failed to load the saved URL after backend inventory loss"
+                    )
+                time.sleep(0.05)
+            else:
+                raise NativeUIJourneyError(
+                    "reopened frontend did not restore its saved inventory with exactly one request"
+                )
+            restored_profiles = restored_inventory.get("profiles", [])
+            if not isinstance(restored_profiles, list) or len(restored_profiles) < 2:
+                raise NativeUIJourneyError(
+                    "saved URL restoration did not return the disposable profiles"
+                )
+            require_disconnected_without_generation(
+                restored_inventory, "saved URL restoration"
+            )
+            expected_rows = {
+                f"Profile {profile_value.get('index', offset) + 1} action"
+                for offset, profile_value in enumerate(restored_profiles)
+                if isinstance(profile_value, dict)
+            }
+            if len(expected_rows) != len(restored_profiles):
+                raise NativeUIJourneyError(
+                    "saved URL restoration returned an invalid profile inventory"
+                )
+            ui._wait(
+                lambda: expected_rows.issubset(set(ui.snapshot().get("labels", []))),
+                "reopened frontend did not render the restored saved inventory",
+            )
+
+            # Keep both UI Snapshot polling and independent backend Snapshot
+            # reads active long enough to detect an accidental refetch loop.
+            polling_deadline = time.monotonic() + 1.6
+            while time.monotonic() < polling_deadline:
+                polled = base._snapshot(
+                    min(30.0, max(0.1, polling_deadline - time.monotonic())),
+                    "NATIVE_CASE_RESTORE_POLL_SNAPSHOT_FAILED",
+                )
+                poll_stats = subscription.control_stats()
+                if (
+                    polled.get("configured") is not True
+                    or polled.get("source_url") != saved_source
+                    or poll_stats.get("subscription_gets") != expected_requests
+                    or poll_stats.get("in_flight_gets") != 0
+                ):
+                    raise NativeUIJourneyError(
+                        "Snapshot polling changed the restored inventory or fetched it again"
+                    )
+                require_disconnected_without_generation(
+                    polled, "Snapshot polling after saved URL restoration"
+                )
+                time.sleep(0.1)
+            fixture_stats = subscription.control_stats()
+            if (
+                fixture_stats.get("subscription_gets") != expected_requests
+                or fixture_stats.get("in_flight_gets") != 0
+                or fixture_stats.get("max_in_flight_gets") != 1
+            ):
+                raise NativeUIJourneyError(
+                    "Snapshot polling caused an extra or overlapping saved URL request"
+                )
             case_result = {
                 "startup_tree": startup,
                 "configure": configured,
+                "saved_url_service_restart": {
+                    "service_restart": restart,
+                    "empty_inventory_before_reopen": True,
+                    "restored_automatically_without_paste": True,
+                    "rendered_profiles": True,
+                    "remained_disconnected_without_generation": True,
+                    "snapshot_polling_did_not_refetch": True,
+                },
                 "fixture_requests": fixture_stats,
             }
         else:
             case_result = {"configure_tree": startup}
+            if ui.windows_uia_diagnostics is not None:
+                case_result["windows_uia_diagnostics"] = ui.windows_uia_diagnostics
         return {
             "platform": args.platform,
             "native_cases": list(selected),
@@ -1617,6 +1791,19 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
                 ui.collect_diagnostics()
             except BaseException as error:
                 cleanup_errors.append(f"native-ui-diagnostics: {_exception_details(error)}")
+            try:
+                ui.restore_windows_crash_diagnostics()
+            except BaseException as error:
+                cleanup_errors.append(f"native-ui-wer-registry-cleanup: {_exception_details(error)}")
+        if base is not None:
+            try:
+                base.reset(timeout_seconds=min(args.timeout, 30.0))
+            except BaseException as error:
+                cleanup_errors.append(f"base-reset: {_exception_details(error)}")
+            try:
+                base.finalize(timeout_seconds=min(args.timeout, 30.0))
+            except BaseException as error:
+                cleanup_errors.append(f"base-finalize: {_exception_details(error)}")
         if subscription is not None:
             try:
                 subscription.close()

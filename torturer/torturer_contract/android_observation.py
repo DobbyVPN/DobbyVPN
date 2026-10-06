@@ -45,6 +45,7 @@ class AndroidProfileObservation:
     native_os_shutdown_cancels_pending_switch: bool = False
     ui_reopen_verified: bool = False
     vpn_consent_handled: bool = False
+    consent_grant_selection: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if self.source_sha is not None and (
@@ -90,6 +91,35 @@ class AndroidProfileObservation:
             or self.stability_sample_interval_seconds <= 0
         ):
             raise AndroidObservationError("stability sampling is invalid")
+        if self.consent_grant_selection is not None:
+            expected = {
+                "source_verified", "digest_verified", "profile_identity_verified",
+                "mode", "index", "protocol", "generation", "generation_advanced",
+                "disconnect_clean",
+            }
+            selection = self.consent_grant_selection
+            if not isinstance(selection, Mapping) or set(selection) != expected:
+                raise AndroidObservationError("consent grant selection is invalid")
+            for name in (
+                "source_verified", "digest_verified", "profile_identity_verified",
+                "generation_advanced", "disconnect_clean",
+            ):
+                if selection.get(name) is not True:
+                    raise AndroidObservationError(
+                        f"consent grant selection {name} is invalid"
+                    )
+            if (
+                selection.get("mode") != "PROFILE_INDEX"
+                or not isinstance(selection.get("index"), int)
+                or isinstance(selection.get("index"), bool)
+                or selection["index"] <= 0
+                or not isinstance(selection.get("protocol"), str)
+                or not selection["protocol"]
+                or not isinstance(selection.get("generation"), int)
+                or isinstance(selection.get("generation"), bool)
+                or selection["generation"] <= 0
+            ):
+                raise AndroidObservationError("consent grant profile identity is invalid")
     @classmethod
     def from_mapping(
         cls,
@@ -161,6 +191,7 @@ class AndroidProfileObservation:
             ),
             ui_reopen_verified=value.get("ui_reopen_verified", False),
             vpn_consent_handled=value.get("vpn_consent_handled", False),
+            consent_grant_selection=value.get("consent_grant_selection"),
         )
         if expected_source_sha is not None:
             if (

@@ -35,6 +35,8 @@ def adapter_for_platform(
     network_interface: str | None = None,
     routing_firewall_helper: Path | None = None,
     android_ui_mode: str = "protocol-matrix",
+    app_apk: Path | None = None,
+    test_companion_apk: Path | None = None,
 ) -> (
     LinuxAdapter
     | WindowsAdapter
@@ -59,6 +61,8 @@ def adapter_for_platform(
             latency_url=PUBLIC_LATENCY_URL,
             download_url=PUBLIC_DOWNLOAD_URL,
             upload_url=PUBLIC_UPLOAD_URL,
+            app_apk=app_apk,
+            test_companion_apk=test_companion_apk,
         )
         if android_ui_mode not in {"gui-auto", "protocol-matrix"}:
             raise ValueError("unsupported Android adapter lane")
@@ -68,6 +72,8 @@ def adapter_for_platform(
         raise ValueError("unsupported platform")
     if android_ui_mode != "protocol-matrix":
         raise ValueError("android_ui_mode is only valid for Android")
+    if app_apk is not None or test_companion_apk is not None:
+        raise ValueError("Android APK paths are only valid for Android")
     if cli is None:
         raise ValueError("desktop adapter requires --cli")
 
