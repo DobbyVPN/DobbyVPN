@@ -119,10 +119,6 @@ struct DobbyLogView: UIViewRepresentable {
         view.adjustsFontForContentSizeCategory = true
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
-        view.panGestureRecognizer.addTarget(
-            context.coordinator,
-            action: #selector(Coordinator.handlePan(_:))
-        )
         context.coordinator.onFollowingChange = onFollowingChange
         view.updateFollowingAccessibilityHint(isFollowing: true)
         return view
@@ -178,8 +174,8 @@ struct DobbyLogView: UIViewRepresentable {
             return false
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            // Ignore programmatic layout and follow-to-bottom changes.
-            guard !updating, (scrollView.isDragging || scrollView.isDecelerating) else { return }
+            // Programmatic content updates are fenced by `updating`.
+            guard !updating else { return }
             updateFollowingState(for: scrollView)
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -188,18 +184,6 @@ struct DobbyLogView: UIViewRepresentable {
         }
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
             updateFollowingState(for: scrollView)
-        }
-        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
-            switch gesture.state {
-            case .changed, .ended, .cancelled, .failed:
-                guard let scrollView = gesture.view as? UIScrollView else { return }
-                DispatchQueue.main.async { [weak self, weak scrollView] in
-                    guard let self = self, let scrollView = scrollView else { return }
-                    self.updateFollowingState(for: scrollView)
-                }
-            default:
-                return
-            }
         }
         private func updateFollowingState(for scrollView: UIScrollView) {
             guard let logView = scrollView as? DobbyLogTextView, !logView.isRestoringReadingPosition else { return }
