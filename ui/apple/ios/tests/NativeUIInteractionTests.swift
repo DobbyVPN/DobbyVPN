@@ -327,7 +327,7 @@ final class NativeUIInteractionTests: XCTestCase {
             "The latest validation event should have a readable rendered record"
         )
         XCTAssertTrue(
-            renderedError.contains(" · ERROR · native-ui\n\(validationError)\n"),
+            renderedError.contains(" · ERROR · App · native-ui\n\(validationError)\n"),
             "The rendered log should show the severity and source beside its timestamp"
         )
         let details = detailElements.element(boundBy: targetDetailIndex)
@@ -572,8 +572,12 @@ final class NativeUIInteractionTests: XCTestCase {
         guard let rendered = logs.value as? String, logs.frame.height > 0 else { return nil }
         let details = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
-            .allElementsBoundByIndex
-        let candidates = details.enumerated().compactMap { index, element -> (anchor: RenderedLogAnchor, relativeY: CGFloat)? in
+        let detailCount = details.count
+        // At the bottom-following position, only recent rows can intersect the viewport.
+        // Querying every retained link makes XCUI traverse dozens of offscreen records.
+        let latestDetails = (max(0, detailCount - 12)..<detailCount).reversed()
+        let candidates = latestDetails.compactMap { index -> (anchor: RenderedLogAnchor, relativeY: CGFloat)? in
+            let element = details.element(boundBy: index)
             guard element.label == "Details", elementIsVisible(element, in: logs),
                   let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { return nil }
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
