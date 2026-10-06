@@ -6,23 +6,23 @@
   <Grid x:Name="Root" MinWidth="560" Margin="24" RowDefinitions="Auto,Auto,*" RowSpacing="16">
     <Grid ColumnDefinitions="*,Auto">
       <TextBlock Text="DobbyVPN" Style="{StaticResource TitleTextBlockStyle}" />
-      <Button Grid.Column="1" Content="About" Click="About_Click" />
+      <Button Grid.Column="1" Content="About" Click="About_Click" AutomationProperties.AutomationId="About" />
     </Grid>
     <ScrollViewer x:Name="ControlsScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
       <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="16">
         <StackPanel Spacing="6">
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
           <TextBox x:Name="SourceEditor" Header="Subscription URL" PlaceholderText="https://…" AutomationProperties.AutomationId="Connection configuration" AutomationProperties.Name="Subscription URL" />
-          <Button x:Name="PasteButton" Grid.Column="1" VerticalAlignment="Bottom" Content="Paste" Click="Paste_Click" Visibility="Collapsed" />
+          <Button x:Name="PasteButton" Grid.Column="1" VerticalAlignment="Bottom" Content="Paste" Click="Paste_Click" Visibility="Collapsed" AutomationProperties.AutomationId="Paste" />
           </Grid>
           <TextBlock x:Name="LoadStatus" TextWrapping="Wrap" />
-          <Button x:Name="RetryButton" Content="Retry" Click="Retry_Click" Visibility="Collapsed" />
+          <Button x:Name="RetryButton" Content="Retry" Click="Retry_Click" Visibility="Collapsed" AutomationProperties.AutomationId="Retry" />
         </StackPanel>
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="16">
           <StackPanel Spacing="4">
             <TextBlock x:Name="StatusText" Text="Disconnected" AutomationProperties.AutomationId="Disconnected" AutomationProperties.LiveSetting="Polite" />
             <TextBlock x:Name="ProfileText" TextWrapping="WrapWholeWords" />
-            <Button x:Name="ActiveStopButton" Content="Disconnect" Click="ActiveStop_Click" Visibility="Collapsed" />
+            <Button x:Name="ActiveStopButton" Content="Disconnect" Click="ActiveStop_Click" Visibility="Collapsed" AutomationProperties.AutomationId="Active connection action" />
             <TextBlock x:Name="FailureText" TextWrapping="WrapWholeWords" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
             <TextBlock x:Name="ErrorText" TextWrapping="WrapWholeWords" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
           </StackPanel>
@@ -42,8 +42,8 @@
       <Grid ColumnDefinitions="*,Auto">
         <TextBlock Text="Logs" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-          <Button Content="Clear" Click="ClearLogs_Click" />
-          <Button Content="Save logs…" Click="SaveLogs_Click" />
+          <Button Content="Clear" Click="ClearLogs_Click" AutomationProperties.AutomationId="Clear" />
+          <Button Content="Save logs…" Click="SaveLogs_Click" AutomationProperties.AutomationId="Save logs" />
         </StackPanel>
       </Grid>
       <TextBlock x:Name="LogsErrorText" Grid.Row="1" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="WrapWholeWords" />

@@ -271,14 +271,18 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);',
             '"UI process did not expose a visible, non-minimized window for the tree snapshot", seconds: 20.0);',
             'TracePhase("tree-uia-root-complete")',
-            'TracePhase("tree-uia-findall-start")',
-            'var controlView = new PropertyCondition(\n                        AutomationElement.IsControlElementProperty,\n                        true);',
-            'var foundElements = root.FindAll(TreeScope.Subtree, controlView);',
-            'TracePhase($"tree-uia-findall-complete elements={foundElements.Count}");',
-            'if (foundElements.Count > 8192)',
+            'TracePhase("tree-uia-targeted-start")',
+            'void AddByAutomationId(string id)',
+            'AddVisibleElement(ByAutomationId(root, id));',
+            'AutomationElement? FindVisibleByName(string name) => root.FindFirst(',
+            'var actionId = $"Profile {profileIndex} action";',
+            'var action = ByAutomationId(root, actionId);',
+            'AddByAutomationId($"Profile {profileIndex} description");',
+            'if (profileCount == 8192)',
+            'TracePhase($"tree-uia-targeted-complete controls={visibleControls.Count} profiles={profileCount}");',
             'catch (COMException error) when (error.HResult == unchecked((int)0x8000FFFF))',
             'uiaError = error.ToString()',
-            'var isOffscreen = current.IsOffscreen;',
+            'if (element is not null && !element.Current.IsOffscreen)',
             '((WindowPattern)windowPattern).Current.CanMaximize',
             '"Could not restore native window bounds after narrow-window test"',
             'originalBounds.Right - originalBounds.Left',
@@ -291,6 +295,20 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             "long? pasteInvokedAtUnixMs", 1
         )[0]
         self.assertNotIn("Walk(root", tree_operation)
+        self.assertNotIn("FindAll(", tree_operation)
+        window_source = (
+            PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/MainWindow.xaml.cs"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'AutomationProperties.SetAutomationId(description, $"Profile {profile.Index + 1} description");',
+            window_source,
+        )
+        window_xaml = (
+            PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/MainWindow.xaml"
+        ).read_text(encoding="utf-8")
+        for automation_id in ("About", "Paste", "Retry", "Active connection action", "Clear", "Save logs"):
+            with self.subTest(automation_id=automation_id):
+                self.assertIn(f'AutomationProperties.AutomationId="{automation_id}"', window_xaml)
         for assertion in (
             'if (request.TryGetProperty("pid", out var requestedPid))',
             'Process.GetProcessesByName(Path.GetFileNameWithoutExtension(expected))',

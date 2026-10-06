@@ -624,34 +624,65 @@ internal static class Program
                 string[] help_texts;
                 try
                 {
-                    TracePhase("tree-uia-findall-start");
-                    var controlView = new PropertyCondition(
-                        AutomationElement.IsControlElementProperty,
-                        true);
-                    var foundElements = root.FindAll(TreeScope.Subtree, controlView);
-                    TracePhase($"tree-uia-findall-complete elements={foundElements.Count}");
-                    if (foundElements.Count > 8192)
-                        throw new InvalidOperationException("Accessibility tree exceeds 8192 elements");
+                    TracePhase("tree-uia-targeted-start");
+                    var visibleControls = new List<AutomationElement>();
 
-                    var visibleElements = new List<AutomationElement>();
-                    for (var elementIndex = 0; elementIndex < foundElements.Count; elementIndex++)
+                    void AddVisibleElement(AutomationElement? element)
                     {
-                        var nodeIndex = elementIndex + 1;
-                        var element = foundElements[elementIndex];
-                        TracePhase($"tree-uia-findall-node={nodeIndex}-current-start");
-                        var current = element.Current;
-                        TracePhase($"tree-uia-findall-node={nodeIndex}-current-complete");
-                        TracePhase($"tree-uia-findall-node={nodeIndex}-is-offscreen-start");
-                        var isOffscreen = current.IsOffscreen;
-                        TracePhase($"tree-uia-findall-node={nodeIndex}-is-offscreen-complete offscreen={isOffscreen}");
-                        if (!isOffscreen) visibleElements.Add(element);
+                        if (element is not null && !element.Current.IsOffscreen)
+                            visibleControls.Add(element);
                     }
-                    TracePhase($"tree-uia-findall-visible-complete elements={visibleElements.Count}");
-                    enabled_controls = visibleElements.Where(e => e.Current.IsEnabled).SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name }).Where(s => s.Length > 0).Distinct().ToArray();
-                    labels = visibleElements.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
-                        .Where(s => s.Length > 0).Distinct().ToArray();
-                    help_texts = visibleElements.Select(e => e.Current.HelpText)
-                        .Where(s => s.Length > 0).Distinct().ToArray();
+
+                    void AddByAutomationId(string id)
+                    {
+                        TracePhase($"tree-uia-find-id={id}-start");
+                        AddVisibleElement(ByAutomationId(root, id));
+                        TracePhase($"tree-uia-find-id={id}-complete");
+                    }
+
+                    AutomationElement? FindVisibleByName(string name) => root.FindFirst(
+                        TreeScope.Subtree,
+                        new AndCondition(
+                            new PropertyCondition(AutomationElement.NameProperty, name),
+                            new PropertyCondition(AutomationElement.IsControlElementProperty, true),
+                            new PropertyCondition(AutomationElement.IsOffscreenProperty, false)));
+
+                    foreach (var id in new[]
+                    {
+                        "Connection configuration", "Paste", "Retry",
+                        "Disconnected", "Connecting", "Reconnecting", "Stopping", "Failed", "Error", "Connected",
+                        "VPN connection action", "Active connection action", "About", "Done",
+                        "Clear", "Save logs", "Backend logs",
+                        "About version metadata", "About compact commit metadata",
+                        "About source commit metadata", "About source link",
+                    })
+                    {
+                        if (id == "Done") AddVisibleElement(FindVisibleByName(id));
+                        else AddByAutomationId(id);
+                    }
+
+                    var profileCount = 0;
+                    for (var profileIndex = 1; profileIndex <= 8192; profileIndex++)
+                    {
+                        var actionId = $"Profile {profileIndex} action";
+                        TracePhase($"tree-uia-find-id={actionId}-start");
+                        var action = ByAutomationId(root, actionId);
+                        if (action is null || action.Current.IsOffscreen) break;
+                        visibleControls.Add(action);
+                        AddByAutomationId($"Profile {profileIndex} description");
+                        profileCount++;
+                    }
+                    if (profileCount == 8192)
+                        throw new InvalidOperationException("Visible profile actions exceed 8192 controls");
+
+                    labels = visibleControls.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
+                        .Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
+                    enabled_controls = visibleControls.Where(e => e.Current.IsEnabled)
+                        .SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
+                        .Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
+                    help_texts = visibleControls.Select(e => e.Current.HelpText)
+                        .Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
+                    TracePhase($"tree-uia-targeted-complete controls={visibleControls.Count} profiles={profileCount}");
                 }
                 catch (ElementNotAvailableException error)
                 {

@@ -240,7 +240,13 @@ public sealed partial class MainWindow : Window
             var row = new Grid { ColumnSpacing = 12 };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Children.Add(new TextBlock { Text = $"{(profile.Description.Length == 0 ? $"Profile {profile.Index + 1}" : profile.Description)} · {profile.Protocol}", TextWrapping = TextWrapping.Wrap });
+            var description = new TextBlock
+            {
+                Text = $"{(profile.Description.Length == 0 ? $"Profile {profile.Index + 1}" : profile.Description)} · {profile.Protocol}",
+                TextWrapping = TextWrapping.Wrap
+            };
+            AutomationProperties.SetAutomationId(description, $"Profile {profile.Index + 1} description");
+            row.Children.Add(description);
             var button = new Button { Content = ActionTitle(profile.Index), IsEnabled = CanAct(profile.Index) };
             AutomationProperties.SetAutomationId(button, $"Profile {profile.Index + 1} action");
             button.Click += async (_, _) => await PerformActionAsync(profile.Index);
