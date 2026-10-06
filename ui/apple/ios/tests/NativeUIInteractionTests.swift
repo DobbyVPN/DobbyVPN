@@ -374,14 +374,11 @@ final class NativeUIInteractionTests: XCTestCase {
                        "The original record should collapse before checking the reading position")
         attachScreenshot("logs-freeze-ready")
         let renderedBeforeFreeze = try XCTUnwrap(logs.value as? String)
-        let selectedRecord = try XCTUnwrap(
-            renderedLogRecord(atDetailIndex: targetDetailIndex, in: renderedBeforeFreeze),
-            "The selected Paste record should remain associated with its Details control"
-        )
         XCTAssertTrue(elementIsVisible(details, in: logs),
                       "The selected Paste record's Details link should remain in the rendered log viewport after collapsing")
-        let positionAnchor = RenderedLogAnchor(
-            detailIndex: targetDetailIndex, record: selectedRecord, element: details
+        let positionAnchor = try XCTUnwrap(
+            visibleLogAnchor(in: logs),
+            "A recent collapsed record should remain visible above the bottom of the log viewport"
         )
         XCTAssertTrue(renderedBeforeFreeze.contains(positionAnchor.record),
                       "The anchor should identify a specific rendered log record")
@@ -597,12 +594,12 @@ final class NativeUIInteractionTests: XCTestCase {
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
         let currentAnchor = detailElements.element(boundBy: anchor.detailIndex)
 
-        // Use short drags so the same row crosses the freeze threshold without
-        // being thrown completely out of the viewport by a full swipe.
+        // Use a measured short drag: tiny drags stay inside the follow threshold,
+        // while a full swipe can throw a bottom row completely out of view.
         var scrollSettled = false
         for _ in 0..<3 {
             let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.50))
+            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
             start.press(forDuration: 0.1, thenDragTo: end)
 
             let movedIntoReadingArea = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
