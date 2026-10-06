@@ -65,7 +65,7 @@ IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS = 10 * 60
 # contract; RunBudget still enforces the 30-minute lane and cleanup reserve.
 IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
 COMMAND_TERMINATION_GRACE_SECONDS = 15
-IOS_SUBSCRIPTION_FIXTURE_EXPECTED_GETS = 2
+IOS_SUBSCRIPTION_FIXTURE_EXPECTED_GETS = 3
 # A timed-out command can use one grace window to stop its process group, then
 # the remaining reserve to drain inherited pipes and reap the direct child.
 # Keep this outside each operation timeout so RunBudget retains its cleanup
@@ -499,12 +499,17 @@ def _write_disposable_subscription_profile(work_dir: Path) -> Path:
     """Create a synthetic twelve-profile list for the Simulator test client."""
     sections = []
     for index in range(1, 13):
+        description = (
+            f'Description = "Simulator fixture profile {index}"\n'
+            if index < 12
+            else ""
+        )
         sections.append(
             "[[Outline]]\n"
-            f'Description = "Simulator fixture profile {index}"\n'
-            'Server = "192.0.2.10"\n'
-            "Port = 443\n"
-            'Password = "fixture-only"'
+            + description
+            + 'Server = "192.0.2.10"\n'
+            + "Port = 443\n"
+            + 'Password = "fixture-only"'
         )
     path = work_dir / "simulator-subscription-profile.toml"
     path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
@@ -525,6 +530,11 @@ def _subscription_fixture_test_environment(fixture: object) -> dict[str, str]:
         "DOBBY_IOS_TEST_FIXTURE_REQUIRED": "1",
         "DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE": "1",
     }
+
+
+def _requires_subscription_fixture(native_cases: Sequence[str] | None) -> bool:
+    """Default XCTest coverage and the fixture case need disposable HTTPS setup."""
+    return native_cases is None or IOS_SUBSCRIPTION_FIXTURE_CASE in native_cases
 
 
 def _assert_subscription_fixture_request_count(
@@ -1280,9 +1290,7 @@ def run_ios_simulator_app_contract(
     native_log_collection_error: str | None = None
     subscription_fixture = None
     subscription_fixture_directory = work_dir / "native-subscription-fixture"
-    requires_subscription_fixture = (
-        native_cases is not None and IOS_SUBSCRIPTION_FIXTURE_CASE in native_cases
-    )
+    requires_subscription_fixture = _requires_subscription_fixture(native_cases)
 
     try:
         inventory = _require_success(
@@ -1380,6 +1388,7 @@ def run_ios_simulator_app_contract(
             # start() records Simulator trust before installing it, so the
             # common finally cleanup can handle partial setup failures too.
             subscription_fixture.start()
+            subscription_fixture.fail_next_response()
             test_environment = _subscription_fixture_test_environment(subscription_fixture)
         project = candidate_root / _PROJECT_PATH
         if not project.is_dir():

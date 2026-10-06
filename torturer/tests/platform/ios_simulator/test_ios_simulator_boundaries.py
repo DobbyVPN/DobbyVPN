@@ -13,7 +13,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_runner import ios_simulator_app, local_vm, local_vm_ios
-from torturer_runner.native_cases import IOS_LOGS_FREEZE_RESUME_CASE, IOS_RENDERER_SEVERITY_CASE
+from torturer_runner.native_cases import (
+    IOS_LOGS_FREEZE_RESUME_CASE,
+    IOS_RENDERER_SEVERITY_CASE,
+)
 
 _ENTRYPOINT_PATH = Path(__file__).with_name("run_app_contract.py")
 _ENTRYPOINT_SPEC = importlib.util.spec_from_file_location(
@@ -322,6 +325,7 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                         work_dir=work_dir,
                         runner=runner,
                         budget=budget,
+                        native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
                     )
 
         failure = caught.exception

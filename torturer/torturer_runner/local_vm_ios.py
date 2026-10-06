@@ -7,7 +7,7 @@ import platform
 import sys
 
 from . import ios_simulator_app as ios
-from .native_cases import IOS_RENDERER_SEVERITY_CASE
+from .native_cases import IOS_RENDERER_SEVERITY_CASE, IOS_SUBSCRIPTION_FIXTURE_CASE
 
 
 def prepare(
@@ -147,6 +147,7 @@ def run(
     selected_cases = native_cases or [
         "NativeUIInteractionTests",
         IOS_RENDERER_SEVERITY_CASE,
+        IOS_SUBSCRIPTION_FIXTURE_CASE,
     ]
     _write_json(logs / "simulator.json", {
         "scope": "ios-simulator-mini", "suite": "mini", "passed": True,

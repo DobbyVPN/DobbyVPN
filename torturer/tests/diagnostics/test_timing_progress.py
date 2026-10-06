@@ -14,6 +14,7 @@ from unittest import mock
 from torturer_runner import local_vm
 from torturer_runner import ios_simulator_app
 from torturer_runner import lane
+from torturer_runner.native_cases import IOS_LOGS_FREEZE_RESUME_CASE
 from torturer_runner.adapters.cli import CLIAdapter, RoutingProofMixin, SubprocessRunner
 from torturer_runner.adapters.windows import WindowsAdapter
 from torturer_contract.engine import ScenarioExecutionError
@@ -192,6 +193,7 @@ class TimingProgressTests(unittest.TestCase):
                     candidate_root=root / "candidate",
                     work_dir=work_dir,
                     runner=Runner(),
+                    native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
                 )
 
         self.assertIsNone(evidence.native_log)

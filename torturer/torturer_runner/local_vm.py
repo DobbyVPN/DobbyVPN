@@ -38,9 +38,11 @@ import traceback
 from typing import Any
 
 from .diagnostics import collect_installed_backend_logs, output_text
+from .ios_simulator import ui_test_selection
 from .native_cases import (
     ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
     IOS_RENDERER_SEVERITY_CASE,
+    IOS_SUBSCRIPTION_FIXTURE_CASE,
     NATIVE_CASE_SUITES,
     validate_native_cases,
 )
@@ -2002,13 +2004,13 @@ def run(args: argparse.Namespace) -> int:
         )
     elif args.platform == "ios-simulator":
         state["coverage"].update(
-            native_cases=["NativeUIInteractionTests", IOS_RENDERER_SEVERITY_CASE],
-            native_case_selection="suite-default",
-            xctest_filters=[
-                "iosAppUITests/NativeUIInteractionTests",
-                "iosAppUITests/NativeRendererInteractionTests/"
-                "testSeverityColorsResolveForLightAndDarkAppearances",
+            native_cases=[
+                "NativeUIInteractionTests",
+                IOS_RENDERER_SEVERITY_CASE,
+                IOS_SUBSCRIPTION_FIXTURE_CASE,
             ],
+            native_case_selection="suite-default",
+            xctest_filters=list(ui_test_selection()),
         )
     elif args.platform == "android":
         state["coverage"].update(

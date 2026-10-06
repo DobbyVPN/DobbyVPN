@@ -248,10 +248,11 @@ public struct DobbyRootView: View {
                 .font(.caption).foregroundStyle(.secondary)
 #if os(iOS)
             DobbyLogView(entries: model.logEntries, clear: model.clearRevision)
+                .accessibilityIdentifier("Connection logs")
 #else
             DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
-#endif
                 .accessibilityIdentifier("Connection logs")
+#endif
         }
     }
 

@@ -21,6 +21,10 @@ on:
           - debug-packages
           - fdroid-preflight
           - ios-simulator-mini
+      native_case:
+        description: Optional registered iOS Simulator mini case selector.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -333,12 +337,23 @@ jobs:
       - name: Build and launch app on iPhone Simulator
         env:
           PYTHONPATH: ${{ runner.temp }}/dobbyvpn-screenshot-python:${{ github.workspace }}/torturer
+          DOBBY_NATIVE_CASE: ${{ inputs.native_case }}
+          DOBBY_PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
+          native_case_args=()
+          if [[ -n "${DOBBY_NATIVE_CASE:-}" ]]; then
+            if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$DOBBY_PLATFORM" != ios-simulator-mini ]]; then
+              echo "native_case is supported only with platform=ios-simulator-mini" >&2
+              exit 2
+            fi
+            native_case_args+=(--native-case "$DOBBY_NATIVE_CASE")
+          fi
           python3 torturer/tests/platform/ios_simulator/run_app_contract.py \
             --candidate-root "$GITHUB_WORKSPACE" \
             --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
-            --source-sha "$GITHUB_SHA"
+            --source-sha "$GITHUB_SHA" \
+            "${native_case_args[@]}"
 
       - name: Retain complete iOS Simulator diagnostics
         if: always()

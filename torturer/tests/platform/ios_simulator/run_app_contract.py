@@ -19,6 +19,7 @@ from torturer_runner.ios_simulator_app import (  # noqa: E402
     retain_ios_failure_diagnostic,
     run_ios_simulator_app_contract,
 )
+from torturer_runner.native_cases import validate_native_cases  # noqa: E402
 
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
@@ -26,12 +27,19 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--candidate-root", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--native-case", action="append")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_arguments(argv)
     try:
+        try:
+            native_cases = validate_native_cases(
+                "ios-simulator", "mini", args.native_case
+            )
+        except ValueError as error:
+            raise IOSSimulatorAppContractError(str(error)) from error
         # The Simulator target checks the shared SwiftUI frontend without
         # embedding the physical-device packet-tunnel extension.
         contract = public_ios_simulator_app_contract("arm64")
@@ -52,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
             contract=contract,
             budget=budget,
             source_sha=args.source_sha,
+            native_cases=native_cases or None,
         )
     except IOSSimulatorAppContractError as error:
         try:

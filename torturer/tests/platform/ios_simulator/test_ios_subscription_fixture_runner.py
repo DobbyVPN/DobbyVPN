@@ -18,7 +18,7 @@ _UDID = "01234567-89ab-cdef-0123-456789abcdef"
 
 
 class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
-    def test_selected_test_receives_only_subscription_url_and_fixture_marker(self) -> None:
+    def test_default_and_selected_fixture_test_receive_run_owned_fixture(self) -> None:
         fixture = SimpleNamespace(
             url="https://127.0.0.1:49123/subscription",
         )
@@ -58,24 +58,33 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
             "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
             "testAutomaticProfilesAndFixtureRequestCounts",
             ios_simulator.ui_test_selection(),
-            "Default CI should report the fixture case's explicit skip when no fixture is provided",
+            "Default CI should run the fixture case with disposable fixture setup",
+        )
+        self.assertTrue(ios_simulator_app._requires_subscription_fixture(None))
+        self.assertTrue(
+            ios_simulator_app._requires_subscription_fixture(
+                [IOS_SUBSCRIPTION_FIXTURE_CASE]
+            )
+        )
+        self.assertFalse(
+            ios_simulator_app._requires_subscription_fixture(["logs-freeze-resume"])
         )
 
-    def test_host_checks_paste_and_cold_link_gets_after_xctest(self) -> None:
+    def test_host_checks_failed_paste_retry_and_cold_link_gets_after_xctest(self) -> None:
         fixture = SimpleNamespace(
             control_stats=lambda: {
-                "subscription_gets": 2,
+                "subscription_gets": 3,
                 "in_flight_gets": 0,
                 "max_in_flight_gets": 1,
             }
         )
         self.assertEqual(
             ios_simulator_app._assert_subscription_fixture_request_count(
-                fixture, expected_gets=2
+                fixture, expected_gets=3
             ),
             fixture.control_stats(),
         )
-        for count in (1, 3):
+        for count in (2, 4):
             fixture.control_stats = lambda count=count: {
                 "subscription_gets": count,
                 "in_flight_gets": 0,
@@ -83,11 +92,21 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
             }
             with self.assertRaisesRegex(
                 ios_simulator_app.IOSSimulatorAppContractError,
-                "expected 2 completed",
+                "expected 3 completed",
             ):
                 ios_simulator_app._assert_subscription_fixture_request_count(
-                    fixture, expected_gets=2
+                    fixture, expected_gets=3
                 )
+
+    def test_subscription_fixture_profile_contains_a_blank_description_for_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            profile = ios_simulator_app._write_disposable_subscription_profile(
+                Path(scratch)
+            )
+            sections = profile.read_text(encoding="utf-8").strip().split("\n\n")
+        self.assertEqual(len(sections), 12)
+        self.assertIn('Description = "Simulator fixture profile 11"', sections[10])
+        self.assertNotIn("Description", sections[11])
 
     def test_fixture_trust_is_limited_to_and_removed_from_temporary_simulator(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:
@@ -229,12 +248,22 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
             / "ui/apple/ios/tests/NativeSubscriptionFixtureInteractionTests.swift"
         ).read_text(encoding="utf-8")
         self.assertIn("throw XCTSkip(", rendered_test)
+        self.assertNotIn("Torturer did not provide the disposable HTTPS", rendered_test)
+        self.assertIn('app.buttons["Retry"]', rendered_test)
+        self.assertIn("assertFailedLoadWithoutConnection", rendered_test)
+        self.assertIn("assertRetriedLoadWithoutConnection", rendered_test)
+        self.assertIn("pasteElapsed, 1.5", rendered_test)
         self.assertIn("Tunnel stderr · tunnel", rendered_test)
         self.assertIn("Stderr capture initialized", rendered_test)
         self.assertIn("paste.tap()", rendered_test)
         self.assertIn("app.open(deepLink)", rendered_test)
         self.assertIn("XCUIDevice.shared.system.open(deepLink)", rendered_test)
         self.assertIn("for _ in 0..<2", rendered_test)
+        runner = (
+            Path(__file__).parent / "run_app_contract.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('parser.add_argument("--native-case", action="append")', runner)
+        self.assertIn("validate_native_cases(", runner)
 
 
 if __name__ == "__main__":
