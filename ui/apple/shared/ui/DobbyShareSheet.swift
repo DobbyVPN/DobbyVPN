@@ -193,7 +193,10 @@ struct DobbyLogView: UIViewRepresentable {
             switch gesture.state {
             case .changed, .ended, .cancelled, .failed:
                 guard let scrollView = gesture.view as? UIScrollView else { return }
-                updateFollowingState(for: scrollView)
+                DispatchQueue.main.async { [weak self, weak scrollView] in
+                    guard let self = self, let scrollView = scrollView else { return }
+                    self.updateFollowingState(for: scrollView)
+                }
             default:
                 return
             }

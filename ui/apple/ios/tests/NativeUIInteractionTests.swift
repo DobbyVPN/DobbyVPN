@@ -100,7 +100,9 @@ final class NativeUIInteractionTests: XCTestCase {
             "A rendered log row should anchor the reading position before Clear"
         )
         let clearAnchorOffsetBeforeScroll = clearAnchor.element.frame.minY - logs.frame.minY
-        let clearAnchorOffset = scrollLogsAwayFromBottom(logs, anchor: clearAnchor)
+        let clearAnchorOffset = scrollLogsAwayFromBottom(
+            logs, anchor: clearAnchor, screenshotName: "logs-scroll-attempt"
+        )
         XCTAssertTrue(logs.value as? String == renderedBeforeClear,
                       "Scrolling to an older record should not change the rendered entries")
         XCTAssertTrue(elementIsVisible(clearAnchor.element, in: logs),
@@ -397,12 +399,17 @@ final class NativeUIInteractionTests: XCTestCase {
                       "The anchor should identify a specific rendered log record")
         let anchorOffsetBeforeScroll = positionAnchor.element.frame.minY - logs.frame.minY
         let anchorOffsetAfterScroll = scrollLogsAwayFromBottom(
-            logs, anchor: positionAnchor, dragEndY: 0.75, screenshotName: "logs-freeze-scrolled"
+            logs, anchor: positionAnchor, dragEndY: 0.75
         )
         XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
                              "The gesture should move the identifiable record away from the bottom")
-        XCTAssertEqual(followingState.label, frozenLabel,
-                       "A user scroll away from the bottom should freeze the displayed log entries")
+        let followingPaused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", frozenLabel), object: followingState
+        )
+        let followStateResult = XCTWaiter.wait(for: [followingPaused], timeout: 3)
+        attachScreenshot("logs-freeze-scrolled")
+        XCTAssertEqual(followStateResult, .completed,
+                       "A user scroll away from the bottom should publish the paused state")
         XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
                        "Scrolling should preserve the rendered log entries")
         let frozen = try XCTUnwrap(logs.value as? String)
@@ -623,7 +630,7 @@ final class NativeUIInteractionTests: XCTestCase {
         let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
         let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: dragEndY))
         start.press(forDuration: 0.1, thenDragTo: end)
-        attachScreenshot(screenshotName ?? "logs-scroll-attempt")
+        if let screenshotName = screenshotName { attachScreenshot(screenshotName) }
         let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
         let offsetAfter = currentAnchor.frame.minY - logs.frame.minY
         XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
