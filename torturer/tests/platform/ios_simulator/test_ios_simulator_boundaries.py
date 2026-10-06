@@ -28,6 +28,34 @@ _ENTRYPOINT_SPEC.loader.exec_module(IOS_RUNNER_ENTRYPOINT)
 
 
 class IOSSimulatorBoundaryTests(unittest.TestCase):
+    def test_disposable_simulator_creation_uses_unique_name_and_selected_device_type(self) -> None:
+        selected = ios_simulator_app.AvailableSimulator(
+            udid="89ABCDEF-0123-4567-89AB-CDEF01234567",
+            name="iPhone 17",
+            runtime="com.apple.CoreSimulator.SimRuntime.iOS-26-2",
+            device_type_identifier="com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+        )
+        runner = mock.Mock()
+        runner.run.return_value = ios_simulator_app.CommandResult(
+            0, "01234567-89ab-cdef-0123-456789abcdef\n", ""
+        )
+
+        simulator = ios_simulator_app._create_disposable_simulator(
+            selected,
+            runner=runner,
+            budget=ios_simulator_app.RunBudget(
+                max_seconds=300,
+                cleanup_reserve_seconds=120,
+            ),
+        )
+
+        command = runner.run.call_args.args[0]
+        self.assertEqual(command[:3], ["xcrun", "simctl", "create"])
+        self.assertRegex(command[3], r"\ADobbyVPN Torturer [0-9a-f]{12}\Z")
+        self.assertEqual(command[4:], [selected.device_type_identifier, selected.runtime])
+        self.assertEqual(simulator.udid, "01234567-89AB-CDEF-0123-456789ABCDEF")
+        self.assertTrue(simulator.temporary)
+
     def test_ci_entrypoint_passes_candidate_sha_into_build_and_ui_test(self) -> None:
         source_sha = "a" * 40
         contract = object()

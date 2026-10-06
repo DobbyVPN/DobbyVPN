@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import traceback
+import uuid
 from typing import Callable, Protocol, Sequence, TypeVar
 
 from torturer_runner.diagnostics import (
