@@ -420,7 +420,7 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
                        "Scrolling should preserve the rendered log entries")
         let frozen = try XCTUnwrap(logs.value as? String)
-        assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen)
+        assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen, message: validationError)
 
         let anchorOffsetBeforeConfiguration = positionAnchor.element.frame.minY - logs.frame.minY
         configuration.tap()
@@ -590,10 +590,27 @@ final class NativeUIInteractionTests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
-    private func assertFrozenLogTextIsSelectable(in logs: XCUIElement, frozenText: String) {
-        let textPoint = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.45))
-        textPoint.press(forDuration: 1.0)
+    private func assertFrozenLogTextIsSelectable(
+        in logs: XCUIElement,
+        frozenText: String,
+        message: String
+    ) {
+        // Target a visible message line directly. A point relative to the whole
+        // text view can land on a Details link and exercise record expansion.
+        let messageLines = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", message))
+            .allElementsBoundByIndex
+        guard let messageLine = messageLines.first(where: {
+            $0.elementType == .textView && $0.isHittable && $0.frame.intersects(logs.frame)
+        }) else {
+            let candidates = messageLines.map { "\($0.elementType):\($0.frame)" }.joined(separator: "; ")
+            XCTFail("No visible non-link log message row was available for selection. Candidates: \(candidates)")
+            return
+        }
+        messageLine.press(forDuration: 1.0)
         attachScreenshot("logs-freeze-selection-menu")
+        XCTAssertEqual(logs.value as? String, frozenText,
+                       "Long-pressing a message row must not expand Details or change frozen entries")
         let copyActionInApp = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
         let systemUI = XCUIApplication(bundleIdentifier: "com.apple.springboard")
