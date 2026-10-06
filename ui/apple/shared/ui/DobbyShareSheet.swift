@@ -54,15 +54,17 @@ struct DobbyShareSheet: NSViewRepresentable {
 private final class DobbyLogTextView: UITextView {
     var preservesReadingPosition = false
     private(set) var isRestoringReadingPosition = false
-    private var lastLayoutWidth: CGFloat?
+    private var lastLayoutSize: CGSize?
     private var anchorCharacterIndex: Int?
     private var anchorViewportY: CGFloat?
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let widthChanged = lastLayoutWidth.map { abs($0 - bounds.width) > 0.5 } ?? false
-        lastLayoutWidth = bounds.width
-        if widthChanged && preservesReadingPosition { restoreReadingPosition() }
+        let sizeChanged = lastLayoutSize.map {
+            abs($0.width - bounds.width) > 0.5 || abs($0.height - bounds.height) > 0.5
+        } ?? false
+        lastLayoutSize = bounds.size
+        if sizeChanged && preservesReadingPosition { restoreReadingPosition() }
     }
 
     func captureReadingPosition() {
@@ -143,6 +145,7 @@ struct DobbyLogView: UIViewRepresentable {
         var parent: DobbyLogView
         var lastClear = 0
         var updating = false
+        private var userScrolling = false
         var entries: [DobbyLogEntry] = []
         var expanded = Set<String>()
         init(_ parent: DobbyLogView) { self.parent = parent }
@@ -157,9 +160,28 @@ struct DobbyLogView: UIViewRepresentable {
             updating = false
             return false
         }
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            userScrolling = true
+        }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard !updating, scrollView.isDragging || scrollView.isDecelerating else { return }
-            if let logView = scrollView as? DobbyLogTextView, logView.isRestoringReadingPosition { return }
+            guard !updating, userScrolling else { return }
+            updateFollowingState(for: scrollView)
+        }
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            guard !decelerate else { return }
+            finishUserScroll(in: scrollView)
+        }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            finishUserScroll(in: scrollView)
+        }
+        private func finishUserScroll(in scrollView: UIScrollView) {
+            guard userScrolling else { return }
+            updateFollowingState(for: scrollView)
+            userScrolling = false
+        }
+        private func updateFollowingState(for scrollView: UIScrollView) {
+            guard let logView = scrollView as? DobbyLogTextView,
+                  !logView.isRestoringReadingPosition else { return }
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scrollView.contentOffset.y + scrollView.bounds.height,
                 contentHeight: scrollView.contentSize.height

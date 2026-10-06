@@ -575,11 +575,11 @@ final class NativeUIInteractionTests: XCTestCase {
             guard element.label == "Details", elementIsVisible(element, in: logs),
                   let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { return nil }
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
-            guard (0.05...0.75).contains(relativeY) else { return nil }
+            guard (0.25...0.70).contains(relativeY) else { return nil }
             return (RenderedLogAnchor(detailIndex: index, record: record, element: element), relativeY)
         }
         return candidates.min {
-            abs($0.relativeY - 0.20) < abs($1.relativeY - 0.20)
+            abs($0.relativeY - 0.40) < abs($1.relativeY - 0.40)
         }?.anchor
     }
 
@@ -589,18 +589,20 @@ final class NativeUIInteractionTests: XCTestCase {
         anchor: RenderedLogAnchor,
         screenshotName: String? = nil
     ) -> CGFloat {
-        let offsetBefore = anchor.element.frame.minY - logs.frame.minY
-        let currentAnchor = anchor.element
-
-        // Use a measured short drag: tiny drags stay inside the follow threshold,
-        // while a full swipe can throw a bottom row completely out of view.
-        for _ in 0..<3 {
+        let initialAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
+        let offsetBefore = initialAnchor.frame.minY - logs.frame.minY
+        // Re-resolve the exact rendered record after each drag. A Details element
+        // bound by index can point at a different row when accessibility rebuilds.
+        // Keep the anchor near the middle and use short drags so it stays visible.
+        for _ in 0..<2 {
+            let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
             if currentAnchor.frame.minY - logs.frame.minY > offsetBefore + 24 { break }
             let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
+            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.57))
             start.press(forDuration: 0.1, thenDragTo: end)
         }
         attachScreenshot(screenshotName ?? "logs-scroll-attempt")
+        let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
         let offsetAfter = currentAnchor.frame.minY - logs.frame.minY
         XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
                              "The downward drag should move the reader more than the follow threshold")
