@@ -7,6 +7,38 @@ private struct RenderedLogAnchor {
     let element: XCUIElement
 }
 
+private final class StableFrameTracker {
+    private var previousFrames: [CGRect]?
+    private var consecutiveStableSamples = 0
+
+    func reset() {
+        previousFrames = nil
+        consecutiveStableSamples = 0
+    }
+
+    func observe(_ frames: [CGRect]) -> Bool {
+        guard frames.allSatisfy({ !$0.isNull && $0.width > 0 && $0.height > 0 }) else {
+            reset()
+            return false
+        }
+        if let previousFrames,
+           previousFrames.count == frames.count,
+           zip(previousFrames, frames).allSatisfy({ pair in
+               let (previous, current) = pair
+               return abs(previous.minX - current.minX) <= 0.5
+                   && abs(previous.minY - current.minY) <= 0.5
+                   && abs(previous.width - current.width) <= 0.5
+                   && abs(previous.height - current.height) <= 0.5
+           }) {
+            consecutiveStableSamples += 1
+        } else {
+            consecutiveStableSamples = 0
+        }
+        previousFrames = frames
+        return consecutiveStableSamples >= 2
+    }
+}
+
 final class NativeUIInteractionTests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "vpn.dobby.app")
     private var capturesLogFreezeScreenshot = false
@@ -478,9 +510,34 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(logs.value as? String, frozen,
                        "A live rotation must not replace frozen log entries")
         XCTAssertTrue(frozen.contains(positionAnchor.record))
-        let landscapeAnchor = try XCTUnwrap(detailElement(for: positionAnchor, in: logs))
-        XCTAssertTrue(elementIsVisible(landscapeAnchor, in: logs),
-                      "The same rendered record should stay visible in landscape")
+        let landscapeFrameTracker = StableFrameTracker()
+        let landscapeLayout = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard self.app.frame.width > self.app.frame.height,
+                  let anchor = self.detailElement(for: positionAnchor, in: logs), anchor.exists else {
+                landscapeFrameTracker.reset()
+                return false
+            }
+            return landscapeFrameTracker.observe([self.app.frame, logs.frame, anchor.frame])
+        }, object: app)
+        let landscapeLayoutResult = XCTWaiter.wait(for: [landscapeLayout], timeout: 12)
+        let landscapeAnchor = detailElement(for: positionAnchor, in: logs)
+        let landscapeVisible = landscapeAnchor.map { elementIsVisible($0, in: logs) } ?? false
+        let landscapeGeometry = """
+        stableFrames=\(landscapeLayoutResult == .completed)
+        appFrame=\(app.frame)
+        logPaneFrame=\(logs.frame)
+        anchorFrame=\(String(describing: landscapeAnchor?.frame))
+        anchorVisible=\(landscapeVisible)
+        """
+        let geometryAttachment = XCTAttachment(string: landscapeGeometry)
+        geometryAttachment.name = "dobbyvpn-ui-logs-freeze-landscape-geometry"
+        geometryAttachment.lifetime = .keepAlways
+        add(geometryAttachment)
+        attachScreenshot("logs-freeze-landscape")
+        XCTAssertEqual(landscapeLayoutResult, .completed,
+                       "The log pane and rendered row should settle after rotation. Geometry: \(landscapeGeometry)")
+        XCTAssertTrue(landscapeVisible,
+                      "The same rendered record should stay visible in landscape. Geometry: \(landscapeGeometry)")
         XCUIDevice.shared.orientation = .portrait
         let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             self.app.frame.height > self.app.frame.width
