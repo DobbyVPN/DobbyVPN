@@ -42,7 +42,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                     captured["fixture_closed"] = True
 
             class UI:
-                def __init__(self, platform, binary, source, timeout, *, helper, screenshot_dir, native_cases):
+                def __init__(self, platform, binary, source, timeout, *, helper, screenshot_dir, native_cases, **_kwargs):
                     captured["ui_arguments"] = (platform, source, native_cases)
                     self.native_case_results = {}
 

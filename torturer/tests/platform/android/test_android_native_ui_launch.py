@@ -1,17 +1,91 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import time
 from types import SimpleNamespace
 from unittest import mock
 
 from torturer_runner import local_vm_android
+from torturer_runner.adapters.android import AndroidAdapter, _MAIN_ACTIVITY, _PACKAGE_NAME
 
 
 class AndroidNativeUiColdLaunchTests(unittest.TestCase):
+    def test_first_rendered_configure_records_one_process_cold_import_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = object.__new__(AndroidAdapter)
+            adapter.ui_mode = "gui-auto"
+            adapter.runner = SimpleNamespace(raw_directory=root)
+            adapter._active_controls = ()
+            adapter._scratch_files = set()
+            adapter._selected_connection = None
+            adapter.source_sha = None
+            adapter.identity_url = None
+            adapter.latency_url = None
+            adapter.download_url = None
+            adapter.upload_url = None
+            adapter._process_cold_import_queued = False
+            adapter._subscription_fixture = SimpleNamespace(
+                url="https://127.0.0.1:54432/subscription",
+                control_url="https://127.0.0.1:54432/control",
+                control_key="fixture-key",
+                control_stats=lambda: {"subscription_gets": 3},
+            )
+            configure = SimpleNamespace(
+                id="functional-configure", operation="configure", timeout_seconds=30
+            )
+
+            first, _, _ = adapter._write_command(
+                SimpleNamespace(), steps=(configure,)
+            )
+            second, _, _ = adapter._write_command(
+                SimpleNamespace(), steps=(configure,)
+            )
+
+            first_command = json.loads(first.read_text(encoding="utf-8"))
+            second_command = json.loads(second.read_text(encoding="utf-8"))
+            self.assertTrue(first_command["process_cold_import"])
+            self.assertEqual(first_command["process_cold_import_request_count"], 3)
+            self.assertNotIn("process_cold_import", second_command)
+
+    def test_hosted_valid_import_launches_after_force_stop_before_instrumentation(self) -> None:
+        adapter = object.__new__(AndroidAdapter)
+        adapter.ui_mode = "gui-auto"
+        adapter._active_controls = ()
+        adapter._progress_sink = None
+        calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+        def adb(arguments: tuple[str, ...], _timeout: float, _failure: str, **options: object):
+            calls.append((arguments, options))
+            output = b"Status: ok\nComplete\n" if "start" in arguments else b""
+            return SimpleNamespace(returncode=0, stdout=output, stderr=b"", timed_out=False)
+
+        adapter._adb = adb  # type: ignore[method-assign]
+        url = "https://127.0.0.1:54432/subscription"
+
+        result = adapter._run_instrumentation(
+            "android-hosted.command.json",
+            time.monotonic() + 20,
+            process_cold_import_url=url,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(calls[0][0], ("shell", "am", "force-stop", _PACKAGE_NAME))
+        self.assertEqual(
+            calls[1][0],
+            (
+                "shell", "am", "start", "-W", "-a", "android.intent.action.VIEW",
+                "-d", "dobbyvpn://import?url=https%3A%2F%2F127.0.0.1%3A54432%2Fsubscription",
+                "-n", _MAIN_ACTIVITY,
+            ),
+        )
+        self.assertEqual(calls[2][0][:6], ("shell", "am", "instrument", "-w", "-r", "--no-restart"))
+
     def _run_ui(
         self, start_output: bytes, native_cases: list[str] | None = None,
     ) -> tuple[

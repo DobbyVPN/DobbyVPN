@@ -101,10 +101,10 @@ final class NativeUIInteractionTests: XCTestCase {
         app.buttons["Clear"].tap()
         let cleared = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let rendered = logs.value as? String else { return false }
-            return preClearRecords.allSatisfy { !rendered.contains($0) }
+            return rendered.isEmpty && preClearRecords.allSatisfy { !rendered.contains($0) }
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 15), .completed,
-                       "Clear should remove every record that was rendered before the action")
+                       "Clear should immediately empty the view and remove every record rendered before the action")
         let configurationAfterClear = app.textFields["Connection configuration"]
         configurationAfterClear.tap()
         configurationAfterClear.typeText("x")
@@ -322,6 +322,14 @@ final class NativeUIInteractionTests: XCTestCase {
         let textBeforeTarget = String(latestLogText[..<targetError.lowerBound])
         let targetDetailIndex = occurrences(of: "Details\n", in: textBeforeTarget) +
             occurrences(of: "Hide details\n", in: textBeforeTarget)
+        let renderedError = try XCTUnwrap(
+            renderedLogRecord(atDetailIndex: targetDetailIndex, in: latestLogText),
+            "The latest validation event should have a readable rendered record"
+        )
+        XCTAssertTrue(
+            renderedError.contains(" · ERROR · native-ui\n\(validationError)\n"),
+            "The rendered log should show the severity and source beside its timestamp"
+        )
         let details = detailElements.element(boundBy: targetDetailIndex)
         XCTAssertTrue(details.waitForExistence(timeout: 10),
                       "The Paste validation record's Details control should be exposed by the log text view")
@@ -365,14 +373,21 @@ final class NativeUIInteractionTests: XCTestCase {
         details.tap()
         XCTAssertEqual(XCTWaiter.wait(for: [detailsCollapsed], timeout: 10), .completed,
                        "The original record should collapse before checking the reading position")
+        attachScreenshot("logs-freeze-ready")
         let renderedBeforeFreeze = try XCTUnwrap(logs.value as? String)
+        let selectedRecord = try XCTUnwrap(
+            renderedLogRecord(atDetailIndex: targetDetailIndex, in: renderedBeforeFreeze),
+            "The selected Paste record should remain associated with its Details control"
+        )
         let positionAnchor = try XCTUnwrap(
-            visibleLogAnchor(in: logs),
+            visibleLogAnchor(in: logs) ??
+                (elementIsVisible(details, in: logs)
+                    ? RenderedLogAnchor(detailIndex: targetDetailIndex, record: selectedRecord, element: details)
+                    : nil),
             "A visible rendered record should anchor the reading position before scrolling"
         )
         XCTAssertTrue(renderedBeforeFreeze.contains(positionAnchor.record),
                       "The anchor should identify a specific rendered log record")
-        attachScreenshot("logs-freeze-ready")
         let anchorOffsetBeforeScroll = positionAnchor.element.frame.minY - logs.frame.minY
         let anchorOffsetAfterScroll = scrollLogsAwayFromBottom(
             logs, anchor: positionAnchor, screenshotName: "logs-freeze-scrolled"
@@ -382,6 +397,7 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
                        "Scrolling should preserve the rendered log entries")
         let frozen = try XCTUnwrap(logs.value as? String)
+        assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen)
 
         configuration.tap()
         configuration.typeText("x")
@@ -539,19 +555,34 @@ final class NativeUIInteractionTests: XCTestCase {
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
+    private func assertFrozenLogTextIsSelectable(in logs: XCUIElement, frozenText: String) {
+        let textPoint = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.45))
+        textPoint.press(forDuration: 1.0)
+        let copyAction = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
+        XCTAssertTrue(copyAction.waitForExistence(timeout: 5),
+                      "A long press on frozen log text should expose the native Copy action")
+        guard copyAction.exists else { return }
+        copyAction.tap()
+        XCTAssertEqual(logs.value as? String, frozenText,
+                       "Selecting and copying log text must not replace the frozen entries")
+    }
+
     private func visibleLogAnchor(in logs: XCUIElement) -> RenderedLogAnchor? {
         guard let rendered = logs.value as? String, logs.frame.height > 0 else { return nil }
         let details = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
             .allElementsBoundByIndex
-        for (index, element) in details.enumerated() where element.label == "Details" {
-            guard elementIsVisible(element, in: logs) else { continue }
+        let candidates = details.enumerated().compactMap { index, element -> (anchor: RenderedLogAnchor, relativeY: CGFloat)? in
+            guard element.label == "Details", elementIsVisible(element, in: logs),
+                  let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { return nil }
             let relativeY = (element.frame.midY - logs.frame.minY) / logs.frame.height
-            guard (0.15...0.38).contains(relativeY),
-                  let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { continue }
-            return RenderedLogAnchor(detailIndex: index, record: record, element: element)
+            guard (0.05...0.80).contains(relativeY) else { return nil }
+            return (RenderedLogAnchor(detailIndex: index, record: record, element: element), relativeY)
         }
-        return nil
+        return candidates.min {
+            abs($0.relativeY - 0.45) < abs($1.relativeY - 0.45)
+        }?.anchor
     }
 
     @discardableResult
@@ -561,8 +592,10 @@ final class NativeUIInteractionTests: XCTestCase {
         screenshotName: String? = nil
     ) -> CGFloat {
         let offsetBefore = anchor.element.frame.minY - logs.frame.minY
-        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.22))
-        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.42))
+        let relativeY = (anchor.element.frame.midY - logs.frame.minY) / logs.frame.height
+        let startY = max(0.04, min(0.72, relativeY - 0.24))
+        let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: startY))
+        let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: min(0.94, startY + 0.12)))
         start.press(forDuration: 0.05, thenDragTo: end)
 
         let detailElements = logs.descendants(matching: .any)

@@ -344,7 +344,12 @@ internal static class Program
             var operation = Text("operation");
             if (operation == "probe")
             {
-                Console.WriteLine(JsonSerializer.Serialize(new { alive = true, pid = process.Id, identity }));
+                process.Refresh();
+                var window = process.MainWindowHandle;
+                Console.WriteLine(JsonSerializer.Serialize(new {
+                    alive = true, pid = process.Id, identity,
+                    windowHandle = window == IntPtr.Zero ? null : $"0x{window.ToInt64():X}"
+                }));
                 return 0;
             }
             if (operation == "close")
@@ -398,7 +403,7 @@ internal static class Program
                         lastWindows = DescribeProcessWindows(process);
                         lastTitle = process.MainWindowTitle;
                         return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);
-                    }, "UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 7.0);
+                    }, "UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 20.0);
                 }
                 catch (TimeoutException error)
                 {
@@ -551,7 +556,7 @@ internal static class Program
             if (operation == "select-log-text")
             {
                 var entry = Walk(Find("Backend logs"), includeLogs: true)
-                    .Where(element => element.Current.ControlType == ControlType.Text)
+                    .Where(element => element.Current.ControlType == ControlType.Text && !element.Current.IsOffscreen)
                     .FirstOrDefault(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) &&
                         ((TextPattern)pattern).DocumentRange.GetText(-1).Contains(" · ", StringComparison.Ordinal));
                 if (entry is null || !entry.TryGetCurrentPattern(TextPattern.Pattern, out var entryPattern))

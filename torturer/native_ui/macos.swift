@@ -256,7 +256,7 @@ func paste(_ editor: AXUIElement, source: String) throws {
     if let error = primary { throw error }
 }
 
-func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, source: String) throws {
+func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, source: String) throws -> Int64 {
     let value = try String(contentsOfFile: source, encoding: .utf8)
     let initialNodes = try elements(window)
     let editor = try find(initialNodes, "Connection configuration", editor: true)
@@ -312,6 +312,7 @@ func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, so
         let availability = try refreshPasteAvailability("text", expected: true)
         let currentEditor = availability.editor
         guard let pasteButton = availability.button else { throw HelperError("Native Paste button was not available for a text clipboard") }
+        let pasteInvokedAtUnixMs = Int64(Date().timeIntervalSince1970 * 1_000)
         try press(pasteButton)
         let deadline = Date().addingTimeInterval(5)
         var observed = ""
@@ -321,12 +322,18 @@ func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, so
             if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
         } while Date() < deadline
         try require(observed == value, "Native Paste button did not fill the subscription URL")
+        board.clearContents()
+        if !previous.isEmpty && !board.writeObjects(previous) {
+            throw HelperError("Native Paste completed; clipboard restoration failed")
+        }
+        return pasteInvokedAtUnixMs
     } catch { primary = error }
     board.clearContents()
     if !previous.isEmpty && !board.writeObjects(previous) {
         throw HelperError("\(primary.map { String(describing: $0) } ?? "Paste completed"); clipboard restoration failed")
     }
     if let error = primary { throw error }
+    throw HelperError("Native Paste completed without an invocation timestamp")
 }
 
 func capture(_ pid: pid_t, path: String) throws {
@@ -494,11 +501,11 @@ func run() throws -> [String: Any] {
     }
     if operation == "select-log-text" {
         let view = try find(nodes, "Connection logs", editor: true)
-        guard let rawCount = try attribute(view, kAXNumberOfCharactersAttribute) as? NSNumber,
-              rawCount.intValue > 0 else {
+        let visible = try visibleCharacterRange(view)
+        guard visible.characterCount > 0, visible.range.length > 0 else {
             throw HelperError("Native log viewer has no selectable text")
         }
-        var range = CFRange(location: 0, length: rawCount.intValue)
+        var range = visible.range
         guard let selectedRange = AXValueCreate(.cfRange, &range) else {
             throw HelperError("Could not create native selected text range")
         }
@@ -735,7 +742,9 @@ func run() throws -> [String: Any] {
               let currentWindow = currentWindows.first else {
             throw HelperError("Native application has no window for Paste")
         }
-        try pasteWithNativeControl(app, window: currentWindow, source: source)
+        let pasteInvokedAtUnixMs = try pasteWithNativeControl(app, window: currentWindow, source: source)
+        return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity,
+                "paste_invoked_at_unix_ms": pasteInvokedAtUnixMs, "labels": []]
     case "capture":
         guard let path = request["path"] as? String else { throw HelperError("Missing screenshot path") }
         try capture(pid, path: path)

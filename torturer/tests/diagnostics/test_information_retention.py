@@ -355,6 +355,41 @@ class InformationRetentionTests(unittest.TestCase):
                 "digest": "active-digest",
                 "source_url": "https://127.0.0.1:12345/subscription?cold=1",
             }
+            inventory_restore = {"state": "checking"}
+
+            def snapshot(*_args, **_kwargs):
+                if inventory_restore["state"] == "empty":
+                    inventory_restore["state"] = "loaded"
+                    return {
+                        "configured": False,
+                        "profiles": [],
+                        "active_profile": None,
+                        "pending_target": None,
+                        "state": "IDLE",
+                        "source_url": "https://127.0.0.1:12345/subscription",
+                    }
+                if inventory_restore["state"] == "loaded":
+                    inventory_restore["state"] = "done"
+                    return {
+                        "configured": True,
+                        "profiles": [{"index": 0}, {"index": 1}],
+                        "active_profile": None,
+                        "pending_target": None,
+                        "state": "CONFIGURED",
+                        "source_url": "https://127.0.0.1:12345/subscription",
+                    }
+                return base._snapshot.return_value
+
+            base._snapshot.side_effect = snapshot
+            service_restarts = {"count": 0}
+
+            def restart_service(_timeout):
+                service_restarts["count"] += 1
+                if service_restarts["count"] == 1:
+                    inventory_restore["state"] = "empty"
+                return {"process_loss_verified": True}
+
+            base.restart_service_for_native_ui.side_effect = restart_service
             base._connected.side_effect = [False, True, True, True, False]
             base._cleanup_verified.return_value = True
             base.restart_service_for_native_ui.return_value = {"process_loss_verified": True}
@@ -367,6 +402,7 @@ class InformationRetentionTests(unittest.TestCase):
                 },
             }[step.operation]
             controller = mock.Mock()
+            controller.profile = root / "source.url"
             controller.cleared_record = "synthetic cleared UI record"
             controller._call.return_value = {"text": "new post-clear event"}
             controller.bounded_by.side_effect = lambda _timeout: nullcontext()
@@ -405,9 +441,11 @@ class InformationRetentionTests(unittest.TestCase):
                         directory=args.profile.parent,
                         start=mock.Mock(return_value="https://127.0.0.1:12345/subscription"),
                         control_stats=mock.Mock(side_effect=[
-                            {"subscription_gets": 0, "in_flight_gets": 0, "max_in_flight_gets": 0},
                             {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},
-                            {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                            {"subscription_gets": 2, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                            {"subscription_gets": 2, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                            {"subscription_gets": 3, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                            {"subscription_gets": 3, "in_flight_gets": 0, "max_in_flight_gets": 1},
                         ]),
                     ),
                 ),
@@ -541,8 +579,9 @@ class InformationRetentionTests(unittest.TestCase):
             controller.profile = profile
             controller.cleared_record = None
             initial = "2026 · INFO · Backend\nready\nDetails\n"
-            log_texts = iter((initial, initial, initial, initial + "new record\n", ""))
+            log_texts = iter((initial, initial, initial, initial, initial + "new record\n", ""))
             positions = iter((
+                {"visible_range_start": 0, "visible_range_end": 100},
                 {"visible_range_start": 0, "visible_range_end": 100},
                 {"visible_range_start": 0, "visible_range_end": 100},
             ))
@@ -617,6 +656,56 @@ class InformationRetentionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(native_ui_smoke.NativeUISmokeError, "reading position changed"):
                 controller.clear_logs()
+
+    def test_windows_clear_preserves_selection_and_position_while_frozen(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            profile = root / "profile.txt"
+            profile.write_text("https://example.invalid/subscription", encoding="utf-8")
+            controller = object.__new__(native_ui_smoke.NativeUIController)
+            controller.platform = "windows"
+            controller.profile = profile
+            controller.cleared_record = None
+            structured = "2026 · INFO · Backend · ready"
+            initial = structured + "\nDetails\n"
+            log_texts = iter((initial, initial, initial, initial, initial + "new record\n", ""))
+            positions = iter((25.0, 25.0, 25.0))
+            selected = iter((structured, structured))
+            operations: list[str] = []
+
+            def call(operation: str, **fields: object) -> dict:
+                operations.append(operation)
+                if operation == "logs":
+                    return {
+                        "ready": True,
+                        "text": next(log_texts),
+                        "entries": [{"text": structured, "foreground": 1}],
+                        "expansion_verified": True,
+                        "expanded_record": '{"message":"ready"}',
+                    }
+                if operation == "select-log-text":
+                    return {"ready": True, "selected": next(selected)}
+                if operation == "log-position":
+                    return {"ready": True, "vertical_scroll_percent": next(positions)}
+                return {"ready": True}
+
+            def wait(predicate, message: str) -> None:
+                if not predicate():
+                    raise AssertionError(message)
+
+            controller._call = call
+            controller._wait = wait
+            controller._click = lambda _name: None
+            controller.failing_subscription = lambda _url: {}
+            controller.snapshot = lambda: {"status": "Disconnected"}
+
+            result = controller.clear_logs()
+
+            self.assertEqual(result, {"status": "Disconnected"})
+            self.assertEqual(controller.cleared_record, structured)
+            self.assertEqual(operations.count("select-log-text"), 2)
+            self.assertEqual(operations.count("log-position"), 3)
+            self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
 
     def test_native_windows_helper_uses_existing_job_boundary(self) -> None:
         process = mock.Mock()

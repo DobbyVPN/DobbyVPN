@@ -99,8 +99,14 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "duplicate_import_single_load",
     "import_preserves_active_generation",
     "bare_deep_link_native",
+    "warm_link_same_window",
     "clear_resumes_following",
     "inventory_reused_after_reopen",
+    "inventory_restored_from_saved_url",
+    "clear_boundary_survives_frontend_reopen",
+    "absent_active_profile_disconnect",
+    "disconnect_responsive_during_configure",
+    "invalid_http_native_paste_no_fetch",
     "close_window",
     "reopen_connected",
     "cold_os_scheme_launch",
@@ -418,19 +424,25 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError(
             f"native Paste did not load the disposable subscription exactly once (observed {initial_requests} GETs)"
         )
-    if ui.platform == "windows":
+    if ui.platform in {"windows", "macos"}:
         paste_invoked_at = getattr(ui, "last_paste_invoked_at_unix_ms", None)
         get_started_at = initial_stats["last_subscription_get_started_at_unix_ms"]
         if type(paste_invoked_at) is not int or get_started_at < paste_invoked_at:
-            raise NativeUIJourneyError("Windows Paste request timing was unavailable or preceded the button invocation")
+            raise NativeUIJourneyError(f"{ui.platform} Paste request timing was unavailable or preceded the button invocation")
         paste_delay_ms = get_started_at - paste_invoked_at
         if paste_delay_ms >= 400:
             raise NativeUIJourneyError(
-                f"Windows Paste waited for the typed debounce before requesting the subscription ({paste_delay_ms} ms)"
+                f"{ui.platform} Paste waited for the typed debounce before requesting the subscription ({paste_delay_ms} ms)"
             )
+    checks: dict[str, bool] = {"native_paste_immediate": True}
     if "Retry" in ui.snapshot().get("labels", []):
         raise NativeUIJourneyError("Retry appeared before any subscription failure")
-    checks: dict[str, bool] = {"native_paste_immediate": True}
+    if any(
+        str(label).strip().casefold() in {"load", "load profiles", "load configuration"}
+        for label in ui.snapshot().get("labels", [])
+    ):
+        raise NativeUIJourneyError("the connection page exposed a separate Load action")
+    checks["no_separate_load_action"] = True
 
     def selected(previous: dict, index: int | None) -> dict:
         deadline = time.monotonic() + timeout
@@ -758,6 +770,16 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
                 "a rendered Windows profile row did not retain its own protocol label: "
                 f"expected={sorted(expected_windows_rows)} labels={labels}"
             )
+    if ui.platform == "macos":
+        expected_macos_rows = {
+            f"Profile 1 protocol · {latest['profiles'][0].get('protocol', '')}",
+            f"Profile 2 protocol · {latest['profiles'][1].get('protocol', '')}",
+        }
+        if not expected_macos_rows.issubset(set(labels)):
+            raise NativeUIJourneyError(
+                "a rendered macOS profile row did not retain its own protocol label: "
+                f"expected={sorted(expected_macos_rows)} labels={labels}"
+            )
     if not {"Profile 1 action", "Profile 2 action"}.issubset(set(labels)):
         raise NativeUIJourneyError("rendered profile rows did not expose both manual Connect controls")
     active_description = (switched.get("active_profile") or {}).get("description", "")
@@ -797,6 +819,7 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     checks["duplicate_import_single_load"] = True
     checks["import_preserves_active_generation"] = True
     checks["bare_deep_link_native"] = True
+    checks["warm_link_same_window"] = True
 
     if ui.platform in {"windows", "macos"}:
         invalid_links = (
@@ -873,8 +896,143 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError("new post-Clear log event was not rendered")
     checks["clear_resumes_following"] = True
 
+    # The user-local Clear boundary survives reopening the native process,
+    # while new records after Clear remain visible and loaded inventory is
+    # reused without another subscription request.
+    clear_boundary_record = getattr(ui, "cleared_record", None)
+    reopen_gets = stats()["subscription_gets"]
+    ui.close()
+    ui.start()
+    reopened_after_clear = wait_for_logs(
+        lambda value: "profile inventory loaded" in value,
+        "reopened desktop UI did not retain new post-Clear log records",
+    )
+    if clear_boundary_record and clear_boundary_record in reopened_after_clear.get("text", ""):
+        raise NativeUIJourneyError("reopening the desktop UI restored a record hidden by Clear")
+    if stats()["subscription_gets"] != reopen_gets:
+        raise NativeUIJourneyError("reopening the desktop UI refetched an already loaded inventory")
+    checks["clear_boundary_survives_frontend_reopen"] = True
+
     ui.connect()
     selected(switched, None)
+
+    # Replace the visible inventory while Auto is active. The active profile
+    # must remain identifiable even though it is absent from the new rows, and
+    # its rendered Disconnect action must stop the real generation.
+    before_absent_disconnect = base._snapshot(min(timeout, 30), "NATIVE_ABSENT_PROFILE_STATUS_FAILED")
+    absent_disconnect_url = url + "?absent-active-disconnect=1"
+    absent_disconnect_before_gets = stats()["subscription_gets"]
+    fixture.replace_response(synthetic_inventory)
+    ui.type_source(absent_disconnect_url)
+    absent_disconnect = wait_for_snapshot(
+        lambda value: value.get("source_url") == absent_disconnect_url
+        and value.get("digest") != before_absent_disconnect.get("digest"),
+        "a different inventory was not accepted while the previous profile remained active",
+    )
+    wait_for_gets(absent_disconnect_before_gets + 1, "absent-profile inventory did not complete one request")
+    require_active_generation(
+        absent_disconnect, before_absent_disconnect,
+        "accepting a different inventory interrupted the active generation",
+    )
+    active_description = (absent_disconnect.get("active_profile") or {}).get("description", "")
+    new_descriptions = {item.get("description", "") for item in absent_disconnect.get("profiles", [])}
+    if not active_description or active_description in new_descriptions:
+        raise NativeUIJourneyError("the active profile was not absent from the replacement inventory")
+    absent_view = require_disconnect_control()
+    if not any(active_description in str(label) for label in absent_view.get("labels", [])):
+        raise NativeUIJourneyError("the active profile summary disappeared when its row was absent")
+    ui._click("Disconnect")
+    disconnected_absent = wait_for_snapshot(
+        lambda value: value.get("state") in {"IDLE", "CONFIGURED"}
+        and value.get("active_profile") is None and value.get("pending_target") is None,
+        "Disconnect did not stop an active profile absent from the loaded inventory",
+    )
+    if ui.wait_status("Disconnected").get("status") != "Disconnected":
+        raise NativeUIJourneyError("the frontend did not render Disconnected after stopping the absent profile")
+    checks["absent_active_profile_disconnect"] = True
+
+    ui._click("VPN connection action")
+    active_again = selected(disconnected_absent, None)
+
+    # Keep a subscription GET held while the user invokes Disconnect. This
+    # proves Configure does not block the foreground action or log refresh.
+    held_disconnect_url = url + "?disconnect-during-configure=1"
+    held_disconnect_before = stats()["subscription_gets"]
+    fixture.hold_responses()
+    try:
+        ui.type_source(held_disconnect_url)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            held_stats = stats()
+            if held_stats["subscription_gets"] == held_disconnect_before + 1 and held_stats["in_flight_gets"] == 1:
+                break
+            if held_stats["subscription_gets"] > held_disconnect_before + 1 or held_stats["max_in_flight_gets"] > 1:
+                raise NativeUIJourneyError("held Configure issued overlapping requests before Disconnect")
+            time.sleep(0.025)
+        else:
+            raise NativeUIJourneyError("held Configure did not start before the Disconnect interaction")
+        require_active_generation(
+            base._snapshot(min(timeout, 30), "NATIVE_HELD_DISCONNECT_STATUS_FAILED"), active_again,
+            "held Configure changed the active connection before Disconnect",
+        )
+        require_disconnect_control()
+        ui.disconnect()
+        disconnected_during_load = wait_for_snapshot(
+            lambda value: value.get("state") in {"IDLE", "CONFIGURED"}
+            and value.get("active_profile") is None and value.get("pending_target") is None,
+            "Disconnect was blocked by a held Configure request",
+        )
+        if stats()["in_flight_gets"] != 1:
+            raise NativeUIJourneyError("Disconnect unexpectedly canceled the independent subscription load")
+        if ui._call("logs").get("ready") is not True:
+            raise NativeUIJourneyError("log refresh did not respond while Configure was held and Disconnect completed")
+    finally:
+        fixture.release_responses()
+    after_held_disconnect = wait_for_snapshot(
+        lambda value: value.get("source_url") == held_disconnect_url,
+        "the held subscription did not finish after Disconnect",
+    )
+    wait_for_gets(held_disconnect_before + 1, "held Configure did not finish exactly once")
+    if after_held_disconnect.get("state") not in {"IDLE", "CONFIGURED"} or after_held_disconnect.get("active_profile") is not None:
+        raise NativeUIJourneyError("the completed Configure restarted a connection after Disconnect")
+    checks["disconnect_responsive_during_configure"] = True
+
+    # A real native Paste containing HTTP text must show validation, perform no
+    # subscription GET and leave the active generation untouched.
+    ui._click("VPN connection action")
+    pasted_connection = selected(disconnected_during_load, None)
+    valid_source = ui.profile.read_text(encoding="utf-8").strip()
+    before_http_paste = base._snapshot(min(timeout, 30), "NATIVE_HTTP_PASTE_STATUS_FAILED")
+    http_paste_gets = stats()["subscription_gets"]
+    logs_before_http_paste = ui._call("logs").get("text", "")
+    ui.profile.write_text("http://example.invalid/not-a-subscription", encoding="utf-8")
+    ui.paste_source()
+    invalid_paste_logs = wait_for_logs(
+        lambda value: "Paste an HTTPS subscription URL with a host" in value
+        and value != logs_before_http_paste,
+        "native Paste of HTTP text did not show actionable URL validation",
+    )
+    time.sleep(0.45)
+    if stats()["subscription_gets"] != http_paste_gets or stats()["in_flight_gets"] != 0:
+        raise NativeUIJourneyError("native Paste of HTTP text started a subscription request")
+    after_http_paste = base._snapshot(min(timeout, 30), "NATIVE_HTTP_PASTE_STATUS_FAILED")
+    require_active_generation(
+        after_http_paste, before_http_paste,
+        "invalid native Paste changed or interrupted the active connection",
+    )
+    if "Paste an HTTPS subscription URL with a host" not in invalid_paste_logs.get("text", ""):
+        raise NativeUIJourneyError("native Paste validation record was not readable")
+    checks["invalid_http_native_paste_no_fetch"] = True
+
+    ui.profile.write_text(valid_source, encoding="utf-8")
+    restore_before_gets = stats()["subscription_gets"]
+    ui.type_source(valid_source)
+    wait_for_gets(restore_before_gets + 1, "restoring the accepted URL after invalid Paste did not load once")
+    restored_paste = wait_for_snapshot(
+        lambda value: value.get("source_url") == valid_source,
+        "restoring the accepted URL after invalid Paste failed",
+    )
+    require_active_generation(restored_paste, pasted_connection, "restoring the URL after Paste changed the active generation")
 
     ui.capture("subscription-controls")
     checks.update({
@@ -928,6 +1086,8 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             _smoke_timeout(request_timeout),
             helper=args.ui_helper,
             screenshot_dir=args.raw_log_dir / "screenshots",
+            expected_version=getattr(args, "candidate_version", None),
+            expected_source_sha=getattr(args, "source_sha", None),
         )
         _start_native_ui(ui, request_timeout)
         configured = _native_ui_action(
@@ -971,6 +1131,73 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if not callable(cleanup_verified) or not cleanup_verified(args.timeout):
             raise NativeUIJourneyError("base adapter could not verify native Disconnect cleanup")
         checks["disconnect_clean"] = True
+
+        # Distinguish inventory reuse from restoring a saved URL after Go has
+        # restarted with no accepted inventory. The backend keeps the URL on
+        # disk, while the frontend must issue one Configure request on reopen
+        # and remain disconnected.
+        saved_source = ui.profile.read_text(encoding="utf-8").strip()
+        requests_before_restore = subscription.control_stats()["subscription_gets"]
+        _native_ui_action(
+            ui, "close-window", "close-before-inventory-restore", request_timeout,
+            ui.close,
+        )
+        _restart_service_for_native_ui(base, args.timeout)
+        unconfigured = base._snapshot(min(30.0, args.timeout), "NATIVE_RESTORE_EMPTY_SNAPSHOT_FAILED")
+        if (
+            unconfigured.get("configured") is not False
+            or unconfigured.get("profiles")
+            or unconfigured.get("source_url") != saved_source
+        ):
+            raise NativeUIJourneyError(
+                "service restart did not leave the saved URL with an empty accepted inventory"
+            )
+        _native_ui_action(
+            ui, "reopen-saved-url-without-inventory", "restore-saved-url", request_timeout,
+            ui.start, milestone="restored-saved-url",
+        )
+        deadline = time.monotonic() + request_timeout
+        restored_inventory = {}
+        while time.monotonic() < deadline:
+            restored_inventory = base._snapshot(
+                min(30.0, max(0.1, deadline - time.monotonic())),
+                "NATIVE_RESTORE_INVENTORY_STATUS_FAILED",
+            )
+            if restored_inventory.get("configured") and restored_inventory.get("source_url") == saved_source:
+                break
+            if restored_inventory.get("state") == "FAILED":
+                raise NativeUIJourneyError(
+                    "frontend failed to load the saved URL after backend inventory loss"
+                )
+            time.sleep(0.1)
+        if restored_inventory.get("configured") is not True or restored_inventory.get("source_url") != saved_source:
+            raise NativeUIJourneyError("reopened frontend did not restore its saved subscription inventory")
+        if (
+            len(restored_inventory.get("profiles", [])) < 2
+            or restored_inventory.get("active_profile") is not None
+            or restored_inventory.get("pending_target") is not None
+        ):
+            raise NativeUIJourneyError("saved inventory restoration changed profiles or started a connection")
+        ui._wait(
+            lambda: "Profile 1 action" in ui.snapshot()["labels"],
+            "reopened frontend did not render the restored saved inventory",
+        )
+        deadline = time.monotonic() + request_timeout
+        while time.monotonic() < deadline:
+            stats_after_restore = subscription.control_stats()
+            if stats_after_restore["subscription_gets"] > requests_before_restore + 1:
+                raise NativeUIJourneyError("saved URL restoration fetched the subscription more than once")
+            if (
+                stats_after_restore["subscription_gets"] == requests_before_restore + 1
+                and stats_after_restore["in_flight_gets"] == 0
+            ):
+                break
+            time.sleep(0.05)
+        else:
+            raise NativeUIJourneyError("saved URL restoration did not issue exactly one completed request")
+        if restored_inventory.get("state") not in {"IDLE", "CONFIGURED"}:
+            raise NativeUIJourneyError("loading the saved inventory started a VPN connection")
+        checks["inventory_restored_from_saved_url"] = True
 
         prepare(args.timeout)
         _native_ui_action(
@@ -1179,6 +1406,8 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
             helper=args.ui_helper,
             screenshot_dir=args.raw_log_dir / "screenshots",
             native_cases=selected,
+            expected_version=getattr(args, "candidate_version", None),
+            expected_source_sha=getattr(args, "source_sha", None),
         )
         with ui.bounded_by(_smoke_timeout(args.timeout)):
             startup = ui.start()
@@ -1265,6 +1494,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-log-dir", type=_path, required=True)
     parser.add_argument("--output", type=_path)
     parser.add_argument("--timeout", type=_timeout, default=900.0)
+    parser.add_argument("--candidate-version")
+    parser.add_argument("--source-sha")
     parser.add_argument("--native-case", action="append", dest="native_cases")
     parser.add_argument("--service-pid", type=int, required=True)
     parser.add_argument("--service-binary", type=_path, required=True)

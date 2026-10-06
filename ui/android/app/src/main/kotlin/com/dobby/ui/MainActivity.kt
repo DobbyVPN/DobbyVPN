@@ -758,17 +758,17 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
             TextButton(onClick = controller::clearLogs) { Text("Clear") }
             TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
         }
+        if (state.logsError.isNotEmpty()) {
+            Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
+        }
+        AndroidView(
+            factory = { controller.createLogView(it) },
+            modifier = Modifier.fillMaxWidth().weight(1f)
+                .traceComposeConstraints("logs-android-view")
+                .clipToBounds(),
+            update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
+        )
     }
-    if (state.logsError.isNotEmpty()) {
-        Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
-    }
-    AndroidView(
-        factory = { controller.createLogView(it) },
-        modifier = Modifier.fillMaxWidth().weight(1f)
-            .traceComposeConstraints("logs-android-view")
-            .clipToBounds(),
-        update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
-    )
 }
 
 private class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {

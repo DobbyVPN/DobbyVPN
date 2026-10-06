@@ -1645,6 +1645,7 @@ def _native_ui_command(
     timeout: float,
     ui_helper: Path,
     native_cases: tuple[str, ...] | None = None,
+    source_sha: str | None = None,
 ) -> list[str]:
     """Build the real-window journey command for desktop full guests."""
     if platform not in {"windows", "macos"}:
@@ -1681,6 +1682,11 @@ def _native_ui_command(
         "--service-binary", str(runtime["binary"]),
     ]
     command.extend(("--service-pipe" if platform == "windows" else "--service-socket", str(runtime[endpoint])))
+    candidate_version = run_dir / "source" / "VERSION"
+    if candidate_version.is_file():
+        command.extend(("--candidate-version", candidate_version.read_text(encoding="utf-8").strip()))
+    if source_sha is not None:
+        command.extend(("--source-sha", source_sha))
     for name, flag in (
         ("library_path", "--service-library-path"),
         ("pid_file", "--service-pid-file"),
@@ -1892,7 +1898,7 @@ def prepare(args: argparse.Namespace) -> int:
                     args.platform,
                     architecture=args.architecture,
                     skip_deps=args.skip_deps,
-                    source_sha=args.source_sha,
+                    source_sha=getattr(args, "source_sha", None),
                     source_tree=args.source_tree,
                 ),
                 platform=args.platform,
@@ -2206,6 +2212,7 @@ def run(args: argparse.Namespace) -> int:
                             run_dir, native_descriptor, runtime, args.platform,
                             native_task_timeout, ui_helper,
                             native_cases=native_cases,
+                            source_sha=getattr(args, "source_sha", None),
                         ),
                         platform=args.platform,
                         run_dir=run_dir,

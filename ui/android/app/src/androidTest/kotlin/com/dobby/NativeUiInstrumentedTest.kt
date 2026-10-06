@@ -695,6 +695,25 @@ class NativeUiInstrumentedTest {
         while (logCanScrollDown() && System.currentTimeMillis() < followDeadline) Thread.sleep(100)
         check(!logCanScrollDown()) { "ANDROID_CLEAR_DID_NOT_RESTORE_LOG_FOLLOW " + logGeometry() }
 
+        val portraitWidth = device.displayWidth
+        val portraitHeight = device.displayHeight
+        try {
+            device.setOrientationLeft()
+            device.waitForIdle()
+            check(device.displayWidth > device.displayHeight && portraitWidth > 0 && portraitHeight > 0) {
+                "ANDROID_CLEAR_ROTATION_NOT_APPLIED ${device.displayWidth}x${device.displayHeight}"
+            }
+            waitForTextContaining(afterClear)
+            val rotated = requireObject("Connection logs").text.orEmpty()
+            check(rotated.contains(afterClear) && !rotated.contains("$prefix-0")) {
+                "ANDROID_CLEAR_BOUNDARY_DID_NOT_SURVIVE_DEVICE_ROTATION " + logGeometry()
+            }
+        } finally {
+            device.unfreezeRotation()
+            device.setOrientationNatural()
+            device.waitForIdle()
+        }
+
         finishCurrentActivity()
         launch()
         waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)

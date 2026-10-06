@@ -101,12 +101,16 @@ def _native_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[byt
 class NativeUIController:
     def __init__(self, platform: str, binary: Path, profile: Path, timeout: float,
                  *, helper: Path, screenshot_dir: Path,
-                 native_cases: tuple[str, ...] = ()) -> None:
+                 native_cases: tuple[str, ...] = (),
+                 expected_version: str | None = None,
+                 expected_source_sha: str | None = None) -> None:
         if platform not in {"macos", "windows"} or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("native UI requires a desktop platform and a finite positive timeout")
         if not helper.is_file():
             raise NativeUISmokeError(f"prepared native helper is missing: {helper}")
         self.platform, self.binary, self.profile, self.helper = platform, binary, profile, helper
+        self.expected_version = expected_version
+        self.expected_source_sha = expected_source_sha
         self.native_cases = frozenset(native_cases)
         self.native_case_results: dict[str, dict[str, object]] = {}
         self.executable = (binary / "Contents/MacOS/DobbyVPNMacApp" if platform == "macos" else binary).resolve()
@@ -150,7 +154,12 @@ class NativeUIController:
             request["identity"] = self.identity
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
-        operation_timeout = min(10.0, available - cleanup_timeout)
+        operation_limit = (
+            30.0
+            if self.platform == "windows" and operation == "findall-probe"
+            else 10.0
+        )
+        operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}
         if self.platform == "windows":
             operation_deadline = time.monotonic() + operation_timeout
@@ -283,6 +292,10 @@ class NativeUIController:
         after = self._call("probe")
         if after.get("pid") != before.get("pid") or after.get("identity") != before.get("identity"):
             raise NativeUISmokeError("bare deep link did not reuse the existing UI process")
+        if self.platform == "windows" and (
+            not before.get("windowHandle") or after.get("windowHandle") != before.get("windowHandle")
+        ):
+            raise NativeUISmokeError("bare deep link did not reuse the existing Windows window")
         return self.snapshot()
 
     def snapshot(self) -> dict:
@@ -328,9 +341,9 @@ class NativeUIController:
         if result.get("ready") is not True:
             raise NativeUISmokeError("native Paste control is unavailable")
         paste_invoked_at = result.get("paste_invoked_at_unix_ms")
-        if self.platform == "windows":
+        if self.platform in {"macos", "windows"}:
             if type(paste_invoked_at) is not int:
-                raise NativeUISmokeError("Windows Paste helper did not report its button-invocation time")
+                raise NativeUISmokeError(f"{self.platform} Paste helper did not report its button-invocation time")
             self.last_paste_invoked_at_unix_ms = paste_invoked_at
         return self.snapshot()
 
@@ -411,6 +424,10 @@ class NativeUIController:
         after = self._call("probe", unbound=self.platform == "windows")
         if after.get("pid") != pid_before or after.get("identity") != identity_before:
             raise NativeUISmokeError("warm deep link did not reuse the existing UI process")
+        if self.platform == "windows" and (
+            not before.get("windowHandle") or after.get("windowHandle") != before.get("windowHandle")
+        ):
+            raise NativeUISmokeError("warm deep link did not reuse the existing Windows window")
         self._wait(lambda: "Retry" not in self.snapshot()["labels"], "import did not replace failed subscription")
         self._wait(lambda: "Profile 1 action" in self.snapshot()["labels"], "imported profiles are unavailable")
         return self.snapshot()
@@ -495,6 +512,13 @@ class NativeUIController:
                     "Windows reading position changed while log following was frozen: "
                     f"before={frozen_position} after={current_position}"
                 )
+            selected_while_frozen = self._call("select-log-text").get("selected", "")
+            if " · " not in selected_while_frozen or self._call("logs").get("text", "") != frozen:
+                raise NativeUISmokeError("Windows log text could not be selected while the rendered view was frozen")
+            selected_position = self._call("log-position").get("vertical_scroll_percent")
+            if (not isinstance(selected_position, (int, float)) or isinstance(selected_position, bool)
+                    or abs(float(selected_position) - float(after_percent)) > 1.0):
+                raise NativeUISmokeError("Windows text selection moved the frozen reading position")
             self._call("scroll-logs", position="bottom")
             latest = ""
             self._wait(
@@ -523,6 +547,13 @@ class NativeUIController:
                     "macOS reading position changed while log following was frozen: "
                     f"before={frozen_position} after={current_position}"
                 )
+            selected_while_frozen = self._call("select-log-text").get("selected", "")
+            if " · " not in selected_while_frozen or self._call("logs").get("text", "") != frozen:
+                raise NativeUISmokeError("macOS log text could not be selected while the rendered view was frozen")
+            selected_position = self._call("log-position")
+            if any(selected_position.get(key) != current_position.get(key)
+                   for key in ("visible_range_start", "visible_range_end")):
+                raise NativeUISmokeError("macOS text selection moved the frozen reading position")
             self._call("scroll-logs", position="bottom")
             latest = ""
             self._wait(
@@ -585,6 +616,10 @@ class NativeUIController:
             commit = metadata.get("DobbySourceCommit") if isinstance(metadata, dict) else None
             if not isinstance(version, str) or not version or not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
                 raise NativeUISmokeError("candidate macOS About metadata is incomplete")
+            if self.expected_version is not None and version != self.expected_version:
+                raise NativeUISmokeError("candidate macOS About version does not match the selected build")
+            if self.expected_source_sha is not None and commit.casefold() != self.expected_source_sha.casefold():
+                raise NativeUISmokeError("candidate macOS About commit does not match the selected build")
             candidate_metadata = (version, commit)
 
         def metadata():
@@ -610,7 +645,9 @@ class NativeUIController:
             source_url = f"https://github.com/DobbyVPN/DobbyVPN/tree/{commit}"
             return (
                 re.fullmatch(r"\d+\.\d+\.\d+", version) is not None
+                and (self.expected_version is None or version == self.expected_version)
                 and re.fullmatch(r"[0-9a-fA-F]{40}", commit) is not None
+                and (self.expected_source_sha is None or commit.casefold() == self.expected_source_sha.casefold())
                 and compact == commit[:12]
                 and source_url in state["help_texts"]
                 and "About source link" in labels

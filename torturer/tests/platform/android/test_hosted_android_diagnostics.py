@@ -45,6 +45,7 @@ class HostedAndroidFailureDiagnosticsTests(unittest.TestCase):
         adapter.profile = profile
         adapter.ui_mode = "protocol-matrix"
         adapter._active_controls = ()
+        adapter._subscription_fixture = None
         adapter._run_instrumentation = mock.Mock(return_value=instrument)
         return adapter
 

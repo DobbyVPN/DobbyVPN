@@ -14,6 +14,22 @@ from torturer_runner.ui.smoke import NativeUIController, NativeUISmokeError
 
 
 class MacOSPreflightTests(unittest.TestCase):
+    def test_native_paste_captures_button_invocation_time(self) -> None:
+        controller = object.__new__(NativeUIController)
+        controller.platform = "macos"
+        controller.profile = Path("/tmp/subscription-source")
+        controller._call = mock.Mock(return_value={
+            "ready": True,
+            "paste_invoked_at_unix_ms": 1_800_000_000_000,
+        })
+        controller.snapshot = mock.Mock(return_value={"status": "Disconnected"})
+
+        result = controller.paste_source()
+
+        self.assertEqual(result, {"status": "Disconnected"})
+        self.assertEqual(controller.last_paste_invoked_at_unix_ms, 1_800_000_000_000)
+        controller._call.assert_called_once_with("paste", source="/tmp/subscription-source")
+
     def test_cold_deep_link_uses_os_scheme_only_when_ui_is_stopped(self) -> None:
         controller = object.__new__(NativeUIController)
         controller.platform = "macos"

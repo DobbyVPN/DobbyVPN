@@ -221,6 +221,8 @@ public final class NativeUiHostedProfileTest {
     private int coldImportInitialGets = -1;
     private boolean coldImportStarted;
     private boolean coldImportAttempted;
+    private boolean processColdImportPending;
+    private int processColdImportInitialGets = -1;
     private final File screenshotDirectory = new File(
             // Instrumentation executes in the target application's UID. The
             // instrumentation APK's cache is a different sandbox and is not
@@ -308,6 +310,8 @@ public final class NativeUiHostedProfileTest {
         launchSubscriptionURL = guiAuto ? command.getString("subscription_url") : "";
         subscriptionControlURL = guiAuto ? command.getString("subscription_control_url") : "";
         subscriptionControlKey = guiAuto ? command.getString("subscription_control_key") : "";
+        processColdImportPending = guiAuto && command.optBoolean("process_cold_import", false);
+        processColdImportInitialGets = command.optInt("process_cold_import_request_count", -1);
         if (guiAuto && (subscriptionControlURL.isEmpty() || subscriptionControlKey.isEmpty())) {
             throw new IllegalArgumentException("ANDROID_SUBSCRIPTION_CONTROL_MISSING");
         }
@@ -692,6 +696,11 @@ public final class NativeUiHostedProfileTest {
     private void configureThroughRenderedUI(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         markProgress("configure", "surface", "started");
+        if (processColdImportPending) {
+            verifyProcessColdImport(subscriptionURL,
+                    remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
+            processColdImportPending = false;
+        }
         // Keep the restore GET distinct so it cannot satisfy the separate
         // successful cold deep-link import assertion below.
         String restoredURL = urlWithQuery(subscriptionURL, "android-saved-source", "1");
@@ -760,6 +769,52 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Entering the already accepted URL triggered another fetch");
         }
         markProgress("configure", "rendered-navigation", "completed");
+    }
+
+    private void verifyProcessColdImport(String subscriptionURL, long timeout) throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
+        if (processColdImportInitialGets < 0) {
+            throw new IllegalStateException("ANDROID_PROCESS_COLD_IMPORT_BASELINE_MISSING");
+        }
+        ensureUiSurface(remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
+        Activity activity = MainActivity.current;
+        if (activity == null) {
+            throw new IllegalStateException("ANDROID_PROCESS_COLD_IMPORT_ACTIVITY_MISSING");
+        }
+        String[] deliveredLink = new String[1];
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+                deliveredLink[0] = activity.getIntent().getDataString());
+        Uri expectedLink = new Uri.Builder().scheme("dobbyvpn").authority("import")
+                .appendQueryParameter("url", subscriptionURL).build();
+        if (!expectedLink.toString().equals(deliveredLink[0])) {
+            throw new AssertionError("Process-cold OS intent was not delivered to the rendered Activity: "
+                    + deliveredLink[0]);
+        }
+        expectedRenderedSource = subscriptionURL;
+        waitForUiControl("Profile 1 action",
+                remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
+        JSONObject requested = waitForSubscriptionGets(processColdImportInitialGets + 1,
+                remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
+        requested = waitForInFlightGets(0,
+                remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
+        JSONObject imported = waitForSessionSource(subscriptionURL,
+                remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
+        if (requested.getInt("subscription_gets") != processColdImportInitialGets + 1
+                || !imported.optBoolean("configured")
+                || !subscriptionURL.equals(imported.optString("source_url"))
+                || imported.optJSONArray("profiles") == null
+                || imported.getJSONArray("profiles").length() == 0
+                || !"CONFIGURED".equals(imported.optString("state"))
+                || imported.optJSONObject("active_profile") != null
+                || imported.optJSONObject("pending_target") != null) {
+            throw new AssertionError("Process-cold deep link did not load exactly one disconnected inventory: "
+                    + imported);
+        }
+        if (awaitVpnNetwork(false, remainingTimeout(
+                deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT")) != null) {
+            throw new AssertionError("Process-cold import started a VPN connection");
+        }
+        markProgress("configure", "process-cold-import-loaded", "completed");
     }
 
     private void launchActivityColdSavedSourceRestore(String subscriptionURL, long timeout) throws Exception {
@@ -932,17 +987,54 @@ public final class NativeUiHostedProfileTest {
         int requests = waitForInFlightGets(0,
                 remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"))
                 .getInt("subscription_gets");
-        String[] invalidURLs = { "http://example.invalid/subscription", "https://" };
-        for (String invalidURL : invalidURLs) {
-            String link = "dobbyvpn://import?url="
-                    + java.net.URLEncoder.encode(invalidURL, "UTF-8");
+        String[][] invalidLinks = {
+                {
+                        "dobbyvpn://import?url="
+                                + java.net.URLEncoder.encode("http://example.invalid/subscription", "UTF-8"),
+                        "Paste an HTTPS subscription URL with a host",
+                },
+                {
+                        "dobbyvpn://import?url=" + java.net.URLEncoder.encode("https://", "UTF-8"),
+                        "Paste an HTTPS subscription URL with a host",
+                },
+                {
+                        "dobbyvpn://import?url=%ZZ",
+                        "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL",
+                },
+                {
+                        "dobbyvpn://import",
+                        "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL",
+                },
+                {
+                        "dobbyvpn://import?url=",
+                        "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL",
+                },
+                {
+                        "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fa"
+                                + "&url=https%3A%2F%2Fexample.invalid%2Fb",
+                        "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL",
+                },
+        };
+        for (int index = 0; index < invalidLinks.length; index++) {
+            String link = invalidLinks[index][0];
+            String actionableFeedback = invalidLinks[index][1];
+            if (index > 0) {
+                // Clear the previous error through the accepted URL without
+                // fetching it again, so every malformed link must render its
+                // own new feedback before the unchanged state is checked.
+                deliverWarmImport(subscriptionURL);
+                waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
+                if (findUiObject("Error") != null) {
+                    throw new AssertionError("Accepted URL did not clear the preceding deep-link error");
+                }
+            }
             String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d '"
                     + link + "' " + context.getPackageName());
             if (!output.contains("Status: ok")) {
                 throw new AssertionError("ANDROID_INVALID_IMPORT_LAUNCH_FAILED");
             }
             waitForUiState("Error", remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
-            waitForUiControl("Paste an HTTPS subscription URL with a host",
+            waitForUiControl(actionableFeedback,
                     remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
             assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
             JSONObject after = snapshotResult("");
@@ -954,7 +1046,8 @@ public final class NativeUiHostedProfileTest {
                     || !before.optString("digest").equals(after.optString("digest"))
                     || before.optLong("generation") != after.optLong("generation")
                     || !before.optString("state").equals(after.optString("state"))) {
-                throw new AssertionError("Invalid deep link fetched or changed the accepted session: " + after);
+                throw new AssertionError("Invalid deep link fetched or changed the accepted session ("
+                        + link + "): " + after);
             }
         }
     }

@@ -94,7 +94,11 @@ public struct DobbyRootView: View {
                                     HStack {
                                         VStack(alignment: .leading) {
                                             Text(profile.name)
-                                            Text(profile.protocolName).font(.caption).foregroundStyle(.secondary)
+                                            Text(profile.protocolName)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .accessibilityIdentifier("Profile \(profile.index + 1) protocol")
+                                                .accessibilityLabel("Profile \(profile.index + 1) protocol · \(profile.protocolName)")
                                         }
                                         Spacer()
                                         Button(model.actionTitle(profile.index)) { model.performPrimaryAction(profile.index) }

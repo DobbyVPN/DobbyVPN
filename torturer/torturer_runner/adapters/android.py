@@ -298,6 +298,7 @@ class AndroidAdapter:
         self._progress_scenario_id: str | None = None
         self._scratch_files: set[Path] = set()
         self._subscription_fixture = None
+        self._process_cold_import_queued = False
         self._diagnostic_collection_sequence = 0
 
     @property
@@ -661,6 +662,13 @@ class AndroidAdapter:
             preserve_active=preserve_active,
             output_name=output_name,
             progress_name=progress_name,
+            process_cold_import_url=(
+                self._subscription_fixture.url
+                if self.ui_mode == "gui-auto"
+                and self._subscription_fixture is not None
+                and json.loads(command_bytes.decode("utf-8")).get("process_cold_import") is True
+                else None
+            ),
         )
         if (
             not _instrumentation_succeeded(instrument)
@@ -775,6 +783,7 @@ class AndroidAdapter:
         preserve_active: bool = False,
         output_name: str | None = None,
         progress_name: str | None = None,
+        process_cold_import_url: str | None = None,
     ) -> CommandResult:
         controls = self._active_controls
         # A rendered GUI invocation must keep the instrumentation boundary
@@ -801,6 +810,23 @@ class AndroidAdapter:
                 _remaining(deadline, "ANDROID_COLD_START_TIMEOUT"),
                 "ANDROID_COLD_START_FAILED",
             )
+            if process_cold_import_url is not None:
+                from urllib.parse import quote
+
+                link = "dobbyvpn://import?url=" + quote(process_cold_import_url, safe="")
+                start = self._adb(
+                    (
+                        "shell", "am", "start", "-W", "-a",
+                        "android.intent.action.VIEW", "-d", link, "-n", _MAIN_ACTIVITY,
+                    ),
+                    _remaining(deadline, "ANDROID_COLD_IMPORT_TIMEOUT"),
+                    "ANDROID_COLD_IMPORT_LAUNCH_FAILED",
+                    allow_nonzero=True,
+                )
+                if start.returncode != 0 or b"Status: ok" not in start.stdout or b"Complete" not in start.stdout:
+                    failure = ScenarioExecutionError("ANDROID_COLD_IMPORT_LAUNCH_FAILED")
+                    _append_command_result_notes(failure, start)
+                    raise failure
         if preserve_active:
             # The rendered process-loss phase must not inherit the previous
             # scenario's editor/activity state. A preserved Activity
@@ -830,7 +856,7 @@ class AndroidAdapter:
                 raise failure
         arguments = (
             "shell", "am", "instrument", "-w", "-r",
-            *(("--no-restart",) if preserve_active else ()),
+            *(("--no-restart",) if preserve_active or process_cold_import_url is not None else ()),
             "-e", "dobby.real_profile", "1",
             "-e", "dobby.hosted_command_file", command_name, "-e", "class",
             _INSTRUMENTATION_CLASS, _INSTRUMENTATION_COMPONENT,
@@ -2186,6 +2212,18 @@ class AndroidAdapter:
             },
             "operations": operations,
         }
+        process_cold_import = (
+            self.ui_mode == "gui-auto"
+            and not self._process_cold_import_queued
+            and any(operation.get("operation") == "configure" for operation in operations)
+        )
+        if process_cold_import:
+            command["process_cold_import"] = True
+            if self._subscription_fixture is None:
+                raise ScenarioExecutionError("ANDROID_SUBSCRIPTION_FIXTURE_UNAVAILABLE")
+            command["process_cold_import_request_count"] = (
+                self._subscription_fixture.control_stats()["subscription_gets"]
+            )
         if self.ui_mode == "protocol-matrix":
             command["profile_file"] = profile_name
         if self.ui_mode == "protocol-matrix" and self._selected_connection is not None:
@@ -2203,6 +2241,8 @@ class AndroidAdapter:
             )
         except OSError as error:
             raise ScenarioExecutionError("ANDROID_COMMAND_WRITE_FAILED") from error
+        if process_cold_import:
+            self._process_cold_import_queued = True
         self._active_controls = tuple(controls)
         return command_file, profile_name, output_name
 

@@ -51,6 +51,37 @@ class _RecordingRunner:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_warm_deep_link_requires_the_same_window_not_only_the_same_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "source.url"
+            controller = object.__new__(smoke.NativeUIController)
+            controller.platform = "windows"
+            controller.profile = profile
+            controller._timeout = 10.0
+            controller._deadline = None
+            controller._call = mock.Mock(side_effect=(
+                {"pid": 42, "identity": "same-process", "windowHandle": "0x1234"},
+                {"pid": 42, "identity": "same-process", "windowHandle": "0x5678"},
+            ))
+            controller._open_link = mock.Mock()
+            controller._wait = mock.Mock(side_effect=lambda predicate, _message: self.assertTrue(predicate()))
+            controller.snapshot = mock.Mock(return_value={"labels": ["Profile 1 action"]})
+
+            with self.assertRaisesRegex(smoke.NativeUISmokeError, "existing Windows window"):
+                controller.import_link("https://example.invalid/subscription")
+
+            self.assertEqual(controller._open_link.call_count, 2)
+            self.assertEqual(
+                profile.read_text(encoding="utf-8"),
+                "https://example.invalid/subscription",
+            )
+
+    def test_windows_probe_reports_main_window_handle_for_activation_checks(self) -> None:
+        source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
+        self.assertIn("var window = process.MainWindowHandle;", source)
+        self.assertIn('windowHandle = window == IntPtr.Zero ? null : $"0x{window.ToInt64():X}"', source)
+
     def test_cold_deep_link_uses_windows_shell_only_when_ui_is_stopped(self) -> None:
         controller = object.__new__(smoke.NativeUIController)
         controller.platform = "windows"
@@ -139,7 +170,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'throw new InvalidOperationException("More than one candidate UI process matches the executable")',
             'var identity = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);',
             'if (request.TryGetProperty("identity", out var prior) && prior.GetString() != identity)',
-            'new { alive = true, pid = process.Id, identity }',
+            'windowHandle = window == IntPtr.Zero ? null : $"0x{window.ToInt64():X}"',
         ):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
@@ -181,7 +212,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'window = EnumerateProcessWindows(process).FirstOrDefault(candidate =>',
             'WaitFor(() =>',
             'return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);',
-            '"UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 7.0);',
+            '"UI process did not expose a visible, non-minimized window for the FindAll probe", seconds: 20.0);',
             'processTopLevelWindows=[{string.Join(" || ", lastWindows)}]',
             'const string automationId = "Connection configuration";',
             'TracePhase("uia-findall-probe-root-complete")',
@@ -247,8 +278,10 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "run"
-            source = run_dir / "source" / "torturer" / "torturer_runner" / "ui"
+            source_root = run_dir / "source"
+            source = source_root / "torturer" / "torturer_runner" / "ui"
             source.mkdir(parents=True)
+            (source_root / "VERSION").write_text("1.5.4\n", encoding="utf-8")
             (source / "smoke.py").touch()
             (source / "journey.py").touch()
             helper = root / "NativeUI.exe"
@@ -262,16 +295,19 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                     30,
                     helper,
                     native_cases=(selected,),
+                    source_sha="a" * 40,
                 )
                 self.assertEqual(
                     [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--native-case"],
                     [selected],
                 )
+                self.assertEqual(command[command.index("--candidate-version") + 1], "1.5.4")
+                self.assertEqual(command[command.index("--source-sha") + 1], "a" * 40)
         self.assertNotIn(flag, local_vm_windows._NATIVE_UI_ENVIRONMENT)
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertNotIn(flag, local_vm._native_ui_environment("windows", {}))
 
-    def test_windows_uia_findall_probe_uses_the_existing_helper_timeout_cap(self) -> None:
+    def test_windows_uia_findall_probe_allows_bounded_cold_window_startup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             helper = root / "NativeUI.exe"
@@ -280,7 +316,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 "windows",
                 root / "DobbyVPN.exe",
                 root / "profile.txt",
-                30,
+                60,
                 helper=helper,
                 screenshot_dir=root / "screenshots",
             )
@@ -297,9 +333,46 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 response = controller._call("findall-probe")
 
         self.assertEqual(response["findAllCount"], 1)
-        self.assertEqual(run.call_args.kwargs["timeout_seconds"], 10.0)
+        self.assertEqual(run.call_args.kwargs["timeout_seconds"], 30.0)
         request = json.loads(run.call_args.kwargs["input_bytes"])
         self.assertEqual(request["operation"], "findall-probe")
+
+    def test_windows_about_matches_candidate_version_and_source_sha(self) -> None:
+        commit = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "NativeUI.exe"
+            helper.touch()
+            controller = smoke.NativeUIController(
+                "windows",
+                root / "DobbyVPN.exe",
+                root / "profile.txt",
+                30,
+                helper=helper,
+                screenshot_dir=root / "screenshots",
+                expected_version="1.5.4",
+                expected_source_sha=commit,
+            )
+            source_url = f"https://github.com/DobbyVPN/DobbyVPN/tree/{commit}"
+            snapshots = iter((
+                {
+                    "labels": [
+                        "Version: 1.5.4", f"Commit: {commit[:12]}",
+                        f"Source commit: {commit}", "About source link",
+                    ],
+                    "help_texts": [source_url],
+                },
+                {"labels": ["Connection configuration"]},
+            ))
+            controller._click = mock.Mock()
+            controller._wait = lambda predicate, message: self.assertTrue(predicate(), message)
+            controller.snapshot = mock.Mock(side_effect=lambda: next(snapshots))
+            controller.capture = mock.Mock(return_value={})
+
+            self.assertEqual(
+                controller.about(),
+                {"about_version": True, "about_source_commit": True},
+            )
 
     def test_native_case_driver_keeps_findall_separate_from_configure_tree_and_paste(self) -> None:
         class FakeController:
@@ -452,7 +525,9 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             def run_helper(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
                 helper_requests.append(json.loads(kwargs["input_bytes"]))
-                response = json.dumps({"pid": 42, "identity": "existing-ui-instance"}).encode("utf-8")
+                response = json.dumps({
+                    "pid": 42, "identity": "existing-ui-instance", "windowHandle": "0x1234"
+                }).encode("utf-8")
                 return subprocess.CompletedProcess(command, 0, response, b"")
 
             with mock.patch.object(smoke, "_native_run", side_effect=run_helper), \
