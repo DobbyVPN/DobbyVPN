@@ -595,6 +595,11 @@ final class NativeUIInteractionTests: XCTestCase {
             return self.occurrences(of: validationError, in: text) > errorsBeforeScroll
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed, "Returning to the bottom should resume new log entries")
+
+        let traceAttachment = XCTAttachment(string: scrollTrace.value as? String ?? "<empty UIKit scroll trace>")
+        traceAttachment.name = "dobbyvpn-ui-uikit-scroll-trace"
+        traceAttachment.lifetime = .keepAlways
+        add(traceAttachment)
     }
 
     private func verifyColdAndWarmImports() throws {
