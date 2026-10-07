@@ -64,6 +64,56 @@ def _exception_details(error: BaseException) -> str:
     return "".join(traceback.format_exception(error)).rstrip()
 
 
+def _valid_windows_content_root_probe(probe: object) -> bool:
+    """Validate the direct XAML editor observation from configure-tree."""
+
+    if not isinstance(probe, dict):
+        return False
+    if (
+        probe.get("schema") != "dobbyvpn.windows-content-root-peers/v2"
+        or probe.get("completed") is not True
+        or probe.get("diagnosticOnly") is not True
+        or probe.get("dispatcherThreadAccess") is not True
+        or probe.get("windowContentIsRoot") is not True
+        or not isinstance(probe.get("windowContentType"), str)
+        or not probe["windowContentType"].strip()
+        or type(probe.get("rootPeerCreated")) is not bool
+        or "rootPeerType" not in probe
+    ):
+        return False
+    root_peer_type = probe["rootPeerType"]
+    if probe["rootPeerCreated"]:
+        if not isinstance(root_peer_type, str) or not root_peer_type.strip():
+            return False
+    elif root_peer_type is not None:
+        return False
+
+    editor = probe.get("editor")
+    if not isinstance(editor, dict) or (
+        editor.get("automationId") != "Connection configuration"
+        or editor.get("name") != "Subscription URL"
+        or editor.get("controlType") != "Edit"
+        or not isinstance(editor.get("peerType"), str)
+        or not editor["peerType"].strip()
+        or editor.get("isControlElement") is not True
+        or editor.get("isContentElement") is not True
+        or editor.get("isLoaded") is not True
+        or editor.get("isVisible") is not True
+        or editor.get("isEnabled") is not True
+    ):
+        return False
+    geometry = editor.get("geometry")
+    if not isinstance(geometry, dict):
+        return False
+    coordinates: list[float] = []
+    for key in ("x", "y", "width", "height"):
+        value = geometry.get(key)
+        if type(value) not in (int, float) or not math.isfinite(value):
+            return False
+        coordinates.append(float(value))
+    return coordinates[2] > 0 and coordinates[3] > 0
+
+
 _REQUIRED_TRUE_CHECKS = frozenset({
     "configure_native",
     "connect_native",
@@ -1609,19 +1659,11 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
                 )
             content_root_probe = diagnostics.get("xaml_content_root_peers")
             post_probe_process = diagnostics.get("post_probe_process")
-            if (
-                not isinstance(content_root_probe, dict)
-                or content_root_probe.get("schema") != "dobbyvpn.windows-content-root-peers/v1"
-                or content_root_probe.get("completed") is not True
-                or content_root_probe.get("diagnosticOnly") is not True
-                or content_root_probe.get("dispatcherThreadAccess") is not True
-                or content_root_probe.get("windowContentIsRoot") is not True
-                or not isinstance(content_root_probe.get("immediateChildren"), list)
-                or not content_root_probe["immediateChildren"]
-            ):
+            if not _valid_windows_content_root_probe(content_root_probe):
                 details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
                 raise NativeUIJourneyError(
-                    "Windows XAML content-root peer inspection did not complete: " + details
+                    "Windows XAML content-root direct editor inspection did not complete: "
+                    + details
                 )
             if not isinstance(post_probe_process, dict) or post_probe_process.get("alive") is not True:
                 details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))

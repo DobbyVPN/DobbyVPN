@@ -22,7 +22,11 @@ from .android_instrumentation import (
     ROUTING_RULE_CHAIN,
     parse_instrumentation_result,
 )
-from .native_cases import ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE, validate_native_cases
+from .native_cases import (
+    ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,
+    ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
+    validate_native_cases,
+)
 from .screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
@@ -61,6 +65,10 @@ _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT = "small-screen-scroll-failure"
 _SMALL_SCREEN_CASE_SCREENSHOT = "small-screen-log-viewport"
 _SMALL_SCREEN_CASE_INSTRUMENTATION_FILTER = (
     "com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable"
+)
+_CLEAR_PROCESS_RESTART_CASE_SCREENSHOT = "logs-clear-before-process-restart"
+_CLEAR_PROCESS_RESTART_CASE_INSTRUMENTATION_FILTER = (
+    "com.dobby.NativeUiInstrumentedTest#clearBoundaryBeforeProcessRestart"
 )
 
 
@@ -200,7 +208,10 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         selected_cases = validate_native_cases("android", "mini", native_cases)
     except ValueError as error:
         raise _error(str(error)) from error
-    if selected_cases and selected_cases != (ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,):
+    if selected_cases and selected_cases not in {
+        (ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,),
+        (ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,),
+    }:
         raise _error("unsupported Android native case selection")
     adb_value = runtime.get("adb")
     serial = runtime.get("serial")
@@ -243,7 +254,12 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
         raise _error("Android native UI did not resolve a cold bare-link foreground launch")
     try:
         instrumentation_filter = (
-            _SMALL_SCREEN_CASE_INSTRUMENTATION_FILTER
+            {
+                ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE:
+                    _SMALL_SCREEN_CASE_INSTRUMENTATION_FILTER,
+                ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE:
+                    _CLEAR_PROCESS_RESTART_CASE_INSTRUMENTATION_FILTER,
+            }.get(selected_cases[0])
             if selected_cases else
             "com.dobby.NativeUiInstrumentedTest,com.dobby.NativeDiagnosticRetentionTest"
         )
@@ -323,7 +339,13 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
             collection_errors.append(
                 _render_collection_error("ANDROID_LAUNCHER_ARTWORK_COLLECTION_FAILED", error)
             )
-    if not selected_cases and parsed.succeeded:
+    if (
+        parsed.succeeded
+        and (
+            not selected_cases
+            or selected_cases == (ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,)
+        )
+    ):
         try:
             restarted = _verify_clear_boundary_after_process_restart(
                 adb_value,
@@ -570,10 +592,15 @@ def _collect_rendered_screenshots(
     destination = logs / "screenshots" / "android"
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
     labels = [match.group(1).decode("ascii") for match in matches]
-    focused_case = native_cases == [ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE]
+    focused_screenshot = {
+        ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE: _SMALL_SCREEN_CASE_SCREENSHOT,
+        ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE:
+            _CLEAR_PROCESS_RESTART_CASE_SCREENSHOT,
+    }.get(native_cases[0] if native_cases and len(native_cases) == 1 else None)
+    focused_case = focused_screenshot is not None
     if succeeded:
         expected_labels = (
-            (_SMALL_SCREEN_CASE_SCREENSHOT,)
+            (focused_screenshot,)
             if focused_case else _LOCAL_REQUIRED_SCREENSHOT_LABELS
         )
         if tuple(labels) != expected_labels:
@@ -592,14 +619,11 @@ def _collect_rendered_screenshots(
             )
         prior_labels = labels[:-1]
         if focused_case:
-            if prior_labels not in ([], [_SMALL_SCREEN_CASE_SCREENSHOT]):
+            if prior_labels not in ([], [focused_screenshot]):
                 raise _error(
-                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: focused small-screen "
-                    "failure markers are invalid"
+                    "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: focused native "
+                    "case failure markers are invalid"
                 )
-            prior_labels = []
-        if focused_case:
-            pass
         else:
             diagnostic_count = prior_labels.count(_LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT)
             if diagnostic_count > 1:

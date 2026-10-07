@@ -190,16 +190,23 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
 
     def _run_ui(
         self, start_output: bytes, native_cases: list[str] | None = None,
+        instrumentation_succeeded: bool = True,
     ) -> tuple[
         subprocess.CompletedProcess[bytes] | None,
         Exception | None,
         list[tuple[str, list[str]]],
+        list[tuple[int, bytes, bytes]],
     ]:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             logs = root / "logs"
             logs.mkdir()
             calls: list[tuple[str, list[str]]] = []
+            parsed_inputs: list[tuple[int, bytes, bytes]] = []
+
+            def parse_result(*, returncode: int, stdout: bytes, stderr: bytes):
+                parsed_inputs.append((returncode, stdout, stderr))
+                return SimpleNamespace(succeeded=instrumentation_succeeded)
 
             def adb_call(_adb, _serial, arguments, *, label, **_kwargs):
                 calls.append((label, arguments))
@@ -208,11 +215,14 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                     "android-clear-boundary-process-restart-launch",
                 }:
                     return subprocess.CompletedProcess(("adb",), 0, start_output, b"")
-                if label in {
-                    "android-native-ui",
-                    "android-clear-boundary-process-restart-test",
-                }:
+                if label == "android-native-ui":
                     return subprocess.CompletedProcess(("adb",), 0, b"instrumentation output\n", b"")
+                if label == "android-clear-boundary-process-restart-test":
+                    return subprocess.CompletedProcess(
+                        ("adb",), 0,
+                        b"restart instrumentation stdout\n",
+                        b"restart instrumentation stderr\n",
+                    )
                 return subprocess.CompletedProcess(("adb",), 0, b"", b"")
 
             with (
@@ -221,7 +231,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                 mock.patch.object(
                     local_vm_android,
                     "parse_instrumentation_result",
-                    return_value=SimpleNamespace(succeeded=True),
+                    side_effect=parse_result,
                 ),
                 mock.patch.object(local_vm_android, "_collect_rendered_screenshots", return_value=[]),
                 mock.patch.object(local_vm_android, "_collect_launcher_artwork", return_value=[]),
@@ -236,11 +246,11 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                         native_cases=native_cases,
                     )
                 except Exception as error:
-                    return None, error, calls
-                return result, None, calls
+                    return None, error, calls, parsed_inputs
+                return result, None, calls, parsed_inputs
 
     def test_force_stop_then_implicit_bare_link_start_precedes_instrumentation(self) -> None:
-        result, error, calls = self._run_ui(
+        result, error, calls, _parsed_inputs = self._run_ui(
             b"Starting: Intent\nStatus: ok\nLaunchState: COLD\nComplete\n"
         )
 
@@ -297,7 +307,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
         )
 
     def test_small_screen_case_runs_only_its_exact_instrumentation_method(self) -> None:
-        result, error, calls = self._run_ui(
+        result, error, calls, _parsed_inputs = self._run_ui(
             b"Starting: Intent\nStatus: ok\nLaunchState: COLD\nComplete\n",
             ["small-screen-log-viewport"],
         )
@@ -311,10 +321,53 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
         )
         self.assertFalse(any("clear-boundary-process" in label for label, _ in calls))
 
+    def test_clear_process_restart_case_runs_exact_method_then_rechecks_after_restart(self) -> None:
+        result, error, calls, parsed_inputs = self._run_ui(
+            b"Starting: Intent\nStatus: ok\nLaunchState: COLD\nComplete\n",
+            ["logs-clear-process-restart"],
+        )
+
+        self.assertIsNone(error)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(b"--- ANDROID CLEAR PROCESS-RESTART CHECK ---", result.stdout)
+        initial_instrument = next(
+            arguments for label, arguments in calls if label == "android-native-ui"
+        )
+        self.assertEqual(
+            initial_instrument[initial_instrument.index("-e") + 2],
+            "com.dobby.NativeUiInstrumentedTest#clearBoundaryBeforeProcessRestart",
+        )
+        self.assertEqual(
+            [label for label, _ in calls if "clear-boundary-process" in label],
+            [
+                "android-clear-boundary-process-death",
+                "android-clear-boundary-process-restart-launch",
+                "android-clear-boundary-process-restart-test",
+            ],
+        )
+        self.assertEqual(len(parsed_inputs), 2)
+        self.assertEqual(parsed_inputs[-1][1], result.stdout)
+        self.assertIn(b"instrumentation output\n", parsed_inputs[-1][1])
+        self.assertIn(b"--- ANDROID CLEAR PROCESS-RESTART CHECK ---", parsed_inputs[-1][1])
+        self.assertIn(b"restart instrumentation stdout\n", parsed_inputs[-1][1])
+        self.assertEqual(parsed_inputs[-1][2], result.stderr)
+        self.assertIn(b"restart instrumentation stderr\n", parsed_inputs[-1][2])
+
+    def test_clear_process_restart_case_skips_controller_restart_after_failure(self) -> None:
+        _result, error, calls, _parsed_inputs = self._run_ui(
+            b"Starting: Intent\nStatus: ok\nLaunchState: COLD\nComplete\n",
+            ["logs-clear-process-restart"],
+            instrumentation_succeeded=False,
+        )
+
+        self.assertIsNone(error)
+        self.assertFalse(any("clear-boundary-process" in label for label, _ in calls))
+
     def test_missing_foreground_marker_stops_before_instrumentation(self) -> None:
         for output in (b"Status: ok\n", b"Complete\n"):
             with self.subTest(output=output):
-                result, error, calls = self._run_ui(output)
+                result, error, calls, _parsed_inputs = self._run_ui(output)
                 self.assertIsNone(result)
                 self.assertIsNotNone(error)
                 self.assertIn("cold bare-link foreground launch", str(error))

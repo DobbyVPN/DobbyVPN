@@ -51,6 +51,7 @@ let package = Package(
             ],
             sources: [
                 "IOSProviderMessageProtocol.swift",
+                "IOSProviderStopBoundary.swift",
                 "IOSLifecycleDiagnostics.swift",
                 "IOSReadinessFailureCooldown.swift",
                 "TunnelSettingsOwner.swift",

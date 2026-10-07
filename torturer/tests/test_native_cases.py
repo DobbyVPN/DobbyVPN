@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from torturer_runner.native_cases import (
+    ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,
     WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,
     validate_native_cases,
 )
@@ -13,6 +14,10 @@ class NativeCaseSelectionTests(unittest.TestCase):
         self.assertEqual(
             validate_native_cases("android", "mini", ["small-screen-log-viewport"]),
             ("small-screen-log-viewport",),
+        )
+        self.assertEqual(
+            validate_native_cases("android", "mini", [ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE]),
+            (ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,),
         )
         self.assertEqual(
             validate_native_cases("windows", "full", ["configure-tree"]),

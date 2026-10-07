@@ -283,6 +283,8 @@ struct DobbyLogView: UIViewRepresentable {
         var onScrollDiagnostic: ((String) -> Void)?
         var isRecordingLayoutDiagnostics = false
         private var lastStableContentHeight: CGFloat?
+        private var lastFollowDecisionContentHeight: CGFloat?
+        private var lastFollowDecisionAtBottom: Bool?
 
         private struct FollowingUpdate {
             let previous: Bool
@@ -374,6 +376,8 @@ struct DobbyLogView: UIViewRepresentable {
                     - scrollView.adjustedContentInset.bottom,
                 contentHeight: contentHeight
             )
+            lastFollowDecisionContentHeight = contentHeight
+            lastFollowDecisionAtBottom = atBottom
             let changed = isFollowing != atBottom
             isFollowing = atBottom
             logView.preservesReadingPosition = !atBottom
@@ -399,18 +403,16 @@ struct DobbyLogView: UIViewRepresentable {
             let rawViewportBottom = scrollView.contentOffset.y + scrollView.bounds.height
             let viewportBottom = rawViewportBottom - scrollView.adjustedContentInset.bottom
             let distanceToBottom = scrollView.contentSize.height - viewportBottom
-            let followHeight = effectiveContentHeight(for: logView)
             let usedRect = logView.layoutManager.usedRect(for: logView.textContainer)
             let extraLineFragment = logView.layoutManager.extraLineFragmentRect
             let pan = scrollView.panGestureRecognizer
             let panTranslationY = pan.translation(in: scrollView).y
             let panVelocityY = pan.velocity(in: scrollView).y
-            let atBottom = shouldFollowLogUpdates(
-                viewportBottom: viewportBottom,
-                contentHeight: followHeight
-            )
             func number(_ value: CGFloat) -> String {
                 String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
+            }
+            func optionalNumber(_ value: CGFloat?) -> String {
+                value.map(number) ?? "none"
             }
             onScrollDiagnostic([
                 "event=\(event)",
@@ -420,8 +422,13 @@ struct DobbyLogView: UIViewRepresentable {
                 "decelerating=\(scrollView.isDecelerating)",
                 "updating=\(updating)",
                 "restoring=\(logView.isRestoringReadingPosition)",
+                "preservesReadingPosition=\(logView.preservesReadingPosition)",
+                "recordingLayoutDiagnostics=\(isRecordingLayoutDiagnostics)",
                 "readingPositionRestoreCount=\(logView.readingPositionRestoreCount)",
+                "offsetX=\(number(scrollView.contentOffset.x))",
                 "offsetY=\(number(scrollView.contentOffset.y))",
+                "boundsOriginX=\(number(scrollView.bounds.origin.x))",
+                "boundsOriginY=\(number(scrollView.bounds.origin.y))",
                 "boundsWidth=\(number(scrollView.bounds.width))",
                 "viewportHeight=\(number(scrollView.bounds.height))",
                 "scrollEnabled=\(scrollView.isScrollEnabled)",
@@ -432,22 +439,36 @@ struct DobbyLogView: UIViewRepresentable {
                 "contentHeight=\(number(scrollView.contentSize.height))",
                 "contentWidth=\(number(scrollView.contentSize.width))",
                 "textStorageLength=\(logView.textStorage.length)",
-                "glyphCount=\(logView.layoutManager.numberOfGlyphs)",
                 "textContainerWidth=\(number(logView.textContainer.size.width))",
                 "textContainerHeight=\(number(logView.textContainer.size.height))",
+                "usedRectMinX=\(number(usedRect.minX))",
+                "usedRectMinY=\(number(usedRect.minY))",
                 "usedRectWidth=\(number(usedRect.width))",
                 "usedRectHeight=\(number(usedRect.height))",
+                "usedRectMaxY=\(number(usedRect.maxY))",
+                "extraLineFragmentMinX=\(number(extraLineFragment.minX))",
+                "extraLineFragmentMinY=\(number(extraLineFragment.minY))",
+                "extraLineFragmentWidth=\(number(extraLineFragment.width))",
                 "extraLineFragmentHeight=\(number(extraLineFragment.height))",
+                "extraLineFragmentMaxY=\(number(extraLineFragment.maxY))",
+                "textContainerInsetLeft=\(number(logView.textContainerInset.left))",
                 "textContainerInsetTop=\(number(logView.textContainerInset.top))",
+                "textContainerInsetRight=\(number(logView.textContainerInset.right))",
                 "textContainerInsetBottom=\(number(logView.textContainerInset.bottom))",
+                "contentInsetTop=\(number(scrollView.contentInset.top))",
+                "contentInsetLeft=\(number(scrollView.contentInset.left))",
+                "contentInsetRight=\(number(scrollView.contentInset.right))",
                 "contentInsetBottom=\(number(scrollView.contentInset.bottom))",
+                "adjustedContentInsetTop=\(number(scrollView.adjustedContentInset.top))",
+                "adjustedContentInsetLeft=\(number(scrollView.adjustedContentInset.left))",
+                "adjustedContentInsetRight=\(number(scrollView.adjustedContentInset.right))",
                 "adjustedContentInsetBottom=\(number(scrollView.adjustedContentInset.bottom))",
-                "effectiveContentHeight=\(number(followHeight))",
-                "stableContentHeight=\(number(lastStableContentHeight ?? followHeight))",
+                "storedValidContentHeight=\(optionalNumber(lastStableContentHeight))",
+                "effectiveContentHeightFromLastFollowDecision=\(optionalNumber(lastFollowDecisionContentHeight))",
                 "rawViewportBottom=\(number(rawViewportBottom))",
                 "adjustedViewportBottom=\(number(viewportBottom))",
                 "distanceToBottom=\(number(distanceToBottom))",
-                "atBottom=\(atBottom)",
+                "atBottom=\(lastFollowDecisionAtBottom.map { String($0) } ?? "unknown")",
                 "followingBefore=\(update?.previous ?? isFollowing)",
                 "followingAfter=\(update?.current ?? isFollowing)",
                 "changed=\(update?.changed ?? false)",

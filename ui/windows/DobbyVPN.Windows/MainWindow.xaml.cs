@@ -105,49 +105,65 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(path)) return;
 
         object diagnostic;
+        var hasDispatcherAccess = DispatcherQueue.HasThreadAccess;
+        var content = Content;
+        AutomationPeer? rootPeer = null;
         try
         {
-            var hasDispatcherAccess = DispatcherQueue.HasThreadAccess;
             if (!hasDispatcherAccess)
                 throw new InvalidOperationException("XAML root diagnostic did not run on the window dispatcher");
 
-            var content = Content ?? throw new InvalidOperationException("MainWindow.Content is unavailable");
-            var peer = FrameworkElementAutomationPeer.CreatePeerForElement(content)
-                ?? throw new InvalidOperationException("MainWindow.Content has no automation peer");
-            var children = peer.GetChildren() ?? [];
+            rootPeer = FrameworkElementAutomationPeer.CreatePeerForElement(Root);
+            var editorPeer = FrameworkElementAutomationPeer.CreatePeerForElement(SourceEditor)
+                ?? throw new InvalidOperationException("SourceEditor has no automation peer");
+            var editorBounds = SourceEditor.TransformToVisual(Root).TransformBounds(
+                new Windows.Foundation.Rect(0, 0, SourceEditor.ActualWidth, SourceEditor.ActualHeight));
             diagnostic = new
             {
-                schema = "dobbyvpn.windows-content-root-peers/v1",
+                schema = "dobbyvpn.windows-content-root-peers/v2",
                 completed = true,
                 diagnosticOnly = true,
                 dispatcherThreadAccess = hasDispatcherAccess,
                 windowContentIsRoot = ReferenceEquals(content, Root),
-                windowContentType = content.GetType().FullName,
+                windowContentType = content?.GetType().FullName,
                 rootType = Root.GetType().FullName,
-                rootAutomationId = AutomationProperties.GetAutomationId(Root),
-                rootPeerType = peer.GetType().FullName,
-                rootControlType = peer.GetAutomationControlType().ToString(),
-                rootName = peer.GetName(),
-                immediateChildren = children.Select((child, index) => new
+                rootPeerCreated = rootPeer is not null,
+                rootPeerType = rootPeer?.GetType().FullName,
+                editor = new
                 {
-                    index,
-                    peerType = child.GetType().FullName,
-                    controlType = child.GetAutomationControlType().ToString(),
-                    name = child.GetName(),
-                    automationId = child.GetAutomationId(),
-                    isControlElement = child.IsControlElement(),
-                    isContentElement = child.IsContentElement(),
-                }).ToArray(),
+                    automationId = editorPeer.GetAutomationId(),
+                    name = editorPeer.GetName(),
+                    controlType = editorPeer.GetAutomationControlType().ToString(),
+                    peerType = editorPeer.GetType().FullName,
+                    isControlElement = editorPeer.IsControlElement(),
+                    isContentElement = editorPeer.IsContentElement(),
+                    isLoaded = SourceEditor.IsLoaded,
+                    isVisible = SourceEditor.Visibility == Visibility.Visible,
+                    isEnabled = SourceEditor.IsEnabled,
+                    geometry = new
+                    {
+                        x = editorBounds.X,
+                        y = editorBounds.Y,
+                        width = editorBounds.Width,
+                        height = editorBounds.Height,
+                    },
+                },
             };
         }
         catch (Exception error)
         {
             diagnostic = new
             {
-                schema = "dobbyvpn.windows-content-root-peers/v1",
+                schema = "dobbyvpn.windows-content-root-peers/v2",
                 completed = false,
                 diagnosticOnly = true,
-                dispatcherThreadAccess = DispatcherQueue.HasThreadAccess,
+                dispatcherThreadAccess = hasDispatcherAccess,
+                windowContentIsRoot = ReferenceEquals(content, Root),
+                windowContentType = content?.GetType().FullName,
+                rootType = Root.GetType().FullName,
+                rootPeerCreated = rootPeer is not null,
+                rootPeerType = rootPeer?.GetType().FullName,
+                editor = (object?)null,
                 error = error.ToString(),
             };
         }

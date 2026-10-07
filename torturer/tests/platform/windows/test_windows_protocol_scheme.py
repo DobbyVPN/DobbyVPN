@@ -41,6 +41,31 @@ sys.modules[SPEC.name] = installer_migration
 SPEC.loader.exec_module(installer_migration)
 
 
+def _windows_content_root_probe() -> dict[str, object]:
+    return {
+        "schema": "dobbyvpn.windows-content-root-peers/v2",
+        "completed": True,
+        "diagnosticOnly": True,
+        "dispatcherThreadAccess": True,
+        "windowContentIsRoot": True,
+        "windowContentType": "Microsoft.UI.Xaml.Controls.Grid",
+        "rootPeerCreated": False,
+        "rootPeerType": None,
+        "editor": {
+            "automationId": "Connection configuration",
+            "name": "Subscription URL",
+            "controlType": "Edit",
+            "peerType": "Microsoft.UI.Xaml.Automation.Peers.TextBoxAutomationPeer",
+            "isControlElement": True,
+            "isContentElement": True,
+            "isLoaded": True,
+            "isVisible": True,
+            "isEnabled": True,
+            "geometry": {"x": 24.0, "y": 84.0, "width": 380.0, "height": 40.0},
+        },
+    }
+
+
 class _RecordingRunner:
     def __init__(self, log_dir: Path) -> None:
         self.log_dir = log_dir
@@ -135,6 +160,31 @@ class _FakeRegistry:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_configure_tree_requires_completed_direct_editor_metadata(self) -> None:
+        valid = _windows_content_root_probe()
+        self.assertTrue(journey._valid_windows_content_root_probe(valid))
+
+        invalid_probes = []
+        wrong_schema = json.loads(json.dumps(valid))
+        wrong_schema["schema"] = "dobbyvpn.windows-content-root-peers/v1"
+        invalid_probes.append(wrong_schema)
+        missing_editor = json.loads(json.dumps(valid))
+        del missing_editor["editor"]
+        invalid_probes.append(missing_editor)
+        invisible_editor = json.loads(json.dumps(valid))
+        invisible_editor["editor"]["isVisible"] = False
+        invalid_probes.append(invisible_editor)
+        empty_geometry = json.loads(json.dumps(valid))
+        empty_geometry["editor"]["geometry"]["width"] = 0
+        invalid_probes.append(empty_geometry)
+        inconsistent_root_peer = json.loads(json.dumps(valid))
+        inconsistent_root_peer["rootPeerCreated"] = True
+        invalid_probes.append(inconsistent_root_peer)
+
+        for probe in invalid_probes:
+            with self.subTest(probe=probe):
+                self.assertFalse(journey._valid_windows_content_root_probe(probe))
+
     def test_windows_content_root_diagnostic_start_does_not_snapshot_or_capture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -155,14 +205,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller.snapshot = mock.Mock(side_effect=AssertionError("probe-only start called Snapshot"))
             controller.capture = mock.Mock(side_effect=AssertionError("probe-only start captured the UI"))
             operations: list[str] = []
-            root_peer_result = {
-                "schema": "dobbyvpn.windows-content-root-peers/v1",
-                "completed": True,
-                "diagnosticOnly": True,
-                "dispatcherThreadAccess": True,
-                "windowContentIsRoot": True,
-                "immediateChildren": [{"index": 0, "peerType": "GridAutomationPeer"}],
-            }
+            root_peer_result = _windows_content_root_probe()
 
             def call(operation: str, **_fields: object) -> dict[str, object]:
                 operations.append(operation)
@@ -248,10 +291,14 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             self.assertIn("Root.Loaded += (_, _) => WriteContentRootPeerDiagnostic()", app_source)
             self.assertIn("DispatcherQueue.HasThreadAccess", app_source)
-            self.assertIn("FrameworkElementAutomationPeer.CreatePeerForElement(content)", app_source)
-            self.assertIn("peer.GetChildren()", app_source)
+            self.assertIn("FrameworkElementAutomationPeer.CreatePeerForElement(SourceEditor)", app_source)
+            self.assertIn('schema = "dobbyvpn.windows-content-root-peers/v2"', app_source)
+            self.assertIn("automationId = editorPeer.GetAutomationId()", app_source)
+            self.assertIn("controlType = editorPeer.GetAutomationControlType().ToString()", app_source)
             self.assertIn("windowContentIsRoot = ReferenceEquals(content, Root)", app_source)
-            self.assertIn("immediateChildren = children.Select", app_source)
+            self.assertIn("geometry = new", app_source)
+            self.assertNotIn("GetChildren()", app_source)
+            self.assertNotIn("immediateChildren", app_source)
             self.assertIn('app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"]', smoke_source)
             self.assertNotIn("uia-inputsite-sibling", helper_source)
             self.assertNotIn("GetNextSibling(targetPane)", helper_source)
@@ -265,14 +312,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller._timeout = 5.0
             controller._deadline = None
             controller.process = None
-            root_peer_result = {
-                "schema": "dobbyvpn.windows-content-root-peers/v1",
-                "completed": True,
-                "diagnosticOnly": True,
-                "dispatcherThreadAccess": True,
-                "windowContentIsRoot": True,
-                "immediateChildren": [{"index": 0, "peerType": "GridAutomationPeer"}],
-            }
+            root_peer_result = _windows_content_root_probe()
             (controller.logs / "windows-content-root-peers.json").write_text(
                 json.dumps(root_peer_result), encoding="utf-8"
             )
@@ -833,12 +873,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 if windows_content_root_diagnostics:
                     self.windows_content_root_diagnostics = {
                         "xaml_content_root_peers": {
-                            "schema": "dobbyvpn.windows-content-root-peers/v1",
-                            "completed": True,
-                            "diagnosticOnly": True,
-                            "dispatcherThreadAccess": True,
-                            "windowContentIsRoot": True,
-                            "immediateChildren": [{"index": 0, "peerType": "GridAutomationPeer"}],
+                            **_windows_content_root_probe(),
                         },
                         "post_probe_process": {"alive": True},
                     }

@@ -56,6 +56,46 @@ class AndroidDiagnosticCollectionTests(unittest.TestCase):
 
 
 class AndroidScreenshotCollectionTests(unittest.TestCase):
+    def test_clear_process_restart_case_requires_one_success_frame(self) -> None:
+        label = "logs-clear-before-process-restart"
+        remote = f"{local_vm_android._SCREENSHOT_ROOT}{label}.png"
+        payload = b"clear-before-process-restart screenshot"
+        marker = (
+            f"DOBBY_UI_SCREENSHOT label={label} path={remote} bytes={len(payload)} "
+            f"sha256={sha256(payload).hexdigest()} width=720 height=1280\n"
+        ).encode()
+
+        with tempfile.TemporaryDirectory() as name:
+            work = Path(name)
+
+            def adb_call(_adb, _serial, arguments, **_kwargs):
+                Path(arguments[2]).write_bytes(payload)
+                return subprocess.CompletedProcess(("adb",), 0, b"pulled", b"")
+
+            with mock.patch.object(local_vm_android, "_adb_call", side_effect=adb_call):
+                local_vm_android._collect_rendered_screenshots(
+                    "adb", "emulator-5554", marker, succeeded=True,
+                    native_cases=["logs-clear-process-restart"],
+                    run_dir=work, logs=work / "logs", timeout=5,
+                    environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
+                )
+                with self.assertRaisesRegex(Exception, "must be logs-clear-before-process-restart"):
+                    local_vm_android._collect_rendered_screenshots(
+                        "adb", "emulator-5554", marker.replace(
+                            label.encode(), b"small-screen-log-viewport"
+                        ), succeeded=True,
+                        native_cases=["logs-clear-process-restart"],
+                        run_dir=work, logs=work / "logs", timeout=5,
+                        environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
+                    )
+                with self.assertRaisesRegex(Exception, "must be logs-clear-before-process-restart"):
+                    local_vm_android._collect_rendered_screenshots(
+                        "adb", "emulator-5554", marker + marker, succeeded=True,
+                        native_cases=["logs-clear-process-restart"],
+                        run_dir=work, logs=work / "logs", timeout=5,
+                        environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
+                    )
+
     def test_failure_checkpoints_and_installed_icon_are_retained(self) -> None:
         labels = (
             "startup", "about-metadata", "landscape-large-font",

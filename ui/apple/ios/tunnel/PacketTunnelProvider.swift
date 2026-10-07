@@ -281,10 +281,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         logs.writeLog(log: "[tunnel] stopTunnel teardown=begin")
         Task {
-            await teardownForStop(reason: "stopTunnel(\(reason))")
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel cleanup wait ended; calling OS completionHandler")
-            completionHandler()
-            logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
+            await teardownForStop(
+                reason: "stopTunnel(\(reason))",
+                completionHandler: completionHandler
+            )
         }
     }
 

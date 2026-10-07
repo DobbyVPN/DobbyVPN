@@ -128,8 +128,23 @@ final class NativeUIInteractionTests: XCTestCase {
         let sentinelCount = occurrences(of: clearSentinel, in: logs.value as? String ?? "")
         app.buttons["Paste"].tap()
         XCTAssertTrue(waitForLogOccurrences(clearSentinel, atLeast: sentinelCount + 1, in: logs, timeout: 20))
+        var expectedClearSentinelCount = sentinelCount + 1
+        // Seed enough real log text through the existing Paste validation path
+        // for the About/logs scroll check to exercise a genuine scroll range.
+        for _ in 0..<7 {
+            expectedClearSentinelCount += 1
+            app.buttons["Paste"].tap()
+            XCTAssertTrue(waitForLogOccurrences(
+                clearSentinel, atLeast: expectedClearSentinelCount, in: logs, timeout: 20
+            ))
+        }
         let renderedBeforeClear = try XCTUnwrap(logs.value as? String)
         let preClearRecords = renderedBeforeClear.components(separatedBy: "Details\n").filter { !$0.isEmpty }
+        XCTAssertGreaterThanOrEqual(
+            occurrences(of: clearSentinel, in: renderedBeforeClear),
+            sentinelCount + 8,
+            "The deterministic Paste rows should provide a real log scroll range"
+        )
         XCTAssertFalse(preClearRecords.isEmpty, "There should be rendered records for Clear to remove")
         let clearAnchor = try XCTUnwrap(
             visibleLogAnchor(in: logs),
@@ -795,17 +810,56 @@ final class NativeUIInteractionTests: XCTestCase {
         let currentAnchorFrame = currentAnchor.frame
         let currentViewportFrame = logs.frame
         let offsetAfter = currentAnchorFrame.minY - currentViewportFrame.minY
+        let movedPastFollowThreshold = offsetAfter > offsetBefore + 24
         let currentAnchorIsVisible = frameIsVisible(currentAnchorFrame, in: currentViewportFrame)
-        if !currentAnchorIsVisible {
-            attachScreenshot("\(diagnosticPrefix)-scroll-anchor-not-visible")
-            attachLogScrollFailureDiagnostics(
+        let renderedLogText = logs.value as? String ?? ""
+        let anchorRecordIsPresent = renderedLogText.contains(anchor.record)
+        if !movedPastFollowThreshold {
+            attachScrollFailureDiagnostics(
+                "movement-at-or-below-24pt",
                 anchor: anchor,
                 beforeAnchorFrame: initialAnchorFrame,
                 afterAnchorFrame: currentAnchorFrame,
                 beforeViewportFrame: initialViewportFrame,
                 afterViewportFrame: currentViewportFrame,
+                offsetBefore: offsetBefore,
+                offsetAfter: offsetAfter,
+                anchorIsVisible: currentAnchorIsVisible,
+                anchorRecordIsPresent: anchorRecordIsPresent,
                 logs: logs,
-                attachmentName: "\(diagnosticPrefix)-log-scroll-anchor-diagnostics"
+                diagnosticPrefix: diagnosticPrefix
+            )
+        }
+        if !currentAnchorIsVisible {
+            attachScrollFailureDiagnostics(
+                "anchor-not-visible",
+                anchor: anchor,
+                beforeAnchorFrame: initialAnchorFrame,
+                afterAnchorFrame: currentAnchorFrame,
+                beforeViewportFrame: initialViewportFrame,
+                afterViewportFrame: currentViewportFrame,
+                offsetBefore: offsetBefore,
+                offsetAfter: offsetAfter,
+                anchorIsVisible: currentAnchorIsVisible,
+                anchorRecordIsPresent: anchorRecordIsPresent,
+                logs: logs,
+                diagnosticPrefix: diagnosticPrefix
+            )
+        }
+        if !anchorRecordIsPresent {
+            attachScrollFailureDiagnostics(
+                "record-absent",
+                anchor: anchor,
+                beforeAnchorFrame: initialAnchorFrame,
+                afterAnchorFrame: currentAnchorFrame,
+                beforeViewportFrame: initialViewportFrame,
+                afterViewportFrame: currentViewportFrame,
+                offsetBefore: offsetBefore,
+                offsetAfter: offsetAfter,
+                anchorIsVisible: currentAnchorIsVisible,
+                anchorRecordIsPresent: anchorRecordIsPresent,
+                logs: logs,
+                diagnosticPrefix: diagnosticPrefix
             )
         }
         XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
@@ -817,15 +871,22 @@ final class NativeUIInteractionTests: XCTestCase {
         return offsetAfter
     }
 
-    private func attachLogScrollFailureDiagnostics(
+    private func attachScrollFailureDiagnostics(
+        _ failureCondition: String,
         anchor: RenderedLogAnchor,
         beforeAnchorFrame: CGRect,
         afterAnchorFrame: CGRect,
         beforeViewportFrame: CGRect,
         afterViewportFrame: CGRect,
+        offsetBefore: CGFloat,
+        offsetAfter: CGFloat,
+        anchorIsVisible: Bool,
+        anchorRecordIsPresent: Bool,
         logs: XCUIElement,
-        attachmentName: String
+        diagnosticPrefix: String
     ) {
+        let attachmentName = "\(diagnosticPrefix)-scroll-\(failureCondition)"
+        attachScreenshot("\(attachmentName)-screenshot")
         let details = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
         let visibleDetailsFrames = (0..<details.count).compactMap { index -> String? in
@@ -848,6 +909,7 @@ final class NativeUIInteractionTests: XCTestCase {
             : visibleDetailsFrames.joined(separator: "\n")
         let diagnosticText = """
         Case: \(attachmentName)
+        Failed condition: \(failureCondition)
 
         Anchored record:
         \(anchor.record)
@@ -856,6 +918,11 @@ final class NativeUIInteractionTests: XCTestCase {
         Anchor frame after drag: \(afterAnchorFrame)
         Viewport frame before drag: \(beforeViewportFrame)
         Viewport frame after drag: \(afterViewportFrame)
+        Anchor offset before drag: \(offsetBefore)
+        Anchor offset after drag: \(offsetAfter)
+        Movement exceeded 24pt: \(offsetAfter > offsetBefore + 24)
+        Anchor visible: \(anchorIsVisible)
+        Anchored record present in rendered text: \(anchorRecordIsPresent)
 
         Visible Details / Hide details descendant frames:
         \(visibleFrames)

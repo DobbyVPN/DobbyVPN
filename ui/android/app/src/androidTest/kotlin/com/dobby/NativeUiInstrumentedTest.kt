@@ -129,6 +129,24 @@ class NativeUiInstrumentedTest {
     }
 
     @Test
+    fun clearBoundaryBeforeProcessRestart() {
+        org.junit.Assume.assumeTrue(
+            "Focused process-restart fixture is run through its native case selector",
+            InstrumentationRegistry.getArguments().getString("class") ==
+                "com.dobby.NativeUiInstrumentedTest#clearBoundaryBeforeProcessRestart",
+        )
+        launch()
+        waitForOneOf(arrayOf("Disconnected"), 30_000)
+        requireObject(connectionActionLabel)
+        requireObject("Share logs")
+        waitForTextContaining("Android diagnostic store resolved")
+        waitForOneOf(arrayOf("Disconnected"), 10_000)
+
+        verifyLogScrollingAndClear()
+        captureScreenshot("logs-clear-before-process-restart")
+    }
+
+    @Test
     fun releaseUiTypesAndShowsConnectFailureThenReopens() {
         launch()
 

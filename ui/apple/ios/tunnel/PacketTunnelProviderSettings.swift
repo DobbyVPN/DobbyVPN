@@ -165,19 +165,25 @@ extension PacketTunnelProvider {
         }
     }
 
-    func teardownForStop(reason: String) async {
+    func teardownForStop(reason: String, completionHandler: @escaping () -> Void) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
-        let failure = DobbyvpnStopSessionAndWait()
-        if failure.isEmpty {
-            callbackBridge = nil
-        } else {
-            logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] Go shutdown retains resources: \(failure)")
-        }
-
-        pathMonitor?.cancel()
-        pathMonitor = nil
-        lastPathSignature = nil
-
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason)) cleanup_complete=\(failure.isEmpty)")
+        IOSProviderStopBoundary.perform(
+            stopGoSessionAndWait: { DobbyvpnStopSessionAndWait() },
+            releasePlatformCallbacks: { callbackBridge = nil },
+            stopPathMonitoring: {
+                pathMonitor?.cancel()
+                pathMonitor = nil
+                lastPathSignature = nil
+            },
+            completeOSStop: { failure in
+                if !failure.isEmpty {
+                    logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] Go shutdown retains resources: \(failure)")
+                }
+                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason)) cleanup_complete=\(failure.isEmpty)")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel cleanup wait ended; calling OS completionHandler")
+                completionHandler()
+                logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
+            }
+        )
     }
 }
