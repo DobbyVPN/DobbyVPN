@@ -504,6 +504,11 @@ final class NativeUIInteractionTests: XCTestCase {
             "About should preserve the visible reading position"
         )
 
+        let readingAnchor = try XCTUnwrap(
+            topmostVisibleLogAnchor(in: logs),
+            "The current reading row should be identifiable before rotation"
+        )
+        let readingAnchorOffsetBeforeRotation = readingAnchor.element.frame.minY - logs.frame.minY
         XCUIDevice.shared.orientation = .landscapeLeft
         let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             self.app.frame.width > self.app.frame.height
@@ -511,42 +516,20 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [landscape], timeout: 15), .completed)
         XCTAssertEqual(logs.value as? String, frozen,
                        "A live rotation must not replace frozen log entries")
+        XCTAssertTrue(frozen.contains(readingAnchor.record))
         XCTAssertTrue(frozen.contains(positionAnchor.record))
         let landscapeFrameTracker = StableFrameTracker()
         let landscapeLayout = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             guard self.app.frame.width > self.app.frame.height,
-                  let anchor = self.detailElement(for: positionAnchor, in: logs), anchor.exists else {
+                  let anchor = self.detailElement(for: readingAnchor, in: logs), anchor.exists else {
                 landscapeFrameTracker.reset()
                 return false
             }
             return landscapeFrameTracker.observe([self.app.frame, logs.frame, anchor.frame])
         }, object: app)
         let landscapeLayoutResult = XCTWaiter.wait(for: [landscapeLayout], timeout: 12)
-        let landscapeAnchor = detailElement(for: positionAnchor, in: logs)
+        let landscapeAnchor = detailElement(for: readingAnchor, in: logs)
         let landscapeVisible = landscapeAnchor.map { elementIsVisible($0, in: logs) } ?? false
-        let landscapeText = logs.value as? String ?? ""
-        let landscapeDetails = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
-        let accessibilityLinkTrace = (0..<landscapeDetails.count).map { index in
-            let element = landscapeDetails.element(boundBy: index)
-            let record = renderedLogRecord(atDetailIndex: index, in: landscapeText)
-            return "index=\(index) label=\(element.label) frame=\(element.frame) " +
-                "visible=\(elementIsVisible(element, in: logs)) " +
-                "mapsToTarget=\(record == positionAnchor.record)"
-        }.joined(separator: "\n")
-        var landscapeCharacterOffset = 0
-        var renderedLinkTrace: [String] = []
-        for line in landscapeText.components(separatedBy: "\n") {
-            if isDetailsControlLine(line) {
-                let index = renderedLinkTrace.count
-                let record = renderedLogRecord(atDetailIndex: index, in: landscapeText)
-                renderedLinkTrace.append(
-                    "index=\(index) utf16Offset=\(landscapeCharacterOffset) " +
-                        "mapsToTarget=\(record == positionAnchor.record)"
-                )
-            }
-            landscapeCharacterOffset += line.utf16.count + 1
-        }
         let scrollTraceValue = scrollTrace.value as? String ?? "<no UIKit trace>"
         let landscapeGeometry = """
         stableFrames=\(landscapeLayoutResult == .completed)
@@ -555,13 +538,10 @@ final class NativeUIInteractionTests: XCTestCase {
         textViewFrame=\(logs.frame)
         logHeaderFrame=\(app.staticTexts["Logs"].frame)
         followingLabelFrame=\(followingState.frame)
-        targetDetailIndex=\(positionAnchor.detailIndex)
+        preScrollDetailIndex=\(positionAnchor.detailIndex)
+        readingAnchorDetailIndex=\(readingAnchor.detailIndex)
         anchorFrame=\(String(describing: landscapeAnchor?.frame))
         anchorVisible=\(landscapeVisible)
-        Rendered Details line UTF-16 mapping:
-        \(renderedLinkTrace.joined(separator: "\n"))
-        XCTest Details accessibility mapping:
-        \(accessibilityLinkTrace)
         UIKit trace:
         \(scrollTraceValue)
         """
@@ -573,7 +553,16 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(landscapeLayoutResult, .completed,
                        "The log pane and rendered row should settle after rotation. Geometry: \(landscapeGeometry)")
         XCTAssertTrue(landscapeVisible,
-                      "The same rendered record should stay visible in landscape. Geometry: \(landscapeGeometry)")
+                      "The current reading record should stay visible in landscape. Geometry: \(landscapeGeometry)")
+        if let landscapeAnchor {
+            let maximumVisibleOffset = max(0, logs.frame.height - landscapeAnchor.frame.height)
+            XCTAssertEqual(
+                landscapeAnchor.frame.minY - logs.frame.minY,
+                min(max(readingAnchorOffsetBeforeRotation, 0), maximumVisibleOffset),
+                accuracy: 2,
+                "Landscape should preserve the current reading row's viewport position"
+            )
+        }
         XCUIDevice.shared.orientation = .portrait
         let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             self.app.frame.height > self.app.frame.width
@@ -581,11 +570,17 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 15), .completed)
         XCTAssertEqual(logs.value as? String, frozen,
                        "Returning to portrait must keep the frozen log entries")
-        XCTAssertTrue(frozen.contains(positionAnchor.record))
+        XCTAssertTrue(frozen.contains(readingAnchor.record))
         attachScreenshot("logs-freeze-returned-to-portrait")
-        let portraitAnchor = try XCTUnwrap(detailElement(for: positionAnchor, in: logs))
+        let portraitAnchor = try XCTUnwrap(detailElement(for: readingAnchor, in: logs))
         XCTAssertTrue(elementIsVisible(portraitAnchor, in: logs),
-                      "The same rendered record should stay visible after returning to portrait")
+                      "The current reading record should stay visible after returning to portrait")
+        XCTAssertEqual(
+            portraitAnchor.frame.minY - logs.frame.minY,
+            readingAnchorOffsetBeforeRotation,
+            accuracy: 2,
+            "Returning to portrait should restore the current reading row's viewport position"
+        )
 
         for _ in 0..<8 { logs.swipeUp() }
         let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
@@ -747,6 +742,19 @@ final class NativeUIInteractionTests: XCTestCase {
         return candidates.min {
             abs($0.relativeY - 0.20) < abs($1.relativeY - 0.20)
         }?.anchor
+    }
+
+    private func topmostVisibleLogAnchor(in logs: XCUIElement) -> RenderedLogAnchor? {
+        guard let rendered = logs.value as? String, logs.frame.height > 0 else { return nil }
+        let details = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let candidates = (0..<details.count).compactMap { index -> RenderedLogAnchor? in
+            let element = details.element(boundBy: index)
+            guard element.label == "Details", elementIsVisible(element, in: logs),
+                  let record = renderedLogRecord(atDetailIndex: index, in: rendered) else { return nil }
+            return RenderedLogAnchor(detailIndex: index, record: record, element: element)
+        }
+        return candidates.min { $0.element.frame.minY < $1.element.frame.minY }
     }
 
     @discardableResult
