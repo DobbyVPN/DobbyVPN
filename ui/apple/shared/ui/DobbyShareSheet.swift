@@ -166,6 +166,7 @@ struct DobbyLogView: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
         if cleared {
             coordinator.isFollowing = true
@@ -208,6 +209,7 @@ struct DobbyLogView: UIViewRepresentable {
         var isFollowing = true
         var isUserDragging = false
         var updating = false
+        var latestEntries: [DobbyLogEntry] = []
         var displayedEntries: [DobbyLogEntry] = []
         var expanded = Set<String>()
         private var lastStableContentHeight: CGFloat?
@@ -267,10 +269,32 @@ struct DobbyLogView: UIViewRepresentable {
             )
             let userGestureActive = isUserDragging || scrollView.isDragging
             let shouldFollow = atBottom && (isFollowing || !userGestureActive)
+            let resumedFollowing = !isFollowing && shouldFollow
             isFollowing = shouldFollow
             logView.preservesReadingPosition = !shouldFollow
             logView.updateFollowingAccessibilityHint(isFollowing: shouldFollow)
+            if resumedFollowing { displayLatestEntries(in: logView) }
             if !shouldFollow { logView.captureReadingPosition() }
+        }
+
+        private func displayLatestEntries(in logView: DobbyLogTextView) {
+            displayedEntries = latestEntries
+            let attributed = logText(displayedEntries, expanded: expanded)
+            let selection = logView.selectedRange
+            updating = true
+            if logView.text != attributed.string {
+                logView.attributedText = attributed
+                logView.selectedRange = NSRange(
+                    location: min(selection.location, logView.textStorage.length), length: 0
+                )
+                if NSMaxRange(selection) <= logView.textStorage.length {
+                    logView.selectedRange = selection
+                }
+            }
+            logView.layoutIfNeeded()
+            _ = effectiveContentHeight(for: logView)
+            logView.scrollRangeToVisible(NSRange(location: logView.textStorage.length, length: 0))
+            updating = false
         }
 
         fileprivate func effectiveContentHeight(for logView: DobbyLogTextView) -> CGFloat {
