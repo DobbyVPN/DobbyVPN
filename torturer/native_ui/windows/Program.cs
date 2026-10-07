@@ -49,6 +49,68 @@ internal static class Program
         Console.Error.Flush();
     }
 
+    private static T ReadUiaProbeProperty<T>(string property, Func<T> read)
+    {
+        TracePhase($"configure-tree-uia-target-property-start property={property}");
+        try
+        {
+            var value = read();
+            TracePhase(
+                $"configure-tree-uia-target-property-complete property={property} " +
+                $"value={JsonSerializer.Serialize(value)}");
+            return value;
+        }
+        catch (Exception error)
+        {
+            TracePhase(
+                $"configure-tree-uia-target-property-failed property={property} " +
+                $"exception_type={error.GetType().FullName} message={JsonSerializer.Serialize(error.Message)}");
+            throw;
+        }
+    }
+
+    private static AutomationElement? GetUiaProbeFirstChild(
+        AutomationElement parent,
+        string parentPath,
+        string childPath)
+    {
+        TracePhase($"configure-tree-uia-path-edge-start parent={parentPath} child={childPath}");
+        try
+        {
+            var child = TreeWalker.ControlViewWalker.GetFirstChild(parent);
+            TracePhase(
+                $"configure-tree-uia-path-edge-complete child={childPath} " +
+                $"has_child={child is not null}");
+            return child;
+        }
+        catch (Exception error)
+        {
+            TracePhase(
+                $"configure-tree-uia-path-edge-failed child={childPath} " +
+                $"exception_type={error.GetType().FullName} message={JsonSerializer.Serialize(error.Message)}");
+            throw;
+        }
+    }
+
+    private static int ReportUiaProbeMissingPath(
+        Process process,
+        string identity,
+        IntPtr window,
+        string missingPath)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            ready = true,
+            pid = process.Id,
+            identity,
+            windowHandle = $"0x{window.ToInt64():X}",
+            pathResolved = false,
+            missingPath,
+            expansionAttempted = false,
+        }));
+        return 0;
+    }
+
     private static string UtcTimestamp() =>
         DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
 
@@ -504,19 +566,94 @@ internal static class Program
             {
                 var queryStarted = Stopwatch.GetTimestamp();
                 TracePhase($"configure-tree-uia-connection-configuration-start utc={UtcTimestamp()}");
-                var element = ByAutomationId(root, "Connection configuration",
-                    message => TracePhase($"uia-walk-{message}"));
+                const string firstPanePath = "window/ControlType.Pane#1";
+                const string targetPanePath = firstPanePath + "/ControlType.Pane#1";
+                var firstPane = GetUiaProbeFirstChild(root, "window", firstPanePath);
+                if (firstPane is null)
+                {
+                    TracePhase($"configure-tree-uia-path-incomplete missing={firstPanePath}");
+                    return ReportUiaProbeMissingPath(process, identity, window, firstPanePath);
+                }
+                var firstPaneControlType = ReadUiaProbeProperty(
+                    "FirstPane.ControlType", () => firstPane.Current.ControlType.ProgrammaticName);
+                if (firstPaneControlType != ControlType.Pane.ProgrammaticName)
+                    throw new InvalidOperationException(
+                        $"Expected {firstPanePath} to be a Pane, found {firstPaneControlType}");
+                var targetPane = GetUiaProbeFirstChild(firstPane, firstPanePath, targetPanePath);
+                if (targetPane is null)
+                {
+                    TracePhase($"configure-tree-uia-path-incomplete missing={targetPanePath}");
+                    return ReportUiaProbeMissingPath(process, identity, window, targetPanePath);
+                }
+
+                var targetControlType = ReadUiaProbeProperty(
+                    "ControlType", () => targetPane.Current.ControlType.ProgrammaticName);
+                if (targetControlType != ControlType.Pane.ProgrammaticName)
+                    throw new InvalidOperationException(
+                        $"Expected {targetPanePath} to be a Pane, found {targetControlType}");
+                var targetName = ReadUiaProbeProperty("Name", () => targetPane.Current.Name);
+                var targetAutomationId = ReadUiaProbeProperty(
+                    "AutomationId", () => targetPane.Current.AutomationId);
+                var targetClassName = ReadUiaProbeProperty(
+                    "ClassName", () => targetPane.Current.ClassName);
+                var targetFrameworkId = ReadUiaProbeProperty(
+                    "FrameworkId", () => targetPane.Current.FrameworkId);
+                var targetIsControlElement = ReadUiaProbeProperty(
+                    "IsControlElement", () => targetPane.Current.IsControlElement);
+                var targetIsContentElement = ReadUiaProbeProperty(
+                    "IsContentElement", () => targetPane.Current.IsContentElement);
+                var targetBounds = ReadUiaProbeProperty("BoundingRectangle", () =>
+                {
+                    var bounds = targetPane.Current.BoundingRectangle;
+                    return new
+                    {
+                        left = bounds.Left,
+                        top = bounds.Top,
+                        right = bounds.Right,
+                        bottom = bounds.Bottom,
+                    };
+                });
+
+                TracePhase($"configure-tree-uia-target-expansion-start path={targetPanePath}");
+                AutomationElement? targetChild;
+                try
+                {
+                    targetChild = TreeWalker.ControlViewWalker.GetFirstChild(targetPane);
+                    TracePhase(
+                        $"configure-tree-uia-target-expansion-complete path={targetPanePath} " +
+                        $"has_child={targetChild is not null}");
+                }
+                catch (Exception error)
+                {
+                    TracePhase(
+                        $"configure-tree-uia-target-expansion-failed path={targetPanePath} " +
+                        $"exception_type={error.GetType().FullName} message={JsonSerializer.Serialize(error.Message)}");
+                    throw;
+                }
                 TracePhase(
                     $"configure-tree-uia-connection-configuration-complete utc={UtcTimestamp()} " +
-                    $"elapsed_ms={ElapsedMilliseconds(queryStarted)} found={element is not null}");
+                    $"elapsed_ms={ElapsedMilliseconds(queryStarted)} expansion_completed=true");
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
-                    ready = element is not null,
+                    ready = true,
                     pid = process.Id,
                     identity,
                     windowHandle = $"0x{window.ToInt64():X}",
-                    query = "ByAutomationId(Connection configuration)",
-                    found = element is not null,
+                    query = "ControlView.GetFirstChild(targetPane)",
+                    targetPane = new
+                    {
+                        path = targetPanePath,
+                        controlType = targetControlType,
+                        name = targetName,
+                        automationId = targetAutomationId,
+                        className = targetClassName,
+                        frameworkId = targetFrameworkId,
+                        isControlElement = targetIsControlElement,
+                        isContentElement = targetIsContentElement,
+                        boundingRectangle = targetBounds,
+                    },
+                    expansionCompleted = true,
+                    targetChildPresent = targetChild is not null,
                 }));
                 return 0;
             }

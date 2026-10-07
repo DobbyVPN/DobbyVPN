@@ -177,12 +177,22 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
         self.assertEqual(registry.values, before)
 
-    def test_windows_configure_tree_diagnostic_uses_incremental_uia_walk(self) -> None:
+    def test_windows_configure_tree_diagnostic_probes_nested_pane_before_expansion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             helper_source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
             baseline_branch = helper_source.index('if (traceWin32Baseline)\n            {')
-            uia_query = 'var element = ByAutomationId(root, "Connection configuration",'
+            uia_query = "var targetPane = GetUiaProbeFirstChild(firstPane, firstPanePath, targetPanePath);"
             query_offset = helper_source.index(uia_query)
+            probe_start = helper_source.index("var firstPane = GetUiaProbeFirstChild(root, \"window\", firstPanePath);")
+            probe_end = helper_source.index('if (operation == "resize-window")', probe_start)
+            probe_source = helper_source[probe_start:probe_end]
+            edge_helper_start = helper_source.index(
+                "private static AutomationElement? GetUiaProbeFirstChild("
+            )
+            edge_helper_end = helper_source.index(
+                "private static int ReportUiaProbeMissingPath(", edge_helper_start
+            )
+            edge_helper_source = helper_source[edge_helper_start:edge_helper_end]
             root_creation = helper_source.index("var root = AutomationElement.FromHandle(window);")
 
             self.assertLess(root_creation, query_offset)
@@ -192,10 +202,39 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertIn("configure-tree-uia-root-start utc=", helper_source)
             self.assertIn("configure-tree-uia-connection-configuration-start utc=", helper_source)
             self.assertIn("configure-tree-uia-connection-configuration-complete utc=", helper_source)
+            self.assertIn('const string targetPanePath = firstPanePath + "/ControlType.Pane#1";', helper_source)
+            self.assertIn("configure-tree-uia-target-property-complete property={property}", helper_source)
+            self.assertIn("configure-tree-uia-target-expansion-start", helper_source)
+            self.assertIn("configure-tree-uia-target-expansion-complete", helper_source)
+            self.assertIn("configure-tree-uia-path-incomplete", helper_source)
+            self.assertIn("pathResolved = false", helper_source)
+            self.assertIn("expansionAttempted = false", helper_source)
+            self.assertIn("has_child={child is not null}", edge_helper_source)
+            self.assertNotIn("if (child is null)", edge_helper_source)
+            for property_name in (
+                "FirstPane.ControlType", "ControlType", "Name", "AutomationId", "ClassName", "FrameworkId",
+                "IsControlElement", "IsContentElement", "BoundingRectangle",
+            ):
+                self.assertIn(f'"{property_name}"', helper_source)
+            self.assertIn("firstPaneControlType != ControlType.Pane.ProgrammaticName", helper_source)
+            self.assertIn("targetControlType != ControlType.Pane.ProgrammaticName", helper_source)
+            self.assertIn('query = "ControlView.GetFirstChild(targetPane)"', helper_source)
+            self.assertIn("targetChildPresent = targetChild is not null", helper_source)
+            self.assertEqual(probe_source.count("GetUiaProbeFirstChild("), 2)
+            self.assertEqual(probe_source.count("TreeWalker.ControlViewWalker.GetFirstChild(targetPane)"), 1)
+            self.assertLess(
+                probe_source.index("if (firstPaneControlType != ControlType.Pane.ProgrammaticName)"),
+                probe_source.index("var targetPane = GetUiaProbeFirstChild("),
+            )
+            self.assertLess(
+                probe_source.index('var targetBounds = ReadUiaProbeProperty("BoundingRectangle"'),
+                probe_source.index('TracePhase($"configure-tree-uia-target-expansion-start'),
+            )
             self.assertIn("return Walk(root, trace).FirstOrDefault(element =>", helper_source)
             self.assertIn("walker.GetFirstChild(element)", helper_source)
             self.assertIn("walker.GetNextSibling(child)", helper_source)
             self.assertIn('children-start node={count} depth={depth} path={path}', helper_source)
+            self.assertNotIn('ByAutomationId(root, "Connection configuration",', helper_source)
             self.assertNotIn("root.FindFirst(TreeScope.Subtree", helper_source)
 
             controller = object.__new__(smoke.NativeUIController)
