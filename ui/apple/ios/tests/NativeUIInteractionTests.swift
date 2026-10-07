@@ -524,6 +524,29 @@ final class NativeUIInteractionTests: XCTestCase {
         let landscapeLayoutResult = XCTWaiter.wait(for: [landscapeLayout], timeout: 12)
         let landscapeAnchor = detailElement(for: positionAnchor, in: logs)
         let landscapeVisible = landscapeAnchor.map { elementIsVisible($0, in: logs) } ?? false
+        let landscapeText = logs.value as? String ?? ""
+        let landscapeDetails = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let accessibilityLinkTrace = (0..<landscapeDetails.count).map { index in
+            let element = landscapeDetails.element(boundBy: index)
+            let record = renderedLogRecord(atDetailIndex: index, in: landscapeText)
+            return "index=\(index) label=\(element.label) frame=\(element.frame) " +
+                "visible=\(elementIsVisible(element, in: logs)) " +
+                "mapsToTarget=\(record == positionAnchor.record)"
+        }.joined(separator: "\n")
+        var landscapeCharacterOffset = 0
+        var renderedLinkTrace: [String] = []
+        for line in landscapeText.components(separatedBy: "\n") {
+            if isDetailsControlLine(line) {
+                let index = renderedLinkTrace.count
+                let record = renderedLogRecord(atDetailIndex: index, in: landscapeText)
+                renderedLinkTrace.append(
+                    "index=\(index) utf16Offset=\(landscapeCharacterOffset) " +
+                        "mapsToTarget=\(record == positionAnchor.record)"
+                )
+            }
+            landscapeCharacterOffset += line.utf16.count + 1
+        }
         let scrollTraceValue = scrollTrace.value as? String ?? "<no UIKit trace>"
         let landscapeGeometry = """
         stableFrames=\(landscapeLayoutResult == .completed)
@@ -532,8 +555,13 @@ final class NativeUIInteractionTests: XCTestCase {
         textViewFrame=\(logs.frame)
         logHeaderFrame=\(app.staticTexts["Logs"].frame)
         followingLabelFrame=\(followingState.frame)
+        targetDetailIndex=\(positionAnchor.detailIndex)
         anchorFrame=\(String(describing: landscapeAnchor?.frame))
         anchorVisible=\(landscapeVisible)
+        Rendered Details line UTF-16 mapping:
+        \(renderedLinkTrace.joined(separator: "\n"))
+        XCTest Details accessibility mapping:
+        \(accessibilityLinkTrace)
         UIKit trace:
         \(scrollTraceValue)
         """
