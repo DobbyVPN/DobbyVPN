@@ -693,22 +693,30 @@ final class NativeUIInteractionTests: XCTestCase {
         frozenText: String,
         message: String
     ) {
-        // Target a visible message line directly. A point relative to the whole
-        // text view can land on a Details link and exercise record expansion.
+        // Skip rows clipped by the viewport: long-pressing their accessibility
+        // centers can land on a Details link and expand the record.
         let messageLines = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", message))
             .allElementsBoundByIndex
+        let viewportFrame = logs.frame.insetBy(dx: 1, dy: 1)
         guard let messageLine = messageLines.first(where: {
-            $0.elementType == .textView && $0.isHittable && $0.frame.intersects(logs.frame)
+            $0.elementType == .textView && $0.isHittable && viewportFrame.contains($0.frame)
         }) else {
-            let candidates = messageLines.map { "\($0.elementType):\($0.frame)" }.joined(separator: "; ")
-            XCTFail("No visible non-link log message row was available for selection. Candidates: \(candidates)")
+            let candidates = messageLines.enumerated().map { index, element in
+                "\(index): hittable=\(element.isHittable), frame=\(element.frame)"
+            }.joined(separator: "; ")
+            XCTFail(
+                "No fully visible non-link log message row was available for selection. " +
+                    "Viewport: \(viewportFrame). Candidates: \(candidates)"
+            )
             return
         }
+        let selectedFrame = messageLine.frame
         messageLine.press(forDuration: 1.0)
         attachScreenshot("logs-freeze-selection-menu")
         XCTAssertEqual(logs.value as? String, frozenText,
-                       "Long-pressing a message row must not expand Details or change frozen entries")
+                       "Long-pressing a message row must not expand Details or change frozen entries. " +
+                           "Selected row: \(selectedFrame); viewport: \(viewportFrame)")
         let copyActionInApp = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "Copy")).firstMatch
         let systemUI = XCUIApplication(bundleIdentifier: "com.apple.springboard")
