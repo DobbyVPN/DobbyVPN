@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.net.Uri
 import android.text.Spannable
 import android.text.Selection
@@ -347,7 +348,7 @@ class NativeUiInstrumentedTest {
         waitForTextContaining("Commit: ${commit.take(8)}")
         waitForTextContaining("Source commit: $commit")
         val source = requireObject("Source code $expectedLink")
-        var clickable = source
+        var clickable: UiObject2? = source
         while (clickable != null && !clickable.isClickable) clickable = clickable.parent
         check(clickable?.isEnabled == true) { "ANDROID_ABOUT_SOURCE_LINK_DISABLED" }
         captureScreenshot("about-metadata")
@@ -653,13 +654,15 @@ class NativeUiInstrumentedTest {
 
     private fun connectionLogTextView(): TextView {
         val found = arrayOfNulls<TextView>(1)
-        instrumentation.runOnMainSync {
+        val lookup = Runnable {
             fun visit(view: View) {
                 if (view.contentDescription == "Connection logs" && view is TextView) found[0] = view
                 if (view is ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
             }
             MainActivity.current?.window?.decorView?.let(::visit)
         }
+        if (Looper.myLooper() == Looper.getMainLooper()) lookup.run()
+        else instrumentation.runOnMainSync(lookup)
         return checkNotNull(found[0]) { "ANDROID_LOG_VIEW_MISSING" }
     }
 

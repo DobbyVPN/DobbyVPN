@@ -132,6 +132,9 @@ final class NativeUIInteractionTests: XCTestCase {
         // Seed enough real log text through the existing Paste validation path
         // for the About/logs scroll check to exercise a genuine scroll range.
         for _ in 0..<7 {
+            configuration.tap()
+            configuration.typeText("x")
+            dismissConfigurationKeyboard()
             expectedClearSentinelCount += 1
             app.buttons["Paste"].tap()
             XCTAssertTrue(waitForLogOccurrences(

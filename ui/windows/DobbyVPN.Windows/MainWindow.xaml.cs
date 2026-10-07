@@ -117,7 +117,7 @@ public sealed partial class MainWindow : Window
             var editorPeer = FrameworkElementAutomationPeer.CreatePeerForElement(SourceEditor)
                 ?? throw new InvalidOperationException("SourceEditor has no automation peer");
             var editorBounds = SourceEditor.TransformToVisual(Root).TransformBounds(
-                new Windows.Foundation.Rect(0, 0, SourceEditor.ActualWidth, SourceEditor.ActualHeight));
+                new global::Windows.Foundation.Rect(0, 0, SourceEditor.ActualWidth, SourceEditor.ActualHeight));
             diagnostic = new
             {
                 schema = "dobbyvpn.windows-content-root-peers/v2",
