@@ -308,7 +308,7 @@ class NativeUIController:
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
         operation_limit = 30.0 if self.platform == "windows" and operation in {
-            "tree", "resize-window", "windows-baseline", "uia-connection-configuration",
+            "tree", "resize-window", "windows-baseline", "uia-inputsite-sibling",
         } else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}
@@ -352,16 +352,27 @@ class NativeUIController:
         import_url: str | None = None,
         *,
         windows_uia_diagnostics: bool = False,
+        windows_uia_probe_only: bool = False,
         windows_no_uia_hold_seconds: float | None = None,
     ) -> dict:
         if self.process is not None or self._alive():
             raise NativeUISmokeError("native UI is already running")
         if windows_uia_diagnostics and (self.platform != "windows" or import_url is not None):
             raise ValueError("Windows startup diagnostics require a cold Windows launch")
+        if windows_uia_probe_only and (
+            self.platform != "windows"
+            or import_url is not None
+            or not windows_uia_diagnostics
+        ):
+            raise ValueError(
+                "Windows UIA probe-only startup requires a cold Windows launch "
+                "with UIA diagnostics enabled"
+            )
         if windows_no_uia_hold_seconds is not None and (
             self.platform != "windows"
             or import_url is not None
             or windows_uia_diagnostics
+            or windows_uia_probe_only
             or not math.isfinite(windows_no_uia_hold_seconds)
             or not 0 <= windows_no_uia_hold_seconds <= 30
         ):
@@ -440,6 +451,8 @@ class NativeUIController:
 
         if windows_uia_diagnostics:
             self.windows_uia_diagnostics = self._run_windows_uia_diagnostics()
+            if windows_uia_probe_only:
+                return self.windows_uia_diagnostics
 
         def ready():
             code = None if self.process is None else self.process.poll()
@@ -495,7 +508,7 @@ class NativeUIController:
 
         if isinstance(baseline, dict) and baseline.get("ready") is True:
             try:
-                diagnostics["uia_probe"] = self._call("uia-connection-configuration")
+                diagnostics["uia_probe"] = self._call("uia-inputsite-sibling")
             except Exception as error:
                 diagnostics["uia_probe_exception"] = "".join(
                     traceback.format_exception(error)

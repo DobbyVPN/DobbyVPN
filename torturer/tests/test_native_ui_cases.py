@@ -52,8 +52,14 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                 def bounded_by(self, _timeout):
                     return nullcontext()
 
-                def start(self, *, windows_uia_diagnostics=False):
+                def start(
+                    self,
+                    *,
+                    windows_uia_diagnostics=False,
+                    windows_uia_probe_only=False,
+                ):
                     self.windows_uia_diagnostics = windows_uia_diagnostics
+                    self.windows_uia_probe_only = windows_uia_probe_only
                     self.launches += 1
                     self.operations.append("start-tree")
                     if self.launches == 2:

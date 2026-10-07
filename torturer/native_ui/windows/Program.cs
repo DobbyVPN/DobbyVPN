@@ -49,21 +49,21 @@ internal static class Program
         Console.Error.Flush();
     }
 
-    private static T ReadUiaProbeProperty<T>(string property, Func<T> read)
+    private static T ReadUiaProbeProperty<T>(string element, string property, Func<T> read)
     {
-        TracePhase($"configure-tree-uia-target-property-start property={property}");
+        TracePhase($"configure-tree-uia-{element}-property-start property={property}");
         try
         {
             var value = read();
             TracePhase(
-                $"configure-tree-uia-target-property-complete property={property} " +
+                $"configure-tree-uia-{element}-property-complete property={property} " +
                 $"value={JsonSerializer.Serialize(value)}");
             return value;
         }
         catch (Exception error)
         {
             TracePhase(
-                $"configure-tree-uia-target-property-failed property={property} " +
+                $"configure-tree-uia-{element}-property-failed property={property} " +
                 $"exception_type={error.GetType().FullName} message={JsonSerializer.Serialize(error.Message)}");
             throw;
         }
@@ -106,7 +106,7 @@ internal static class Program
             windowHandle = $"0x{window.ToInt64():X}",
             pathResolved = false,
             missingPath,
-            expansionAttempted = false,
+            siblingNavigationAttempted = false,
         }));
         return 0;
     }
@@ -434,7 +434,7 @@ internal static class Program
             }
             var traceTree = operation == "tree";
             var traceWin32Baseline = operation == "windows-baseline";
-            var traceUiaProbe = operation == "uia-connection-configuration";
+            var traceUiaProbe = operation == "uia-inputsite-sibling";
             var traceWindow = traceTree || traceWin32Baseline || traceUiaProbe;
             var activateAndDiscoverWindow = traceWindow || operation == "resize-window";
             var baselineStarted = traceWin32Baseline ? Stopwatch.GetTimestamp() : 0;
@@ -565,7 +565,7 @@ internal static class Program
             if (traceUiaProbe)
             {
                 var queryStarted = Stopwatch.GetTimestamp();
-                TracePhase($"configure-tree-uia-connection-configuration-start utc={UtcTimestamp()}");
+                TracePhase($"configure-tree-uia-inputsite-sibling-start utc={UtcTimestamp()}");
                 const string firstPanePath = "window/ControlType.Pane#1";
                 const string targetPanePath = firstPanePath + "/ControlType.Pane#1";
                 var firstPane = GetUiaProbeFirstChild(root, "window", firstPanePath);
@@ -575,7 +575,7 @@ internal static class Program
                     return ReportUiaProbeMissingPath(process, identity, window, firstPanePath);
                 }
                 var firstPaneControlType = ReadUiaProbeProperty(
-                    "FirstPane.ControlType", () => firstPane.Current.ControlType.ProgrammaticName);
+                    "first-pane", "ControlType", () => firstPane.Current.ControlType.ProgrammaticName);
                 if (firstPaneControlType != ControlType.Pane.ProgrammaticName)
                     throw new InvalidOperationException(
                         $"Expected {firstPanePath} to be a Pane, found {firstPaneControlType}");
@@ -587,48 +587,72 @@ internal static class Program
                 }
 
                 var targetControlType = ReadUiaProbeProperty(
-                    "ControlType", () => targetPane.Current.ControlType.ProgrammaticName);
+                    "target-pane", "ControlType", () => targetPane.Current.ControlType.ProgrammaticName);
                 if (targetControlType != ControlType.Pane.ProgrammaticName)
                     throw new InvalidOperationException(
                         $"Expected {targetPanePath} to be a Pane, found {targetControlType}");
-                var targetName = ReadUiaProbeProperty("Name", () => targetPane.Current.Name);
+                var targetName = ReadUiaProbeProperty("target-pane", "Name", () => targetPane.Current.Name);
                 var targetAutomationId = ReadUiaProbeProperty(
-                    "AutomationId", () => targetPane.Current.AutomationId);
+                    "target-pane", "AutomationId", () => targetPane.Current.AutomationId);
                 var targetClassName = ReadUiaProbeProperty(
-                    "ClassName", () => targetPane.Current.ClassName);
+                    "target-pane", "ClassName", () => targetPane.Current.ClassName);
                 var targetFrameworkId = ReadUiaProbeProperty(
-                    "FrameworkId", () => targetPane.Current.FrameworkId);
+                    "target-pane", "FrameworkId", () => targetPane.Current.FrameworkId);
                 var targetIsControlElement = ReadUiaProbeProperty(
-                    "IsControlElement", () => targetPane.Current.IsControlElement);
+                    "target-pane", "IsControlElement", () => targetPane.Current.IsControlElement);
                 var targetIsContentElement = ReadUiaProbeProperty(
-                    "IsContentElement", () => targetPane.Current.IsContentElement);
+                    "target-pane", "IsContentElement", () => targetPane.Current.IsContentElement);
 
-                TracePhase($"configure-tree-uia-target-expansion-start path={targetPanePath}");
-                AutomationElement? targetChild;
+                TracePhase($"configure-tree-uia-sibling-navigation-start path={targetPanePath}");
+                AutomationElement? sibling;
                 try
                 {
-                    targetChild = TreeWalker.ControlViewWalker.GetFirstChild(targetPane);
+                    sibling = TreeWalker.ControlViewWalker.GetNextSibling(targetPane);
                     TracePhase(
-                        $"configure-tree-uia-target-expansion-complete path={targetPanePath} " +
-                        $"has_child={targetChild is not null}");
+                        $"configure-tree-uia-sibling-navigation-complete path={targetPanePath} " +
+                        $"sibling_present={sibling is not null}");
                 }
                 catch (Exception error)
                 {
                     TracePhase(
-                        $"configure-tree-uia-target-expansion-failed path={targetPanePath} " +
+                        $"configure-tree-uia-sibling-navigation-failed path={targetPanePath} " +
                         $"exception_type={error.GetType().FullName} message={JsonSerializer.Serialize(error.Message)}");
                     throw;
                 }
+                string? siblingControlType = null;
+                string? siblingName = null;
+                string? siblingAutomationId = null;
+                string? siblingClassName = null;
+                string? siblingFrameworkId = null;
+                bool? siblingIsControlElement = null;
+                bool? siblingIsContentElement = null;
+                if (sibling is not null)
+                {
+                    siblingControlType = ReadUiaProbeProperty(
+                        "sibling", "ControlType", () => sibling.Current.ControlType.ProgrammaticName);
+                    siblingName = ReadUiaProbeProperty("sibling", "Name", () => sibling.Current.Name);
+                    siblingAutomationId = ReadUiaProbeProperty(
+                        "sibling", "AutomationId", () => sibling.Current.AutomationId);
+                    siblingClassName = ReadUiaProbeProperty(
+                        "sibling", "ClassName", () => sibling.Current.ClassName);
+                    siblingFrameworkId = ReadUiaProbeProperty(
+                        "sibling", "FrameworkId", () => sibling.Current.FrameworkId);
+                    siblingIsControlElement = ReadUiaProbeProperty(
+                        "sibling", "IsControlElement", () => sibling.Current.IsControlElement);
+                    siblingIsContentElement = ReadUiaProbeProperty(
+                        "sibling", "IsContentElement", () => sibling.Current.IsContentElement);
+                }
                 TracePhase(
-                    $"configure-tree-uia-connection-configuration-complete utc={UtcTimestamp()} " +
-                    $"elapsed_ms={ElapsedMilliseconds(queryStarted)} expansion_completed=true");
+                    $"configure-tree-uia-inputsite-sibling-complete utc={UtcTimestamp()} " +
+                    $"elapsed_ms={ElapsedMilliseconds(queryStarted)} sibling_navigation_completed=true");
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
                     ready = true,
                     pid = process.Id,
                     identity,
                     windowHandle = $"0x{window.ToInt64():X}",
-                    query = "ControlView.GetFirstChild(targetPane)",
+                    query = "ControlView.GetNextSibling(targetPane)",
+                    diagnosticOnly = true,
                     targetPane = new
                     {
                         path = targetPanePath,
@@ -640,8 +664,17 @@ internal static class Program
                         isControlElement = targetIsControlElement,
                         isContentElement = targetIsContentElement,
                     },
-                    expansionCompleted = true,
-                    targetChildPresent = targetChild is not null,
+                    siblingNavigationCompleted = true,
+                    sibling = sibling is null ? null : new
+                    {
+                        controlType = siblingControlType,
+                        name = siblingName,
+                        automationId = siblingAutomationId,
+                        className = siblingClassName,
+                        frameworkId = siblingFrameworkId,
+                        isControlElement = siblingIsControlElement,
+                        isContentElement = siblingIsContentElement,
+                    },
                 }));
                 return 0;
             }

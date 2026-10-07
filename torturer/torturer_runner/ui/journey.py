@@ -1590,7 +1590,41 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
             if selected == (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,):
                 startup = ui.start(windows_no_uia_hold_seconds=20)
             else:
-                startup = ui.start(windows_uia_diagnostics=args.platform == "windows")
+                windows_probe_only = selected == (WINDOWS_CONFIGURE_TREE_CASE,)
+                startup = ui.start(
+                    windows_uia_diagnostics=args.platform == "windows",
+                    windows_uia_probe_only=windows_probe_only,
+                )
+        windows_probe: dict[str, object] | None = None
+        post_probe_process: dict[str, object] | None = None
+        if selected == (WINDOWS_CONFIGURE_TREE_CASE,):
+            diagnostics = ui.windows_uia_diagnostics
+            if diagnostics is None:
+                raise NativeUIJourneyError(
+                    "Windows configure-tree did not retain its UIA sibling diagnostics"
+                )
+            if "uia_probe_exception" in diagnostics or "post_probe_process_exception" in diagnostics:
+                details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+                raise NativeUIJourneyError(
+                    "Windows UIA sibling diagnostic raised or lost its post-probe process check: "
+                    + details
+                )
+            windows_probe = diagnostics.get("uia_probe")
+            post_probe_process = diagnostics.get("post_probe_process")
+            if (
+                not isinstance(windows_probe, dict)
+                or windows_probe.get("siblingNavigationCompleted") is not True
+                or windows_probe.get("diagnosticOnly") is not True
+            ):
+                details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+                raise NativeUIJourneyError(
+                    "Windows UIA sibling navigation did not complete: " + details
+                )
+            if not isinstance(post_probe_process, dict) or post_probe_process.get("alive") is not True:
+                details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+                raise NativeUIJourneyError(
+                    "Windows UIA sibling diagnostic left the app process unavailable: " + details
+                )
         if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
             configured = ui.configure()
             if configured.get("input_verified") is not True:
@@ -1767,7 +1801,16 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
         elif selected == (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,):
             case_result = {"windows_no_uia_hold": startup}
         else:
-            case_result = {"configure_tree": startup}
+            case_result = {
+                "configure_tree": {
+                    "diagnostic_only": True,
+                    "rendered_controls_queried": False,
+                    "sibling_navigation_completed": True,
+                    "target_pane": windows_probe["targetPane"],
+                    "sibling": windows_probe.get("sibling"),
+                    "post_probe_process": post_probe_process,
+                }
+            }
             if ui.windows_uia_diagnostics is not None:
                 case_result["windows_uia_diagnostics"] = ui.windows_uia_diagnostics
         return {

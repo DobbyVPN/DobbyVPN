@@ -134,6 +134,60 @@ class _FakeRegistry:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
+    def test_windows_uia_probe_only_start_does_not_snapshot_or_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "DobbyVPN.exe"
+            helper = root / "NativeUI.exe"
+            binary.touch()
+            helper.touch()
+            controller = smoke.NativeUIController(
+                "windows",
+                binary,
+                root / "profile.txt",
+                30,
+                helper=helper,
+                screenshot_dir=root / "screenshots",
+            )
+            controller._alive = mock.Mock(return_value=False)
+            controller._wait = lambda predicate, message: self.assertTrue(predicate(), message)
+            controller.snapshot = mock.Mock(side_effect=AssertionError("probe-only start called Snapshot"))
+            controller.capture = mock.Mock(side_effect=AssertionError("probe-only start captured the UI"))
+            operations: list[str] = []
+
+            def call(operation: str, **_fields: object) -> dict[str, object]:
+                operations.append(operation)
+                if operation == "windows-baseline":
+                    return {"ready": True, "pid": 42}
+                if operation == "uia-inputsite-sibling":
+                    return {
+                        "ready": True,
+                        "diagnosticOnly": True,
+                        "siblingNavigationCompleted": True,
+                        "sibling": None,
+                    }
+                controller.pid = 42
+                controller.identity = "candidate-ui-instance"
+                return {"alive": True, "pid": 42, "identity": controller.identity}
+
+            controller._call = call
+            process = mock.Mock(pid=42)
+            process.poll.return_value = None
+            with mock.patch.object(smoke.subprocess, "Popen", return_value=process):
+                result = controller.start(
+                    windows_uia_diagnostics=True,
+                    windows_uia_probe_only=True,
+                )
+
+            self.assertEqual(
+                operations,
+                ["probe", "windows-baseline", "uia-inputsite-sibling", "probe"],
+            )
+            self.assertEqual(result, controller.windows_uia_diagnostics)
+            self.assertEqual(result["post_probe_process"]["alive"], True)
+            controller.snapshot.assert_not_called()
+            controller.capture.assert_not_called()
+
     def test_windows_local_dumps_restores_existing_values_and_removes_new_keys(self) -> None:
         registry = _FakeRegistry()
         existing_path = smoke._WINDOWS_LOCAL_DUMPS_PATH + r"\DobbyVPN.exe"
@@ -177,7 +231,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
         self.assertEqual(registry.values, before)
 
-    def test_windows_configure_tree_diagnostic_probes_nested_pane_before_expansion(self) -> None:
+    def test_windows_configure_tree_diagnostic_probes_one_inputsite_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             helper_source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
             baseline_branch = helper_source.index('if (traceWin32Baseline)\n            {')
@@ -186,13 +240,6 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             probe_start = helper_source.index("var firstPane = GetUiaProbeFirstChild(root, \"window\", firstPanePath);")
             probe_end = helper_source.index('if (operation == "resize-window")', probe_start)
             probe_source = helper_source[probe_start:probe_end]
-            edge_helper_start = helper_source.index(
-                "private static AutomationElement? GetUiaProbeFirstChild("
-            )
-            edge_helper_end = helper_source.index(
-                "private static int ReportUiaProbeMissingPath(", edge_helper_start
-            )
-            edge_helper_source = helper_source[edge_helper_start:edge_helper_end]
             root_creation = helper_source.index("var root = AutomationElement.FromHandle(window);")
 
             self.assertLess(root_creation, query_offset)
@@ -200,36 +247,36 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertLess(query_offset, helper_source.index("if (operation == \"resize-window\")"))
             self.assertEqual(helper_source.count(uia_query), 1)
             self.assertIn("configure-tree-uia-root-start utc=", helper_source)
-            self.assertIn("configure-tree-uia-connection-configuration-start utc=", helper_source)
-            self.assertIn("configure-tree-uia-connection-configuration-complete utc=", helper_source)
+            self.assertIn("configure-tree-uia-inputsite-sibling-start utc=", helper_source)
+            self.assertIn("configure-tree-uia-inputsite-sibling-complete utc=", helper_source)
             self.assertIn('const string targetPanePath = firstPanePath + "/ControlType.Pane#1";', helper_source)
-            self.assertIn("configure-tree-uia-target-property-complete property={property}", helper_source)
-            self.assertIn("configure-tree-uia-target-expansion-start", helper_source)
-            self.assertIn("configure-tree-uia-target-expansion-complete", helper_source)
+            self.assertIn("configure-tree-uia-{element}-property-complete property={property}", helper_source)
+            self.assertIn("configure-tree-uia-sibling-navigation-start", helper_source)
+            self.assertIn("configure-tree-uia-sibling-navigation-complete", helper_source)
             self.assertIn("configure-tree-uia-path-incomplete", helper_source)
             self.assertIn("pathResolved = false", helper_source)
-            self.assertIn("expansionAttempted = false", helper_source)
-            self.assertIn("has_child={child is not null}", edge_helper_source)
-            self.assertNotIn("if (child is null)", edge_helper_source)
+            self.assertIn("siblingNavigationAttempted = false", helper_source)
             for property_name in (
-                "FirstPane.ControlType", "ControlType", "Name", "AutomationId", "ClassName", "FrameworkId",
+                "ControlType", "Name", "AutomationId", "ClassName", "FrameworkId",
                 "IsControlElement", "IsContentElement",
             ):
                 self.assertIn(f'"{property_name}"', helper_source)
             self.assertNotIn("BoundingRectangle", probe_source)
             self.assertIn("firstPaneControlType != ControlType.Pane.ProgrammaticName", helper_source)
             self.assertIn("targetControlType != ControlType.Pane.ProgrammaticName", helper_source)
-            self.assertIn('query = "ControlView.GetFirstChild(targetPane)"', helper_source)
-            self.assertIn("targetChildPresent = targetChild is not null", helper_source)
+            self.assertIn('query = "ControlView.GetNextSibling(targetPane)"', helper_source)
+            self.assertIn("siblingNavigationCompleted = true", helper_source)
+            self.assertIn("sibling = sibling is null ? null : new", helper_source)
             self.assertEqual(probe_source.count("GetUiaProbeFirstChild("), 2)
-            self.assertEqual(probe_source.count("TreeWalker.ControlViewWalker.GetFirstChild(targetPane)"), 1)
+            self.assertEqual(probe_source.count("TreeWalker.ControlViewWalker.GetNextSibling(targetPane)"), 1)
+            self.assertNotIn("GetFirstChild(targetPane)", probe_source)
             self.assertLess(
                 probe_source.index("if (firstPaneControlType != ControlType.Pane.ProgrammaticName)"),
                 probe_source.index("var targetPane = GetUiaProbeFirstChild("),
             )
             self.assertLess(
                 probe_source.index('var targetIsContentElement = ReadUiaProbeProperty('),
-                probe_source.index('TracePhase($"configure-tree-uia-target-expansion-start'),
+                probe_source.index('TracePhase($"configure-tree-uia-sibling-navigation-start'),
             )
             self.assertIn("return Walk(root, trace).FirstOrDefault(element =>", helper_source)
             self.assertIn("walker.GetFirstChild(element)", helper_source)
@@ -242,7 +289,12 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller.logs = Path(directory)
             controller._call = mock.Mock(side_effect=(
                 {"ready": True, "pid": 42},
-                {"ready": True, "found": True},
+                {
+                    "ready": True,
+                    "diagnosticOnly": True,
+                    "siblingNavigationCompleted": True,
+                    "sibling": None,
+                },
                 {"alive": True, "pid": 42},
             ))
 
@@ -250,9 +302,17 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             self.assertEqual(
                 [call.args[0] for call in controller._call.call_args_list],
-                ["windows-baseline", "uia-connection-configuration", "probe"],
+                ["windows-baseline", "uia-inputsite-sibling", "probe"],
             )
-            self.assertEqual(result["uia_probe"], {"ready": True, "found": True})
+            self.assertEqual(
+                result["uia_probe"],
+                {
+                    "ready": True,
+                    "siblingNavigationCompleted": True,
+                    "diagnosticOnly": True,
+                    "sibling": None,
+                },
+            )
             retained = json.loads(
                 (Path(directory) / "windows-configure-tree-diagnostics.json").read_text(encoding="utf-8")
             )
@@ -714,7 +774,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 for operation in (
                     "tree",
                     "windows-baseline",
-                    "uia-connection-configuration",
+                    "uia-inputsite-sibling",
                 ):
                     controller._call(operation)
 
@@ -724,7 +784,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         )
         self.assertEqual(
             [json.loads(call.kwargs["input_bytes"])["operation"] for call in run.call_args_list],
-            ["tree", "windows-baseline", "uia-connection-configuration"],
+            ["tree", "windows-baseline", "uia-inputsite-sibling"],
         )
 
     def test_windows_about_matches_candidate_version_and_source_sha(self) -> None:
@@ -782,6 +842,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 self,
                 *,
                 windows_uia_diagnostics=False,
+                windows_uia_probe_only=False,
                 windows_no_uia_hold_seconds=None,
             ):
                 if windows_no_uia_hold_seconds is not None:
@@ -793,9 +854,20 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                         "automation_queries": 0,
                     }
                     return self.windows_no_uia_diagnostics
-                self.operations.append(f"start-tree-uia-diagnostics={windows_uia_diagnostics}")
-                if windows_uia_diagnostics:
-                    self.windows_uia_diagnostics = {"uia_probe": {"found": True}}
+                self.operations.append(
+                    f"start-tree-uia-diagnostics={windows_uia_diagnostics};probe-only={windows_uia_probe_only}"
+                )
+                if windows_uia_probe_only:
+                    self.windows_uia_diagnostics = {
+                        "uia_probe": {
+                            "diagnosticOnly": True,
+                            "siblingNavigationCompleted": True,
+                            "targetPane": {"className": "InputSiteWindowClass"},
+                            "sibling": None,
+                        },
+                        "post_probe_process": {"alive": True},
+                    }
+                    return self.windows_uia_diagnostics
                 return {"status": "Disconnected", "labels": ["Connection configuration"]}
 
             def configure(self):
@@ -871,11 +943,19 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             no_uia, no_uia_controller = run_case(WINDOWS_CONFIGURE_TREE_NO_UIA_CASE)
         self.assertEqual(windows["coverage"]["native_cases"], [WINDOWS_CONFIGURE_TREE_CASE])
         self.assertEqual(
-            windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["windows_uia_diagnostics"]["uia_probe"]["found"],
+            windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["windows_uia_diagnostics"]
+            ["uia_probe"]["siblingNavigationCompleted"],
             True,
         )
+        self.assertEqual(
+            windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["configure_tree"]
+            ["rendered_controls_queried"],
+            False,
+        )
         self.assertEqual(windows_controller.operations, [
-            "enable-wer", "start-tree-uia-diagnostics=True", "close", "collect", "restore-wer",
+            "enable-wer",
+            "start-tree-uia-diagnostics=True;probe-only=True",
+            "close", "collect", "restore-wer",
         ])
         self.assertEqual(
             no_uia["coverage"]["native_cases"],
