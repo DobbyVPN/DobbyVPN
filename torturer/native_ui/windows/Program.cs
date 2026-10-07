@@ -602,17 +602,6 @@ internal static class Program
                     "IsControlElement", () => targetPane.Current.IsControlElement);
                 var targetIsContentElement = ReadUiaProbeProperty(
                     "IsContentElement", () => targetPane.Current.IsContentElement);
-                var targetBounds = ReadUiaProbeProperty("BoundingRectangle", () =>
-                {
-                    var bounds = targetPane.Current.BoundingRectangle;
-                    return new
-                    {
-                        left = bounds.Left,
-                        top = bounds.Top,
-                        right = bounds.Right,
-                        bottom = bounds.Bottom,
-                    };
-                });
 
                 TracePhase($"configure-tree-uia-target-expansion-start path={targetPanePath}");
                 AutomationElement? targetChild;
@@ -650,7 +639,6 @@ internal static class Program
                         frameworkId = targetFrameworkId,
                         isControlElement = targetIsControlElement,
                         isContentElement = targetIsContentElement,
-                        boundingRectangle = targetBounds,
                     },
                     expansionCompleted = true,
                     targetChildPresent = targetChild is not null,

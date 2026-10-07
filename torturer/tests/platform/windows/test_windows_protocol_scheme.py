@@ -213,9 +213,10 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertNotIn("if (child is null)", edge_helper_source)
             for property_name in (
                 "FirstPane.ControlType", "ControlType", "Name", "AutomationId", "ClassName", "FrameworkId",
-                "IsControlElement", "IsContentElement", "BoundingRectangle",
+                "IsControlElement", "IsContentElement",
             ):
                 self.assertIn(f'"{property_name}"', helper_source)
+            self.assertNotIn("BoundingRectangle", probe_source)
             self.assertIn("firstPaneControlType != ControlType.Pane.ProgrammaticName", helper_source)
             self.assertIn("targetControlType != ControlType.Pane.ProgrammaticName", helper_source)
             self.assertIn('query = "ControlView.GetFirstChild(targetPane)"', helper_source)
@@ -227,7 +228,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 probe_source.index("var targetPane = GetUiaProbeFirstChild("),
             )
             self.assertLess(
-                probe_source.index('var targetBounds = ReadUiaProbeProperty("BoundingRectangle"'),
+                probe_source.index('var targetIsContentElement = ReadUiaProbeProperty('),
                 probe_source.index('TracePhase($"configure-tree-uia-target-expansion-start'),
             )
             self.assertIn("return Walk(root, trace).FirstOrDefault(element =>", helper_source)
