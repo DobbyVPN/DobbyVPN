@@ -1334,9 +1334,12 @@ def run_ios_simulator_app_contract(
         def boot_simulator() -> None:
             boot_timeout = _stage_timeout(budget, "boot")
             try:
-                boot = runner.run(
-                    simctl_boot_command(simulator.udid),
-                    timeout_seconds=boot_timeout,
+                boot = _timed_stage(
+                    "simctl-boot",
+                    lambda: runner.run(
+                        simctl_boot_command(simulator.udid),
+                        timeout_seconds=boot_timeout,
+                    ),
                 )
             except BaseException as error:
                 if isinstance(error, (KeyboardInterrupt, SystemExit)):
@@ -1350,13 +1353,19 @@ def run_ios_simulator_app_contract(
                 )
                 add_stream_notes(failure, "command", boot.stdout, boot.stderr)
                 raise failure
-            _require_success(
-                runner,
-                simctl_bootstatus_command(simulator.udid),
-                "bootstatus",
-                budget=budget,
+            _timed_stage(
+                "simctl-bootstatus",
+                lambda: _require_success(
+                    runner,
+                    simctl_bootstatus_command(simulator.udid),
+                    "bootstatus",
+                    budget=budget,
+                ),
             )
-            _open_simulator(runner, simulator.udid, budget=budget)
+            _timed_stage(
+                "open-simulator",
+                lambda: _open_simulator(runner, simulator.udid, budget=budget),
+            )
 
         _timed_stage("boot", boot_simulator)
         if keyboard_state is not None:

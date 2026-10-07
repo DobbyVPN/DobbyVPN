@@ -205,7 +205,15 @@ class TimingProgressTests(unittest.TestCase):
         finish_events = [event for event in events if event["event"] == "stage-finish"]
         self.assertEqual(
             [event["stage"] for event in finish_events],
-            ["boot", "install", "xctest", "cleanup"],
+            [
+                "simctl-boot",
+                "simctl-bootstatus",
+                "open-simulator",
+                "boot",
+                "install",
+                "xctest",
+                "cleanup",
+            ],
         )
         for event in events:
             _assert_utc_timestamp(self, event["timestamp_utc"])
