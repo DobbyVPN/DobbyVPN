@@ -344,6 +344,7 @@ final class NativeUIInteractionTests: XCTestCase {
         let validationError = "Paste an HTTPS subscription URL with a host"
         app.terminate()
         UIPasteboard.general.string = clipboard
+        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
         app.launch()
 
         let configuration = app.textFields["Connection configuration"]
@@ -352,6 +353,9 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let scrollTrace = app.descendants(matching: .any)
+            .matching(identifier: "Log scroll diagnostics").firstMatch
+        XCTAssertTrue(scrollTrace.waitForExistence(timeout: 10))
         let controls = app.descendants(matching: .any)
             .matching(identifier: "Connection controls").firstMatch
         let errorStatus = app.staticTexts["Error"]
@@ -878,6 +882,11 @@ final class NativeUIInteractionTests: XCTestCase {
         let visibleFrames = visibleDetailsFrames.isEmpty
             ? "<no visible Details or Hide details descendants>"
             : visibleDetailsFrames.joined(separator: "\n")
+        let scrollTrace = app.descendants(matching: .any)
+            .matching(identifier: "Log scroll diagnostics").firstMatch
+        let nativeScrollTrace = scrollTrace.exists
+            ? scrollTrace.value as? String ?? "<empty UIKit scroll trace>"
+            : "<UIKit scroll trace disabled>"
         let diagnosticText = """
         Case: \(attachmentName)
         Failed condition: \(failureCondition)
@@ -897,6 +906,9 @@ final class NativeUIInteractionTests: XCTestCase {
 
         Visible Details / Hide details descendant frames:
         \(visibleFrames)
+
+        UIKit scroll trace:
+        \(nativeScrollTrace)
 
         Rendered log text:
         \(renderedLogText)

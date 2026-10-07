@@ -53,6 +53,7 @@ struct DobbyShareSheet: NSViewRepresentable {
 #if os(iOS)
 private final class DobbyLogTextView: UITextView {
     var preservesReadingPosition = false
+    var onReadingPositionRestore: ((CGFloat, CGFloat) -> Void)?
     private(set) var isRestoringReadingPosition = false
     private(set) var readingPositionRestoreCount = 0
     private var lastLayoutSize: CGSize?
@@ -138,16 +139,19 @@ private final class DobbyLogTextView: UITextView {
         let requestedY = line.minY + textContainerInset.top - restoredAnchorViewportY
         let maximumY = max(-adjustedContentInset.top, contentSize.height - bounds.height + adjustedContentInset.bottom)
         let restoredY = min(max(requestedY, -adjustedContentInset.top), maximumY)
+        let previousY = contentOffset.y
         isRestoringReadingPosition = true
         setContentOffset(CGPoint(x: contentOffset.x, y: restoredY), animated: false)
         isRestoringReadingPosition = false
         readingPositionRestoreCount += 1
+        onReadingPositionRestore?(previousY, contentOffset.y)
     }
 }
 
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int
+    let onScrollDiagnostic: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -161,11 +165,21 @@ struct DobbyLogView: UIViewRepresentable {
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
         view.updateFollowingAccessibilityHint(isFollowing: true)
+        context.coordinator.onScrollDiagnostic = onScrollDiagnostic
+        view.onReadingPositionRestore = { [weak coordinator = context.coordinator, weak view] previousY, restoredY in
+            guard let view else { return }
+            coordinator?.recordScrollDiagnostic(
+                "layout.restoreReadingPosition(previousY=\(previousY),restoredY=\(restoredY))",
+                for: view
+            )
+        }
         return view
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.onScrollDiagnostic = onScrollDiagnostic
+        coordinator.recordScrollDiagnostic("update.begin", for: view)
         coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
         if cleared {
@@ -195,13 +209,18 @@ struct DobbyLogView: UIViewRepresentable {
         let layoutRestoredReadingPosition =
             restoreCountBeforeLayout != (view as? DobbyLogTextView)?.readingPositionRestoreCount
         if coordinator.isFollowing || cleared {
+            coordinator.recordScrollDiagnostic("update.scrollToBottom.before", for: view)
             view.scrollRangeToVisible(NSRange(location: view.textStorage.length, length: 0))
+            coordinator.recordScrollDiagnostic("update.scrollToBottom.after", for: view)
         } else if !layoutRestoredReadingPosition {
             // Keep the captured offset unless layoutSubviews already restored a newer character anchor.
+            coordinator.recordScrollDiagnostic("update.restoreOffset.before", for: view)
             view.setContentOffset(offset, animated: false)
+            coordinator.recordScrollDiagnostic("update.restoreOffset.after", for: view)
         }
         coordinator.lastClear = clear
         coordinator.updating = false
+        coordinator.recordScrollDiagnostic("update.end", for: view)
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -212,6 +231,7 @@ struct DobbyLogView: UIViewRepresentable {
         var latestEntries: [DobbyLogEntry] = []
         var displayedEntries: [DobbyLogEntry] = []
         var expanded = Set<String>()
+        var onScrollDiagnostic: ((String) -> Void)?
         private var lastStableContentHeight: CGFloat?
 
         func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
@@ -238,24 +258,32 @@ struct DobbyLogView: UIViewRepresentable {
             let gestureActive = isUserDragging || scrollView.isDragging || scrollView.isDecelerating
             guard gestureActive else { return }
 
+            recordScrollDiagnostic("scroll.didScroll.beforeDecision", for: scrollView)
             if !updating && (isUserDragging || scrollView.isDecelerating) {
                 updateFollowingState(for: scrollView)
+                recordScrollDiagnostic("scroll.didScroll.afterDecision", for: scrollView)
             }
         }
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             guard scrollView is DobbyLogTextView else { return }
             isUserDragging = true
+            recordScrollDiagnostic("scroll.willBeginDragging", for: scrollView)
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
             guard scrollView is DobbyLogTextView else { return }
             let accepted = isUserDragging && !updating
             isUserDragging = false
             if accepted { updateFollowingState(for: scrollView) }
+            recordScrollDiagnostic(
+                "scroll.didEndDragging(decelerate=\(decelerate),accepted=\(accepted))",
+                for: scrollView
+            )
         }
         func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
             guard scrollView is DobbyLogTextView else { return }
             isUserDragging = false
             updateFollowingState(for: scrollView)
+            recordScrollDiagnostic("scroll.didEndDecelerating", for: scrollView)
         }
 
         private func updateFollowingState(for scrollView: UIScrollView) {
@@ -270,9 +298,14 @@ struct DobbyLogView: UIViewRepresentable {
             let userGestureActive = isUserDragging || scrollView.isDragging
             let shouldFollow = atBottom && (isFollowing || !userGestureActive)
             let resumedFollowing = !isFollowing && shouldFollow
+            let previousFollowing = isFollowing
             isFollowing = shouldFollow
             logView.preservesReadingPosition = !shouldFollow
             logView.updateFollowingAccessibilityHint(isFollowing: shouldFollow)
+            recordScrollDiagnostic(
+                "scroll.followDecision(previous=\(previousFollowing),atBottom=\(atBottom),resumed=\(resumedFollowing))",
+                for: scrollView
+            )
             if resumedFollowing { displayLatestEntries(in: logView) }
             if !shouldFollow { logView.captureReadingPosition() }
         }
@@ -282,6 +315,7 @@ struct DobbyLogView: UIViewRepresentable {
             let attributed = logText(displayedEntries, expanded: expanded)
             let selection = logView.selectedRange
             updating = true
+            recordScrollDiagnostic("resume.applyLatest.before", for: logView)
             if logView.text != attributed.string {
                 logView.attributedText = attributed
                 logView.selectedRange = NSRange(
@@ -295,6 +329,42 @@ struct DobbyLogView: UIViewRepresentable {
             _ = effectiveContentHeight(for: logView)
             logView.scrollRangeToVisible(NSRange(location: logView.textStorage.length, length: 0))
             updating = false
+            recordScrollDiagnostic("resume.applyLatest.after", for: logView)
+        }
+
+        fileprivate func recordScrollDiagnostic(_ event: String, for scrollView: UIScrollView) {
+            guard let logView = scrollView as? DobbyLogTextView,
+                  let onScrollDiagnostic else { return }
+            let bounds = scrollView.bounds
+            let contentSize = scrollView.contentSize
+            let inset = scrollView.adjustedContentInset
+            let viewportBottom = scrollView.contentOffset.y + bounds.height - inset.bottom
+            let minimumOffsetY = -inset.top
+            let maximumOffsetY = max(minimumOffsetY, contentSize.height - bounds.height + inset.bottom)
+            let adjustedInset = [inset.top, inset.left, inset.bottom, inset.right]
+                .map(number)
+                .joined(separator: ",")
+            func number(_ value: CGFloat) -> String {
+                String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
+            }
+            onScrollDiagnostic([
+                "event=\(event)",
+                "offset=(\(number(scrollView.contentOffset.x)),\(number(scrollView.contentOffset.y)))",
+                "bounds=(\(number(bounds.width)),\(number(bounds.height)))",
+                "contentSize=(\(number(contentSize.width)),\(number(contentSize.height)))",
+                "adjustedInset=(\(adjustedInset))",
+                "offsetRangeY=(\(number(minimumOffsetY)),\(number(maximumOffsetY)))",
+                "distanceToBottom=\(number(contentSize.height - viewportBottom))",
+                "textLength=\(logView.textStorage.length)",
+                "latestEntries=\(latestEntries.count)",
+                "displayedEntries=\(displayedEntries.count)",
+                "following=\(isFollowing)",
+                "userDragging=\(isUserDragging)",
+                "scrollDragging=\(scrollView.isDragging)",
+                "decelerating=\(scrollView.isDecelerating)",
+                "updating=\(updating)",
+                "restoring=\(logView.isRestoringReadingPosition)",
+            ].joined(separator: " "))
         }
 
         fileprivate func effectiveContentHeight(for logView: DobbyLogTextView) -> CGFloat {
