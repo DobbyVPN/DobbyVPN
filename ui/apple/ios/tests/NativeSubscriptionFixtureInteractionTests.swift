@@ -155,31 +155,76 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertTrue(profiles.isHittable, "The complete profile viewport should be available for row gestures")
         attachScreenshot("subscription-profiles-visible")
 
-        // Move by about one row at a time. Count a profile only after its
-        // description, protocol and Connect action are all hittable, so a row
-        // clipped at the viewport edge is checked on the next scroll step.
-        // Keep the final ordered assertion to catch rows that never appear.
+        // Walk through the list in measured, low-speed steps. The default
+        // XCTest drag velocity can carry the nested ScrollView past several
+        // rows even when the finger moves only about one row. Count a profile
+        // only after its description, protocol and Connect action are hittable.
         let names = app.staticTexts.matching(
             NSPredicate(format: "label MATCHES %@", #"Simulator fixture profile (?:[1-9]|1[01])|Profile 12"#)
         )
         var encountered: [Int] = []
-        for _ in 0..<50 {
-            for element in names.allElementsBoundByIndex where element.isHittable {
-                guard let index = Self.profileIndex(from: element.label), !encountered.contains(index) else { continue }
+        var traversalObservations: [String] = []
+        var previousGeometry: String?
+        var consecutiveNoMovement = 0
+        for step in 0..<50 {
+            let viewport = profiles.frame
+            var visibleRows: [(index: Int, name: XCUIElement, frame: CGRect)] = []
+            for element in names.allElementsBoundByIndex {
+                guard let index = Self.profileIndex(from: element.label) else { continue }
+                let frame = element.frame
+                guard frame.intersects(viewport) else { continue }
+                visibleRows.append((index, element, frame))
+            }
+
+            var rowObservations: [String] = []
+            let geometry = visibleRows.map { row in
+                "\(row.index)@\(Int((row.frame.minY * 2).rounded()) / 2)"
+            }.joined(separator: ",")
+            for row in visibleRows {
+                let index = row.index
                 let protocolLabel = app.staticTexts.matching(identifier: "Profile \(index) protocol").firstMatch
                 let connect = app.buttons.matching(identifier: "Profile \(index) action").firstMatch
-                guard protocolLabel.isHittable, connect.isHittable else { continue }
+                let nameIsHittable = row.name.isHittable
+                let protocolIsHittable = protocolLabel.isHittable
+                let actionIsHittable = connect.isHittable
+                rowObservations.append(
+                    "p\(index) name=\(Self.frameDescription(row.frame))/\(nameIsHittable) " +
+                    "protocol=\(Self.frameDescription(protocolLabel.frame))/\(protocolIsHittable) " +
+                    "action=\(Self.frameDescription(connect.frame))/\(actionIsHittable)"
+                )
+                guard nameIsHittable, protocolIsHittable, actionIsHittable,
+                      !encountered.contains(index) else { continue }
                 encountered.append(index)
                 XCTAssertEqual(protocolLabel.label, "Profile \(index) protocol · OUTLINE")
                 XCTAssertEqual(connect.label, "Connect")
-                XCTAssertTrue(connect.isHittable)
             }
+            traversalObservations.append(
+                "step=\(step) viewport=\(Self.frameDescription(viewport)) " +
+                "rows=[\(rowObservations.joined(separator: "; "))]"
+            )
             if encountered.count == 12 { break }
+            if geometry == previousGeometry {
+                consecutiveNoMovement += 1
+            } else {
+                consecutiveNoMovement = 0
+            }
+            previousGeometry = geometry
+            if consecutiveNoMovement >= 2 { break }
+
             let start = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80))
-            let end = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.50))
-            start.press(forDuration: 0.05, thenDragTo: end)
+            let end = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+            start.press(
+                forDuration: 0.05,
+                thenDragTo: end,
+                withVelocity: XCUIGestureVelocity(80),
+                thenHoldForDuration: 0.10
+            )
         }
-        XCTAssertEqual(encountered, Array(1...12), "Rendered profiles should appear in source order")
+        XCTAssertEqual(
+            encountered,
+            Array(1...12),
+            "Rendered profiles should appear in source order. Scroll measurements: \(traversalObservations.joined(separator: " | "))"
+        )
         XCTAssertTrue(app.staticTexts["Profile 12"].isHittable)
         XCTAssertTrue(app.buttons["Profile 12 action"].isHittable)
 
@@ -233,6 +278,10 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", value), object: field
         )
         XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 15), .completed)
+    }
+
+    private static func frameDescription(_ frame: CGRect) -> String {
+        String(format: "(%.1f,%.1f,%.1f,%.1f)", frame.minX, frame.minY, frame.width, frame.height)
     }
 
     private func waitForLoadedInventory(source: String) throws -> XCUIElement {
