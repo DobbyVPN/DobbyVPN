@@ -24,12 +24,16 @@ _DEFAULT_UI_TEST_SELECTION = (
     "testAutomaticProfilesAndFixtureRequestCounts",
 )
 _NATIVE_CASE_TEST_SELECTIONS = {
-    IOS_LOGS_FREEZE_RESUME_CASE:
+    IOS_LOGS_FREEZE_RESUME_CASE: (
         "iosAppUITests/NativeUIInteractionTests/testLogsFreezeAndResumeAtBottom",
-    IOS_RENDERER_SEVERITY_CASE: _DEFAULT_UI_TEST_SELECTION[1],
+        "iosAppUITests/NativeUIInteractionTests/testNativeConnectionAboutAndLogs",
+    ),
+    IOS_RENDERER_SEVERITY_CASE: (_DEFAULT_UI_TEST_SELECTION[1],),
     IOS_SUBSCRIPTION_FIXTURE_CASE:
-        "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
-        "testAutomaticProfilesAndFixtureRequestCounts",
+        (
+            "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
+            "testAutomaticProfilesAndFixtureRequestCounts",
+        ),
 }
 
 
@@ -47,7 +51,9 @@ def ui_test_selection(native_cases: Sequence[str] | None = None) -> tuple[str, .
     if len(set(selected)) != len(selected):
         raise IOSSimulatorContractError("native XCTest cases must be unique")
     try:
-        return tuple(_NATIVE_CASE_TEST_SELECTIONS[case] for case in selected)
+        return tuple(
+            test for case in selected for test in _NATIVE_CASE_TEST_SELECTIONS[case]
+        )
     except KeyError as error:
         raise IOSSimulatorContractError(
             f"unsupported iOS Simulator native case: {error.args[0]}"

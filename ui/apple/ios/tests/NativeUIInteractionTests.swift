@@ -54,6 +54,10 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testNativeConnectionAboutAndLogs() throws {
+        app.terminate()
+        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
+        app.launch()
+
         let configuration = app.textFields["Connection configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         assertLogLayout()
@@ -133,7 +137,10 @@ final class NativeUIInteractionTests: XCTestCase {
         )
         let clearAnchorOffsetBeforeScroll = clearAnchor.element.frame.minY - logs.frame.minY
         let clearAnchorOffset = scrollLogsAwayFromBottom(
-            logs, anchor: clearAnchor, screenshotName: "logs-scroll-attempt"
+            logs,
+            anchor: clearAnchor,
+            diagnosticPrefix: "logs-clear",
+            screenshotName: "logs-clear-scroll-attempt"
         )
         XCTAssertTrue(logs.value as? String == renderedBeforeClear,
                       "Scrolling to an older record should not change the rendered entries")
@@ -439,7 +446,10 @@ final class NativeUIInteractionTests: XCTestCase {
                       "The anchor should identify a specific rendered log record")
         let anchorOffsetBeforeScroll = positionAnchor.element.frame.minY - logs.frame.minY
         let anchorOffsetAfterScroll = scrollLogsAwayFromBottom(
-            logs, anchor: positionAnchor, dragEndY: 0.75
+            logs,
+            anchor: positionAnchor,
+            diagnosticPrefix: "logs-freeze",
+            dragEndY: 0.75
         )
         XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
                              "The gesture should move the identifiable record away from the bottom")
@@ -761,6 +771,7 @@ final class NativeUIInteractionTests: XCTestCase {
     private func scrollLogsAwayFromBottom(
         _ logs: XCUIElement,
         anchor: RenderedLogAnchor,
+        diagnosticPrefix: String,
         dragEndY: CGFloat = 0.60,
         screenshotName: String? = nil
     ) -> CGFloat {
@@ -786,14 +797,15 @@ final class NativeUIInteractionTests: XCTestCase {
         let offsetAfter = currentAnchorFrame.minY - currentViewportFrame.minY
         let currentAnchorIsVisible = frameIsVisible(currentAnchorFrame, in: currentViewportFrame)
         if !currentAnchorIsVisible {
-            attachScreenshot("logs-scroll-anchor-not-visible")
+            attachScreenshot("\(diagnosticPrefix)-scroll-anchor-not-visible")
             attachLogScrollFailureDiagnostics(
                 anchor: anchor,
                 beforeAnchorFrame: initialAnchorFrame,
                 afterAnchorFrame: currentAnchorFrame,
                 beforeViewportFrame: initialViewportFrame,
                 afterViewportFrame: currentViewportFrame,
-                logs: logs
+                logs: logs,
+                attachmentName: "\(diagnosticPrefix)-log-scroll-anchor-diagnostics"
             )
         }
         XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
@@ -811,7 +823,8 @@ final class NativeUIInteractionTests: XCTestCase {
         afterAnchorFrame: CGRect,
         beforeViewportFrame: CGRect,
         afterViewportFrame: CGRect,
-        logs: XCUIElement
+        logs: XCUIElement,
+        attachmentName: String
     ) {
         let details = logs.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
@@ -834,6 +847,8 @@ final class NativeUIInteractionTests: XCTestCase {
             ? "<no visible Details or Hide details descendants>"
             : visibleDetailsFrames.joined(separator: "\n")
         let diagnosticText = """
+        Case: \(attachmentName)
+
         Anchored record:
         \(anchor.record)
 
@@ -852,7 +867,7 @@ final class NativeUIInteractionTests: XCTestCase {
         \(scrollDiagnosticValue)
         """
         let attachment = XCTAttachment(string: diagnosticText)
-        attachment.name = "dobbyvpn-ui-log-scroll-anchor-diagnostics"
+        attachment.name = "dobbyvpn-ui-\(attachmentName)"
         attachment.lifetime = .keepAlways
         add(attachment)
     }

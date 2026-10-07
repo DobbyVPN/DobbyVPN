@@ -385,6 +385,11 @@ struct DobbyLogView: UIViewRepresentable {
             let viewportBottom = rawViewportBottom - scrollView.adjustedContentInset.bottom
             let distanceToBottom = scrollView.contentSize.height - viewportBottom
             let followHeight = effectiveContentHeight(for: logView)
+            let usedRect = logView.layoutManager.usedRect(for: logView.textContainer)
+            let extraLineFragment = logView.layoutManager.extraLineFragmentRect
+            let pan = scrollView.panGestureRecognizer
+            let panTranslationY = pan.translation(in: scrollView).y
+            let panVelocityY = pan.velocity(in: scrollView).y
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: viewportBottom,
                 contentHeight: followHeight
@@ -404,8 +409,20 @@ struct DobbyLogView: UIViewRepresentable {
                 "offsetY=\(number(scrollView.contentOffset.y))",
                 "boundsWidth=\(number(scrollView.bounds.width))",
                 "viewportHeight=\(number(scrollView.bounds.height))",
+                "scrollEnabled=\(scrollView.isScrollEnabled)",
+                "tracking=\(scrollView.isTracking)",
+                "panState=\(pan.state)",
+                "panTranslationY=\(number(panTranslationY))",
+                "panVelocityY=\(number(panVelocityY))",
                 "contentHeight=\(number(scrollView.contentSize.height))",
+                "contentWidth=\(number(scrollView.contentSize.width))",
                 "textStorageLength=\(logView.textStorage.length)",
+                "glyphCount=\(logView.layoutManager.numberOfGlyphs)",
+                "textContainerWidth=\(number(logView.textContainer.size.width))",
+                "textContainerHeight=\(number(logView.textContainer.size.height))",
+                "usedRectWidth=\(number(usedRect.width))",
+                "usedRectHeight=\(number(usedRect.height))",
+                "extraLineFragmentHeight=\(number(extraLineFragment.height))",
                 "textContainerInsetTop=\(number(logView.textContainerInset.top))",
                 "textContainerInsetBottom=\(number(logView.textContainerInset.bottom))",
                 "contentInsetBottom=\(number(scrollView.contentInset.bottom))",

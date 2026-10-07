@@ -289,7 +289,7 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             run[run.index("-resultBundlePath") + 1], str(result_bundle)
         )
 
-    def test_ios_native_case_selectors_filter_to_one_exact_test(self) -> None:
+    def test_ios_native_case_selectors_filter_to_exact_tests(self) -> None:
         udid = "01234567-89ab-cdef-0123-456789abcdef"
         command = ios_simulator_app.xcodebuild_ui_test_without_building_command(
             udid,
@@ -303,6 +303,8 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         self.assertEqual(filters, [
             "-only-testing:iosAppUITests/NativeUIInteractionTests/"
             "testLogsFreezeAndResumeAtBottom",
+            "-only-testing:iosAppUITests/NativeUIInteractionTests/"
+            "testNativeConnectionAboutAndLogs",
         ])
         severity = ios_simulator_app.xcodebuild_ui_test_without_building_command(
             udid,
