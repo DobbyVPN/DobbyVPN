@@ -55,6 +55,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
     func testNativeConnectionAboutAndLogs() throws {
         app.terminate()
+        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
         app.launch()
 
         let configuration = app.textFields["Connection configuration"]
@@ -120,6 +121,9 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["Clear"].exists)
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let scrollTrace = app.descendants(matching: .any)
+            .matching(identifier: "Log scroll diagnostics").firstMatch
+        XCTAssertTrue(scrollTrace.waitForExistence(timeout: 10))
         let populated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", ""), object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [populated], timeout: 10), .completed, "Retained records should be visible before clearing")
         let clearSentinel = "Paste an HTTPS subscription URL with a host"

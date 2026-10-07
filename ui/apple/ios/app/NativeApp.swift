@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import IOSIntegration
 
 @main
@@ -28,6 +29,9 @@ struct NativeDobbyVPNApp: App {
                 .overlay(alignment: .topTrailing) {
                     if SimulatorLogScrollDiagnostics.shared.isEnabled {
                         SimulatorLogScrollDiagnosticsView()
+                            .frame(width: 1, height: 1)
+                            .opacity(0.01)
+                            .accessibilityHidden(false)
                     }
                 }
 #else
@@ -54,14 +58,15 @@ private struct SimulatorTestSessionStateView: View {
     }
 }
 
-final class SimulatorLogScrollDiagnostics: ObservableObject {
+final class SimulatorLogScrollDiagnostics {
     static let shared = SimulatorLogScrollDiagnostics()
     static let environmentKey = "DOBBY_IOS_TEST_LOG_SCROLL_TRACE"
     private static let maximumRecords = 96
 
     let isEnabled: Bool
-    @Published private(set) var value = ""
+    private(set) var value = ""
     private var records: [String] = []
+    private weak var accessibilityView: UILabel?
 
     private init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         isEnabled = environment[Self.environmentKey] == "1"
@@ -76,22 +81,31 @@ final class SimulatorLogScrollDiagnostics: ObservableObject {
                 self.records.removeFirst(self.records.count - Self.maximumRecords)
             }
             self.value = self.records.joined(separator: "\n")
+            self.accessibilityView?.accessibilityValue = self.value
         }
+    }
+
+    func attachAccessibilityView(_ view: UILabel) {
+        accessibilityView = view
+        view.isAccessibilityElement = true
+        view.accessibilityLabel = "Log scroll diagnostics"
+        view.accessibilityIdentifier = "Log scroll diagnostics"
+        view.accessibilityValue = value
+        view.isUserInteractionEnabled = false
     }
 }
 
-private struct SimulatorLogScrollDiagnosticsView: View {
-    @ObservedObject private var diagnostics = SimulatorLogScrollDiagnostics.shared
+private struct SimulatorLogScrollDiagnosticsView: UIViewRepresentable {
+    private let diagnostics = SimulatorLogScrollDiagnostics.shared
 
-    var body: some View {
-        Text("Log scroll diagnostics")
-            .accessibilityElement()
-            .accessibilityLabel("Log scroll diagnostics")
-            .accessibilityIdentifier("Log scroll diagnostics")
-            .accessibilityValue(diagnostics.value)
-            .frame(width: 1, height: 1)
-            .opacity(0.01)
-            .accessibilityHidden(false)
+    func makeUIView(context: Context) -> UILabel {
+        let view = UILabel()
+        diagnostics.attachAccessibilityView(view)
+        return view
+    }
+
+    func updateUIView(_ view: UILabel, context: Context) {
+        diagnostics.attachAccessibilityView(view)
     }
 }
 #endif
