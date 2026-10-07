@@ -713,9 +713,9 @@ class NativeUiInstrumentedTest {
         check(!logCanScrollDown()) {
             "ANDROID_LOG_FOLLOW_DID_NOT_REACH_BOTTOM " + logGeometry()
         }
-        val followDeadline = System.currentTimeMillis() + 10_000
+        val resumeDeadline = System.currentTimeMillis() + 10_000
         while (!requireObject("Connection logs").text.orEmpty().contains(pending)
-            && System.currentTimeMillis() < followDeadline) {
+            && System.currentTimeMillis() < resumeDeadline) {
             device.waitForIdle()
             Thread.sleep(100)
         }
