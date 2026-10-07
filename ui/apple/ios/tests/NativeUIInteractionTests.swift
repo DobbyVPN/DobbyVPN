@@ -158,6 +158,9 @@ final class NativeUIInteractionTests: XCTestCase {
             logs,
             anchor: clearAnchor,
             diagnosticPrefix: "logs-clear",
+            // The prior 15% drag crossed the follow threshold briefly, then
+            // decelerated back to the bottom. Use the measured 25% endpoint.
+            dragEndY: 0.70,
             screenshotName: "logs-clear-scroll-attempt"
         )
         XCTAssertTrue(logs.value as? String == renderedBeforeClear,

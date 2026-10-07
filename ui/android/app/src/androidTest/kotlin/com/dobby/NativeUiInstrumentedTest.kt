@@ -705,15 +705,24 @@ class NativeUiInstrumentedTest {
                 && logScrollY() <= frozenScrollY + 32) {
             "ANDROID_LOG_FROZEN_VIEW_DID_NOT_SURVIVE_ACTIVITY_RECREATION " + logGeometry()
         }
-        val deadline = System.currentTimeMillis() + 10_000
-        while (!requireObject("Connection logs").text.orEmpty().contains(pending) && System.currentTimeMillis() < deadline) {
+        val scrollDeadline = System.currentTimeMillis() + 10_000
+        while (logCanScrollDown() && System.currentTimeMillis() < scrollDeadline) {
             requireObject("Connection logs").parent.scroll(androidx.test.uiautomator.Direction.DOWN, 1f)
             device.waitForIdle()
         }
-        check(requireObject("Connection logs").text.orEmpty().contains(pending)) {
+        check(!logCanScrollDown()) {
+            "ANDROID_LOG_FOLLOW_DID_NOT_REACH_BOTTOM " + logGeometry()
+        }
+        val followDeadline = System.currentTimeMillis() + 10_000
+        while (!requireObject("Connection logs").text.orEmpty().contains(pending)
+            && System.currentTimeMillis() < followDeadline) {
+            device.waitForIdle()
+            Thread.sleep(100)
+        }
+        check(requireObject("Connection logs").text.orEmpty().contains(pending)
+                && !logCanScrollDown()) {
             "ANDROID_LOG_FOLLOW_NOT_RESUMED " + logGeometry()
         }
-        check(!logCanScrollDown()) { "ANDROID_LOG_FOLLOW_DID_NOT_REACH_BOTTOM " + logGeometry() }
         check(requireObject("Connection logs").parent.scroll(androidx.test.uiautomator.Direction.UP, 1f)) {
             "ANDROID_LOG_CLEAR_FREEZE_FAILED"
         }
