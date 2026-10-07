@@ -765,14 +765,30 @@ final class NativeUIInteractionTests: XCTestCase {
         screenshotName: String? = nil
     ) -> CGFloat {
         let initialAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
-        let offsetBefore = initialAnchor.frame.minY - logs.frame.minY
+        let initialAnchorFrame = initialAnchor.frame
+        let initialViewportFrame = logs.frame
+        let offsetBefore = initialAnchorFrame.minY - initialViewportFrame.minY
         // The freeze case needs a larger drag; its anchor is selected near the top.
         let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
         let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: dragEndY))
         start.press(forDuration: 0.1, thenDragTo: end)
         if let screenshotName = screenshotName { attachScreenshot(screenshotName) }
         let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
-        let offsetAfter = currentAnchor.frame.minY - logs.frame.minY
+        let currentAnchorFrame = currentAnchor.frame
+        let currentViewportFrame = logs.frame
+        let offsetAfter = currentAnchorFrame.minY - currentViewportFrame.minY
+        let currentAnchorIsVisible = frameIsVisible(currentAnchorFrame, in: currentViewportFrame)
+        if !currentAnchorIsVisible {
+            attachScreenshot("logs-scroll-anchor-not-visible")
+            attachLogScrollFailureDiagnostics(
+                anchor: anchor,
+                beforeAnchorFrame: initialAnchorFrame,
+                afterAnchorFrame: currentAnchorFrame,
+                beforeViewportFrame: initialViewportFrame,
+                afterViewportFrame: currentViewportFrame,
+                logs: logs
+            )
+        }
         XCTAssertGreaterThan(offsetAfter, offsetBefore + 24,
                              "The downward drag should move the reader more than the follow threshold")
         XCTAssertTrue(elementIsVisible(currentAnchor, in: logs),
@@ -782,10 +798,65 @@ final class NativeUIInteractionTests: XCTestCase {
         return offsetAfter
     }
 
+    private func attachLogScrollFailureDiagnostics(
+        anchor: RenderedLogAnchor,
+        beforeAnchorFrame: CGRect,
+        afterAnchorFrame: CGRect,
+        beforeViewportFrame: CGRect,
+        afterViewportFrame: CGRect,
+        logs: XCUIElement
+    ) {
+        let details = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let visibleDetailsFrames = (0..<details.count).compactMap { index -> String? in
+            let element = details.element(boundBy: index)
+            let frame = element.frame
+            guard element.label == "Details" || element.label == "Hide details",
+                  !frame.isNull, frame.width > 0, frame.height > 0 else { return nil }
+            let visibleFrame = frame.intersection(afterViewportFrame)
+            guard !visibleFrame.isNull, visibleFrame.width > 0, visibleFrame.height > 0 else { return nil }
+            return "\(element.label): frame=\(frame), visibleFrame=\(visibleFrame)"
+        }
+        let scrollDiagnostics = app.descendants(matching: .any)
+            .matching(identifier: "Log scroll diagnostics").firstMatch
+        let scrollDiagnosticValue = scrollDiagnostics.exists
+            ? (scrollDiagnostics.value as? String ?? "<no accessibility value>")
+            : "<diagnostic element unavailable>"
+        let renderedLogText = logs.value as? String ?? "<no rendered log text>"
+        let visibleFrames = visibleDetailsFrames.isEmpty
+            ? "<no visible Details or Hide details descendants>"
+            : visibleDetailsFrames.joined(separator: "\n")
+        let diagnosticText = """
+        Anchored record:
+        \(anchor.record)
+
+        Anchor frame before drag: \(beforeAnchorFrame)
+        Anchor frame after drag: \(afterAnchorFrame)
+        Viewport frame before drag: \(beforeViewportFrame)
+        Viewport frame after drag: \(afterViewportFrame)
+
+        Visible Details / Hide details descendant frames:
+        \(visibleFrames)
+
+        Rendered log text:
+        \(renderedLogText)
+
+        Accessibility scroll diagnostic value:
+        \(scrollDiagnosticValue)
+        """
+        let attachment = XCTAttachment(string: diagnosticText)
+        attachment.name = "dobbyvpn-ui-log-scroll-anchor-diagnostics"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     private func elementIsVisible(_ element: XCUIElement, in logs: XCUIElement) -> Bool {
-        let frame = element.frame
+        frameIsVisible(element.frame, in: logs.frame)
+    }
+
+    private func frameIsVisible(_ frame: CGRect, in viewportFrame: CGRect) -> Bool {
         guard !frame.isNull, frame.width > 0, frame.height > 0 else { return false }
-        let visibleFrame = frame.intersection(logs.frame)
+        let visibleFrame = frame.intersection(viewportFrame)
         return !visibleFrame.isNull && visibleFrame.width > 0 && visibleFrame.height > 0
     }
 

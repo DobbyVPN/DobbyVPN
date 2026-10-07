@@ -69,11 +69,14 @@ final class SimulatorLogScrollDiagnostics: ObservableObject {
 
     func append(_ record: String) {
         guard isEnabled else { return }
-        records.append(record)
-        if records.count > Self.maximumRecords {
-            records.removeFirst(records.count - Self.maximumRecords)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.records.append(record)
+            if self.records.count > Self.maximumRecords {
+                self.records.removeFirst(self.records.count - Self.maximumRecords)
+            }
+            self.value = self.records.joined(separator: "\n")
         }
-        value = records.joined(separator: "\n")
     }
 }
 
