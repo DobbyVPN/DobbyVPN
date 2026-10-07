@@ -522,15 +522,18 @@ final class NativeUIInteractionTests: XCTestCase {
         let landscapeLayoutResult = XCTWaiter.wait(for: [landscapeLayout], timeout: 12)
         let landscapeAnchor = detailElement(for: positionAnchor, in: logs)
         let landscapeVisible = landscapeAnchor.map { elementIsVisible($0, in: logs) } ?? false
+        let scrollTraceValue = scrollTrace.value as? String ?? "<no UIKit trace>"
         let landscapeGeometry = """
         stableFrames=\(landscapeLayoutResult == .completed)
         appFrame=\(app.frame)
         logPaneFrame=\(logs.frame)
         anchorFrame=\(String(describing: landscapeAnchor?.frame))
         anchorVisible=\(landscapeVisible)
+        UIKit trace:
+        \(scrollTraceValue)
         """
         let geometryAttachment = XCTAttachment(string: landscapeGeometry)
-        geometryAttachment.name = "dobbyvpn-ui-logs-freeze-landscape-geometry"
+        geometryAttachment.name = "log-freeze-landscape-geometry"
         geometryAttachment.lifetime = .keepAlways
         add(geometryAttachment)
         attachScreenshot("logs-freeze-landscape")
