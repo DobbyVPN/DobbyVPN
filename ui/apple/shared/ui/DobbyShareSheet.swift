@@ -90,6 +90,21 @@ private final class DobbyLogTextView: UITextView {
             : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
     }
 
+    func restoreScrollExtent(to height: CGFloat, layoutHeight: CGFloat) {
+        guard height.isFinite, height > contentSize.height + 1 else { return }
+        let previousHeight = contentSize.height
+        contentSize = CGSize(width: contentSize.width, height: height)
+        if onLayoutDiagnostic != nil {
+            recordPositionDiagnostic("scroll-extent-restored", details: [
+                "previousHeight=\(diagnosticNumber(previousHeight))",
+                "restoredHeight=\(diagnosticNumber(contentSize.height))",
+                "layoutHeight=\(diagnosticNumber(layoutHeight))",
+                "usedRectMaxY=\(diagnosticNumber(layoutManager.usedRect(for: textContainer).maxY))",
+                "extraLineFragmentMaxY=\(diagnosticNumber(layoutManager.extraLineFragmentRect.maxY))",
+            ].joined(separator: " "))
+        }
+    }
+
     func captureReadingPosition() {
         guard textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
@@ -447,9 +462,22 @@ struct DobbyLogView: UIViewRepresentable {
                 lastStableContentHeight = measured
                 return measured
             }
-            // During a transient TextKit layout, UITextView can report only its
-            // container insets while retaining nonempty text. Keep the last
-            // laid-out height for follow-state decisions until layout settles.
+            // UITextView can retain valid TextKit layout while its scroll extent
+            // transiently collapses to the text-container insets. Restore the
+            // extent from the laid-out text so a real drag can move the reader.
+            logView.layoutManager.ensureLayout(for: logView.textContainer)
+            let usedRect = logView.layoutManager.usedRect(for: logView.textContainer)
+            let extraLineFragment = logView.layoutManager.extraLineFragmentRect
+            let layoutHeight = max(usedRect.maxY, extraLineFragment.maxY)
+            let restoredHeight = max(lastStableContentHeight ?? measured, ceil(layoutHeight))
+            logView.restoreScrollExtent(to: restoredHeight, layoutHeight: layoutHeight)
+            let repaired = logView.contentSize.height
+            if repaired > emptyTextHeight + 1 {
+                lastStableContentHeight = repaired
+                return repaired
+            }
+            // Keep the last valid height for follow-state calculations if UIKit
+            // still reports the collapsed extent after the repair attempt.
             return lastStableContentHeight ?? measured
         }
     }

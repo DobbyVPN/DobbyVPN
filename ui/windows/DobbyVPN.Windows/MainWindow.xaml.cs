@@ -135,8 +135,8 @@ public sealed partial class MainWindow : Window
                     controlType = child.GetAutomationControlType().ToString(),
                     name = child.GetName(),
                     automationId = child.GetAutomationId(),
-                    isControlElement = child.GetIsControlElement(),
-                    isContentElement = child.GetIsContentElement(),
+                    isControlElement = child.IsControlElement(),
+                    isContentElement = child.IsContentElement(),
                 }).ToArray(),
             };
         }
