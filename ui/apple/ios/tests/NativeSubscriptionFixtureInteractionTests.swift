@@ -113,11 +113,34 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertLessThanOrEqual(profiles.frame.height, 220, "The profile list should remain bounded")
 
         // The inner list can extend below the clipped outer controls viewport
-        // on the compact Simulator. Scroll the outer view until the complete
-        // inner viewport is visible before sending row-scrolling gestures.
-        for _ in 0..<8 {
-            if profiles.frame.maxY <= controls.frame.maxY + 1 { break }
-            controls.swipeUp()
+        // on the compact Simulator. Drag through the blank trailing margin
+        // above the child list so hit-testing cannot scroll the child to its
+        // tail while we bring the complete viewport into view.
+        for _ in 0..<4 {
+            let parentViewport = controls.frame
+            let profileViewport = profiles.frame
+            if profileViewport.maxY <= parentViewport.maxY + 1 { break }
+
+            let startPoint = CGPoint(
+                x: parentViewport.maxX - 4,
+                y: profileViewport.minY - 4
+            )
+            let scrollDistance = profileViewport.maxY - parentViewport.maxY + 8
+            let endPoint = CGPoint(x: startPoint.x, y: startPoint.y - scrollDistance)
+            XCTAssertTrue(parentViewport.contains(startPoint), "The parent-scroll start should lie in the visible Connection controls viewport")
+            XCTAssertTrue(parentViewport.contains(endPoint), "The parent-scroll end should lie in the visible Connection controls viewport")
+            XCTAssertFalse(profileViewport.contains(startPoint), "The parent-scroll start must stay outside the nested profile list")
+            XCTAssertFalse(profileViewport.contains(endPoint), "The parent-scroll end must stay outside the nested profile list")
+
+            let start = controls.coordinate(withNormalizedOffset: CGVector(
+                dx: (startPoint.x - parentViewport.minX) / parentViewport.width,
+                dy: (startPoint.y - parentViewport.minY) / parentViewport.height
+            ))
+            let end = controls.coordinate(withNormalizedOffset: CGVector(
+                dx: (endPoint.x - parentViewport.minX) / parentViewport.width,
+                dy: (endPoint.y - parentViewport.minY) / parentViewport.height
+            ))
+            start.press(forDuration: 0.05, thenDragTo: end)
         }
         let controlsViewport = controls.frame
         let profileViewport = profiles.frame
@@ -130,6 +153,7 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             "The profile list should end inside the visible Connection controls viewport; profiles=\(profileViewport), controls=\(controlsViewport)"
         )
         XCTAssertTrue(profiles.isHittable, "The complete profile viewport should be available for row gestures")
+        attachScreenshot("subscription-profiles-visible")
 
         // Move in short increments so every source-ordered row passes through
         // the viewport. Validate each rendered description, protocol and
