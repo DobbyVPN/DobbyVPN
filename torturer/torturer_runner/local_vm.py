@@ -2634,7 +2634,9 @@ def cleanup(args: argparse.Namespace) -> int:
         try:
             cleanup_ios(run_dir, runtime, logs, args.timeout)
         except Exception as error:
-            errors.append(f"cleanup-ios: {type(error).__name__}: {error}")
+            errors.append(
+                "cleanup-ios: " + "".join(traceback.format_exception(error)).rstrip()
+            )
     if installed_descriptor.is_file():
         source = run_dir / "source"
         _cleanup_logged(

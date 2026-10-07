@@ -107,6 +107,34 @@ class LocalVMLifecycleTests(unittest.TestCase):
             self.assertIn("original I/O failure", diagnostic.getvalue())
             self.assertEqual(json.loads((run_dir / "platform.json").read_text())["status"], "cleanup-failed")
 
+    def test_ios_cleanup_retains_nested_exception_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            local_vm._write_json(run_dir / "platform.json", {
+                "platform": "ios-simulator",
+                "status": "running",
+                "runtime": {"udid": "synthetic-simulator"},
+            })
+            args = local_vm.build_parser().parse_args([
+                "cleanup", "--platform", "ios-simulator", "--run-dir", str(run_dir),
+                "--timeout", "30",
+            ])
+            failure = ExceptionGroup(
+                "Disposable iOS Simulator cleanup failed",
+                [OSError("synthetic keychain reset failure")],
+            )
+            diagnostic = io.StringIO()
+            with (
+                mock.patch("torturer_runner.local_vm_ios.cleanup", side_effect=failure),
+                redirect_stderr(diagnostic),
+            ):
+                self.assertEqual(local_vm.cleanup(args), 1)
+
+            state = json.loads((run_dir / "platform.json").read_text())
+            self.assertEqual(state["status"], "cleanup-failed")
+            self.assertIn("OSError: synthetic keychain reset failure", state["cleanup_errors"][0])
+            self.assertIn("OSError: synthetic keychain reset failure", diagnostic.getvalue())
+
     def test_windows_case_only_full_run_reuses_the_tracked_backend(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
