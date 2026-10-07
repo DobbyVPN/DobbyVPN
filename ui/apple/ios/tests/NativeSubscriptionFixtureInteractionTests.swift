@@ -155,18 +155,25 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertTrue(profiles.isHittable, "The complete profile viewport should be available for row gestures")
         attachScreenshot("subscription-profiles-visible")
 
-        // Walk through the list in measured, low-speed steps. The default
-        // XCTest drag velocity can carry the nested ScrollView past several
-        // rows even when the finger moves only about one row. Count a profile
-        // only after its description, protocol and Connect action are hittable.
+        // Walk through the list with feedback from the row positions. The
+        // low-speed XCTest drag moved content only 2 points after an 11.88-
+        // point finger movement on the compact Simulator, so scale the next
+        // drag from the measured content movement. Keep each observed scroll
+        // below a quarter row to avoid skipping profiles.
         let names = app.staticTexts.matching(
             NSPredicate(format: "label MATCHES %@", #"Simulator fixture profile (?:[1-9]|1[01])|Profile 12"#)
         )
         var encountered: [Int] = []
         var traversalObservations: [String] = []
         var previousGeometry: String?
+        var previousRowY: [Int: CGFloat] = [:]
+        var previousFingerTravel: CGFloat?
+        var requestedFingerTravel: CGFloat = 0
         var consecutiveNoMovement = 0
-        for step in 0..<50 {
+        let maximumTraversalSteps = 50
+        let targetContentMovement: CGFloat = 10
+        let minimumFingerTravel: CGFloat = 6
+        for step in 0..<maximumTraversalSteps {
             let viewport = profiles.frame
             var visibleRows: [(index: Int, name: XCUIElement, frame: CGRect)] = []
             for element in names.allElementsBoundByIndex {
@@ -180,6 +187,38 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             let geometry = visibleRows.map { row in
                 "\(row.index)@\(Int((row.frame.minY * 2).rounded()) / 2)"
             }.joined(separator: ",")
+            var currentRowY: [Int: CGFloat] = [:]
+            for row in visibleRows {
+                currentRowY[row.index] = row.frame.minY
+            }
+            let observedMovements = currentRowY.compactMap { entry -> CGFloat? in
+                guard let previousY = previousRowY[entry.key] else { return nil }
+                let movement = previousY - entry.value
+                return movement > 0.25 ? movement : nil
+            }
+            let observedContentMovement = Self.median(observedMovements)
+            var movementDescription = "previousDrag=none"
+            if let previousFingerTravel {
+                if let observedContentMovement {
+                    let scale = min(2, targetContentMovement / observedContentMovement)
+                    requestedFingerTravel = previousFingerTravel * scale
+                    movementDescription =
+                        "previousDrag=\(Self.pointDescription(previousFingerTravel))pt " +
+                        "observedContent=\(Self.pointDescription(observedContentMovement))pt"
+                } else {
+                    requestedFingerTravel = previousFingerTravel
+                    movementDescription =
+                        "previousDrag=\(Self.pointDescription(previousFingerTravel))pt " +
+                        "observedContent=unavailable"
+                }
+            } else {
+                requestedFingerTravel = viewport.height * 0.08
+            }
+            let maximumFingerTravel = viewport.height * (0.80 - 0.12)
+            requestedFingerTravel = min(
+                maximumFingerTravel,
+                max(minimumFingerTravel, requestedFingerTravel)
+            )
             for row in visibleRows {
                 let index = row.index
                 let protocolLabel = app.staticTexts.matching(identifier: "Profile \(index) protocol").firstMatch
@@ -200,19 +239,34 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             }
             traversalObservations.append(
                 "step=\(step) viewport=\(Self.frameDescription(viewport)) " +
+                "\(movementDescription) nextDrag=\(Self.pointDescription(requestedFingerTravel))pt " +
                 "rows=[\(rowObservations.joined(separator: "; "))]"
             )
-            if encountered.count == 12 { break }
+            if encountered.count == 12 {
+                traversalObservations[traversalObservations.count - 1] += " stop=all-profiles-visible"
+                break
+            }
             if geometry == previousGeometry {
                 consecutiveNoMovement += 1
             } else {
                 consecutiveNoMovement = 0
             }
             previousGeometry = geometry
-            if consecutiveNoMovement >= 2 { break }
+            previousRowY = currentRowY
+            if consecutiveNoMovement >= 2 {
+                traversalObservations[traversalObservations.count - 1] += " stop=no-movement"
+                break
+            }
+            guard step + 1 < maximumTraversalSteps else {
+                traversalObservations[traversalObservations.count - 1] += " stop=step-cap"
+                break
+            }
 
-            let start = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80))
-            let end = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+            let startOffset: CGFloat = 0.80
+            let endOffset = startOffset - requestedFingerTravel / viewport.height
+            let start = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startOffset))
+            let end = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endOffset))
+            previousFingerTravel = (startOffset - endOffset) * viewport.height
             start.press(
                 forDuration: 0.05,
                 thenDragTo: end,
@@ -282,6 +336,20 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
 
     private static func frameDescription(_ frame: CGRect) -> String {
         String(format: "(%.1f,%.1f,%.1f,%.1f)", frame.minX, frame.minY, frame.width, frame.height)
+    }
+
+    private static func pointDescription(_ points: CGFloat) -> String {
+        String(format: "%.1f", points)
+    }
+
+    private static func median(_ values: [CGFloat]) -> CGFloat? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        let middle = sorted.count / 2
+        if sorted.count % 2 == 0 {
+            return (sorted[middle - 1] + sorted[middle]) / 2
+        }
+        return sorted[middle]
     }
 
     private func waitForLoadedInventory(source: String) throws -> XCUIElement {
