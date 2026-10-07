@@ -257,6 +257,11 @@ public sealed partial class MainWindow : Window
                 if (recoveringFromSnapshotError) ErrorText.Text = string.Empty;
             }
         }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            // Window shutdown cancels the in-flight Snapshot request. Do not
+            // report this expected lifecycle cancellation as a UI failure.
+        }
         catch (Exception error)
         {
             _snapshot = null;
