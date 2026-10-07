@@ -7,23 +7,17 @@ import AppKit
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
-    private let onLogScrollDiagnostic: ((String) -> Void)?
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var configurationFocused: Bool
     @State private var showingAbout = false
     @State private var controlsHeight: CGFloat = 0
     @State private var canPaste = false
-    // The iOS log coordinator reports its state here for the visible status line.
     @State private var followingLogs = true
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
 
-    public init(
-        model: DobbySessionViewModel,
-        onLogScrollDiagnostic: ((String) -> Void)? = nil
-    ) {
+    public init(model: DobbySessionViewModel) {
         self.model = model
-        self.onLogScrollDiagnostic = onLogScrollDiagnostic
     }
 
     public var body: some View {
@@ -255,15 +249,10 @@ public struct DobbyRootView: View {
             }
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text(followingLogs ? "Following newest entries" : "Updates paused while reading")
-                .font(.caption2).foregroundStyle(.secondary)
-                .accessibilityIdentifier("Connection log following state")
 #if os(iOS)
             DobbyLogView(
                 entries: model.logEntries,
-                clear: model.clearRevision,
-                onFollowingChange: { followingLogs = $0 },
-                onScrollDiagnostic: onLogScrollDiagnostic
+                clear: model.clearRevision
             )
                 .accessibilityIdentifier("Connection logs")
 #else

@@ -55,7 +55,6 @@ final class NativeUIInteractionTests: XCTestCase {
 
     func testNativeConnectionAboutAndLogs() throws {
         app.terminate()
-        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
         app.launch()
 
         let configuration = app.textFields["Connection configuration"]
@@ -121,9 +120,6 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["Clear"].exists)
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
-        let scrollTrace = app.descendants(matching: .any)
-            .matching(identifier: "Log scroll diagnostics").firstMatch
-        XCTAssertTrue(scrollTrace.waitForExistence(timeout: 10))
         let populated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", ""), object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [populated], timeout: 10), .completed, "Retained records should be visible before clearing")
         let clearSentinel = "Paste an HTTPS subscription URL with a host"
@@ -348,7 +344,6 @@ final class NativeUIInteractionTests: XCTestCase {
         let validationError = "Paste an HTTPS subscription URL with a host"
         app.terminate()
         UIPasteboard.general.string = clipboard
-        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
         app.launch()
 
         let configuration = app.textFields["Connection configuration"]
@@ -359,15 +354,6 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
         let controls = app.descendants(matching: .any)
             .matching(identifier: "Connection controls").firstMatch
-        let followingState = app.staticTexts["Connection log following state"]
-        XCTAssertTrue(followingState.waitForExistence(timeout: 10))
-        let scrollTrace = app.descendants(matching: .any)
-            .matching(identifier: "Log scroll diagnostics").firstMatch
-        XCTAssertTrue(scrollTrace.waitForExistence(timeout: 10))
-        let followingLabel = "Following newest entries"
-        let frozenLabel = "Updates paused while reading"
-        XCTAssertEqual(followingState.label, followingLabel,
-                       "The visible log status should identify its initial follow state")
         let errorStatus = app.staticTexts["Error"]
         var expectedErrorCount = occurrences(of: validationError, in: logs.value as? String ?? "")
         paste.tap()
@@ -395,8 +381,6 @@ final class NativeUIInteractionTests: XCTestCase {
             return self.occurrences(of: validationError, in: text) >= 8
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
-        XCTAssertEqual(followingState.label, followingLabel,
-                       "Programmatic log updates should keep the view following newest entries")
         let beforeScroll = try XCTUnwrap(logs.value as? String)
         let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
         XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 8)
@@ -477,14 +461,7 @@ final class NativeUIInteractionTests: XCTestCase {
         )
         XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
                              "The gesture should move the identifiable record away from the bottom")
-        let followingPaused = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", frozenLabel), object: followingState
-        )
-        let followStateResult = XCTWaiter.wait(for: [followingPaused], timeout: 3)
         attachScreenshot("logs-freeze-scrolled")
-        let observedScrollTrace = scrollTrace.value as? String ?? "<no accessibility value>"
-        XCTAssertEqual(followStateResult, .completed,
-                       "A user scroll away from the bottom should publish the paused state. UIKit trace:\n\(observedScrollTrace)")
         XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
                        "Scrolling should preserve the rendered log entries")
         let frozen = try XCTUnwrap(logs.value as? String)
@@ -498,8 +475,6 @@ final class NativeUIInteractionTests: XCTestCase {
                        "Editing the configuration should not move the frozen log view")
         XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
                       "The same log record should remain visible after dismissing the configuration keyboard")
-        XCTAssertEqual(followingState.label, frozenLabel,
-                       "The configuration keyboard must not resume automatic log following")
         XCTAssertEqual(
             positionAnchor.element.frame.minY - logs.frame.minY,
             anchorOffsetBeforeConfiguration,
@@ -512,8 +487,6 @@ final class NativeUIInteractionTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { refreshOpportunity.fulfill() }
         wait(for: [refreshOpportunity], timeout: 2.0)
         attachScreenshot("logs-freeze-after-refresh")
-        XCTAssertEqual(followingState.label, frozenLabel,
-                       "A Paste validation entry must not resume following while the reader is away from the bottom")
         XCTAssertEqual(logs.value as? String, frozen,
                        "The refreshed log source should stay frozen while the reader is away from the bottom")
         XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
@@ -564,20 +537,16 @@ final class NativeUIInteractionTests: XCTestCase {
         let landscapeLayoutResult = XCTWaiter.wait(for: [landscapeLayout], timeout: 12)
         let landscapeAnchor = detailElement(for: readingAnchor, in: logs)
         let landscapeVisible = landscapeAnchor.map { elementIsVisible($0, in: logs) } ?? false
-        let scrollTraceValue = scrollTrace.value as? String ?? "<no UIKit trace>"
         let landscapeGeometry = """
         stableFrames=\(landscapeLayoutResult == .completed)
         appFrame=\(app.frame)
         controlsFrame=\(controls.frame)
         textViewFrame=\(logs.frame)
         logHeaderFrame=\(app.staticTexts["Logs"].frame)
-        followingLabelFrame=\(followingState.frame)
         preScrollDetailIndex=\(positionAnchor.detailIndex)
         readingAnchorDetailIndex=\(readingAnchor.detailIndex)
         anchorFrame=\(String(describing: landscapeAnchor?.frame))
         anchorVisible=\(landscapeVisible)
-        UIKit trace:
-        \(scrollTraceValue)
         """
         let geometryAttachment = XCTAttachment(string: landscapeGeometry)
         geometryAttachment.name = "log-freeze-landscape-geometry"
@@ -622,8 +591,6 @@ final class NativeUIInteractionTests: XCTestCase {
             return self.occurrences(of: validationError, in: text) > errorsBeforeScroll
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed, "Returning to the bottom should resume new log entries")
-        XCTAssertEqual(followingState.label, followingLabel,
-                       "Returning to the bottom should restore automatic log following")
     }
 
     private func verifyColdAndWarmImports() throws {
@@ -907,11 +874,6 @@ final class NativeUIInteractionTests: XCTestCase {
             guard !visibleFrame.isNull, visibleFrame.width > 0, visibleFrame.height > 0 else { return nil }
             return "\(element.label): frame=\(frame), visibleFrame=\(visibleFrame)"
         }
-        let scrollDiagnostics = app.descendants(matching: .any)
-            .matching(identifier: "Log scroll diagnostics").firstMatch
-        let scrollDiagnosticValue = scrollDiagnostics.exists
-            ? (scrollDiagnostics.value as? String ?? "<no accessibility value>")
-            : "<diagnostic element unavailable>"
         let renderedLogText = logs.value as? String ?? "<no rendered log text>"
         let visibleFrames = visibleDetailsFrames.isEmpty
             ? "<no visible Details or Hide details descendants>"
@@ -938,9 +900,6 @@ final class NativeUIInteractionTests: XCTestCase {
 
         Rendered log text:
         \(renderedLogText)
-
-        Accessibility scroll diagnostic value:
-        \(scrollDiagnosticValue)
         """
         let attachment = XCTAttachment(string: diagnosticText)
         attachment.name = "dobbyvpn-ui-\(attachmentName)"
