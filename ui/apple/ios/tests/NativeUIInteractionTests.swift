@@ -461,7 +461,7 @@ final class NativeUIInteractionTests: XCTestCase {
             logs,
             anchor: positionAnchor,
             diagnosticPrefix: "logs-freeze",
-            dragEndY: 0.75
+            dragEndY: 0.95
         )
         XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
                              "The gesture should move the identifiable record away from the bottom")
