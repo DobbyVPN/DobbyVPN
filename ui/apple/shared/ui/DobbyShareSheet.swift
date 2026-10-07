@@ -60,6 +60,10 @@ private final class DobbyLogTextView: UITextView {
     private var anchorCharacterIndex: Int?
     private var anchorViewportY: CGFloat?
 
+    private func diagnosticNumber(_ value: CGFloat) -> String {
+        String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         recordPositionDiagnostic("layoutSubviews")
@@ -74,8 +78,9 @@ private final class DobbyLogTextView: UITextView {
         }
     }
 
-    func recordPositionDiagnostic(_ event: String) {
-        onLayoutDiagnostic?(event, self)
+    func recordPositionDiagnostic(_ event: String, details: String? = nil) {
+        let diagnostic = details.map { "\(event) \($0)" } ?? event
+        onLayoutDiagnostic?(diagnostic, self)
     }
 
     func updateFollowingAccessibilityHint(isFollowing: Bool) {
@@ -96,12 +101,22 @@ private final class DobbyLogTextView: UITextView {
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
         anchorCharacterIndex = character
         anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
+        if onLayoutDiagnostic != nil {
+            recordPositionDiagnostic("reading-position-captured", details: [
+                "anchorCharacterIndex=\(character)",
+                "anchorViewportY=\(diagnosticNumber(anchorViewportY ?? 0))",
+                "captureOffsetY=\(diagnosticNumber(contentOffset.y))",
+                "textContainerWidth=\(diagnosticNumber(textContainer.size.width))",
+                "anchorLineMinY=\(diagnosticNumber(line.minY))",
+            ].joined(separator: " "))
+        }
     }
 
     private func restoreReadingPosition() {
         guard let character = anchorCharacterIndex,
               let viewportY = anchorViewportY,
               textStorage.length > 0 else { return }
+        let contentHeightBeforeLayout = contentSize.height
         layoutManager.ensureLayout(for: textContainer)
         let glyph = layoutManager.glyphIndexForCharacter(at: min(character, textStorage.length - 1))
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
@@ -112,6 +127,24 @@ private final class DobbyLogTextView: UITextView {
         setContentOffset(CGPoint(x: contentOffset.x, y: restoredY), animated: false)
         isRestoringReadingPosition = false
         readingPositionRestoreCount += 1
+        if onLayoutDiagnostic != nil {
+            let usedRect = layoutManager.usedRect(for: textContainer)
+            recordPositionDiagnostic("reading-position-restore-applied", details: [
+                "anchorCharacterIndex=\(character)",
+                "anchorViewportY=\(diagnosticNumber(viewportY))",
+                "anchorLineMinY=\(diagnosticNumber(line.minY))",
+                "requestedOffsetY=\(diagnosticNumber(requestedY))",
+                "maximumOffsetY=\(diagnosticNumber(maximumY))",
+                "clampedOffsetY=\(diagnosticNumber(restoredY))",
+                "appliedOffsetY=\(diagnosticNumber(contentOffset.y))",
+                "contentHeightBeforeLayout=\(diagnosticNumber(contentHeightBeforeLayout))",
+                "contentHeightAfterLayout=\(diagnosticNumber(contentSize.height))",
+                "boundsWidth=\(diagnosticNumber(bounds.width))",
+                "boundsHeight=\(diagnosticNumber(bounds.height))",
+                "textContainerWidth=\(diagnosticNumber(textContainer.size.width))",
+                "usedRectHeight=\(diagnosticNumber(usedRect.height))",
+            ].joined(separator: " "))
+        }
     }
 }
 

@@ -326,6 +326,8 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
+        let controls = app.descendants(matching: .any)
+            .matching(identifier: "Connection controls").firstMatch
         let followingState = app.staticTexts["Connection log following state"]
         XCTAssertTrue(followingState.waitForExistence(timeout: 10))
         let scrollTrace = app.descendants(matching: .any)
@@ -526,7 +528,10 @@ final class NativeUIInteractionTests: XCTestCase {
         let landscapeGeometry = """
         stableFrames=\(landscapeLayoutResult == .completed)
         appFrame=\(app.frame)
-        logPaneFrame=\(logs.frame)
+        controlsFrame=\(controls.frame)
+        textViewFrame=\(logs.frame)
+        logHeaderFrame=\(app.staticTexts["Logs"].frame)
+        followingLabelFrame=\(followingState.frame)
         anchorFrame=\(String(describing: landscapeAnchor?.frame))
         anchorVisible=\(landscapeVisible)
         UIKit trace:
