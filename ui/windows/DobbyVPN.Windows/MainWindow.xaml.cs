@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO.Pipes;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
@@ -17,6 +18,7 @@ namespace DobbyVPN.Windows;
 public sealed partial class MainWindow : Window
 {
     private const string PipeName = "DobbyVPN.Control";
+    private const string ContentRootPeersPathVariable = "DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH";
     private readonly PeriodicTimer _pollTimer = new(TimeSpan.FromMilliseconds(750));
     private readonly CancellationTokenSource _shutdown = new();
     private Snapshot? _snapshot;
@@ -55,6 +57,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ContentRootPeersPathVariable)))
+            Root.Loaded += (_, _) => WriteContentRootPeerDiagnostic();
         Root.SizeChanged += (_, args) =>
         {
             ControlsScroll.MaxHeight = args.NewSize.Height * 0.6;
@@ -93,6 +97,73 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) => Clipboard.ContentChanged -= ClipboardChanged;
         _ = PollSnapshotsAsync(_shutdown.Token);
         _ = RefreshSnapshotAsync();
+    }
+
+    private void WriteContentRootPeerDiagnostic()
+    {
+        var path = Environment.GetEnvironmentVariable(ContentRootPeersPathVariable);
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        object diagnostic;
+        try
+        {
+            var hasDispatcherAccess = DispatcherQueue.HasThreadAccess;
+            if (!hasDispatcherAccess)
+                throw new InvalidOperationException("XAML root diagnostic did not run on the window dispatcher");
+
+            var content = Content ?? throw new InvalidOperationException("MainWindow.Content is unavailable");
+            var peer = FrameworkElementAutomationPeer.CreatePeerForElement(content)
+                ?? throw new InvalidOperationException("MainWindow.Content has no automation peer");
+            var children = peer.GetChildren() ?? [];
+            diagnostic = new
+            {
+                schema = "dobbyvpn.windows-content-root-peers/v1",
+                completed = true,
+                diagnosticOnly = true,
+                dispatcherThreadAccess = hasDispatcherAccess,
+                windowContentIsRoot = ReferenceEquals(content, Root),
+                windowContentType = content.GetType().FullName,
+                rootType = Root.GetType().FullName,
+                rootAutomationId = AutomationProperties.GetAutomationId(Root),
+                rootPeerType = peer.GetType().FullName,
+                rootControlType = peer.GetAutomationControlType().ToString(),
+                rootName = peer.GetName(),
+                immediateChildren = children.Select((child, index) => new
+                {
+                    index,
+                    peerType = child.GetType().FullName,
+                    controlType = child.GetAutomationControlType().ToString(),
+                    name = child.GetName(),
+                    automationId = child.GetAutomationId(),
+                    isControlElement = child.GetIsControlElement(),
+                    isContentElement = child.GetIsContentElement(),
+                }).ToArray(),
+            };
+        }
+        catch (Exception error)
+        {
+            diagnostic = new
+            {
+                schema = "dobbyvpn.windows-content-root-peers/v1",
+                completed = false,
+                diagnosticOnly = true,
+                dispatcherThreadAccess = DispatcherQueue.HasThreadAccess,
+                error = error.ToString(),
+            };
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            var temporaryPath = fullPath + ".tmp";
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(diagnostic) + Environment.NewLine);
+            File.Move(temporaryPath, fullPath, overwrite: true);
+        }
+        catch (Exception error)
+        {
+            _diagnostics.Record(error.ToString(), "test.content-root-diagnostic-write-failure");
+        }
     }
 
     private async Task PollSnapshotsAsync(CancellationToken cancellationToken)

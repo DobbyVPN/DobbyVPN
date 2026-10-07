@@ -55,11 +55,9 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                 def start(
                     self,
                     *,
-                    windows_uia_diagnostics=False,
-                    windows_uia_probe_only=False,
+                    windows_content_root_diagnostics=False,
                 ):
-                    self.windows_uia_diagnostics = windows_uia_diagnostics
-                    self.windows_uia_probe_only = windows_uia_probe_only
+                    self.windows_content_root_diagnostics = windows_content_root_diagnostics
                     self.launches += 1
                     self.operations.append("start-tree")
                     if self.launches == 2:

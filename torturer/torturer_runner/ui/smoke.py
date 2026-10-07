@@ -276,7 +276,7 @@ class NativeUIController:
         self.reconnecting_seen = False
         self.cleared_record: str | None = None
         self.log_resize_verified = False
-        self.windows_uia_diagnostics: dict[str, object] | None = None
+        self.windows_content_root_diagnostics: dict[str, object] | None = None
         self.windows_no_uia_diagnostics: dict[str, object] | None = None
         self._windows_local_dumps: _WindowsLocalDumps | None = None
         self._windows_wer_started_at_utc: datetime | None = None
@@ -308,7 +308,7 @@ class NativeUIController:
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
         operation_limit = 30.0 if self.platform == "windows" and operation in {
-            "tree", "resize-window", "windows-baseline", "uia-inputsite-sibling",
+            "tree", "resize-window", "windows-baseline",
         } else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}
@@ -351,28 +351,19 @@ class NativeUIController:
         self,
         import_url: str | None = None,
         *,
-        windows_uia_diagnostics: bool = False,
-        windows_uia_probe_only: bool = False,
+        windows_content_root_diagnostics: bool = False,
         windows_no_uia_hold_seconds: float | None = None,
     ) -> dict:
         if self.process is not None or self._alive():
             raise NativeUISmokeError("native UI is already running")
-        if windows_uia_diagnostics and (self.platform != "windows" or import_url is not None):
-            raise ValueError("Windows startup diagnostics require a cold Windows launch")
-        if windows_uia_probe_only and (
-            self.platform != "windows"
-            or import_url is not None
-            or not windows_uia_diagnostics
+        if windows_content_root_diagnostics and (
+            self.platform != "windows" or import_url is not None
         ):
-            raise ValueError(
-                "Windows UIA probe-only startup requires a cold Windows launch "
-                "with UIA diagnostics enabled"
-            )
+            raise ValueError("XAML content-root diagnostics require a cold Windows launch")
         if windows_no_uia_hold_seconds is not None and (
             self.platform != "windows"
             or import_url is not None
-            or windows_uia_diagnostics
-            or windows_uia_probe_only
+            or windows_content_root_diagnostics
             or not math.isfinite(windows_no_uia_hold_seconds)
             or not 0 <= windows_no_uia_hold_seconds <= 30
         ):
@@ -389,6 +380,17 @@ class NativeUIController:
         self.last_window_readiness = None
         prefix = self.logs / f"{self.platform}-app-{self.launch_count:02d}"
         command = [str(self.binary)]
+        content_root_diagnostic_path = self.logs / "windows-content-root-peers.json"
+        if windows_content_root_diagnostics and content_root_diagnostic_path.exists():
+            raise NativeUISmokeError(
+                f"XAML content-root diagnostic already exists: {content_root_diagnostic_path}"
+            )
+        app_environment = None
+        if windows_content_root_diagnostics:
+            app_environment = os.environ.copy()
+            app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"] = str(
+                content_root_diagnostic_path
+            )
         if self.platform == "macos":
             command = ["open", "-W", "-n"]
             for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET", "DOBBY_LOG_PATH"):
@@ -425,6 +427,7 @@ class NativeUIController:
                         stdin=subprocess.DEVNULL,
                         stdout=stdout,
                         stderr=stderr,
+                        env=app_environment,
                     )
                 self.pid = self.process.pid
         else:
@@ -449,10 +452,9 @@ class NativeUIController:
             )
             return self.windows_no_uia_diagnostics
 
-        if windows_uia_diagnostics:
-            self.windows_uia_diagnostics = self._run_windows_uia_diagnostics()
-            if windows_uia_probe_only:
-                return self.windows_uia_diagnostics
+        if windows_content_root_diagnostics:
+            self.windows_content_root_diagnostics = self._run_windows_content_root_diagnostics()
+            return self.windows_content_root_diagnostics
 
         def ready():
             code = None if self.process is None else self.process.poll()
@@ -493,7 +495,7 @@ class NativeUIController:
         self._windows_local_dumps.restore()
         self._windows_local_dumps = None
 
-    def _run_windows_uia_diagnostics(self) -> dict[str, object]:
+    def _run_windows_content_root_diagnostics(self) -> dict[str, object]:
         diagnostics: dict[str, object] = {
             "started_at_utc": datetime.now(timezone.utc).isoformat(),
         }
@@ -508,13 +510,27 @@ class NativeUIController:
 
         if isinstance(baseline, dict) and baseline.get("ready") is True:
             try:
-                diagnostics["uia_probe"] = self._call("uia-inputsite-sibling")
+                path = self.logs / "windows-content-root-peers.json"
+                deadline = time.monotonic() + min(15.0, self.timeout)
+                while not path.is_file():
+                    if self.process is not None and self.process.poll() is not None:
+                        raise NativeUISmokeError(
+                            "Windows UI process exited before writing its XAML content-root peers"
+                        )
+                    if time.monotonic() >= deadline:
+                        raise NativeUISmokeError(
+                            "Windows UI did not write its XAML content-root peer diagnostic"
+                        )
+                    time.sleep(0.1)
+                diagnostics["xaml_content_root_peers"] = json.loads(
+                    path.read_text(encoding="utf-8")
+                )
             except Exception as error:
-                diagnostics["uia_probe_exception"] = "".join(
+                diagnostics["xaml_content_root_exception"] = "".join(
                     traceback.format_exception(error)
                 )
         else:
-            diagnostics["uia_probe"] = "not-run: no healthy Win32 window baseline"
+            diagnostics["xaml_content_root_peers"] = "not-run: no healthy Win32 window baseline"
 
         try:
             diagnostics["post_probe_process"] = self._call("probe")
@@ -523,8 +539,8 @@ class NativeUIController:
                 traceback.format_exception(error)
             )
 
-        path = self.logs / "windows-configure-tree-diagnostics.json"
-        path.write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
+        output_path = self.logs / "windows-content-root-diagnostics.json"
+        output_path.write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
         return diagnostics
 
     def _run_windows_no_uia_hold(self, hold_seconds: float) -> dict[str, object]:

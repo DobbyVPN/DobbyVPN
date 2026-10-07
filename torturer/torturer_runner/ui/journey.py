@@ -1590,40 +1590,43 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
             if selected == (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,):
                 startup = ui.start(windows_no_uia_hold_seconds=20)
             else:
-                windows_probe_only = selected == (WINDOWS_CONFIGURE_TREE_CASE,)
                 startup = ui.start(
-                    windows_uia_diagnostics=args.platform == "windows",
-                    windows_uia_probe_only=windows_probe_only,
+                    windows_content_root_diagnostics=args.platform == "windows",
                 )
-        windows_probe: dict[str, object] | None = None
+        content_root_probe: dict[str, object] | None = None
         post_probe_process: dict[str, object] | None = None
         if selected == (WINDOWS_CONFIGURE_TREE_CASE,):
-            diagnostics = ui.windows_uia_diagnostics
+            diagnostics = ui.windows_content_root_diagnostics
             if diagnostics is None:
                 raise NativeUIJourneyError(
-                    "Windows configure-tree did not retain its UIA sibling diagnostics"
+                    "Windows configure-tree did not retain its XAML content-root diagnostics"
                 )
-            if "uia_probe_exception" in diagnostics or "post_probe_process_exception" in diagnostics:
+            if "xaml_content_root_exception" in diagnostics or "post_probe_process_exception" in diagnostics:
                 details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
                 raise NativeUIJourneyError(
-                    "Windows UIA sibling diagnostic raised or lost its post-probe process check: "
+                    "Windows XAML content-root diagnostic raised or lost its post-probe process check: "
                     + details
                 )
-            windows_probe = diagnostics.get("uia_probe")
+            content_root_probe = diagnostics.get("xaml_content_root_peers")
             post_probe_process = diagnostics.get("post_probe_process")
             if (
-                not isinstance(windows_probe, dict)
-                or windows_probe.get("siblingNavigationCompleted") is not True
-                or windows_probe.get("diagnosticOnly") is not True
+                not isinstance(content_root_probe, dict)
+                or content_root_probe.get("schema") != "dobbyvpn.windows-content-root-peers/v1"
+                or content_root_probe.get("completed") is not True
+                or content_root_probe.get("diagnosticOnly") is not True
+                or content_root_probe.get("dispatcherThreadAccess") is not True
+                or content_root_probe.get("windowContentIsRoot") is not True
+                or not isinstance(content_root_probe.get("immediateChildren"), list)
+                or not content_root_probe["immediateChildren"]
             ):
                 details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
                 raise NativeUIJourneyError(
-                    "Windows UIA sibling navigation did not complete: " + details
+                    "Windows XAML content-root peer inspection did not complete: " + details
                 )
             if not isinstance(post_probe_process, dict) or post_probe_process.get("alive") is not True:
                 details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
                 raise NativeUIJourneyError(
-                    "Windows UIA sibling diagnostic left the app process unavailable: " + details
+                    "Windows content-root inspection left the app process unavailable: " + details
                 )
         if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
             configured = ui.configure()
@@ -1805,14 +1808,12 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
                 "configure_tree": {
                     "diagnostic_only": True,
                     "rendered_controls_queried": False,
-                    "sibling_navigation_completed": True,
-                    "target_pane": windows_probe["targetPane"],
-                    "sibling": windows_probe.get("sibling"),
+                    "xaml_content_root_peers": content_root_probe,
                     "post_probe_process": post_probe_process,
                 }
             }
-            if ui.windows_uia_diagnostics is not None:
-                case_result["windows_uia_diagnostics"] = ui.windows_uia_diagnostics
+            if ui.windows_content_root_diagnostics is not None:
+                case_result["windows_content_root_diagnostics"] = ui.windows_content_root_diagnostics
         return {
             "platform": args.platform,
             "native_cases": list(selected),

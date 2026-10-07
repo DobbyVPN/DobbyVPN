@@ -14,6 +14,7 @@ from unittest import mock
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[4]
 WINDOWS_PROGRAM = PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/Program.cs"
+WINDOWS_MAIN_WINDOW = PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/MainWindow.xaml.cs"
 WINDOWS_NATIVE_UI = PRODUCT_ROOT / "torturer/native_ui/windows/Program.cs"
 WINDOWS_COMPONENTS = PRODUCT_ROOT / "ui/windows/installer/AppComponents.wxs"
 MIGRATION_PATH = PRODUCT_ROOT / ".github/scripts/desktop/installer_migration.py"
@@ -134,7 +135,7 @@ class _FakeRegistry:
 
 
 class WindowsProtocolSchemeTests(unittest.TestCase):
-    def test_windows_uia_probe_only_start_does_not_snapshot_or_capture(self) -> None:
+    def test_windows_content_root_diagnostic_start_does_not_snapshot_or_capture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             binary = root / "DobbyVPN.exe"
@@ -154,18 +155,19 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller.snapshot = mock.Mock(side_effect=AssertionError("probe-only start called Snapshot"))
             controller.capture = mock.Mock(side_effect=AssertionError("probe-only start captured the UI"))
             operations: list[str] = []
+            root_peer_result = {
+                "schema": "dobbyvpn.windows-content-root-peers/v1",
+                "completed": True,
+                "diagnosticOnly": True,
+                "dispatcherThreadAccess": True,
+                "windowContentIsRoot": True,
+                "immediateChildren": [{"index": 0, "peerType": "GridAutomationPeer"}],
+            }
 
             def call(operation: str, **_fields: object) -> dict[str, object]:
                 operations.append(operation)
                 if operation == "windows-baseline":
                     return {"ready": True, "pid": 42}
-                if operation == "uia-inputsite-sibling":
-                    return {
-                        "ready": True,
-                        "diagnosticOnly": True,
-                        "siblingNavigationCompleted": True,
-                        "sibling": None,
-                    }
                 controller.pid = 42
                 controller.identity = "candidate-ui-instance"
                 return {"alive": True, "pid": 42, "identity": controller.identity}
@@ -173,17 +175,24 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller._call = call
             process = mock.Mock(pid=42)
             process.poll.return_value = None
-            with mock.patch.object(smoke.subprocess, "Popen", return_value=process):
+
+            def launch(*_args, **kwargs):
+                Path(kwargs["env"]["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"]).write_text(
+                    json.dumps(root_peer_result), encoding="utf-8"
+                )
+                return process
+
+            with mock.patch.object(smoke.subprocess, "Popen", side_effect=launch):
                 result = controller.start(
-                    windows_uia_diagnostics=True,
-                    windows_uia_probe_only=True,
+                    windows_content_root_diagnostics=True,
                 )
 
             self.assertEqual(
                 operations,
-                ["probe", "windows-baseline", "uia-inputsite-sibling", "probe"],
+                ["probe", "windows-baseline", "probe"],
             )
-            self.assertEqual(result, controller.windows_uia_diagnostics)
+            self.assertEqual(result, controller.windows_content_root_diagnostics)
+            self.assertEqual(result["xaml_content_root_peers"], root_peer_result)
             self.assertEqual(result["post_probe_process"]["alive"], True)
             controller.snapshot.assert_not_called()
             controller.capture.assert_not_called()
@@ -231,90 +240,56 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
         self.assertEqual(registry.values, before)
 
-    def test_windows_configure_tree_diagnostic_probes_one_inputsite_sibling(self) -> None:
+    def test_windows_configure_tree_diagnostic_uses_xaml_root_peers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             helper_source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
-            baseline_branch = helper_source.index('if (traceWin32Baseline)\n            {')
-            uia_query = "var targetPane = GetUiaProbeFirstChild(firstPane, firstPanePath, targetPanePath);"
-            query_offset = helper_source.index(uia_query)
-            probe_start = helper_source.index("var firstPane = GetUiaProbeFirstChild(root, \"window\", firstPanePath);")
-            probe_end = helper_source.index('if (operation == "resize-window")', probe_start)
-            probe_source = helper_source[probe_start:probe_end]
-            root_creation = helper_source.index("var root = AutomationElement.FromHandle(window);")
+            app_source = WINDOWS_MAIN_WINDOW.read_text(encoding="utf-8")
+            smoke_source = (TORTURER_ROOT / "torturer_runner/ui/smoke.py").read_text(encoding="utf-8")
 
-            self.assertLess(root_creation, query_offset)
-            self.assertLess(baseline_branch, root_creation)
-            self.assertLess(query_offset, helper_source.index("if (operation == \"resize-window\")"))
-            self.assertEqual(helper_source.count(uia_query), 1)
-            self.assertIn("configure-tree-uia-root-start utc=", helper_source)
-            self.assertIn("configure-tree-uia-inputsite-sibling-start utc=", helper_source)
-            self.assertIn("configure-tree-uia-inputsite-sibling-complete utc=", helper_source)
-            self.assertIn('const string targetPanePath = firstPanePath + "/ControlType.Pane#1";', helper_source)
-            self.assertIn("configure-tree-uia-{element}-property-complete property={property}", helper_source)
-            self.assertIn("configure-tree-uia-sibling-navigation-start", helper_source)
-            self.assertIn("configure-tree-uia-sibling-navigation-complete", helper_source)
-            self.assertIn("configure-tree-uia-path-incomplete", helper_source)
-            self.assertIn("pathResolved = false", helper_source)
-            self.assertIn("siblingNavigationAttempted = false", helper_source)
-            for property_name in (
-                "ControlType", "Name", "AutomationId", "ClassName", "FrameworkId",
-                "IsControlElement", "IsContentElement",
-            ):
-                self.assertIn(f'"{property_name}"', helper_source)
-            self.assertNotIn("BoundingRectangle", probe_source)
-            self.assertIn("firstPaneControlType != ControlType.Pane.ProgrammaticName", helper_source)
-            self.assertIn("targetControlType != ControlType.Pane.ProgrammaticName", helper_source)
-            self.assertIn('query = "ControlView.GetNextSibling(targetPane)"', helper_source)
-            self.assertIn("siblingNavigationCompleted = true", helper_source)
-            self.assertIn("sibling = sibling is null ? null : new", helper_source)
-            self.assertEqual(probe_source.count("GetUiaProbeFirstChild("), 2)
-            self.assertEqual(probe_source.count("TreeWalker.ControlViewWalker.GetNextSibling(targetPane)"), 1)
-            self.assertNotIn("GetFirstChild(targetPane)", probe_source)
-            self.assertLess(
-                probe_source.index("if (firstPaneControlType != ControlType.Pane.ProgrammaticName)"),
-                probe_source.index("var targetPane = GetUiaProbeFirstChild("),
-            )
-            self.assertLess(
-                probe_source.index('var targetIsContentElement = ReadUiaProbeProperty('),
-                probe_source.index('TracePhase($"configure-tree-uia-sibling-navigation-start'),
-            )
+            self.assertIn("Root.Loaded += (_, _) => WriteContentRootPeerDiagnostic()", app_source)
+            self.assertIn("DispatcherQueue.HasThreadAccess", app_source)
+            self.assertIn("FrameworkElementAutomationPeer.CreatePeerForElement(content)", app_source)
+            self.assertIn("peer.GetChildren()", app_source)
+            self.assertIn("windowContentIsRoot = ReferenceEquals(content, Root)", app_source)
+            self.assertIn("immediateChildren = children.Select", app_source)
+            self.assertIn('app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"]', smoke_source)
+            self.assertNotIn("uia-inputsite-sibling", helper_source)
+            self.assertNotIn("GetNextSibling(targetPane)", helper_source)
+            self.assertNotIn("InputSiteWindowClass", helper_source + app_source)
             self.assertIn("return Walk(root, trace).FirstOrDefault(element =>", helper_source)
             self.assertIn("walker.GetFirstChild(element)", helper_source)
             self.assertIn("walker.GetNextSibling(child)", helper_source)
-            self.assertIn('children-start node={count} depth={depth} path={path}', helper_source)
-            self.assertNotIn('ByAutomationId(root, "Connection configuration",', helper_source)
-            self.assertNotIn("root.FindFirst(TreeScope.Subtree", helper_source)
 
             controller = object.__new__(smoke.NativeUIController)
             controller.logs = Path(directory)
+            controller._timeout = 5.0
+            controller._deadline = None
+            controller.process = None
+            root_peer_result = {
+                "schema": "dobbyvpn.windows-content-root-peers/v1",
+                "completed": True,
+                "diagnosticOnly": True,
+                "dispatcherThreadAccess": True,
+                "windowContentIsRoot": True,
+                "immediateChildren": [{"index": 0, "peerType": "GridAutomationPeer"}],
+            }
+            (controller.logs / "windows-content-root-peers.json").write_text(
+                json.dumps(root_peer_result), encoding="utf-8"
+            )
             controller._call = mock.Mock(side_effect=(
                 {"ready": True, "pid": 42},
-                {
-                    "ready": True,
-                    "diagnosticOnly": True,
-                    "siblingNavigationCompleted": True,
-                    "sibling": None,
-                },
                 {"alive": True, "pid": 42},
             ))
 
-            result = controller._run_windows_uia_diagnostics()
+            result = controller._run_windows_content_root_diagnostics()
 
             self.assertEqual(
                 [call.args[0] for call in controller._call.call_args_list],
-                ["windows-baseline", "uia-inputsite-sibling", "probe"],
+                ["windows-baseline", "probe"],
             )
-            self.assertEqual(
-                result["uia_probe"],
-                {
-                    "ready": True,
-                    "siblingNavigationCompleted": True,
-                    "diagnosticOnly": True,
-                    "sibling": None,
-                },
-            )
+            self.assertEqual(result["xaml_content_root_peers"], root_peer_result)
             retained = json.loads(
-                (Path(directory) / "windows-configure-tree-diagnostics.json").read_text(encoding="utf-8")
+                (controller.logs / "windows-content-root-diagnostics.json").read_text(encoding="utf-8")
             )
             self.assertEqual(retained["post_probe_process"], {"alive": True, "pid": 42})
 
@@ -774,17 +749,16 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 for operation in (
                     "tree",
                     "windows-baseline",
-                    "uia-inputsite-sibling",
                 ):
                     controller._call(operation)
 
         self.assertEqual(
             [call.kwargs["timeout_seconds"] for call in run.call_args_list],
-            [30.0, 30.0, 30.0],
+            [30.0, 30.0],
         )
         self.assertEqual(
             [json.loads(call.kwargs["input_bytes"])["operation"] for call in run.call_args_list],
-            ["tree", "windows-baseline", "uia-inputsite-sibling"],
+            ["tree", "windows-baseline"],
         )
 
     def test_windows_about_matches_candidate_version_and_source_sha(self) -> None:
@@ -828,7 +802,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         class FakeController:
             def __init__(self, *_args, **_kwargs):
                 self.operations: list[str] = []
-                self.windows_uia_diagnostics = None
+                self.windows_content_root_diagnostics = None
                 self.windows_no_uia_diagnostics = None
 
             @staticmethod
@@ -841,8 +815,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             def start(
                 self,
                 *,
-                windows_uia_diagnostics=False,
-                windows_uia_probe_only=False,
+                windows_content_root_diagnostics=False,
                 windows_no_uia_hold_seconds=None,
             ):
                 if windows_no_uia_hold_seconds is not None:
@@ -855,19 +828,21 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                     }
                     return self.windows_no_uia_diagnostics
                 self.operations.append(
-                    f"start-tree-uia-diagnostics={windows_uia_diagnostics};probe-only={windows_uia_probe_only}"
+                    f"start-content-root-diagnostics={windows_content_root_diagnostics}"
                 )
-                if windows_uia_probe_only:
-                    self.windows_uia_diagnostics = {
-                        "uia_probe": {
+                if windows_content_root_diagnostics:
+                    self.windows_content_root_diagnostics = {
+                        "xaml_content_root_peers": {
+                            "schema": "dobbyvpn.windows-content-root-peers/v1",
+                            "completed": True,
                             "diagnosticOnly": True,
-                            "siblingNavigationCompleted": True,
-                            "targetPane": {"className": "InputSiteWindowClass"},
-                            "sibling": None,
+                            "dispatcherThreadAccess": True,
+                            "windowContentIsRoot": True,
+                            "immediateChildren": [{"index": 0, "peerType": "GridAutomationPeer"}],
                         },
                         "post_probe_process": {"alive": True},
                     }
-                    return self.windows_uia_diagnostics
+                    return self.windows_content_root_diagnostics
                 return {"status": "Disconnected", "labels": ["Connection configuration"]}
 
             def configure(self):
@@ -943,9 +918,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             no_uia, no_uia_controller = run_case(WINDOWS_CONFIGURE_TREE_NO_UIA_CASE)
         self.assertEqual(windows["coverage"]["native_cases"], [WINDOWS_CONFIGURE_TREE_CASE])
         self.assertEqual(
-            windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["windows_uia_diagnostics"]
-            ["uia_probe"]["siblingNavigationCompleted"],
-            True,
+            windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["configure_tree"]
+            ["xaml_content_root_peers"]["completed"], True,
         )
         self.assertEqual(
             windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["configure_tree"]
@@ -954,7 +928,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         )
         self.assertEqual(windows_controller.operations, [
             "enable-wer",
-            "start-tree-uia-diagnostics=True;probe-only=True",
+            "start-content-root-diagnostics=True",
             "close", "collect", "restore-wer",
         ])
         self.assertEqual(
