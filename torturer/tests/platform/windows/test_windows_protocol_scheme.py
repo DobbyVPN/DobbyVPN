@@ -177,11 +177,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
         self.assertEqual(registry.values, before)
 
-    def test_windows_configure_tree_diagnostic_runs_one_named_uia_query(self) -> None:
+    def test_windows_configure_tree_diagnostic_uses_incremental_uia_walk(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             helper_source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
             baseline_branch = helper_source.index('if (traceWin32Baseline)\n            {')
-            uia_query = 'var element = ByAutomationId(root, "Connection configuration");'
+            uia_query = 'var element = ByAutomationId(root, "Connection configuration",'
             query_offset = helper_source.index(uia_query)
             root_creation = helper_source.index("var root = AutomationElement.FromHandle(window);")
 
@@ -192,6 +192,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertIn("configure-tree-uia-root-start utc=", helper_source)
             self.assertIn("configure-tree-uia-connection-configuration-start utc=", helper_source)
             self.assertIn("configure-tree-uia-connection-configuration-complete utc=", helper_source)
+            self.assertIn("return Walk(root, trace).FirstOrDefault(element =>", helper_source)
+            self.assertIn("walker.GetFirstChild(element)", helper_source)
+            self.assertIn("walker.GetNextSibling(child)", helper_source)
+            self.assertIn('children-start node={count} depth={depth} path={path}', helper_source)
+            self.assertNotIn("root.FindFirst(TreeScope.Subtree", helper_source)
 
             controller = object.__new__(smoke.NativeUIController)
             controller.logs = Path(directory)
@@ -519,17 +524,14 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             '"UI process did not expose a visible, non-minimized window for the tree snapshot", seconds: 20.0);',
             'TracePhase("tree-uia-root-complete")',
             'TracePhase("tree-uia-targeted-start")',
-            'void AddByAutomationId(string id)',
-            'AddVisibleElement(ByAutomationId(root, id));',
-            'AutomationElement? FindVisibleByName(string name) => root.FindFirst(',
-            'var actionId = $"Profile {profileIndex} action";',
-            'var action = ByAutomationId(root, actionId);',
-            'AddByAutomationId($"Profile {profileIndex} description");',
-            'if (profileCount == 8192)',
+            'var visibleControls = Walk(root, message => TracePhase($"tree-uia-{message}"))',
+            'var profileCount = visibleControls.Count(element =>',
+            'if (profileCount >= 8192)',
+            'var pasteButton = Walk(root).FirstOrDefault(element =>',
+            'AutomationElement? FindBy(bool automationId)',
             'TracePhase($"tree-uia-targeted-complete controls={visibleControls.Count} profiles={profileCount}");',
             'catch (COMException error) when (error.HResult == unchecked((int)0x8000FFFF))',
             'uiaError = error.ToString()',
-            'if (element is not null && !element.Current.IsOffscreen)',
             '((WindowPattern)windowPattern).Current.CanMaximize',
             '"Could not restore native window bounds after narrow-window test"',
             'originalBounds.Right - originalBounds.Left',
@@ -537,11 +539,12 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         ):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
-        self.assertEqual(source.count("root.FindFirst(TreeScope.Subtree, new AndCondition("), 3)
+        self.assertNotIn("root.FindFirst(TreeScope.Subtree", source)
         tree_operation = source.split('if (operation == "tree")', 1)[1].split(
             "long? pasteInvokedAtUnixMs", 1
         )[0]
-        self.assertNotIn("Walk(root", tree_operation)
+        self.assertIn("Walk(root", tree_operation)
+        self.assertIn("children-start node={count} depth={depth} path={path}", source)
         self.assertNotIn("FindAll(", tree_operation)
         window_source = (
             PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/MainWindow.xaml.cs"

@@ -114,11 +114,13 @@ internal static class Program
                $"name=\"{current.Name}\" patterns[invoke={invoke},selectionItem={selection},value={value}]";
     }
 
-    private static AutomationElement? ByAutomationId(AutomationElement root, string id)
+    private static AutomationElement? ByAutomationId(AutomationElement root, string id, Action<string>? trace = null)
     {
-        return root.FindFirst(TreeScope.Subtree, new AndCondition(
-            new PropertyCondition(AutomationElement.AutomationIdProperty, id),
-            new PropertyCondition(AutomationElement.IsControlElementProperty, true)));
+        return Walk(root, trace).FirstOrDefault(element =>
+        {
+            var current = element.Current;
+            return current.IsControlElement && current.AutomationId == id;
+        });
     }
 
     private static void WaitFor(Func<bool> condition, string message, double seconds = 15)
@@ -502,7 +504,8 @@ internal static class Program
             {
                 var queryStarted = Stopwatch.GetTimestamp();
                 TracePhase($"configure-tree-uia-connection-configuration-start utc={UtcTimestamp()}");
-                var element = ByAutomationId(root, "Connection configuration");
+                var element = ByAutomationId(root, "Connection configuration",
+                    message => TracePhase($"uia-walk-{message}"));
                 TracePhase(
                     $"configure-tree-uia-connection-configuration-complete utc={UtcTimestamp()} " +
                     $"elapsed_ms={ElapsedMilliseconds(queryStarted)} found={element is not null}");
@@ -548,30 +551,27 @@ internal static class Program
             }
             AutomationElement Find(string name, bool editor = false, bool actionable = false)
             {
-                AutomationElement? FindBy(AutomationProperty property)
+                AutomationElement? FindBy(bool automationId)
                 {
-                    var conditions = new List<Condition>
+                    foreach (var candidate in Walk(root,
+                                 traceTree ? message => TracePhase($"tree-action-{message}") : null))
                     {
-                        new PropertyCondition(property, name),
-                        new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
-                        // Keep targeted lookup within the same UIA control view as Walk.
-                        new PropertyCondition(AutomationElement.IsControlElementProperty, true),
-                    };
-                    if (editor)
-                        conditions.Add(new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
-                    if (actionable)
-                    {
-                        conditions.Add(new OrCondition(
-                            new PropertyCondition(AutomationElement.IsInvokePatternAvailableProperty, true),
-                            new PropertyCondition(AutomationElement.IsSelectionItemPatternAvailableProperty, true)
-                        ));
+                        var current = candidate.Current;
+                        if (!current.IsControlElement || current.IsOffscreen ||
+                            (automationId ? current.AutomationId : current.Name) != name ||
+                            (editor && current.ControlType != ControlType.Edit))
+                            continue;
+                        if (actionable &&
+                            !candidate.TryGetCurrentPattern(InvokePattern.Pattern, out _) &&
+                            !candidate.TryGetCurrentPattern(SelectionItemPattern.Pattern, out _))
+                            continue;
+                        return candidate;
                     }
-                    return root.FindFirst(TreeScope.Subtree, new AndCondition(conditions.ToArray()));
+                    return null;
                 }
 
                 // Resolve stable identifiers before user-facing labels to avoid matching a tab and its label.
-                var element = FindBy(AutomationElement.AutomationIdProperty)
-                    ?? FindBy(AutomationElement.NameProperty);
+                var element = FindBy(automationId: true) ?? FindBy(automationId: false);
                 if (element is null)
                     throw new InvalidOperationException($"Expected one visible {name}, found no matching control");
                 if (!element.Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
@@ -695,54 +695,20 @@ internal static class Program
                 try
                 {
                     TracePhase("tree-uia-targeted-start");
-                    var visibleControls = new List<AutomationElement>();
-
-                    void AddVisibleElement(AutomationElement? element)
+                    var visibleControls = Walk(root, message => TracePhase($"tree-uia-{message}"))
+                        .Where(element =>
+                        {
+                            var current = element.Current;
+                            return current.IsControlElement && !current.IsOffscreen;
+                        })
+                        .ToList();
+                    var profileCount = visibleControls.Count(element =>
                     {
-                        if (element is not null && !element.Current.IsOffscreen)
-                            visibleControls.Add(element);
-                    }
-
-                    void AddByAutomationId(string id)
-                    {
-                        TracePhase($"tree-uia-find-id={id}-start");
-                        AddVisibleElement(ByAutomationId(root, id));
-                        TracePhase($"tree-uia-find-id={id}-complete");
-                    }
-
-                    AutomationElement? FindVisibleByName(string name) => root.FindFirst(
-                        TreeScope.Subtree,
-                        new AndCondition(
-                            new PropertyCondition(AutomationElement.NameProperty, name),
-                            new PropertyCondition(AutomationElement.IsControlElementProperty, true),
-                            new PropertyCondition(AutomationElement.IsOffscreenProperty, false)));
-
-                    foreach (var id in new[]
-                    {
-                        "Connection configuration", "Paste", "Retry",
-                        "Disconnected", "Connecting", "Reconnecting", "Stopping", "Failed", "Error", "Connected",
-                        "VPN connection action", "Active connection action", "About", "Done",
-                        "Clear", "Save logs", "Backend logs",
-                        "About version metadata", "About compact commit metadata",
-                        "About source commit metadata", "About source link",
-                    })
-                    {
-                        if (id == "Done") AddVisibleElement(FindVisibleByName(id));
-                        else AddByAutomationId(id);
-                    }
-
-                    var profileCount = 0;
-                    for (var profileIndex = 1; profileIndex <= 8192; profileIndex++)
-                    {
-                        var actionId = $"Profile {profileIndex} action";
-                        TracePhase($"tree-uia-find-id={actionId}-start");
-                        var action = ByAutomationId(root, actionId);
-                        if (action is null || action.Current.IsOffscreen) break;
-                        visibleControls.Add(action);
-                        AddByAutomationId($"Profile {profileIndex} description");
-                        profileCount++;
-                    }
-                    if (profileCount == 8192)
+                        var id = element.Current.AutomationId;
+                        return id.StartsWith("Profile ", StringComparison.Ordinal) &&
+                               id.EndsWith(" action", StringComparison.Ordinal);
+                    });
+                    if (profileCount >= 8192)
                         throw new InvalidOperationException("Visible profile actions exceed 8192 controls");
 
                     labels = visibleControls.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
@@ -881,13 +847,16 @@ internal static class Program
                     {
                         bool PasteAvailable()
                         {
-                            var pasteButton = root.FindFirst(TreeScope.Subtree, new AndCondition(
-                                new PropertyCondition(AutomationElement.NameProperty, "Paste"),
-                                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
-                                new PropertyCondition(AutomationElement.IsControlElementProperty, true),
-                                new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
-                                new PropertyCondition(AutomationElement.IsEnabledProperty, true),
-                                new PropertyCondition(AutomationElement.IsInvokePatternAvailableProperty, true)));
+                            var pasteButton = Walk(root).FirstOrDefault(element =>
+                            {
+                                var current = element.Current;
+                                return current.Name == "Paste" &&
+                                       current.ControlType == ControlType.Button &&
+                                       current.IsControlElement &&
+                                       !current.IsOffscreen &&
+                                       current.IsEnabled &&
+                                       element.TryGetCurrentPattern(InvokePattern.Pattern, out _);
+                            });
                             return pasteButton is not null;
                         }
                         void WaitForPasteAvailability(bool expected, string clipboardDescription)
@@ -989,22 +958,40 @@ internal static class Program
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
     }
 
-    private static IEnumerable<AutomationElement> Walk(AutomationElement root)
+    private static IEnumerable<AutomationElement> Walk(AutomationElement root, Action<string>? trace = null)
     {
-        var queue = new Queue<AutomationElement>();
-        queue.Enqueue(root);
+        const int maximumDepth = 64;
+        var queue = new Queue<(AutomationElement Element, int Depth, string Path)>();
+        queue.Enqueue((root, 0, "window"));
         int count = 0;
+        var walker = TreeWalker.ControlViewWalker;
         while (queue.Count > 0)
         {
-            if (++count > 8192) throw new InvalidOperationException("Accessibility tree exceeds 8192 elements");
-            var element = queue.Dequeue();
+            var (element, depth, path) = queue.Dequeue();
+            if (++count > 8192)
+                throw new InvalidOperationException($"Accessibility tree exceeds 8192 elements at {path}");
             yield return element;
-            var child = TreeWalker.ControlViewWalker.GetFirstChild(element);
+            trace?.Invoke($"children-start node={count} depth={depth} path={path}");
+            var child = walker.GetFirstChild(element);
+            trace?.Invoke($"first-child-complete node={count} has_child={child is not null}");
+            if (child is not null && depth >= maximumDepth)
+                throw new InvalidOperationException($"Accessibility tree exceeds depth {maximumDepth} at {path}");
+            var siblingIndex = 0;
             while (child is not null)
             {
-                queue.Enqueue(child);
-                child = TreeWalker.ControlViewWalker.GetNextSibling(child);
+                siblingIndex++;
+                var current = child.Current;
+                var segment = $"{current.ControlType.ProgrammaticName}#{siblingIndex}";
+                if (!string.IsNullOrWhiteSpace(current.AutomationId))
+                    segment += $"[{JsonSerializer.Serialize(current.AutomationId)}]";
+                var childPath = $"{path}/{segment}";
+                trace?.Invoke($"child-observed parent_node={count} child_index={siblingIndex} path={childPath}");
+                queue.Enqueue((child, depth + 1, childPath));
+                trace?.Invoke($"next-sibling-start parent_node={count} child_index={siblingIndex} path={childPath}");
+                child = walker.GetNextSibling(child);
+                trace?.Invoke($"next-sibling-complete parent_node={count} child_index={siblingIndex} has_sibling={child is not null}");
             }
+            trace?.Invoke($"children-complete node={count} depth={depth} child_count={siblingIndex} path={path}");
         }
     }
 
