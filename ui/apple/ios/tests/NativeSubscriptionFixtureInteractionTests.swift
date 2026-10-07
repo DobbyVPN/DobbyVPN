@@ -112,6 +112,25 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertTrue(profiles.waitForExistence(timeout: 10), "A separate bounded profile-list viewport should be present")
         XCTAssertLessThanOrEqual(profiles.frame.height, 220, "The profile list should remain bounded")
 
+        // The inner list can extend below the clipped outer controls viewport
+        // on the compact Simulator. Scroll the outer view until the complete
+        // inner viewport is visible before sending row-scrolling gestures.
+        for _ in 0..<8 {
+            if profiles.frame.maxY <= controls.frame.maxY + 1 { break }
+            controls.swipeUp()
+        }
+        let controlsViewport = controls.frame
+        let profileViewport = profiles.frame
+        XCTAssertGreaterThanOrEqual(
+            profileViewport.minY, controlsViewport.minY - 1,
+            "The profile list should start inside the visible Connection controls viewport; profiles=\(profileViewport), controls=\(controlsViewport)"
+        )
+        XCTAssertLessThanOrEqual(
+            profileViewport.maxY, controlsViewport.maxY + 1,
+            "The profile list should end inside the visible Connection controls viewport; profiles=\(profileViewport), controls=\(controlsViewport)"
+        )
+        XCTAssertTrue(profiles.isHittable, "The complete profile viewport should be available for row gestures")
+
         // Move in short increments so every source-ordered row passes through
         // the viewport. Validate each rendered description, protocol and
         // Connect action while the logs remain visible below the controls.
