@@ -378,15 +378,17 @@ struct DobbyLogView: UIViewRepresentable {
             )
             lastFollowDecisionContentHeight = contentHeight
             lastFollowDecisionAtBottom = atBottom
-            let changed = isFollowing != atBottom
-            isFollowing = atBottom
-            logView.preservesReadingPosition = !atBottom
-            logView.updateFollowingAccessibilityHint(isFollowing: atBottom)
-            if changed { onFollowingChange?(atBottom) }
-            if !atBottom { logView.captureReadingPosition() }
+            let userGestureActive = isUserDragging || scrollView.isDragging
+            let shouldFollow = atBottom && (isFollowing || !userGestureActive)
+            let changed = isFollowing != shouldFollow
+            isFollowing = shouldFollow
+            logView.preservesReadingPosition = !shouldFollow
+            logView.updateFollowingAccessibilityHint(isFollowing: shouldFollow)
+            if changed { onFollowingChange?(shouldFollow) }
+            if !shouldFollow { logView.captureReadingPosition() }
             return FollowingUpdate(
                 previous: previous,
-                current: atBottom,
+                current: shouldFollow,
                 changed: changed,
                 emitted: changed && onFollowingChange != nil
             )
