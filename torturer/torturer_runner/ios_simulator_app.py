@@ -805,6 +805,10 @@ def _retain_xctest_screenshots(
                 human_name = attachment.get("suggestedHumanReadableName")
                 if not isinstance(human_name, str) or not human_name.startswith("dobbyvpn-ui-"):
                     continue
+                if human_name.lower().endswith(".txt"):
+                    # The complete .xcresult retains text diagnostics; this
+                    # side export contains only screenshots.
+                    continue
                 if not human_name.lower().endswith(".png"):
                     raise IOSSimulatorAppContractError(
                         f"named iOS UI screenshot is not a PNG: {human_name}"

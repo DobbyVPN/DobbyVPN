@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 import importlib.util
 import io
+import json
 from pathlib import Path
 import contextlib
 import sys
@@ -28,6 +28,57 @@ _ENTRYPOINT_SPEC.loader.exec_module(IOS_RUNNER_ENTRYPOINT)
 
 
 class IOSSimulatorBoundaryTests(unittest.TestCase):
+    def test_named_text_diagnostics_remain_compatible_with_screenshot_collection(self) -> None:
+        from PIL import Image
+
+        screenshot_buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), color="white").save(screenshot_buffer, format="PNG")
+        screenshot_bytes = screenshot_buffer.getvalue()
+
+        class ExportRunner:
+            def run(self, command, *, cwd=None, timeout_seconds=None):
+                del cwd, timeout_seconds
+                output_dir = Path(command[command.index("--output-path") + 1])
+                screenshot_name = "dobbyvpn-ui-scroll-check_0_01234567-89AB-CDEF-0123-456789ABCDEF.png"
+                text_name = "dobbyvpn-ui-scroll-diagnostics_0_01234567-89AB-CDEF-0123-456789ABCDEF.txt"
+                (output_dir / screenshot_name).write_bytes(screenshot_bytes)
+                (output_dir / text_name).write_text("scroll geometry", encoding="utf-8")
+                (output_dir / "manifest.json").write_text(
+                    json.dumps([{
+                        "testName": "NativeUIInteractionTests/testLogsFreezeAndResumeAtBottom",
+                        "attachments": [
+                            {
+                                "suggestedHumanReadableName": screenshot_name,
+                                "exportedFileName": screenshot_name,
+                            },
+                            {
+                                "suggestedHumanReadableName": text_name,
+                                "exportedFileName": text_name,
+                            },
+                        ],
+                    }]),
+                    encoding="utf-8",
+                )
+                return ios_simulator_app.CommandResult(0, "", "")
+
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            result_bundle = root / "xctest-results.xcresult"
+            result_bundle.mkdir()
+            work_dir = root / "work"
+            work_dir.mkdir()
+            retained = ios_simulator_app._retain_xctest_screenshots(
+                ExportRunner(),
+                result_bundle,
+                work_dir,
+                budget=ios_simulator_app.RunBudget(),
+            )
+            self.assertEqual(retained.name, "ui-screenshots")
+            self.assertEqual((retained / "scroll-check.png").read_bytes(), screenshot_bytes)
+            self.assertEqual(
+                sorted(path.name for path in retained.iterdir()), ["scroll-check.png"]
+            )
+
     def test_disposable_simulator_creation_uses_unique_name_and_selected_device_type(self) -> None:
         selected = ios_simulator_app.AvailableSimulator(
             udid="89ABCDEF-0123-4567-89AB-CDEF01234567",

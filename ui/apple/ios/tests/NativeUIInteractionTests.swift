@@ -771,7 +771,14 @@ final class NativeUIInteractionTests: XCTestCase {
         // The freeze case needs a larger drag; its anchor is selected near the top.
         let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
         let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: dragEndY))
-        start.press(forDuration: 0.1, thenDragTo: end)
+        // A default-speed drag decelerates to the top of this short log pane,
+        // which can move a valid visible anchor completely out of view.
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.2
+        )
         if let screenshotName = screenshotName { attachScreenshot(screenshotName) }
         let currentAnchor = detailElement(for: anchor, in: logs) ?? anchor.element
         let currentAnchorFrame = currentAnchor.frame
