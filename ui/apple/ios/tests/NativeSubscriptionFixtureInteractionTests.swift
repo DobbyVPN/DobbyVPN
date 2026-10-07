@@ -155,9 +155,10 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertTrue(profiles.isHittable, "The complete profile viewport should be available for row gestures")
         attachScreenshot("subscription-profiles-visible")
 
-        // Move in short increments so every source-ordered row passes through
-        // the viewport. Validate each rendered description, protocol and
-        // Connect action while the logs remain visible below the controls.
+        // Move by about one row at a time. Count a profile only after its
+        // description, protocol and Connect action are all hittable, so a row
+        // clipped at the viewport edge is checked on the next scroll step.
+        // Keep the final ordered assertion to catch rows that never appear.
         let names = app.staticTexts.matching(
             NSPredicate(format: "label MATCHES %@", #"Simulator fixture profile (?:[1-9]|1[01])|Profile 12"#)
         )
@@ -165,16 +166,17 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         for _ in 0..<50 {
             for element in names.allElementsBoundByIndex where element.isHittable {
                 guard let index = Self.profileIndex(from: element.label), !encountered.contains(index) else { continue }
-                encountered.append(index)
                 let protocolLabel = app.staticTexts.matching(identifier: "Profile \(index) protocol").firstMatch
                 let connect = app.buttons.matching(identifier: "Profile \(index) action").firstMatch
+                guard protocolLabel.isHittable, connect.isHittable else { continue }
+                encountered.append(index)
                 XCTAssertEqual(protocolLabel.label, "Profile \(index) protocol · OUTLINE")
                 XCTAssertEqual(connect.label, "Connect")
                 XCTAssertTrue(connect.isHittable)
             }
             if encountered.count == 12 { break }
-            let start = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
-            let end = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
+            let start = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80))
+            let end = profiles.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.50))
             start.press(forDuration: 0.05, thenDragTo: end)
         }
         XCTAssertEqual(encountered, Array(1...12), "Rendered profiles should appear in source order")
