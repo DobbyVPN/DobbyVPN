@@ -844,8 +844,8 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
             modifier = Modifier.fillMaxWidth().weight(1f)
                 .clipToBounds(),
             update = {
-                controller.restoreRetainedLogView(it)
                 it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor)
+                controller.restoreRetainedLogView(it)
             },
         )
     }
@@ -924,6 +924,7 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         restoredScrollY = null
         awaitingRestoredEntries = false
         restoredVisibleBoundaries = null
+        render(latest)
     }
 
     override fun onInterceptTouchEvent(event: android.view.MotionEvent): Boolean {
