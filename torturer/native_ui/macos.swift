@@ -1117,79 +1117,28 @@ func run() throws -> [String: Any] {
         try require(range.length < characterCount, "Native log viewer does not overflow its viewport; freeze/resume cannot be tested")
         if !isAtTarget(range) {
             FileHandle.standardError.write(Data((
-                "scroll-logs target=\(position) start-range=\(rangeDescription(range)) " +
+                "scroll-logs native-phaseful-gesture target=\(position) start-range=\(rangeDescription(range)) " +
                     "characters=\(characterCount) scrollbar=\(scrollbarValueDescription())\n"
             ).utf8))
-            var reached = false
-            var accessibilitySetStatus = "not-settable"
-            var settable = DarwinBoolean(false)
-            let settableResult = AXUIElementIsAttributeSettable(
-                scrollbar, kAXValueAttribute as CFString, &settable
-            )
-            if settableResult == .success && settable.boolValue {
-                var scrollbarMinimum: NSNumber?
-                var scrollbarMaximum: NSNumber?
-                do {
-                    scrollbarMinimum = try attribute(scrollbar, kAXMinValueAttribute) as? NSNumber
-                    scrollbarMaximum = try attribute(scrollbar, kAXMaxValueAttribute) as? NSNumber
-                } catch {
-                    accessibilitySetStatus = "scrollbar-limit-read-error=\(error)"
-                }
-                if let minimum = scrollbarMinimum, let maximum = scrollbarMaximum {
-                    let targetValue = position == "top" ? minimum.doubleValue : maximum.doubleValue
-                    let setResult = AXUIElementSetAttributeValue(
-                        scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
-                    )
-                    accessibilitySetStatus = "set-result=\(setResult.rawValue) value=\(targetValue)"
-                    if setResult == .success {
-                        for _ in 0..<10 {
-                            range = try checkedVisibleRange()
-                            if isAtTarget(range) {
-                                reached = true
-                                break
-                            }
-                            Thread.sleep(forTimeInterval: 0.05)
-                        }
-                    }
-                } else {
-                    let targetValue = position == "top" ? 0.0 : 1.0
-                    let setResult = AXUIElementSetAttributeValue(
-                        scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
-                    )
-                    let limitStatus = accessibilitySetStatus == "not-settable"
-                        ? "scrollbar-min-max-unavailable"
-                        : accessibilitySetStatus
-                    accessibilitySetStatus =
-                        "\(limitStatus) normalized-endpoint-set-result=\(setResult.rawValue) value=\(targetValue)"
-                    if setResult == .success {
-                        for _ in 0..<10 {
-                            range = try checkedVisibleRange()
-                            if isAtTarget(range) {
-                                reached = true
-                                break
-                            }
-                            Thread.sleep(forTimeInterval: 0.05)
-                        }
-                    }
-                }
-            } else {
-                accessibilitySetStatus = "settable-check=\(settableResult.rawValue) settable=\(settable.boolValue)"
-            }
-            FileHandle.standardError.write(Data((
-                "scroll-logs accessibility-set \(accessibilitySetStatus) reached=\(reached) " +
-                    "range=\(rangeDescription(range)) scrollbar=\(scrollbarValueDescription())\n"
-            ).utf8))
             let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
-            if !reached {
-                guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                          mouseCursorPosition: center, mouseButton: .left) else {
-                    throw HelperError("Could not position the pointer over native logs")
-                }
-                moved.post(tap: .cghidEventTap)
+            guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                      mouseCursorPosition: center, mouseButton: .left) else {
+                throw HelperError("Could not position the pointer over native logs")
             }
+            moved.post(tap: .cghidEventTap)
+            func postScrollEvent(_ delta: Int32, phase: CGScrollPhase) throws {
+                guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                          wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else {
+                    throw HelperError("Could not create native log scroll event")
+                }
+                event.location = center
+                event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+                event.post(tap: .cghidEventTap)
+            }
+            var reached = false
             let maximumScrollEvents = 64
             var totalScrollEvents = 0
-            for delta in (reached ? [] : [100, -100]) {
+            for delta in [240, -240] {
                 var unchanged = 0
                 var directionEventCount = 0
                 var madeProgress = false
@@ -1197,12 +1146,8 @@ func run() throws -> [String: Any] {
                 while totalScrollEvents < maximumScrollEvents {
                     var batchEvents = 0
                     while batchEvents < 16 && totalScrollEvents < maximumScrollEvents {
-                        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line,
-                                                  wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
-                            throw HelperError("Could not create native log scroll event")
-                        }
-                        event.location = center
-                        event.post(tap: .cghidEventTap)
+                        let phase: CGScrollPhase = totalScrollEvents == 0 ? .began : .changed
+                        try postScrollEvent(Int32(delta), phase: phase)
                         directionEventCount += 1
                         totalScrollEvents += 1
                         batchEvents += 1
@@ -1250,6 +1195,9 @@ func run() throws -> [String: Any] {
                 // Continue a helpful direction across batches. Try its opposite only
                 // after observed movement away or repeated samples with no movement.
                 if reached || stopReason == "event-cap" { break }
+            }
+            if totalScrollEvents > 0 {
+                try postScrollEvent(0, phase: .ended)
             }
             try require(reached,
                         "Native log viewer did not scroll to \(position); " +
