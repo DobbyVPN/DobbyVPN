@@ -296,6 +296,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         controller.platform = "windows"
         controller.pid = 42
         controller.identity = "candidate-ui-instance"
+        controller._windows_wer_dump_dir = Path("run/windows-wer-dumps")
         url = "https://127.0.0.1:49152/subscription?import-during-connect=1"
         uri = "dobbyvpn://import?url=https%3A%2F%2F127.0.0.1%3A49152%2Fsubscription%3Fimport-during-connect%3D1"
 
@@ -321,6 +322,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             target="Profile 2 action",
             competing="Profile 1 action",
             uri=uri,
+            dumpDirectory=str(controller._windows_wer_dump_dir),
         )
 
         mutations = (
