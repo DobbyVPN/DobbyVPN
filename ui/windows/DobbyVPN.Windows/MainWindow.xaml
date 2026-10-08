@@ -8,7 +8,7 @@
       <TextBlock Text="DobbyVPN" Style="{StaticResource TitleTextBlockStyle}" />
       <Button Grid.Column="1" Content="About" Click="About_Click" AutomationProperties.AutomationId="About" />
     </Grid>
-    <ScrollViewer x:Name="ControlsScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
+    <ScrollViewer x:Name="ControlsScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="Connection controls">
       <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="16">
         <StackPanel Spacing="6">
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
@@ -33,7 +33,7 @@
             </Button>
           </StackPanel>
         </Grid>
-        <ScrollViewer x:Name="ProfilesScroll" Grid.Row="2" MaxHeight="180" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer x:Name="ProfilesScroll" Grid.Row="2" MaxHeight="180" VerticalScrollBarVisibility="Auto" AutomationProperties.AutomationId="Profile list viewport">
           <StackPanel x:Name="ProfileList" Spacing="8" />
         </ScrollViewer>
       </Grid>

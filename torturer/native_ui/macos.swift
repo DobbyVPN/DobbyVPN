@@ -222,6 +222,208 @@ func find(_ nodes: [AXUIElement], _ name: String, editor: Bool = false) throws -
     return element
 }
 
+func bounds(_ element: AXUIElement) throws -> CGRect {
+    guard let positionValue = try axValue(element, kAXPositionAttribute),
+          let sizeValue = try axValue(element, kAXSizeAttribute) else {
+        throw HelperError("Native control bounds are unavailable: \(element)")
+    }
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    try require(AXValueGetValue(positionValue, .cgPoint, &origin), "Could not read native control position")
+    try require(AXValueGetValue(sizeValue, .cgSize, &size), "Could not read native control size")
+    try require(size.width > 0 && size.height > 0, "Native control has empty bounds")
+    return CGRect(origin: origin, size: size)
+}
+
+func rectangle(_ bounds: CGRect) -> [String: Double] {
+    ["x": Double(bounds.minX), "y": Double(bounds.minY),
+     "width": Double(bounds.width), "height": Double(bounds.height)]
+}
+
+func contained(_ child: CGRect, by parent: CGRect, tolerance: CGFloat = 1) -> Bool {
+    child.minX >= parent.minX - tolerance && child.minY >= parent.minY - tolerance &&
+        child.maxX <= parent.maxX + tolerance && child.maxY <= parent.maxY + tolerance
+}
+
+func profileScrollParts(_ profileView: AXUIElement) throws -> (area: AXUIElement, bounds: CGRect, scrollbar: AXUIElement?) {
+    let identifiedBounds = try bounds(profileView)
+    var candidates = [AXUIElement]()
+    for element in try elements(profileView) {
+        guard try label(element, kAXRoleAttribute) == kAXScrollAreaRole,
+              contained(try bounds(element), by: identifiedBounds, tolerance: 2) else { continue }
+        candidates.append(element)
+    }
+
+    var current: AXUIElement? = profileView
+    for _ in 0..<8 {
+        guard let element = current else { break }
+        if try label(element, kAXRoleAttribute) == kAXScrollAreaRole,
+           contained(try bounds(element), by: identifiedBounds, tolerance: 2),
+           !candidates.contains(where: { CFEqual($0, element) }) {
+            candidates.append(element)
+        }
+        current = try axElement(element, kAXParentAttribute)
+    }
+    guard let area = candidates.first else {
+        throw HelperError("Profile list identifier is not associated with its native scroll viewport")
+    }
+    return (area, try bounds(area), try axElement(area, kAXVerticalScrollBarAttribute))
+}
+
+func profileScrollPercent(_ profileView: AXUIElement) throws -> Double? {
+    let parts = try profileScrollParts(profileView)
+    guard let scrollbar = parts.scrollbar else { return nil }
+    guard let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber,
+          let minimum = try attribute(scrollbar, kAXMinValueAttribute) as? NSNumber,
+          let maximum = try attribute(scrollbar, kAXMaxValueAttribute) as? NSNumber else {
+        return nil
+    }
+    let range = maximum.doubleValue - minimum.doubleValue
+    guard range > 0 else { return nil }
+    return min(100, max(0, (value.doubleValue - minimum.doubleValue) / range * 100))
+}
+
+func profileListLayout(_ nodes: [AXUIElement]) throws -> [String: Any] {
+    guard let window = nodes.first,
+          try label(window, kAXRoleAttribute) == kAXWindowRole else {
+        throw HelperError("Native profile layout has no window root")
+    }
+    let windowBounds = try bounds(window)
+    let controlsBounds = try bounds(find(nodes, "Connection controls"))
+    let profileView = try find(nodes, "Profile list viewport")
+    let profileParts = try profileScrollParts(profileView)
+    let profileBounds = profileParts.bounds
+    let actionBounds = try bounds(find(nodes, "VPN connection action"))
+    let logText = try find(nodes, "Connection logs", editor: true)
+    var logAncestor: AXUIElement? = logText
+    var logScrollArea: AXUIElement?
+    for _ in 0..<8 {
+        guard let element = logAncestor else { break }
+        if try label(element, kAXRoleAttribute) == kAXScrollAreaRole {
+            logScrollArea = element
+            break
+        }
+        logAncestor = try axElement(element, kAXParentAttribute)
+    }
+    guard let logViewport = logScrollArea else {
+        throw HelperError("Native log text has no containing scroll viewport")
+    }
+    let logsBounds = try bounds(logViewport)
+    let visibleActions = try nodes.compactMap { element -> (Int, String)? in
+        let id = try identifier(element)
+        guard id.hasPrefix("Profile "), id.hasSuffix(" action"),
+              try label(element, kAXRoleAttribute) == kAXButtonRole,
+              let index = Int(id.dropFirst("Profile ".count).dropLast(" action".count)) else {
+            return nil
+        }
+        return contained(try bounds(element), by: profileBounds) ? (index, id) : nil
+    }.sorted { $0.0 < $1.0 }.map { $0.1 }
+    let scrollPosition: Any
+    if let percent = try profileScrollPercent(profileView) {
+        scrollPosition = percent
+    } else {
+        scrollPosition = NSNull()
+    }
+    return [
+        "ready": true,
+        "window": rectangle(windowBounds),
+        "controls": rectangle(controlsBounds),
+        "profile_viewport": rectangle(profileBounds),
+        "connection_action": rectangle(actionBounds),
+        "logs": rectangle(logsBounds),
+        "scroll_position": scrollPosition,
+        "visible_profile_actions": visibleActions,
+    ]
+}
+
+func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [String: Any] {
+    try require(position == "top" || position == "bottom", "Profile list position must be top or bottom")
+    guard let window = nodes.first else { throw HelperError("Profile list window is unavailable") }
+    let profileView = try find(nodes, "Profile list viewport")
+    let profileParts = try profileScrollParts(profileView)
+    guard let scrollbar = profileParts.scrollbar else {
+        throw HelperError("Profile list viewport has no native vertical scrollbar")
+    }
+    guard let minimum = try attribute(scrollbar, kAXMinValueAttribute) as? NSNumber,
+          let maximum = try attribute(scrollbar, kAXMaxValueAttribute) as? NSNumber,
+          maximum.doubleValue > minimum.doubleValue else {
+        throw HelperError("Profile list does not expose an overflowing vertical range")
+    }
+    let targetID = position == "top" ? "Profile 1 action" : "Profile 24 action"
+    func currentLayout() throws -> [String: Any] {
+        try retryTransientAccessibilityReads(
+            context: "reading native profile-list geometry",
+            deadline: Date().addingTimeInterval(0.5)
+        ) {
+            try profileListLayout(elements(window))
+        }
+    }
+    func targetVisible(_ layout: [String: Any]) -> Bool {
+        (layout["visible_profile_actions"] as? [String])?.contains(targetID) == true
+    }
+    var layout = try currentLayout()
+    if !targetVisible(layout) {
+        var settable = DarwinBoolean(false)
+        if AXUIElementIsAttributeSettable(scrollbar, kAXValueAttribute as CFString, &settable) == .success,
+           settable.boolValue {
+            let targetValue = position == "top" ? minimum.doubleValue : maximum.doubleValue
+            if AXUIElementSetAttributeValue(
+                scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
+            ) == .success {
+                for _ in 0..<12 {
+                    layout = try currentLayout()
+                    if targetVisible(layout) { return layout }
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+            }
+        }
+
+        let profileBounds = profileParts.bounds
+        let center = CGPoint(x: profileBounds.midX, y: profileBounds.midY)
+        guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                                  mouseCursorPosition: center, mouseButton: .left) else {
+            throw HelperError("Could not position the pointer over the profile list")
+        }
+        moved.post(tap: .cghidEventTap)
+        var reached = false
+        for delta in [100, -100] {
+            var unchanged = 0
+            var priorDistance = position == "top"
+                ? (layout["scroll_position"] as? Double ?? 0)
+                : 100 - (layout["scroll_position"] as? Double ?? 0)
+            for _ in 0..<24 {
+                guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line,
+                                          wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
+                    throw HelperError("Could not create native profile-list scroll event")
+                }
+                event.location = center
+                event.post(tap: .cghidEventTap)
+                Thread.sleep(forTimeInterval: 0.05)
+                layout = try currentLayout()
+                if targetVisible(layout) {
+                    reached = true
+                    break
+                }
+                let scrollPosition = layout["scroll_position"] as? Double
+                    ?? (position == "top" ? 0 : 100)
+                let distance = position == "top" ? scrollPosition : 100 - scrollPosition
+                if distance < priorDistance {
+                    unchanged = 0
+                } else {
+                    unchanged += 1
+                }
+                priorDistance = distance
+                if unchanged >= 3 { break }
+            }
+            if reached { break }
+        }
+        try require(reached, "Profile list did not scroll to \(position); \(targetID) was not visible")
+    }
+    layout = try currentLayout()
+    try require(targetVisible(layout), "Profile list did not expose \(targetID) at \(position)")
+    return layout
+}
+
 func press(_ element: AXUIElement) throws {
     let code = AXUIElementPerformAction(element, kAXPressAction as CFString)
     try require(code == .success, "Native AX press failed: \(code.rawValue)")
@@ -502,7 +704,7 @@ func run() throws -> [String: Any] {
         }
         try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, "Native app did not become foreground")
     }
-    if operation == "scroll-logs" { try activate() }
+    if operation == "scroll-logs" || operation == "scroll-profile-list" { try activate() }
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 1)
     let nodes: [AXUIElement]
@@ -567,6 +769,15 @@ func run() throws -> [String: Any] {
     if operation == "logs" {
         let view = try find(nodes, "Connection logs", editor: true)
         return ["ready": true, "text": try label(view, kAXValueAttribute)]
+    }
+    if operation == "profile-list-layout" {
+        return try profileListLayout(nodes)
+    }
+    if operation == "scroll-profile-list" {
+        guard let position = request["position"] as? String else {
+            throw HelperError("Missing profile-list scroll position")
+        }
+        return try scrollProfileList(nodes, position: position)
     }
     if operation == "log-position" {
         let view = try find(nodes, "Connection logs", editor: true)

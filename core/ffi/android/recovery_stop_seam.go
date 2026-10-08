@@ -15,8 +15,8 @@ import testseam "core/sessionapi/runtime"
 //
 //export Java_com_dobby_nativebridge_NativeRecoveryStopTestSeam_enableNative
 func Java_com_dobby_nativebridge_NativeRecoveryStopTestSeam_enableNative(
-	_ *C.JNIEnv,
-	_ C.jclass,
+	env *C.JNIEnv,
+	clazz C.jclass,
 ) C.jboolean {
 	if testseam.EnableTestRecoveryStop() {
 		return C.jboolean(1)
@@ -26,8 +26,8 @@ func Java_com_dobby_nativebridge_NativeRecoveryStopTestSeam_enableNative(
 
 //export Java_com_dobby_nativebridge_NativeRecoveryStopTestSeam_armNative
 func Java_com_dobby_nativebridge_NativeRecoveryStopTestSeam_armNative(
-	_ *C.JNIEnv,
-	_ C.jclass,
+	env *C.JNIEnv,
+	clazz C.jclass,
 ) C.jboolean {
 	if testseam.ArmTestRecoveryStop() {
 		return C.jboolean(1)

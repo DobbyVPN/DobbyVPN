@@ -376,10 +376,23 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             point_end = helper_source.index("private static void Capture(", point_start)
             point_method = helper_source[point_start:point_end]
             self.assertEqual(point_method.count("AutomationElement.FromPoint("), 1)
+            self.assertIn("CapturePointContextBeforeFromPoint(window, pointX, pointY)", point_method)
+            self.assertLess(
+                point_method.index("CapturePointContextBeforeFromPoint(window, pointX, pointY)"),
+                point_method.index("AutomationElement.FromPoint("),
+            )
+            self.assertIn('response["pointContextBeforeFromPoint"]', point_method)
             self.assertIn("walker.GetParent(", point_method)
             self.assertIn("maximumAncestors\"] = 8", point_method)
             self.assertNotIn("GetFirstChild", point_method)
             self.assertNotIn("GetNextSibling", point_method)
+            context_start = helper_source.index(
+                "private static Dictionary<string, object?> CapturePointContextBeforeFromPoint("
+            )
+            context_end = helper_source.index("private static AutomationElement RequireAutomationId(", context_start)
+            point_context = helper_source[context_start:context_end]
+            self.assertIn("return InPerMonitorV2DpiContext(() =>", point_context)
+            self.assertIn("WindowFromPoint(new NativePoint { X = pointX, Y = pointY })", point_context)
             self.assertIn('if (traceAutomationPoint)\n                return MeasureAutomationElementFromPoint', helper_source)
             self.assertIn('request.GetProperty("windowHandle")', helper_source)
             self.assertIn('self._call(\n                        "uia-point"', smoke_source)
@@ -811,6 +824,31 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         ):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, source)
+
+    def test_native_ui_profile_list_layout_uses_viewport_scroll_and_clipped_actions(self) -> None:
+        source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
+        layout_start = source.index(
+            "private static Dictionary<string, object?> ProfileListLayout("
+        )
+        scroll_start = source.index(
+            "private static Dictionary<string, object?> ScrollProfileList(", layout_start
+        )
+        scroll_end = source.index("private static void TracePhase(", scroll_start)
+        layout = source[layout_start:scroll_start]
+        scroll = source[scroll_start:scroll_end]
+
+        self.assertIn('operation == "profile-list-layout"', source)
+        self.assertIn('operation == "scroll-profile-list"', source)
+        self.assertIn("FindAll(", layout)
+        self.assertNotIn("Walk(", layout)
+        self.assertIn('var profileViewport = RequireAutomationId(root, "Profile list viewport")', layout)
+        self.assertIn("FullyInside(actionBounds, viewportBounds)", layout)
+        self.assertIn('"visible_profile_actions"', layout)
+        self.assertIn('"scroll_position"', layout)
+        self.assertIn('RequireAutomationId(root, "Profile list viewport")', scroll)
+        self.assertIn("viewport.TryGetCurrentPattern(ScrollPattern.Pattern", scroll)
+        self.assertIn('position is not ("top" or "bottom")', scroll)
+        self.assertIn("SetScrollPercent(ScrollPattern.NoScroll, targetPosition)", scroll)
 
     def test_windows_paste_controller_retains_helper_invocation_time(self) -> None:
         controller = object.__new__(smoke.NativeUIController)

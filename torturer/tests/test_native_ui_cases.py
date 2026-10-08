@@ -22,14 +22,15 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         def sleep(self, seconds):
             self.now += seconds
 
-    def recovery_fakes(self, marker, *, traffic_ok=True, competing_connect=False,
-                       later_generation=False):
+    def recovery_fakes(self, marker, *, platform="macos", traffic_ok=True,
+                       competing_connect=False, later_generation=False):
         events = []
         clock = self.FakeClock()
 
         class UI:
             def __init__(self):
                 self.base = None
+                self.platform = platform
 
             def configure(self):
                 events.append("configure")
@@ -154,7 +155,18 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             self.assertEqual(result["stopped_generation"], 8)
             self.assertEqual(base.stopped_snapshots, 31)
             self.assertEqual(events.count("inspect_cleanup"), 1)
+            self.assertIn("click:Stop", events)
+            self.assertNotIn("click:VPN connection action", events)
+
+    def test_auto_recovery_stop_keeps_windows_action_identifier(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "recovery-stop.arm"
+            ui, base, events, clock = self.recovery_fakes(marker, platform="windows")
+            with patch.object(journey, "time", clock):
+                journey._exercise_auto_recovery_stop(ui, base, marker, 1.0)
+
             self.assertIn("click:VPN connection action", events)
+            self.assertNotIn("click:Stop", events)
 
     def test_auto_recovery_stop_does_not_arm_when_throughput_is_not_positive(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -197,6 +209,92 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                     "connection generation resumed after rendered recovery Stop",
                 ):
                     journey._exercise_auto_recovery_stop(ui, base, marker, 1.0)
+
+    @staticmethod
+    def profile_layout(scroll_position, visible_actions):
+        return {
+            "ready": True,
+            "window": {"x": 0, "y": 0, "width": 1000, "height": 800},
+            "controls": {"x": 10, "y": 10, "width": 470, "height": 400},
+            "profile_viewport": {"x": 20, "y": 120, "width": 440, "height": 180},
+            "connection_action": {"x": 20, "y": 20, "width": 440, "height": 80},
+            "logs": {"x": 500, "y": 10, "width": 480, "height": 760},
+            "scroll_position": scroll_position,
+            "visible_profile_actions": visible_actions,
+        }
+
+    def test_long_profile_list_reaches_twenty_fourth_action_and_restores_top(self):
+        events = []
+
+        class UI:
+            platform = "macos"
+
+            def scroll_profile_list(self, position):
+                events.append(f"scroll:{position}")
+                if position == "bottom":
+                    return NativeUICaseFixtureTests.profile_layout(100, ["Profile 24 action"])
+                return NativeUICaseFixtureTests.profile_layout(0, ["Profile 1 action", "Profile 2 action"])
+
+            def _call(self, operation):
+                events.append(operation)
+                if operation == "logs":
+                    return {"ready": True, "text": "INFO · desktop fixture log"}
+                if operation == "log-position":
+                    return {"visible_range_start": 0, "visible_range_end": 20}
+                raise AssertionError(f"unexpected UI operation: {operation}")
+
+        journey._exercise_long_profile_list_viewport(UI())
+        self.assertEqual(events, ["scroll:bottom", "logs", "log-position", "scroll:top"])
+        self.assertFalse(any(event.startswith("click:") for event in events))
+
+    def test_long_profile_list_restores_top_if_bottom_profile_is_not_reachable(self):
+        events = []
+
+        class UI:
+            platform = "windows"
+
+            def scroll_profile_list(self, position):
+                events.append(f"scroll:{position}")
+                actions = ["Profile 1 action"] if position == "bottom" else ["Profile 1 action"]
+                return NativeUICaseFixtureTests.profile_layout(100 if position == "bottom" else 0, actions)
+
+            def _call(self, operation):
+                events.append(operation)
+                raise AssertionError("logs should not be queried after a failed reachability assertion")
+
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "Profile 24 action was not reachable"):
+            journey._exercise_long_profile_list_viewport(UI())
+        self.assertEqual(events, ["scroll:bottom", "scroll:top"])
+
+    def test_long_profile_list_preserves_failure_when_top_restoration_also_fails(self):
+        class UI:
+            platform = "windows"
+
+            def scroll_profile_list(self, position):
+                if position == "bottom":
+                    return NativeUICaseFixtureTests.profile_layout(100, ["Profile 1 action"])
+                raise journey.NativeUIJourneyError("top restoration failed")
+
+            def _call(self, _operation):
+                raise AssertionError("logs should not be queried after a failed reachability assertion")
+
+        with self.assertRaises(BaseExceptionGroup) as caught:
+            journey._exercise_long_profile_list_viewport(UI())
+        self.assertEqual(len(caught.exception.exceptions), 2)
+        self.assertIn("Profile 24 action was not reachable", str(caught.exception.exceptions[0]))
+        self.assertIn("top restoration failed", str(caught.exception.exceptions[1]))
+
+    def test_long_profile_layout_rejects_a_logs_pane_that_is_too_small(self):
+        layout = self.profile_layout(100, ["Profile 24 action"])
+        layout["logs"] = {"x": 500, "y": 10, "width": 120, "height": 100}
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "logs pane was too small"):
+            journey._assert_profile_list_layout(layout, edge="bottom", visible_action="Profile 24 action")
+
+    def test_long_profile_layout_rejects_viewport_overlapping_the_main_action(self):
+        layout = self.profile_layout(100, ["Profile 24 action"])
+        layout["profile_viewport"] = {"x": 20, "y": 80, "width": 440, "height": 180}
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "overlapped the main action"):
+            journey._assert_profile_list_layout(layout, edge="bottom", visible_action="Profile 24 action")
 
     def test_macos_configure_case_uses_disposable_https_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:

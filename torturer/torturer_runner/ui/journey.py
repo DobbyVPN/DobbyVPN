@@ -405,6 +405,126 @@ def _record_native_observations(
     checks[key("throughput_positive")] = _positive_throughput(throughput)
 
 
+def _layout_rect(layout: dict[str, Any], name: str) -> tuple[float, float, float, float]:
+    value = layout.get(name)
+    if not isinstance(value, dict):
+        raise NativeUIJourneyError(f"desktop layout did not report {name} bounds")
+    coordinates: list[float] = []
+    for key in ("x", "y", "width", "height"):
+        raw = value.get(key)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+            raise NativeUIJourneyError(f"desktop layout reported invalid {name} {key}: {raw!r}")
+        coordinates.append(float(raw))
+    x, y, width, height = coordinates
+    if width <= 0 or height <= 0:
+        raise NativeUIJourneyError(f"desktop layout reported empty {name} bounds")
+    return x, y, width, height
+
+
+def _rect_contains(container: tuple[float, float, float, float], item: tuple[float, float, float, float]) -> bool:
+    cx, cy, cw, ch = container
+    ix, iy, iw, ih = item
+    tolerance = 1.0  # Accessibility frames can be fractional on scaled displays.
+    return (
+        ix >= cx - tolerance and iy >= cy - tolerance
+        and ix + iw <= cx + cw + tolerance and iy + ih <= cy + ch + tolerance
+    )
+
+
+def _rects_overlap(left: tuple[float, float, float, float], right: tuple[float, float, float, float]) -> bool:
+    lx, ly, lw, lh = left
+    rx, ry, rw, rh = right
+    return min(lx + lw, rx + rw) - max(lx, rx) > 1 and min(ly + lh, ry + rh) - max(ly, ry) > 1
+
+
+def _assert_profile_list_layout(
+    layout: object,
+    *,
+    edge: str,
+    visible_action: str,
+) -> None:
+    if not isinstance(layout, dict) or layout.get("ready") is not True:
+        raise NativeUIJourneyError("desktop profile-list layout evidence was not ready")
+    if edge not in {"top", "bottom"}:
+        raise ValueError(f"unsupported profile-list edge: {edge}")
+
+    bounds = {name: _layout_rect(layout, name) for name in (
+        "window", "controls", "profile_viewport", "connection_action", "logs",
+    )}
+    window = bounds["window"]
+    controls = bounds["controls"]
+    profile_viewport = bounds["profile_viewport"]
+    connection_action = bounds["connection_action"]
+    logs = bounds["logs"]
+    for name, rectangle in bounds.items():
+        if name != "window" and not _rect_contains(window, rectangle):
+            raise NativeUIJourneyError(f"desktop {name} bounds escaped the native window")
+    if not _rect_contains(controls, profile_viewport) or not _rect_contains(controls, connection_action):
+        raise NativeUIJourneyError("desktop profile viewport or main action escaped Connection controls")
+    if logs[2] < 160 or logs[3] < 120:
+        raise NativeUIJourneyError(
+            f"desktop logs pane was too small to remain usable with a long profile list: {logs[2]:.1f}x{logs[3]:.1f}"
+        )
+    if _rects_overlap(profile_viewport, connection_action) or _rects_overlap(profile_viewport, logs):
+        raise NativeUIJourneyError("desktop profile viewport overlapped the main action or logs pane")
+
+    scroll_position = layout.get("scroll_position")
+    if (
+        isinstance(scroll_position, bool)
+        or not isinstance(scroll_position, (int, float))
+        or not math.isfinite(scroll_position)
+        or not 0 <= scroll_position <= 100
+    ):
+        raise NativeUIJourneyError(f"desktop profile-list scroll position was invalid: {scroll_position!r}")
+    if edge == "top" and scroll_position > 5:
+        raise NativeUIJourneyError(f"desktop profile list did not return to the top: {scroll_position!r}%")
+    if edge == "bottom" and scroll_position < 95:
+        raise NativeUIJourneyError(f"desktop profile list did not reach the bottom: {scroll_position!r}%")
+
+    visible_actions = layout.get("visible_profile_actions")
+    if not isinstance(visible_actions, list) or any(not isinstance(action, str) for action in visible_actions):
+        raise NativeUIJourneyError("desktop profile-list layout did not report visible profile actions")
+    if visible_action not in visible_actions:
+        raise NativeUIJourneyError(f"{visible_action} was not reachable inside the bounded profile viewport")
+
+
+def _exercise_long_profile_list_viewport(ui) -> None:
+    """Prove the bottom synthetic profile remains reachable without using it."""
+
+    try:
+        bottom = ui.scroll_profile_list("bottom")
+        _assert_profile_list_layout(bottom, edge="bottom", visible_action="Profile 24 action")
+
+        rendered_logs = ui._call("logs")
+        if rendered_logs.get("ready") is not True or not str(rendered_logs.get("text", "")).strip():
+            raise NativeUIJourneyError("desktop log output was unavailable with the long profile list at its bottom")
+        visible_log_position = ui._call("log-position")
+        if ui.platform == "macos":
+            visible_range_start = visible_log_position.get("visible_range_start")
+            visible_range_end = visible_log_position.get("visible_range_end")
+            if not (
+                isinstance(visible_range_start, int)
+                and isinstance(visible_range_end, int)
+                and visible_range_end > visible_range_start
+            ):
+                raise NativeUIJourneyError("desktop logs had no readable viewport at the bottom of the long profile list")
+        elif not str(visible_log_position.get("visible_first_record", "")).strip():
+            raise NativeUIJourneyError("desktop logs had no visible record at the bottom of the long profile list")
+    except BaseException as primary_error:
+        try:
+            top = ui.scroll_profile_list("top")
+            _assert_profile_list_layout(top, edge="top", visible_action="Profile 1 action")
+        except BaseException as restore_error:
+            raise BaseExceptionGroup(
+                "long profile-list verification and top restoration failed",
+                [primary_error, restore_error],
+            )
+        raise
+    else:
+        top = ui.scroll_profile_list("top")
+        _assert_profile_list_layout(top, edge="top", visible_action="Profile 1 action")
+
+
 def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float) -> dict[str, bool]:
     initial = base._snapshot(min(timeout, 30), "NATIVE_SELECTION_STATUS_FAILED")
     if len(initial.get("profiles", [])) < 2:
@@ -1211,21 +1331,7 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     expected_logs_control = "Backend logs" if ui.platform == "windows" else "Connection logs"
     if not {"Profile 1 action", "Profile 2 action", expected_logs_control}.issubset(set(layout_view.get("labels", []))):
         raise NativeUIJourneyError("the long profile list hid the top profile actions or desktop logs pane")
-    rendered_logs = ui._call("logs")
-    if rendered_logs.get("ready") is not True or not str(rendered_logs.get("text", "")).strip():
-        raise NativeUIJourneyError("desktop log output was unavailable while the long profile list was rendered")
-    visible_log_position = ui._call("log-position")
-    if ui.platform == "macos":
-        visible_range_start = visible_log_position.get("visible_range_start")
-        visible_range_end = visible_log_position.get("visible_range_end")
-        if not (
-            isinstance(visible_range_start, int)
-            and isinstance(visible_range_end, int)
-            and visible_range_end > visible_range_start
-        ):
-            raise NativeUIJourneyError("desktop logs had no readable viewport with the long profile list")
-    elif not str(visible_log_position.get("visible_first_record", "")).strip():
-        raise NativeUIJourneyError("desktop logs had no visible record with the long profile list")
+    _exercise_long_profile_list_viewport(ui)
 
     fixture.replace_response(previous_inventory)
     restore_layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=restore"
@@ -1619,7 +1725,7 @@ def _exercise_auto_recovery_stop(ui: Any, base: Any, marker: Path, timeout: floa
 
     ui._wait(stop_is_rendered, "Auto recovery did not render an enabled Stop control")
     ui.capture("auto-recovery-stop")
-    ui._click("VPN connection action")
+    ui._click("Stop" if ui.platform == "macos" else "VPN connection action")
     deadline = time.monotonic() + timeout
     stopped: dict[str, object] = {}
     while time.monotonic() < deadline:

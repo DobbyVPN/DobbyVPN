@@ -27,6 +27,21 @@ from torturer_runner.windows_job import (
 from torturer_contract.engine import ScenarioExecutionError
 
 
+def _desktop_profile_layout(platform: str) -> dict[str, object]:
+    height = 560 if platform == "macos" else 640
+    log_height = height - 310
+    return {
+        "ready": True,
+        "window": {"x": 50, "y": 60, "width": 640, "height": height},
+        "controls": {"x": 70, "y": 90, "width": 600, "height": 210},
+        "profile_viewport": {"x": 90, "y": 180, "width": 560, "height": 100},
+        "connection_action": {"x": 500, "y": 130, "width": 100, "height": 32},
+        "logs": {"x": 70, "y": 310, "width": 600, "height": log_height},
+        "scroll_position": 0,
+        "visible_profile_actions": ["Profile 1 action", "Profile 2 action"],
+    }
+
+
 class BinaryStderr:
     def __init__(self) -> None:
         self.buffer = BytesIO()
@@ -637,6 +652,8 @@ class InformationRetentionTests(unittest.TestCase):
                     return {"ready": True, **next(positions)}
                 if operation == "resize-window":
                     return {"ready": True, "width": 900, "height": 700}
+                if operation == "profile-list-layout":
+                    return _desktop_profile_layout(controller.platform)
                 return {"ready": True}
 
             def wait(predicate, message: str) -> None:
@@ -655,6 +672,7 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(controller.cleared_record, "2026 · INFO · Backend")
             self.assertIn("select-log-text", operations)
             self.assertIn("log-position", operations)
+            self.assertEqual(operations.count("profile-list-layout"), 1)
             self.assertEqual(operations.count("resize-window"), 2)
             self.assertTrue(controller.log_resize_verified)
             self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
@@ -693,6 +711,8 @@ class InformationRetentionTests(unittest.TestCase):
                             "visible_first_record": "record-at-" + str(position)}
                 if operation == "resize-window":
                     return {"ready": True, "left": 50, "top": 60, "width": 900, "height": 700}
+                if operation == "profile-list-layout":
+                    return _desktop_profile_layout(controller.platform)
                 return {"ready": True}
 
             def wait(predicate, message: str) -> None:
@@ -743,6 +763,8 @@ class InformationRetentionTests(unittest.TestCase):
                             "visible_first_record": "record-at-" + str(position)}
                 if operation == "resize-window":
                     return {"ready": True, "left": 50, "top": 60, "width": 900, "height": 700}
+                if operation == "profile-list-layout":
+                    return _desktop_profile_layout(controller.platform)
                 return {"ready": True}
 
             def wait(predicate, message: str) -> None:
@@ -762,6 +784,7 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(operations.count("select-log-text"), 2)
             self.assertEqual(operations.count("log-position"), 4)
             self.assertEqual(operations.count("resize-window"), 2)
+            self.assertEqual(operations.count("profile-list-layout"), 1)
             self.assertTrue(controller.log_resize_verified)
             self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
 

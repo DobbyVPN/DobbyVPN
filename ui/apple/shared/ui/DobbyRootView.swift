@@ -117,6 +117,7 @@ public struct DobbyRootView: View {
                         }
                         .frame(maxHeight: min(180, geometry.size.height * 0.25))
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("Profile list viewport")
                     }
                     .background(GeometryReader { size in
                         Color.clear.preference(key: ControlsHeight.self, value: size.size.height)

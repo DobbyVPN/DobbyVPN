@@ -308,9 +308,9 @@ class NativeUIController:
             request["identity"] = self.identity
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
-        operation_limit = 30.0 if self.platform == "windows" and operation in {
-            "tree", "resize-window", "windows-baseline", "uia-point",
-        } else 10.0
+        operation_limit = 30.0 if operation in {"profile-list-layout", "scroll-profile-list"} or (
+            self.platform == "windows" and operation in {"tree", "resize-window", "windows-baseline", "uia-point"}
+        ) else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}
         if self.platform == "windows":
@@ -870,6 +870,7 @@ class NativeUIController:
             frozen = self._call("logs").get("text", "")
             original_window = self.resize_window(640, 640)
             try:
+                self.assert_primary_action_and_logs_visible()
                 resized_view = self._call("logs")
                 resized_position = self._call("log-position")
                 if resized_view.get("text", "") != frozen:
@@ -925,6 +926,7 @@ class NativeUIController:
             frozen = self._call("logs").get("text", "")
             original_window = self.resize_window(640, 560)
             try:
+                self.assert_primary_action_and_logs_visible()
                 resized_view = self._call("logs")
                 resized_position = self._call("log-position")
                 if resized_view.get("text", "") != frozen:
@@ -1055,6 +1057,51 @@ class NativeUIController:
         if top is not None:
             request["top"] = top
         return self._call("resize-window", **request)
+
+    def profile_list_layout(self) -> dict:
+        result = self._call("profile-list-layout")
+        if result.get("ready") is not True:
+            raise NativeUISmokeError("native helper did not return profile-list layout evidence")
+        return result
+
+    def scroll_profile_list(self, position: str) -> dict:
+        if position not in {"top", "bottom"}:
+            raise ValueError("profile-list position must be top or bottom")
+        result = self._call("scroll-profile-list", position=position)
+        if result.get("ready") is not True:
+            raise NativeUISmokeError(f"native helper did not scroll the profile list to {position}")
+        return result
+
+    def assert_primary_action_and_logs_visible(self) -> dict:
+        layout = self.profile_list_layout()
+
+        def rectangle(name: str) -> tuple[float, float, float, float]:
+            value = layout.get(name)
+            if not isinstance(value, dict):
+                raise NativeUISmokeError(f"native profile layout omitted {name} bounds")
+            coordinates = tuple(value.get(key) for key in ("x", "y", "width", "height"))
+            if any(type(item) not in (int, float) or not math.isfinite(item) for item in coordinates):
+                raise NativeUISmokeError(f"native profile layout returned invalid {name} bounds: {value}")
+            x, y, width, height = (float(item) for item in coordinates)
+            if width <= 0 or height <= 0:
+                raise NativeUISmokeError(f"native profile layout returned empty {name} bounds: {value}")
+            return x, y, width, height
+
+        def contained(inner: tuple[float, float, float, float], outer: tuple[float, float, float, float]) -> bool:
+            ix, iy, iw, ih = inner
+            ox, oy, ow, oh = outer
+            return ix >= ox - 1 and iy >= oy - 1 and ix + iw <= ox + ow + 1 and iy + ih <= oy + oh + 1
+
+        window = rectangle("window")
+        action = rectangle("connection_action")
+        logs = rectangle("logs")
+        if not contained(action, window) or not contained(logs, window):
+            raise NativeUISmokeError("resized native window clipped the main action or log viewport")
+        ax, ay, aw, ah = action
+        lx, ly, lw, lh = logs
+        if ax < lx + lw and lx < ax + aw and ay < ly + lh and ly < ay + ah:
+            raise NativeUISmokeError("resized native main action overlaps the log viewport")
+        return layout
 
     def about(self) -> dict:
         self._click("About")

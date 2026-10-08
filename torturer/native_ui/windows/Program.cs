@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -20,18 +21,28 @@ internal static class Program
 {
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(NativePoint point);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
-    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll", SetLastError = true)] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr GetThreadDesktop(uint threadId);
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseDesktop(IntPtr desktop);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder information, uint length, out uint needed);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
     [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW", SetLastError = true)]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
     private static extern int GetWindowTextLength(IntPtr window);
@@ -45,20 +56,38 @@ internal static class Program
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
 
-    private static NativePoint GetPhysicalClientOrigin(IntPtr window)
+    private static NativePoint GetPhysicalClientOrigin(IntPtr window) =>
+        InPerMonitorV2DpiContext(() =>
+        {
+            var point = new NativePoint();
+            if (!ClientToScreen(window, ref point))
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not map the HWND client origin to screen coordinates");
+            return point;
+        });
+
+    private static System.Windows.Rect GetPhysicalWindowRect(IntPtr window) =>
+        InPerMonitorV2DpiContext(() =>
+        {
+            if (!GetWindowRect(window, out var bounds))
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not read the HWND rectangle in physical pixels");
+            return new System.Windows.Rect(
+                bounds.Left, bounds.Top, bounds.Right - bounds.Left, bounds.Bottom - bounds.Top);
+        });
+
+    private static T InPerMonitorV2DpiContext<T>(Func<T> operation)
     {
         var previousContext = SetThreadDpiAwarenessContext(new IntPtr(-4)); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
         if (previousContext == IntPtr.Zero)
             throw new System.ComponentModel.Win32Exception(
-                Marshal.GetLastWin32Error(), "Could not enter the physical-pixel DPI context");
+                Marshal.GetLastWin32Error(), "Could not enter the physical-pixel DPI context for the point snapshot");
 
-        var point = new NativePoint();
+        T result = default!;
         Exception? failure = null;
         try
         {
-            if (!ClientToScreen(window, ref point))
-                failure = new System.ComponentModel.Win32Exception(
-                    Marshal.GetLastWin32Error(), "Could not map the HWND client origin to screen coordinates");
+            result = operation();
         }
         catch (Exception error)
         {
@@ -69,14 +98,338 @@ internal static class Program
         {
             if (SetThreadDpiAwarenessContext(previousContext) == IntPtr.Zero)
                 throw new System.ComponentModel.Win32Exception(
-                    Marshal.GetLastWin32Error(), "Could not restore the native UI thread DPI context");
+                    Marshal.GetLastWin32Error(), "Could not restore the native UI thread DPI context after the point snapshot");
         }
         catch (Exception restoreFailure)
         {
             failure = failure is null ? restoreFailure : new AggregateException(failure, restoreFailure);
         }
-        if (failure is not null) throw failure;
-        return point;
+
+        if (failure is not null)
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        return result;
+    }
+
+    private static string ReadUserObjectName(IntPtr handle, string description)
+    {
+        const int UoiName = 2;
+        var name = new StringBuilder(256);
+        Marshal.SetLastPInvokeError(0);
+        if (!GetUserObjectInformation(handle, UoiName, name, checked((uint)(name.Capacity * sizeof(char))), out _))
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(), $"Could not read the {description} name");
+        return name.ToString();
+    }
+
+    private static Dictionary<string, object?> DescribeThreadDesktop(uint threadId)
+    {
+        var result = new Dictionary<string, object?> { ["threadId"] = threadId };
+        try
+        {
+            Marshal.SetLastPInvokeError(0);
+            var desktop = GetThreadDesktop(threadId);
+            result["handle"] = $"0x{desktop.ToInt64():X}";
+            if (desktop == IntPtr.Zero)
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not get the thread desktop");
+            result["name"] = ReadUserObjectName(desktop, "thread desktop");
+        }
+        catch (Exception error)
+        {
+            result["error"] = error.ToString();
+        }
+        return result;
+    }
+
+    private static Dictionary<string, object?> DescribeInputDesktop()
+    {
+        var result = new Dictionary<string, object?>();
+        var errors = new List<string>();
+        var desktop = IntPtr.Zero;
+        try
+        {
+            Marshal.SetLastPInvokeError(0);
+            desktop = OpenInputDesktop(0, false, 0x0001); // DESKTOP_READOBJECTS
+            result["handle"] = $"0x{desktop.ToInt64():X}";
+            if (desktop == IntPtr.Zero)
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not open the input desktop for a read-only name query");
+            result["name"] = ReadUserObjectName(desktop, "input desktop");
+        }
+        catch (Exception error)
+        {
+            errors.Add(error.ToString());
+        }
+        finally
+        {
+            if (desktop != IntPtr.Zero)
+            {
+                Marshal.SetLastPInvokeError(0);
+                if (!CloseDesktop(desktop))
+                    errors.Add(new System.ComponentModel.Win32Exception(
+                        Marshal.GetLastWin32Error(), "Could not close the input desktop handle").ToString());
+            }
+        }
+        result["errors"] = errors;
+        return result;
+    }
+
+    private static Dictionary<string, object?> DescribeWindowContext(
+        IntPtr window,
+        bool includeThreadDesktop,
+        bool includeGeometry)
+    {
+        var result = new Dictionary<string, object?>
+        {
+            ["handle"] = $"0x{window.ToInt64():X}",
+            ["found"] = window != IntPtr.Zero,
+        };
+        if (window == IntPtr.Zero) return result;
+
+        Marshal.SetLastPInvokeError(0);
+        var threadId = GetWindowThreadProcessId(window, out var processId);
+        result["threadId"] = threadId;
+        result["processId"] = processId;
+        if (threadId == 0 || processId == 0)
+            result["identityError"] = "GetWindowThreadProcessId returned a zero thread or process ID";
+
+        if (processId != 0)
+        {
+            Marshal.SetLastPInvokeError(0);
+            if (ProcessIdToSessionId(processId, out var sessionId))
+                result["sessionId"] = sessionId;
+            else
+                result["sessionIdError"] = new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), $"Could not read session ID for process {processId}").ToString();
+        }
+
+        if (includeThreadDesktop && threadId != 0)
+            result["threadDesktop"] = DescribeThreadDesktop(threadId);
+
+        if (includeGeometry)
+        {
+            try
+            {
+                Marshal.SetLastPInvokeError(0);
+                if (!GetWindowRect(window, out var rect))
+                    throw new System.ComponentModel.Win32Exception(
+                        Marshal.GetLastWin32Error(), "Could not read the window rectangle in physical pixels");
+                result["rect"] = new
+                {
+                    left = rect.Left,
+                    top = rect.Top,
+                    right = rect.Right,
+                    bottom = rect.Bottom,
+                    width = rect.Right - rect.Left,
+                    height = rect.Bottom - rect.Top,
+                };
+            }
+            catch (Exception error)
+            {
+                result["rectError"] = error.ToString();
+            }
+
+            try
+            {
+                var className = new StringBuilder(256);
+                Marshal.SetLastPInvokeError(0);
+                var length = GetClassName(window, className, className.Capacity);
+                if (length == 0)
+                    throw new System.ComponentModel.Win32Exception(
+                        Marshal.GetLastWin32Error(), "Could not read the window class name");
+                result["className"] = className.ToString();
+            }
+            catch (Exception error)
+            {
+                result["classNameError"] = error.ToString();
+            }
+        }
+        return result;
+    }
+
+    private static Dictionary<string, object?> CapturePointContextBeforeFromPoint(
+        IntPtr targetWindow,
+        int pointX,
+        int pointY)
+    {
+        return InPerMonitorV2DpiContext(() =>
+        {
+            var helperThreadId = GetCurrentThreadId();
+            var helperProcessId = GetCurrentProcessId();
+            var helper = new Dictionary<string, object?>
+            {
+                ["processId"] = helperProcessId,
+                ["threadId"] = helperThreadId,
+                ["apartmentState"] = Thread.CurrentThread.GetApartmentState().ToString(),
+                ["threadDesktop"] = DescribeThreadDesktop(helperThreadId),
+            };
+            Marshal.SetLastPInvokeError(0);
+            if (ProcessIdToSessionId(helperProcessId, out var helperSessionId))
+                helper["sessionId"] = helperSessionId;
+            else
+                helper["sessionIdError"] = new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not read the helper process session ID").ToString();
+
+            var inputDesktop = DescribeInputDesktop();
+            var targetWindowDescription = DescribeWindowContext(
+                targetWindow, includeThreadDesktop: true, includeGeometry: true);
+            var result = new Dictionary<string, object?>
+            {
+                ["coordinateSpace"] = "physical-screen-pixels",
+                ["point"] = new { x = pointX, y = pointY },
+                ["helper"] = helper,
+                ["inputDesktop"] = inputDesktop,
+                ["targetWindow"] = targetWindowDescription,
+            };
+
+            var foregroundWindow = GetForegroundWindow();
+            Marshal.SetLastPInvokeError(0);
+            var pointWindowHandle = WindowFromPoint(new NativePoint { X = pointX, Y = pointY });
+            var pointWindow = DescribeWindowContext(
+                pointWindowHandle, includeThreadDesktop: true, includeGeometry: true);
+            try
+            {
+                Marshal.SetLastPInvokeError(0);
+                var rootWindow = GetAncestor(pointWindowHandle, 2); // GA_ROOT
+                pointWindow["root"] = DescribeWindowContext(rootWindow, includeThreadDesktop: false, includeGeometry: true);
+            }
+            catch (Exception error)
+            {
+                pointWindow["rootError"] = error.ToString();
+            }
+            try
+            {
+                var ownerWindow = GetWindow(pointWindowHandle, 4); // GW_OWNER
+                pointWindow["ownerWindow"] = DescribeWindowContext(ownerWindow, includeThreadDesktop: false, includeGeometry: true);
+            }
+            catch (Exception error)
+            {
+                pointWindow["ownerWindowError"] = error.ToString();
+            }
+            result["capturedAtUtc"] = UtcTimestamp();
+            result["foregroundWindow"] = DescribeWindowContext(
+                foregroundWindow, includeThreadDesktop: false, includeGeometry: false);
+            result["windowFromPoint"] = pointWindow;
+            return result;
+        });
+    }
+
+    private static AutomationElement RequireAutomationId(AutomationElement root, string automationId)
+    {
+        var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
+        return root.FindFirst(TreeScope.Descendants, condition)
+            ?? throw new InvalidOperationException($"Native UI element was not found: {automationId}");
+    }
+
+    private static System.Windows.Rect PhysicalBounds(AutomationElement element, string description)
+    {
+        var bounds = element.Current.BoundingRectangle;
+        if (!HasUsableBounds(bounds))
+            throw new InvalidOperationException($"Native UI element has no usable screen rectangle: {description}");
+        return bounds;
+    }
+
+    private static bool HasUsableBounds(System.Windows.Rect bounds) =>
+        !bounds.IsEmpty && double.IsFinite(bounds.Left) && double.IsFinite(bounds.Top) &&
+        double.IsFinite(bounds.Width) && double.IsFinite(bounds.Height) &&
+        bounds.Width > 0 && bounds.Height > 0;
+
+    private static object RectJson(System.Windows.Rect bounds) => new
+    {
+        x = bounds.Left,
+        y = bounds.Top,
+        width = bounds.Width,
+        height = bounds.Height,
+    };
+
+    private static bool FullyInside(System.Windows.Rect element, System.Windows.Rect viewport) =>
+        element.Left >= viewport.Left && element.Top >= viewport.Top &&
+        element.Right <= viewport.Right && element.Bottom <= viewport.Bottom;
+
+    private static Dictionary<string, object?> ProfileListLayout(AutomationElement root, IntPtr window)
+    {
+        var controls = RequireAutomationId(root, "Connection controls");
+        var profileViewport = RequireAutomationId(root, "Profile list viewport");
+        var connectionAction = RequireAutomationId(root, "VPN connection action");
+        var logs = RequireAutomationId(root, "Backend logs");
+        double? scrollPosition = null;
+        if (profileViewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
+        {
+            var verticalPosition = ((ScrollPattern)scrollPattern).Current.VerticalScrollPercent;
+            if (verticalPosition >= 0) scrollPosition = verticalPosition;
+        }
+
+        var viewportBounds = PhysicalBounds(profileViewport, "Profile list viewport");
+        var profileButtons = profileViewport.FindAll(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+        var visibleActions = new List<(int Number, string AutomationId)>();
+        foreach (AutomationElement button in profileButtons)
+        {
+            var automationId = button.Current.AutomationId;
+            const string prefix = "Profile ";
+            const string suffix = " action";
+            if (!automationId.StartsWith(prefix, StringComparison.Ordinal) ||
+                !automationId.EndsWith(suffix, StringComparison.Ordinal) ||
+                automationId.Length <= prefix.Length + suffix.Length)
+                continue;
+
+            var numberText = automationId.Substring(
+                prefix.Length, automationId.Length - prefix.Length - suffix.Length);
+            if (!int.TryParse(numberText, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number < 1)
+                continue;
+
+            var actionBounds = button.Current.BoundingRectangle;
+            if (HasUsableBounds(actionBounds) && FullyInside(actionBounds, viewportBounds))
+                visibleActions.Add((number, automationId));
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["ready"] = true,
+            ["window"] = RectJson(GetPhysicalWindowRect(window)),
+            ["controls"] = RectJson(PhysicalBounds(controls, "Connection controls")),
+            ["profile_viewport"] = RectJson(viewportBounds),
+            ["connection_action"] = RectJson(PhysicalBounds(connectionAction, "VPN connection action")),
+            ["logs"] = RectJson(PhysicalBounds(logs, "Backend logs")),
+            ["scroll_position"] = scrollPosition,
+            ["visible_profile_actions"] = visibleActions
+                .OrderBy(action => action.Number)
+                .Select(action => action.AutomationId)
+                .ToArray(),
+        };
+    }
+
+    private static Dictionary<string, object?> ScrollProfileList(
+        AutomationElement root,
+        IntPtr window,
+        string position)
+    {
+        if (position is not ("top" or "bottom"))
+            throw new ArgumentException("Profile list scroll position must be top or bottom");
+
+        var viewport = RequireAutomationId(root, "Profile list viewport");
+        if (!viewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
+            throw new InvalidOperationException("Profile list viewport does not expose ScrollPattern");
+        var scroll = (ScrollPattern)scrollPattern;
+        if (scroll.Current.VerticalScrollPercent < 0)
+            throw new InvalidOperationException("Profile list viewport does not expose a vertical scroll range");
+
+        var targetPosition = position == "top" ? 0d : 100d;
+        scroll.SetScrollPercent(ScrollPattern.NoScroll, targetPosition);
+        WaitFor(() =>
+        {
+            var actualPosition = scroll.Current.VerticalScrollPercent;
+            return position == "top" ? actualPosition <= 1 : actualPosition >= 99;
+        }, $"Profile list viewport did not scroll to {position}", seconds: 3);
+
+        var layout = ProfileListLayout(root, window);
+        if (layout["scroll_position"] is not double measuredPosition)
+            throw new InvalidOperationException("Profile list viewport did not report its scroll position after scrolling");
+        if (position == "top" ? measuredPosition > 1 : measuredPosition < 99)
+            throw new InvalidOperationException(
+                $"Profile list viewport did not remain at {position}; position={measuredPosition.ToString(CultureInfo.InvariantCulture)}");
+        return layout;
     }
 
     private static void TracePhase(string name)
@@ -608,6 +961,16 @@ internal static class Program
                 if (!element.Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
                 return element;
             }
+            if (operation == "profile-list-layout")
+            {
+                Console.WriteLine(JsonSerializer.Serialize(ProfileListLayout(root, window)));
+                return 0;
+            }
+            if (operation == "scroll-profile-list")
+            {
+                Console.WriteLine(JsonSerializer.Serialize(ScrollProfileList(root, window, Text("position"))));
+                return 0;
+            }
             if (operation == "logs")
             {
                 var logRoot = Find("Backend logs");
@@ -1097,6 +1460,19 @@ internal static class Program
                 coordinateSpace = "physical-screen-pixels",
                 adjustedForWindowMove = pointX != requestedX || pointY != requestedY,
             };
+
+            var pointContextStarted = Stopwatch.GetTimestamp();
+            try
+            {
+                response["pointContextBeforeFromPoint"] =
+                    CapturePointContextBeforeFromPoint(window, pointX, pointY);
+            }
+            catch (Exception error)
+            {
+                response["pointContextSnapshotException"] = error.ToString();
+            }
+            response["pointContextSnapshotDurationMs"] =
+                Stopwatch.GetElapsedTime(pointContextStarted).TotalMilliseconds;
 
             AutomationElement? target = null;
             var fromPointStarted = Stopwatch.GetTimestamp();
