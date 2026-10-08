@@ -656,6 +656,48 @@ internal static class Program
             current.IsControlElement, current.IsEnabled, current.IsOffscreen);
     }
 
+    private static Dictionary<string, NativeActionState> ReadActionStates(
+        AutomationElement scope, params string[] automationIds)
+    {
+        if (automationIds.Length == 0 || automationIds.Distinct(StringComparer.Ordinal).Count() != automationIds.Length)
+            throw new ArgumentException("A UI Automation snapshot requires distinct action identifiers", nameof(automationIds));
+
+        var cache = new CacheRequest
+        {
+            TreeScope = TreeScope.Element,
+            AutomationElementMode = AutomationElementMode.Full,
+        };
+        cache.Add(AutomationElement.AutomationIdProperty);
+        cache.Add(AutomationElement.NameProperty);
+        cache.Add(AutomationElement.ControlTypeProperty);
+        cache.Add(AutomationElement.IsControlElementProperty);
+        cache.Add(AutomationElement.IsEnabledProperty);
+        cache.Add(AutomationElement.IsOffscreenProperty);
+
+        var conditions = automationIds
+            .Select(id => (Condition)new PropertyCondition(AutomationElement.AutomationIdProperty, id))
+            .ToArray();
+        var states = new Dictionary<string, NativeActionState>(StringComparer.Ordinal);
+        using (cache.Activate())
+        {
+            var elements = scope.FindAll(TreeScope.Descendants, new OrCondition(conditions));
+            foreach (AutomationElement element in elements)
+            {
+                var current = element.Cached;
+                var automationId = current.AutomationId;
+                var state = new NativeActionState(element, automationId, current.Name, current.ControlType.ProgrammaticName,
+                    current.IsControlElement, current.IsEnabled, current.IsOffscreen);
+                if (!states.TryAdd(automationId, state))
+                    throw new InvalidOperationException($"Multiple native UI elements matched automation identifier: {automationId}");
+            }
+        }
+
+        foreach (var automationId in automationIds)
+            if (!states.ContainsKey(automationId))
+                states.Add(automationId, new NativeActionState(null, automationId, null, null, null, null, null));
+        return states;
+    }
+
     private static Dictionary<string, object?> DescribeProtocolRegistration()
     {
         var result = new Dictionary<string, object?> { ["registry_view"] = RegistryView.Default.ToString() };
@@ -902,29 +944,29 @@ internal static class Program
             }
         }
         var controls = FindScope(root, "Connection controls");
-        var viewport = FindScope(controls, "Profile list viewport");
+        _ = FindScope(controls, "Profile list viewport");
         _ = FindScope(controls, "VPN connection action");
         NativeActionState before = default;
         NativeActionState competingBefore = default;
         Dictionary<string, object?>? lastBaselineSample = null;
         string? latestBaselineException = null;
         var baselineSampleNumber = 0;
-        NativeActionState ReadBaselineActionState(AutomationElement scope, string automationId, string role, bool trace)
+        Dictionary<string, NativeActionState> ReadBaselineActionStates(int sampleNumber, bool trace)
         {
             var started = Stopwatch.GetTimestamp();
             if (trace)
-                TracePhase($"profile-switch-baseline-read-start utc={UtcTimestamp()} sample=1 role={role} automation_id={JsonSerializer.Serialize(automationId)}");
+                TracePhase($"profile-switch-baseline-cache-read-start utc={UtcTimestamp()} sample={sampleNumber}");
             try
             {
-                var state = ReadActionState(scope, automationId);
+                var states = ReadActionStates(controls, targetId, competingId, "VPN connection action");
                 if (trace)
-                    TracePhase($"profile-switch-baseline-read-complete utc={UtcTimestamp()} sample=1 role={role} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} state={JsonSerializer.Serialize(state.ToDiagnostic())}");
-                return state;
+                    TracePhase($"profile-switch-baseline-cache-read-complete utc={UtcTimestamp()} sample={sampleNumber} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} states={JsonSerializer.Serialize(states.ToDictionary(pair => pair.Key, pair => pair.Value.ToDiagnostic(), StringComparer.Ordinal))}");
+                return states;
             }
             catch (Exception error)
             {
                 if (trace)
-                    TracePhase($"profile-switch-baseline-read-exception utc={UtcTimestamp()} sample=1 role={role} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} error={JsonSerializer.Serialize(error.ToString())}");
+                    TracePhase($"profile-switch-baseline-cache-read-exception utc={UtcTimestamp()} sample={sampleNumber} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} error={JsonSerializer.Serialize(error.ToString())}");
                 throw;
             }
         }
@@ -941,10 +983,13 @@ internal static class Program
                 var sampleNumber = Interlocked.Increment(ref baselineSampleNumber);
                 var sampledTarget = default(NativeActionState);
                 var sampledCompeting = default(NativeActionState);
+                var sampledConnection = default(NativeActionState);
                 try
                 {
-                    sampledTarget = ReadBaselineActionState(viewport, targetId, "target", traceBaseline && sampleNumber == 1);
-                    sampledCompeting = ReadBaselineActionState(viewport, competingId, "competing", traceBaseline && sampleNumber == 1);
+                    var states = ReadBaselineActionStates(sampleNumber, traceBaseline && sampleNumber == 1);
+                    sampledTarget = states[targetId];
+                    sampledCompeting = states[competingId];
+                    sampledConnection = states["VPN connection action"];
                     firstBaselinePairCompleted?.Invoke();
                     var ready = CanConnect(sampledTarget, sampledCompeting);
                     if (ready)
@@ -957,6 +1002,7 @@ internal static class Program
                         ["ready"] = ready,
                         ["target"] = sampledTarget.ToDiagnostic(),
                         ["competing"] = sampledCompeting.ToDiagnostic(),
+                        ["connection"] = sampledConnection.ToDiagnostic(),
                     };
                     Console.Error.WriteLine(
                         $"native-ui-phase=profile-switch-baseline-sample {JsonSerializer.Serialize(lastBaselineSample)}");
@@ -971,6 +1017,7 @@ internal static class Program
                         ["ready"] = false,
                         ["target"] = sampledTarget.ToDiagnostic(),
                         ["competing"] = sampledCompeting.ToDiagnostic(),
+                        ["connection"] = sampledConnection.ToDiagnostic(),
                         ["exception"] = latestBaselineException,
                     };
                     Console.Error.WriteLine(
@@ -1052,16 +1099,16 @@ internal static class Program
                 $"native-ui-phase=profile-switch-observation {JsonSerializer.Serialize(sample)}");
             Console.Error.Flush();
         }
-        NativeActionState ReadTimed(
-            AutomationElement scope, string automationId, Dictionary<string, object?> sample, string label)
+        Dictionary<string, NativeActionState> ReadTimed(Dictionary<string, object?> sample, string label)
         {
             var started = Stopwatch.GetTimestamp();
             sample[$"{label}_read_started_at_utc"] = Timestamp(started);
             try
             {
-                var state = ReadActionState(scope, automationId);
-                sample[$"{label}_state"] = state.ToDiagnostic();
-                return state;
+                var states = ReadActionStates(controls, targetId, competingId, "VPN connection action");
+                sample[$"{label}_states"] = states.ToDictionary(
+                    pair => pair.Key, pair => pair.Value.ToDiagnostic(), StringComparer.Ordinal);
+                return states;
             }
             catch (Exception error)
             {
@@ -1080,16 +1127,18 @@ internal static class Program
             var sample = new Dictionary<string, object?>();
             try
             {
-                var target = ReadTimed(viewport, targetId, sample, "poll_target");
-                var competing = ReadTimed(viewport, competingId, sample, "poll_competing");
-                var connection = ReadTimed(controls, "VPN connection action", sample, "poll_connection");
+                var states = ReadTimed(sample, "poll_cache");
+                var target = states[targetId];
+                var competing = states[competingId];
+                var connection = states["VPN connection action"];
                 lastTarget = target; lastCompeting = competing; lastConnection = connection;
                 if (CanStop(target, competing, connection))
                 {
                     RequireForeground(window, "profile switch Stop");
-                    target = ReadTimed(viewport, targetId, sample, "verify_target");
-                    competing = ReadTimed(viewport, competingId, sample, "verify_competing");
-                    connection = ReadTimed(controls, "VPN connection action", sample, "verify_connection");
+                    states = ReadTimed(sample, "verify_cache");
+                    target = states[targetId];
+                    competing = states[competingId];
+                    connection = states["VPN connection action"];
                     lastTarget = target; lastCompeting = competing; lastConnection = connection;
                     if (CanStop(target, competing, connection))
                     {
