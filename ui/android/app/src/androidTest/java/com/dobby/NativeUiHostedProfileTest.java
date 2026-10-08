@@ -435,7 +435,7 @@ public final class NativeUiHostedProfileTest {
                                 consentHandled |= connectThroughRenderedUI(operationTimeout(operation));
                                 assertRenderedSourceRetained(2_000L);
                                 boolean nativeShutdownVerified = verifySubscriptionControls(
-                                        command.getString("subscription_url"),
+                                        expectedRenderedSource,
                                         operationTimeout(operation));
                                 observation.put("native_os_shutdown_cancels_pending_switch",
                                         nativeShutdownVerified);
@@ -1610,17 +1610,63 @@ public final class NativeUiHostedProfileTest {
         waitForSessionSource(
                 currentSource, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         boolean returnedToProduct = false;
+        String cancellationObservation = "no observation";
         while (System.currentTimeMillis() < deadline) {
-            returnedToProduct = findResumedTargetActivity() != null
-                    && "PRODUCT".equals(foregroundCategory())
-                    && findVpnConsentButton(device) == null
-                    && VpnService.prepare(context) != null;
+            // The instrumentation monitor may miss an Activity resumed before enrollment.
+            // Keep it diagnostic and use the live Activity's LifecycleOwner as authority.
+            Activity monitorResumedActivity = findResumedTargetActivity();
+            AtomicReference<Boolean> nativeActivityReady = new AtomicReference<>(false);
+            AtomicReference<String> nativeActivityState = new AtomicReference<>("activity=null");
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                MainActivity activity = MainActivity.current;
+                if (activity == null) return;
+                boolean targetActivity = !activity.isFinishing()
+                        && !activity.isDestroyed()
+                        && context.getPackageName().equals(activity.getPackageName());
+                androidx.lifecycle.Lifecycle.State lifecycleState =
+                        activity.getLifecycle().getCurrentState();
+                boolean lifecycleResumed = lifecycleState
+                        == androidx.lifecycle.Lifecycle.State.RESUMED;
+                boolean windowFocused = activity.hasWindowFocus();
+                nativeActivityReady.set(targetActivity && lifecycleResumed && windowFocused);
+                nativeActivityState.set("activity=" + activity
+                        + ", target=" + targetActivity
+                        + ", lifecycle=" + lifecycleState
+                        + ", windowFocused=" + windowFocused);
+            });
+            String foreground = foregroundCategory();
+            boolean consentPromptAbsent = findVpnConsentButton(device) == null;
+            boolean permissionPending = VpnService.prepare(context) != null;
+            returnedToProduct = nativeActivityReady.get()
+                    && "PRODUCT".equals(foreground)
+                    && consentPromptAbsent
+                    && permissionPending;
+            cancellationObservation = "monitorResumed=" + (monitorResumedActivity != null)
+                    + (monitorResumedActivity == null ? "" : " (" + monitorResumedActivity + ")")
+                    + ", nativeActivity={" + nativeActivityState.get() + "}"
+                    + ", foreground=" + foreground
+                    + ", consentPromptAbsent=" + consentPromptAbsent
+                    + ", permissionPending=" + permissionPending;
             if (returnedToProduct) break;
             SystemClock.sleep(POLL_MILLIS);
         }
+        if (progressObservation != null) {
+            progressObservation.put("consent_cancellation_observation", cancellationObservation);
+        }
         if (!returnedToProduct) {
-            throw new AssertionError(
-                    "Cancelled consent did not return to the resumed product with permission pending");
+            AssertionError failure = new AssertionError(
+                    "Cancelled consent did not return to the resumed product with permission pending: "
+                            + cancellationObservation);
+            try {
+                failure.addSuppressed(new IllegalStateException(
+                        "ANDROID_CONSENT_CANCELLATION_UI_HIERARCHY\n"
+                                + dumpUiTimeoutContext("VPN consent cancellation")));
+            } catch (Throwable diagnosticFailure) {
+                failure.addSuppressed(new IllegalStateException(
+                        "ANDROID_CONSENT_CANCELLATION_UI_HIERARCHY_COLLECTION_FAILED",
+                        diagnosticFailure));
+            }
+            throw failure;
         }
         assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject current = snapshotResult("");
