@@ -1061,14 +1061,56 @@ public final class NativeUiHostedProfileTest {
             JSONObject emptyInventory = snapshotResult("");
             JSONArray profiles = emptyInventory.optJSONArray("profiles");
             UiObject2 connect = findUiObject(CONNECTION_ACTION_LABEL);
-            if (!subscriptionURL.equals(emptyInventory.optString("source_url"))
-                    || emptyInventory.optBoolean("configured")
-                    || (profiles != null && profiles.length() != 0)
-                    || findUiObject("Retry") != null
-                    || findUiObject("Profile 1 action") != null
-                    || connect == null || connect.isEnabled()) {
-                throw new AssertionError("Held saved URL did not render an empty, loading inventory: "
-                        + emptyInventory);
+            boolean sourceMatches = subscriptionURL.equals(emptyInventory.optString("source_url"));
+            boolean backendUnconfigured = !emptyInventory.optBoolean("configured");
+            boolean inventoryEmpty = profiles == null || profiles.length() == 0;
+            UiObject2 retry = findUiObject("Retry");
+            UiObject2 profile1Action = findUiObject("Profile 1 action");
+            boolean retryAbsent = retry == null;
+            boolean profile1ActionAbsent = profile1Action == null;
+            Boolean connectEnabled = connect == null ? null : connect.isEnabled();
+            boolean connectPresentAndDisabled = connect != null && Boolean.FALSE.equals(connectEnabled);
+            ArrayList<String> failedPredicates = new ArrayList<>();
+            if (!sourceMatches) failedPredicates.add("sourceMatches");
+            if (!backendUnconfigured) failedPredicates.add("backendUnconfigured");
+            if (!inventoryEmpty) failedPredicates.add("inventoryEmpty");
+            if (!retryAbsent) failedPredicates.add("retryAbsent");
+            if (!profile1ActionAbsent) failedPredicates.add("profile1ActionAbsent");
+            if (!connectPresentAndDisabled) failedPredicates.add("connectPresentAndDisabled");
+            if (!failedPredicates.isEmpty()) {
+                AssertionError failure = new AssertionError(
+                        "Held saved URL did not render an empty, loading inventory: " + emptyInventory
+                                + "; failed_predicates=" + failedPredicates
+                                + "; predicate_values={sourceMatches=" + sourceMatches
+                                + ", backendUnconfigured=" + backendUnconfigured
+                                + ", inventoryEmpty=" + inventoryEmpty
+                                + ", retryAbsent=" + retryAbsent
+                                + ", profile1ActionAbsent=" + profile1ActionAbsent
+                                + ", connectPresent=" + (connect != null)
+                                + ", connectEnabled=" + connectEnabled + "}");
+                try {
+                    StringBuilder uiDetails = new StringBuilder("Held saved URL matching UI nodes:")
+                            .append("\nretryFound=").append(retry != null)
+                            .append("\nprofile1ActionFound=").append(profile1Action != null);
+                    appendHeldSavedSourceActionDetails(uiDetails, failure, connect, connectEnabled);
+                    System.err.println("DOBBY_SAVED_SOURCE_UI_NODES_BEGIN");
+                    System.err.println(uiDetails);
+                    System.err.println("DOBBY_SAVED_SOURCE_UI_NODES_END");
+                    System.err.flush();
+                } catch (Throwable diagnosticFailure) {
+                    failure.addSuppressed(new IllegalStateException(
+                            "ANDROID_SAVED_SOURCE_UI_NODE_DIAGNOSTICS_FAILED", diagnosticFailure));
+                }
+                try {
+                    System.err.println("DOBBY_SAVED_SOURCE_UI_HIERARCHY_BEGIN");
+                    System.err.println(dumpUiHierarchy());
+                    System.err.println("DOBBY_SAVED_SOURCE_UI_HIERARCHY_END");
+                    System.err.flush();
+                } catch (Throwable hierarchyFailure) {
+                    failure.addSuppressed(new IllegalStateException(
+                            "ANDROID_SAVED_SOURCE_UI_HIERARCHY_FAILED", hierarchyFailure));
+                }
+                throw failure;
             }
 
             subscriptionFixturePost("/release", new byte[0]);
@@ -1099,6 +1141,43 @@ public final class NativeUiHostedProfileTest {
                     else throw releaseFailure;
                 }
             }
+        }
+    }
+
+    private void appendHeldSavedSourceActionDetails(
+            StringBuilder details, AssertionError failure, UiObject2 connect, Boolean enabled) {
+        details.append("\nconnectionActionFound=").append(connect != null);
+        if (connect == null) return;
+        details.append("\nconnectionAction.enabled=").append(enabled);
+        try {
+            details.append("\nconnectionAction.text=").append(connect.getText());
+        } catch (Throwable diagnosticFailure) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_SAVED_SOURCE_ACTION_TEXT_DIAGNOSTIC_FAILED", diagnosticFailure));
+        }
+        try {
+            details.append("\nconnectionAction.contentDescription=").append(connect.getContentDescription());
+        } catch (Throwable diagnosticFailure) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_SAVED_SOURCE_ACTION_DESCRIPTION_DIAGNOSTIC_FAILED", diagnosticFailure));
+        }
+        try {
+            details.append("\nconnectionAction.class=").append(connect.getClassName());
+        } catch (Throwable diagnosticFailure) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_SAVED_SOURCE_ACTION_CLASS_DIAGNOSTIC_FAILED", diagnosticFailure));
+        }
+        try {
+            details.append("\nconnectionAction.clickable=").append(connect.isClickable());
+        } catch (Throwable diagnosticFailure) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_SAVED_SOURCE_ACTION_CLICKABLE_DIAGNOSTIC_FAILED", diagnosticFailure));
+        }
+        try {
+            details.append("\nconnectionAction.visibleBounds=").append(connect.getVisibleBounds());
+        } catch (Throwable diagnosticFailure) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_SAVED_SOURCE_ACTION_BOUNDS_DIAGNOSTIC_FAILED", diagnosticFailure));
         }
     }
 
