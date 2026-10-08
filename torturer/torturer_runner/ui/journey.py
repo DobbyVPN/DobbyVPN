@@ -1741,6 +1741,10 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError("restored subscription did not recover the supplied profile inventory")
     before_bare = base._snapshot(min(timeout, 30), "NATIVE_BARE_LINK_STATUS_FAILED")
     bare_view = ui.bare_link()
+    if ui.platform in {"windows", "macos"} and any(
+        "Use dobbyvpn://import?url=" in str(label) for label in bare_view.get("labels", [])
+    ):
+        raise NativeUIJourneyError("a bare deep link showed invalid-import guidance")
     after_bare = base._snapshot(min(timeout, 30), "NATIVE_BARE_LINK_STATUS_FAILED")
     require_active_generation(after_bare, before_bare, "a bare deep link changed the active connection")
     if after_bare.get("source_url") != restored_url or bare_view.get("status") != "Connected":

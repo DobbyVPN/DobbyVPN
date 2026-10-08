@@ -518,7 +518,8 @@ public sealed partial class MainWindow : Window
         Activate();
         try
         {
-            if (value.Equals("dobbyvpn://", StringComparison.OrdinalIgnoreCase)) return;
+            if (value.Equals("dobbyvpn://", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("dobbyvpn:///", StringComparison.OrdinalIgnoreCase)) return;
             if (System.Text.RegularExpressions.Regex.IsMatch(value, "%(?![0-9a-fA-F]{2})")) throw new FormatException("Invalid URL escape");
             var uri = new Uri(value);
             if (uri.Scheme != "dobbyvpn" || uri.Host != "import" || uri.AbsolutePath is not ("" or "/") || uri.UserInfo.Length > 0 || !uri.IsDefaultPort || uri.Fragment.Length > 0)
