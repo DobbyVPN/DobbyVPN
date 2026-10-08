@@ -58,6 +58,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -65,7 +66,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.security.KeyStore;
 import java.security.MessageDigest;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -82,6 +86,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
 
 /**
  * Android's functional seam for the Compose frontend and shared Go backend.
@@ -252,9 +260,11 @@ public final class NativeUiHostedProfileTest {
     private String launchSubscriptionURL = "";
     private String subscriptionControlURL = "";
     private String subscriptionControlKey = "";
-    private int coldImportInitialGets = -1;
-    private boolean coldImportStarted;
-    private boolean coldImportAttempted;
+    private String subscriptionControlCAPem = "";
+    private SSLSocketFactory subscriptionControlSocketFactory;
+    private int savedSourceInitialGets = -1;
+    private boolean savedSourceRestoreStarted;
+    private boolean savedSourceRestoreAttempted;
     private boolean processColdImportPending;
     private int processColdImportInitialGets = -1;
     private final File screenshotDirectory = new File(
@@ -343,14 +353,26 @@ public final class NativeUiHostedProfileTest {
                 "ui_mode", command.optString("coverage_lane", "")));
         String testCase = command.optString("test_case", "");
         boolean autoRecoveryStopCase = AUTO_RECOVERY_STOP_TEST_CASE.equals(testCase);
+        boolean savedSourceRestoreOnly = command.optBoolean("saved_source_restore_only", false);
+        boolean savedSourceRestorePreverified = command.optBoolean(
+                "saved_source_restore_preverified", false);
         launchSubscriptionURL = guiAuto ? command.getString("subscription_url") : "";
         subscriptionControlURL = guiAuto ? command.getString("subscription_control_url") : "";
         subscriptionControlKey = guiAuto ? command.getString("subscription_control_key") : "";
+        subscriptionControlCAPem = guiAuto ? command.getString("subscription_control_ca_pem") : "";
         processColdImportPending = guiAuto && command.optBoolean("process_cold_import", false);
         processColdImportInitialGets = command.optInt("process_cold_import_request_count", -1);
-        if (guiAuto && (subscriptionControlURL.isEmpty() || subscriptionControlKey.isEmpty())) {
+        if (guiAuto && (subscriptionControlURL.isEmpty() || subscriptionControlKey.isEmpty()
+                || subscriptionControlCAPem.isEmpty())) {
             throw new IllegalArgumentException("ANDROID_SUBSCRIPTION_CONTROL_MISSING");
         }
+        if ((savedSourceRestoreOnly || savedSourceRestorePreverified)
+                && (!guiAuto || !testCase.isEmpty()
+                || savedSourceRestoreOnly && savedSourceRestorePreverified)) {
+            throw new IllegalArgumentException("ANDROID_SAVED_SOURCE_RESTORE_PHASE_INVALID");
+        }
+        subscriptionControlSocketFactory = guiAuto
+                ? createSubscriptionControlSocketFactory(subscriptionControlCAPem) : null;
         if (guiAuto && command.has("profile_index")) {
             throw new IllegalArgumentException("ANDROID_GUI_AUTO_PROFILE_INDEX_FORBIDDEN");
         }
@@ -389,7 +411,7 @@ public final class NativeUiHostedProfileTest {
                             configureThroughRenderedUI(
                                     command.getString("subscription_url"),
                                     operationTimeout(operation),
-                                    autoRecoveryStopCase);
+                                    autoRecoveryStopCase || savedSourceRestorePreverified);
                             // The one-step configure scenario must prove that
                             // the rendered profile was accepted by Go.  A
                             // later connect/reconnect owns that visible start
@@ -398,7 +420,7 @@ public final class NativeUiHostedProfileTest {
                             boolean startsLater = hasFollowingConnectionStart(
                                     operations, i + 1);
                             boolean consentHandled = false;
-                            if (!startsLater) {
+                            if (!startsLater && !savedSourceRestoreOnly) {
                                 consentHandled = verifyManualConsent(operationTimeout(operation));
                                 consentHandled |= connectThroughRenderedUI(operationTimeout(operation));
                                 assertRenderedSourceRetained(2_000L);
@@ -801,20 +823,24 @@ public final class NativeUiHostedProfileTest {
             throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         markProgress("configure", "surface", "started");
+        boolean processColdImportVerified = processColdImportPending;
         if (processColdImportPending) {
             verifyProcessColdImport(subscriptionURL,
                     remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
             processColdImportPending = false;
         }
+        int recoveryImportInitialGets = skipColdSavedSourceRestore && !processColdImportVerified
+                ? subscriptionFixtureState().getInt("subscription_gets") : -1;
+        int expectedNavigationGets = -1;
         // Keep the restore GET distinct so it cannot satisfy the separate
         // successful cold deep-link import assertion below.
         String restoredURL = urlWithQuery(subscriptionURL, "android-saved-source", "1");
-        if (!skipColdSavedSourceRestore && !coldImportAttempted) {
+        if (!skipColdSavedSourceRestore && !savedSourceRestoreAttempted) {
             launchActivityColdSavedSourceRestore(restoredURL,
                     remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         }
         String savedLaunchURL = launchSubscriptionURL;
-        if (coldImportStarted) launchSubscriptionURL = "";
+        if (savedSourceRestoreStarted) launchSubscriptionURL = "";
         try {
             ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
             foregroundActivity = ensureForegroundActivity();
@@ -822,7 +848,7 @@ public final class NativeUiHostedProfileTest {
             launchSubscriptionURL = savedLaunchURL;
         }
         markProgress("configure", "surface", "completed");
-        if (coldImportStarted) {
+        if (savedSourceRestoreStarted) {
             expectedRenderedSource = restoredURL;
             verifySavedURLRestoration(restoredURL,
                     remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
@@ -831,7 +857,7 @@ public final class NativeUiHostedProfileTest {
                     || !restoredURL.equals(restored.optString("source_url"))) {
                 throw new AssertionError("Saved URL restore did not remain configured and disconnected: " + restored);
             }
-            coldImportStarted = false;
+            savedSourceRestoreStarted = false;
             markProgress("configure", "cold-source-restored", "completed");
 
             int beforeColdImport = subscriptionFixtureState().getInt("subscription_gets");
@@ -839,6 +865,34 @@ public final class NativeUiHostedProfileTest {
                     remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
             verifyInvalidDeepLinksDoNotFetch(subscriptionURL,
                     remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+            expectedNavigationGets = savedSourceInitialGets + 2;
+        } else if (skipColdSavedSourceRestore) {
+            if (processColdImportVerified) {
+                expectedRenderedSource = subscriptionURL;
+                JSONObject importedGets = waitForInFlightGets(0,
+                        remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+                expectedNavigationGets = importedGets.getInt("subscription_gets");
+            } else {
+                expectedRenderedSource = subscriptionURL;
+                waitForUiControl("Profile 1 action",
+                        remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+                JSONObject importedGets = waitForInFlightGets(0,
+                        remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+                JSONObject imported = waitForSessionSource(subscriptionURL,
+                        remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
+                JSONArray profiles = imported.optJSONArray("profiles");
+                if (importedGets.getInt("subscription_gets") != recoveryImportInitialGets + 1
+                        || !imported.optBoolean("configured")
+                        || !subscriptionURL.equals(imported.optString("source_url"))
+                        || profiles == null || profiles.length() == 0
+                        || imported.optJSONObject("active_profile") != null
+                        || imported.optJSONObject("pending_target") != null
+                        || !"CONFIGURED".equals(imported.optString("state"))) {
+                    throw new AssertionError("Rendered cold import did not load one disconnected inventory: "
+                            + imported);
+                }
+                expectedNavigationGets = importedGets.getInt("subscription_gets");
+            }
         }
         markProgress("configure", "configuration-control", "started");
         tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
@@ -870,7 +924,8 @@ public final class NativeUiHostedProfileTest {
                 Math.min(2_000L, remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT")));
         waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         JSONObject unchanged = subscriptionFixtureState();
-        if (unchanged.getInt("subscription_gets") != coldImportInitialGets + 2) {
+        if (expectedNavigationGets < 0
+                || unchanged.getInt("subscription_gets") != expectedNavigationGets) {
             throw new AssertionError("Entering the already accepted URL triggered another fetch");
         }
         markProgress("configure", "rendered-navigation", "completed");
@@ -924,8 +979,8 @@ public final class NativeUiHostedProfileTest {
 
     private void launchActivityColdSavedSourceRestore(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
-        coldImportAttempted = true;
-        coldImportStarted = true;
+        savedSourceRestoreAttempted = true;
+        savedSourceRestoreStarted = true;
         expectedRenderedSource = subscriptionURL;
         Activity previous = MainActivity.current;
         if (previous != null) {
@@ -941,7 +996,7 @@ public final class NativeUiHostedProfileTest {
         remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT");
         JSONObject drained = waitForInFlightGets(0,
                 remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
-        coldImportInitialGets = drained.getInt("subscription_gets");
+        savedSourceInitialGets = drained.getInt("subscription_gets");
 
         File savedSource = new File(NativeVpnBridge.sourceURLPath(context));
         File savedSourceDirectory = savedSource.getParentFile();
@@ -984,11 +1039,11 @@ public final class NativeUiHostedProfileTest {
                     deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
             assertRenderedSourceRetained(remainingTimeout(
                     deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
-            JSONObject held = waitForSubscriptionGets(coldImportInitialGets + 1,
+            JSONObject held = waitForSubscriptionGets(savedSourceInitialGets + 1,
                     remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
             held = waitForInFlightGets(1,
                     remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
-            if (held.getInt("subscription_gets") != coldImportInitialGets + 1
+            if (held.getInt("subscription_gets") != savedSourceInitialGets + 1
                     || held.getInt("max_in_flight_gets") > 1) {
                 throw new AssertionError("Saved URL restoration duplicated or overlapped its HTTPS request");
             }
@@ -1013,7 +1068,7 @@ public final class NativeUiHostedProfileTest {
             JSONObject completed = waitForInFlightGets(0,
                     remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
             JSONObject restored = snapshotResult("");
-            if (completed.getInt("subscription_gets") != coldImportInitialGets + 1
+            if (completed.getInt("subscription_gets") != savedSourceInitialGets + 1
                     || !restored.optBoolean("configured")
                     || !subscriptionURL.equals(restored.optString("source_url"))
                     || restored.optJSONArray("profiles") == null
@@ -1157,8 +1212,32 @@ public final class NativeUiHostedProfileTest {
         }
     }
 
+    private SSLSocketFactory createSubscriptionControlSocketFactory(String caPem) throws Exception {
+        CertificateFactory certificateFactory = CertificateFactory.getInstance("X.509");
+        X509Certificate certificate;
+        try (ByteArrayInputStream input = new ByteArrayInputStream(
+                caPem.getBytes(StandardCharsets.US_ASCII))) {
+            certificate = (X509Certificate) certificateFactory.generateCertificate(input);
+        }
+        certificate.checkValidity();
+        KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        trustStore.load(null, null);
+        trustStore.setCertificateEntry("android-subscription-fixture", certificate);
+        TrustManagerFactory trustManagers = TrustManagerFactory.getInstance(
+                TrustManagerFactory.getDefaultAlgorithm());
+        trustManagers.init(trustStore);
+        SSLContext tls = SSLContext.getInstance("TLS");
+        tls.init(null, trustManagers.getTrustManagers(), null);
+        return tls.getSocketFactory();
+    }
+
     private HttpURLConnection subscriptionControl(String suffix, String method, byte[] body) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(subscriptionControlURL + suffix).openConnection();
+        HttpURLConnection connection = (HttpURLConnection)
+                new URL(subscriptionControlURL + suffix).openConnection();
+        if (!(connection instanceof HttpsURLConnection) || subscriptionControlSocketFactory == null) {
+            throw new IllegalStateException("ANDROID_SUBSCRIPTION_CONTROL_TLS_UNAVAILABLE");
+        }
+        ((HttpsURLConnection) connection).setSSLSocketFactory(subscriptionControlSocketFactory);
         connection.setConnectTimeout(5_000);
         connection.setReadTimeout(5_000);
         connection.setRequestMethod(method);
@@ -3248,7 +3327,6 @@ public final class NativeUiHostedProfileTest {
             launch = new Intent(Intent.ACTION_VIEW, new Uri.Builder().scheme("dobbyvpn")
                     .authority("import").appendQueryParameter("url", launchSubscriptionURL).build())
                     .setPackage(context.getPackageName());
-            coldImportStarted = true;
         }
         // The controller may have launched the production app immediately
         // before --no-restart instrumentation. That Activity was resumed

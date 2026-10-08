@@ -31,6 +31,10 @@ class AndroidAutoRecoveryStopAdapterTests(unittest.TestCase):
             command = json.loads(command_file.read_text(encoding="utf-8"))
             self.assertEqual(command["test_case"], "android:auto-recovery-stop")
             self.assertEqual(
+                command["subscription_control_ca_pem"],
+                (root / "fixture-ca.pem").read_text(encoding="ascii"),
+            )
+            self.assertEqual(
                 [step["operation"] for step in command["operations"]],
                 [step.operation for step in scenario.steps],
             )
@@ -140,10 +144,13 @@ def command_adapter(root: Path) -> AndroidAdapter:
     adapter.download_url = "https://download.example.test/?bytes=1024"
     adapter.upload_url = "https://upload.example.test"
     adapter._process_cold_import_queued = False
+    certificate = root / "fixture-ca.pem"
+    certificate.write_text("synthetic run-owned fixture CA\n", encoding="ascii")
     adapter._subscription_fixture = SimpleNamespace(
         url="https://127.0.0.1:54432/subscription",
         control_url="https://127.0.0.1:54432/control",
         control_key="fixture-key",
+        certificate=certificate,
         control_stats=lambda: {"subscription_gets": 3},
     )
     return adapter

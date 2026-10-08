@@ -10,8 +10,81 @@ import time
 from types import SimpleNamespace
 from unittest import mock
 
+from torturer_contract.engine import ScenarioExecutionError
+from torturer_contract.results import ConnectionIdentity
+from torturer_contract.scenarios import select_scenarios
 from torturer_runner import local_vm_android
 from torturer_runner.adapters.android import AndroidAdapter, _MAIN_ACTIVITY, _PACKAGE_NAME
+
+
+FIXTURE_CA_PEM = "synthetic run-owned fixture CA\n"
+
+
+def fixture_stub(root: Path, subscription_gets: int) -> SimpleNamespace:
+    certificate = root / "fixture-ca.pem"
+    certificate.write_text(FIXTURE_CA_PEM, encoding="ascii")
+    return SimpleNamespace(
+        url="https://127.0.0.1:54432/subscription",
+        control_url="https://127.0.0.1:54432/control",
+        control_key="fixture-key",
+        certificate=certificate,
+        control_stats=lambda: {"subscription_gets": subscription_gets},
+    )
+
+
+def phase_adapter(root: Path) -> AndroidAdapter:
+    adapter = object.__new__(AndroidAdapter)
+    adapter.ui_mode = "gui-auto"
+    adapter.runner = SimpleNamespace(raw_directory=root)
+    adapter._active_controls = ()
+    adapter._scratch_files = set()
+    adapter._connections = (ConnectionIdentity(index=0, protocol="AUTO"),)
+    adapter._selected_connection = adapter._connections[0]
+    adapter.source_sha = None
+    adapter._progress_scenario_id = "functional.configure"
+    adapter.identity_url = None
+    adapter.latency_url = None
+    adapter.download_url = None
+    adapter.upload_url = None
+    adapter._process_cold_import_queued = False
+    adapter._saved_source_restore_preverified = False
+    adapter._subscription_fixture = fixture_stub(root, 0)
+    return adapter
+
+
+def output_result(*, connected: bool = False) -> SimpleNamespace:
+    connection = {"index": 0, "protocol": "AUTO"}
+    observation = {
+        "configured": True,
+        "connected": connected,
+        "connections": [connection],
+        "connection": connection,
+        "tunnel_interface": False,
+        "routing_verified": False,
+        "stability_verified": False,
+        "stability_sample_count": 5,
+        "stability_sample_interval_seconds": 1.0,
+        "process_loss_verified": False,
+        "latency_ms": 0.0,
+        "download_mbps": 0.0,
+        "upload_mbps": 0.0,
+        "disconnect_clean": False,
+        "restart_verified": False,
+        "reconnect_completed": False,
+        "second_tunnel_interface": False,
+        "second_routing_verified": False,
+        "final_disconnect_clean": False,
+        "cleanup_verified": False,
+        "coverage_lane": "gui-auto",
+        "gui_auto_verified": True,
+        "vpn_consent_handled": False,
+    }
+    return SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps(observation).encode("utf-8"),
+        stderr=b"",
+        timed_out=False,
+    )
 
 
 class AndroidNativeUiColdLaunchTests(unittest.TestCase):
@@ -30,12 +103,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             adapter.download_url = None
             adapter.upload_url = None
             adapter._process_cold_import_queued = False
-            adapter._subscription_fixture = SimpleNamespace(
-                url="https://127.0.0.1:54432/subscription",
-                control_url="https://127.0.0.1:54432/control",
-                control_key="fixture-key",
-                control_stats=lambda: {"subscription_gets": 3},
-            )
+            adapter._subscription_fixture = fixture_stub(root, 3)
             configure = SimpleNamespace(
                 id="functional-configure", operation="configure", timeout_seconds=30
             )
@@ -51,6 +119,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             second_command = json.loads(second.read_text(encoding="utf-8"))
             self.assertTrue(first_command["process_cold_import"])
             self.assertEqual(first_command["process_cold_import_request_count"], 3)
+            self.assertEqual(first_command["subscription_control_ca_pem"], FIXTURE_CA_PEM)
             self.assertNotIn("process_cold_import", second_command)
 
     def test_consent_n11_command_dispatches_rendered_selection_after_configure(self) -> None:
@@ -68,12 +137,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             adapter.download_url = None
             adapter.upload_url = None
             adapter._process_cold_import_queued = False
-            adapter._subscription_fixture = SimpleNamespace(
-                url="https://127.0.0.1:54432/subscription",
-                control_url="https://127.0.0.1:54432/control",
-                control_key="fixture-key",
-                control_stats=lambda: {"subscription_gets": 0},
-            )
+            adapter._subscription_fixture = fixture_stub(root, 0)
             steps = (
                 SimpleNamespace(id="configure", operation="configure", timeout_seconds=90),
                 SimpleNamespace(
@@ -92,6 +156,134 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             )
             self.assertTrue(command["process_cold_import"])
             self.assertEqual(command["process_cold_import_request_count"], 0)
+            self.assertEqual(command["subscription_control_ca_pem"], FIXTURE_CA_PEM)
+
+    def test_saved_source_phase_precedes_n11_and_full_lane_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = phase_adapter(root)
+            adapter.app_apk = root / "app.apk"
+            adapter.test_companion_apk = root / "test.apk"
+            fixture_stats = {"subscription_gets": 0}
+            adapter._subscription_fixture.control_stats = lambda: dict(fixture_stats)
+            commands: list[dict[str, object]] = []
+            configure = SimpleNamespace(
+                id="configure", operation="configure", timeout_seconds=90
+            )
+            consent_selection = SimpleNamespace(
+                id="consent-grant-selection",
+                operation="consent_grant_selection",
+                timeout_seconds=120,
+            )
+
+            def instrument(command_name: str, _deadline: float, **_kwargs: object):
+                command = json.loads((root / command_name).read_text(encoding="utf-8"))
+                commands.append(command)
+                if command.get("saved_source_restore_only"):
+                    fixture_stats["subscription_gets"] = 2
+                elif command.get("process_cold_import"):
+                    self.assertEqual(
+                        command["process_cold_import_request_count"],
+                        fixture_stats["subscription_gets"],
+                    )
+                    fixture_stats["subscription_gets"] += 1
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"", timed_out=False)
+
+            adapter._run_instrumentation = mock.Mock(side_effect=instrument)
+            adapter._stage_private_file = mock.Mock()
+            adapter._adb = mock.Mock(side_effect=lambda *_args, **_kwargs: output_result())
+            scenario = select_scenarios(scenario_ids=["functional.configure"])[0]
+            with mock.patch(
+                "torturer_runner.adapters.android._instrumentation_succeeded",
+                return_value=True,
+            ):
+                observation = adapter._execute_phase(
+                    scenario,
+                    (configure, consent_selection),
+                    time.monotonic() + 120,
+                    [],
+                )
+
+            self.assertTrue(observation.configured)
+            self.assertFalse(observation.connected)
+            self.assertEqual(len(commands), 2)
+            self.assertTrue(commands[0]["saved_source_restore_only"])
+            self.assertNotIn("process_cold_import", commands[0])
+            self.assertTrue(commands[1]["saved_source_restore_preverified"])
+            self.assertTrue(commands[1]["process_cold_import"])
+            self.assertEqual(commands[1]["process_cold_import_request_count"], 2)
+
+            # N11's exact APK reinstall invalidates its first-process import
+            # queue. Keep only the successful restore observation so the full
+            # lane runs its own cold import without repeating that restore.
+            def install_result(arguments, *_args, **_kwargs):
+                return SimpleNamespace(
+                    stdout_text=(
+                        "package:/data/app/com.dobby.vpn/base.apk"
+                        if arguments[:3] == ("shell", "pm", "path")
+                        else ""
+                    )
+                )
+
+            adapter._process_cold_import_queued = True
+            adapter._adb = mock.Mock(side_effect=install_result)
+            adapter._install_fresh_apk_pair(time.monotonic() + 120)
+            self.assertFalse(adapter._process_cold_import_queued)
+            adapter._adb = mock.Mock(side_effect=lambda *_args, **_kwargs: output_result())
+            with mock.patch(
+                "torturer_runner.adapters.android._instrumentation_succeeded",
+                return_value=True,
+            ):
+                observation = adapter._execute_phase(
+                    scenario,
+                    scenario.steps,
+                    time.monotonic() + 120,
+                    [],
+                )
+
+            self.assertTrue(observation.configured)
+            self.assertEqual(len(commands), 3)
+            self.assertTrue(commands[2]["saved_source_restore_preverified"])
+            self.assertTrue(commands[2]["process_cold_import"])
+            self.assertEqual(commands[2]["process_cold_import_request_count"], 3)
+            self.assertEqual(fixture_stats["subscription_gets"], 4)
+
+    def test_failed_saved_source_phase_blocks_process_cold_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = phase_adapter(root)
+            commands: list[dict[str, object]] = []
+
+            def instrument(command_name: str, _deadline: float, **_kwargs: object):
+                commands.append(json.loads((root / command_name).read_text(encoding="utf-8")))
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"", timed_out=False)
+
+            adapter._run_instrumentation = mock.Mock(side_effect=instrument)
+            adapter._stage_private_file = mock.Mock()
+            adapter._adb = mock.Mock(
+                side_effect=lambda *_args, **_kwargs: output_result(connected=True)
+            )
+            scenario = select_scenarios(scenario_ids=["functional.configure"])[0]
+            with (
+                mock.patch(
+                    "torturer_runner.adapters.android._instrumentation_succeeded",
+                    return_value=True,
+                ),
+                self.assertRaisesRegex(
+                    ScenarioExecutionError,
+                    "ANDROID_SAVED_SOURCE_RESTORE_PREPHASE_INVALID",
+                ),
+            ):
+                adapter._execute_phase(
+                    scenario,
+                    scenario.steps,
+                    time.monotonic() + 120,
+                    [],
+                )
+
+            self.assertEqual(len(commands), 1)
+            self.assertTrue(commands[0]["saved_source_restore_only"])
+            self.assertNotIn("process_cold_import", commands[0])
 
     def test_consent_n11_reinstalls_exact_apk_pair_around_rendered_case(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

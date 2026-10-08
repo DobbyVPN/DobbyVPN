@@ -319,6 +319,7 @@ class AndroidAdapter:
         self._scratch_files: set[Path] = set()
         self._subscription_fixture = None
         self._process_cold_import_queued = False
+        self._saved_source_restore_preverified = False
         self._diagnostic_collection_sequence = 0
 
     @staticmethod
@@ -667,6 +668,11 @@ class AndroidAdapter:
                 failure = ScenarioExecutionError("ANDROID_N11_APK_VERIFY_FAILED")
                 _append_command_result_notes(failure, installed)
                 raise failure
+        # A fresh install starts a new app process and invalidates any queued
+        # first-process import from the uninstalled app pair. Keep the
+        # adapter-owned saved-source verification result; it was observed
+        # against this candidate and fixture before the reinstall.
+        self._process_cold_import_queued = False
 
     def _validate_observation_identity(
         self, observation: AndroidProfileObservation
@@ -929,12 +935,48 @@ class AndroidAdapter:
         preserve_active: bool = False,
         test_case: str | None = None,
         native_case_facts: dict[str, object] | None = None,
+        saved_source_restore_only: bool = False,
+        saved_source_restore_preverified: bool = False,
     ) -> AndroidProfileObservation:
+        configure_step = next(
+            (step for step in steps if step.operation == "configure"), None
+        )
+        saved_source_restore_preverified = saved_source_restore_preverified or (
+            configure_step is not None
+            and getattr(self, "_saved_source_restore_preverified", False)
+        )
+        run_saved_source_restore_phase = (
+            self.ui_mode == "gui-auto"
+            and test_case is None
+            and not preserve_active
+            and not saved_source_restore_only
+            and not saved_source_restore_preverified
+            and not getattr(self, "_process_cold_import_queued", False)
+            and configure_step is not None
+        )
+        if run_saved_source_restore_phase:
+            restored = self._execute_phase(
+                scenario,
+                (configure_step,),
+                deadline,
+                device_files,
+                saved_source_restore_only=True,
+            )
+            self._validate_observation_identity(restored)
+            self._validate_gui_observation(scenario, restored, steps=(configure_step,))
+            if not restored.configured or restored.connected or not restored.gui_auto_verified:
+                raise ScenarioExecutionError(
+                    "ANDROID_SAVED_SOURCE_RESTORE_PREPHASE_INVALID"
+                )
+            self._saved_source_restore_preverified = True
+            saved_source_restore_preverified = True
         command_file, profile_name, output_name = self._write_command(
             scenario,
             steps=steps,
             preserve_active=preserve_active,
             test_case=test_case,
+            saved_source_restore_only=saved_source_restore_only,
+            saved_source_restore_preverified=saved_source_restore_preverified,
         )
         progress_name = self._progress_name(command_file)
         device_files.extend(
@@ -2576,11 +2618,26 @@ class AndroidAdapter:
         steps: tuple[ScenarioStep, ...] | None = None,
         preserve_active: bool = False,
         test_case: str | None = None,
+        saved_source_restore_only: bool = False,
+        saved_source_restore_preverified: bool = False,
     ) -> tuple[Path, str, str]:
         if test_case is not None and (
             test_case != _AUTO_RECOVERY_STOP_CASE or self.ui_mode != "gui-auto"
         ):
             raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
+        if saved_source_restore_only and (
+            self.ui_mode != "gui-auto"
+            or test_case is not None
+            or saved_source_restore_preverified
+            or steps is None
+            or len(steps) != 1
+            or steps[0].operation != "configure"
+        ):
+            raise ScenarioExecutionError("ANDROID_SAVED_SOURCE_RESTORE_PHASE_INVALID")
+        if saved_source_restore_preverified and (
+            self.ui_mode != "gui-auto" or test_case is not None
+        ):
+            raise ScenarioExecutionError("ANDROID_SAVED_SOURCE_RESTORE_PHASE_INVALID")
         self._active_controls = ()
         raw_directory = getattr(self.runner, "raw_directory", None)
         if not isinstance(raw_directory, Path):
@@ -2620,6 +2677,7 @@ class AndroidAdapter:
         subscription_url = None
         subscription_control_url = None
         subscription_control_key = None
+        subscription_control_ca_pem = None
         if self.ui_mode == "gui-auto":
             if self._subscription_fixture is None:
                 from torturer_runner.subscription_fixture import SubscriptionFixture
@@ -2628,10 +2686,19 @@ class AndroidAdapter:
             subscription_url = self._subscription_fixture.url
             subscription_control_url = self._subscription_fixture.control_url
             subscription_control_key = self._subscription_fixture.control_key
+            try:
+                subscription_control_ca_pem = self._subscription_fixture.certificate.read_text(
+                    encoding="ascii"
+                )
+            except (OSError, UnicodeDecodeError) as error:
+                raise ScenarioExecutionError(
+                    "ANDROID_SUBSCRIPTION_FIXTURE_CA_UNAVAILABLE"
+                ) from error
         command = {
             "subscription_url": subscription_url,
             "subscription_control_url": subscription_control_url,
             "subscription_control_key": subscription_control_key,
+            "subscription_control_ca_pem": subscription_control_ca_pem,
             "output_file": output_name,
             "progress_file": progress_name,
             "coverage_lane": self.coverage_lane,
@@ -2646,9 +2713,14 @@ class AndroidAdapter:
         }
         if test_case is not None:
             command["test_case"] = test_case
+        if saved_source_restore_only:
+            command["saved_source_restore_only"] = True
+        if saved_source_restore_preverified:
+            command["saved_source_restore_preverified"] = True
         process_cold_import = (
             self.ui_mode == "gui-auto"
             and test_case is None
+            and not saved_source_restore_only
             and not self._process_cold_import_queued
             and any(operation.get("operation") == "configure" for operation in operations)
         )
