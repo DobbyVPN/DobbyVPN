@@ -828,8 +828,22 @@ internal static class Program
         var controls = RequireAutomationId(root, "Connection controls");
         var viewport = RequireAutomationId(controls, "Profile list viewport");
         _ = RequireAutomationId(controls, "VPN connection action");
-        var before = ReadActionState(viewport, targetId);
-        var competingBefore = ReadActionState(viewport, competingId);
+        NativeActionState before;
+        NativeActionState competingBefore;
+        try
+        {
+            before = ReadActionState(viewport, targetId);
+            competingBefore = ReadActionState(viewport, competingId);
+        }
+        catch (ElementNotAvailableException error)
+        {
+            Console.Error.WriteLine("native-ui-phase=profile-switch-baseline-peer-retry");
+            Console.Error.WriteLine(error.ToString());
+            Console.Error.Flush();
+            Thread.Sleep(20);
+            before = ReadActionState(viewport, targetId);
+            competingBefore = ReadActionState(viewport, competingId);
+        }
         bool CanStop(NativeActionState target, NativeActionState competing, NativeActionState connection)
         {
             var connectionName = connection.Name;
