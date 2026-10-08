@@ -1571,6 +1571,12 @@ public final class NativeUiHostedProfileTest {
         int count = initial.getJSONArray("profiles").length();
         int target = count > 1 ? 1 : 0;
         String control = "Profile " + (target + 1) + " action";
+        if (initial.optJSONObject("active_profile") != null
+                || initial.optJSONObject("pending_target") != null
+                || awaitVpnNetwork(false, remainingTimeout(
+                        deadline, "ANDROID_VPN_CONSENT_STALE_NETWORK")) != null) {
+            throw new AssertionError("Manual consent requires an idle, tunnel-free baseline: " + initial);
+        }
         tapEnabledControl(control, deadline);
         UiObject2 cancel = uiDevice().wait(androidx.test.uiautomator.Until.findObject(
                 By.res("android:id/button2")), remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"));
@@ -1584,27 +1590,101 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Denied consent started a connection: " + denied);
         }
         tapEnabledControl(control, deadline);
+        UiDevice device = uiDevice();
+        boolean secondPromptVisible = false;
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 prompt = findVpnConsentButton(device);
+            secondPromptVisible = prompt != null && !prompt.getVisibleBounds().isEmpty();
+            if (secondPromptVisible) break;
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        if (!secondPromptVisible || VpnService.prepare(context) == null) {
+            throw new AssertionError("Second VPN consent prompt did not open before the warm import");
+        }
         Uri changedSource = Uri.parse(launchSubscriptionURL).buildUpon()
                 .appendQueryParameter("consent-currentness", "1").build();
         if (MainActivity.current == null) throw new IllegalStateException("ANDROID_CONSENT_ACTIVITY_MISSING");
-        deliverWarmImport(changedSource.toString());
-        acceptVpnConsent(remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"), "manual-consent");
-        JSONObject current = waitForSessionSource(changedSource.toString(), remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        if (current.getLong("generation") != initial.getLong("generation")
-                || !initial.getString("state").equals(current.getString("state"))
-                || !initial.optString("active_digest").equals(current.optString("active_digest"))) {
-            throw new AssertionError("Stale consent target started after the imported source changed");
+        String currentSource = changedSource.toString();
+        expectedRenderedSource = currentSource;
+        deliverWarmImport(currentSource);
+        waitForSessionSource(
+                currentSource, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        boolean returnedToProduct = false;
+        while (System.currentTimeMillis() < deadline) {
+            returnedToProduct = findResumedTargetActivity() != null
+                    && "PRODUCT".equals(foregroundCategory())
+                    && findVpnConsentButton(device) == null
+                    && VpnService.prepare(context) != null;
+            if (returnedToProduct) break;
+            SystemClock.sleep(POLL_MILLIS);
         }
+        if (!returnedToProduct) {
+            throw new AssertionError(
+                    "Cancelled consent did not return to the resumed product with permission pending");
+        }
+        assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        JSONObject current = snapshotResult("");
+        if (!currentSource.equals(current.optString("source_url"))
+                || !initial.getString("digest").equals(current.optString("digest"))
+                || current.getLong("generation") != initial.getLong("generation")
+                || !initial.getString("state").equals(current.optString("state"))
+                || !initial.optString("active_digest").equals(current.optString("active_digest"))
+                || current.optJSONObject("active_profile") != null
+                || current.optJSONObject("pending_target") != null
+                || current.getJSONArray("profiles").length() != count
+                || findVpnConsentButton(device) != null
+                || VpnService.prepare(context) == null) {
+            throw new AssertionError("Warm import changed the denied consent baseline: " + current);
+        }
+        if (awaitVpnNetwork(false, remainingTimeout(
+                deadline, "ANDROID_VPN_CONSENT_STALE_NETWORK")) != null) {
+            throw new AssertionError("Warm import created a VPN before a fresh consent request");
+        }
+
         tapEnabledControl(control, deadline);
-        JSONObject selected = awaitSelection(current.getLong("generation"), "PROFILE_INDEX", target, deadline);
+        acceptVpnConsent(
+                remainingTimeout(deadline, "ANDROID_VPN_CONSENT_TIMEOUT"),
+                "manual-consent-current-source");
+        if (VpnService.prepare(context) != null) {
+            throw new AssertionError("Fresh current-source consent did not grant VPN permission");
+        }
+        JSONObject selected = awaitSelection(
+                current.getLong("generation"), "PROFILE_INDEX", target, deadline);
+        JSONObject expectedProfile = current.getJSONArray("profiles").getJSONObject(target);
+        JSONObject activeProfile = selected.getJSONObject("active_profile");
+        String currentDigest = current.getString("digest");
+        if (!"CONNECTED".equals(selected.optString("state"))
+                || !currentSource.equals(selected.optString("source_url"))
+                || !currentDigest.equals(selected.optString("digest"))
+                || !currentDigest.equals(selected.optString("active_digest"))
+                || !"PROFILE_INDEX".equals(selected.optString("active_mode"))
+                || activeProfile.getInt("index") != target
+                || !expectedProfile.optString("protocol").equals(activeProfile.optString("protocol"))
+                || !expectedProfile.optString("description").equals(activeProfile.optString("description"))
+                || selected.getLong("generation") <= current.getLong("generation")) {
+            throw new AssertionError("Fresh consent selected a different source or profile: " + selected);
+        }
+        if (awaitVpnNetwork(true, remainingTimeout(
+                deadline, "ANDROID_VPN_CONSENT_TUNNEL_MISSING")) == null) {
+            throw new AssertionError("Fresh current-source consent did not create a VPN tunnel");
+        }
+
         tapEnabledControl(control, deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (awaitVpnNetwork(false, remainingTimeout(
+                deadline, "ANDROID_UI_DISCONNECT_TIMEOUT")) != null) {
+            throw new AssertionError("Fresh current-source consent tunnel remained after Disconnect");
+        }
         JSONObject stopped = snapshotResult("");
         if (stopped.getLong("generation") != selected.getLong("generation")
-                || !"IDLE".equals(stopped.optString("state"))) {
+                || !"IDLE".equals(stopped.optString("state"))
+                || !currentSource.equals(stopped.optString("source_url"))
+                || !currentDigest.equals(stopped.optString("digest"))
+                || stopped.optJSONObject("active_profile") != null
+                || stopped.optJSONObject("pending_target") != null) {
             throw new AssertionError("Nondefault consent target did not disconnect cleanly");
         }
-        markProgress("configure", "manual-consent-denied-currentness-granted", "completed");
+        markProgress("configure", "manual-consent-current-source-granted", "completed");
         return true;
     }
 
