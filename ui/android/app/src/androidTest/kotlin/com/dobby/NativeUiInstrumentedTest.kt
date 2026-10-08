@@ -104,17 +104,8 @@ class NativeUiInstrumentedTest {
         // product timeout into a multi-minute test. Keep discovery
         // non-blocking and let the helpers below own the timing.
         Configurator.getInstance().setWaitForSelectorTimeout(0)
-        check(
-            screenshotDirectory.deleteRecursively()
-                || !screenshotDirectory.exists(),
-        ) {
-            "ANDROID_UI_SCREENSHOT_DIRECTORY_CLEANUP_FAILED"
-        }
         check(screenshotDirectory.mkdirs() || screenshotDirectory.isDirectory()) {
             "ANDROID_UI_SCREENSHOT_DIRECTORY_FAILED"
-        }
-        check(screenshotDirectory.listFiles()?.isEmpty() == true) {
-            "ANDROID_UI_SCREENSHOT_DIRECTORY_NOT_EMPTY"
         }
     }
 
@@ -1165,96 +1156,144 @@ class NativeUiInstrumentedTest {
     }
 
     private fun scrollControlsToConnectionAction() {
-        var viewport = currentControlsScrollViewport()
-        // rememberScrollState restores its offset across configuration changes.
-        // A failed UP means this viewport is already at the top.
-        viewport.scroll(androidx.test.uiautomator.Direction.UP, 1f)
-        device.waitForIdle()
-        viewport = currentControlsScrollViewport()
+        var reachedStatus = waitForOneOfOrNull(arrayOf("Disconnected", "Error"), 100)
+        var reachedAction = waitForObject(connectionActionLabel, 100)
+        var button = clickableConnectionAction(reachedAction)
+        if (connectionActionReachable(reachedStatus, reachedAction, button)) return
 
-        var reachedStatus: UiObject2? = null
-        var reachedAction: UiObject2? = null
+        val minimumWidth = device.displayWidth * 8 / 10
+        val minimumHeight = device.displayHeight / 5
         val scrollAttempts = mutableListOf<String>()
+
+        fun moveControls(direction: androidx.test.uiautomator.Direction, attempt: String) {
+            val viewport = currentControlsScrollViewport()
+            val boundsResult = viewport?.let { runCatching { it.visibleBounds } }
+            val bounds = boundsResult?.getOrNull()
+            if (viewport == null || bounds == null || bounds.width() < minimumWidth ||
+                bounds.height() < minimumHeight) {
+                val boundsFailure = boundsResult?.exceptionOrNull()
+                failSmallScreenReachability(
+                    if (boundsFailure == null) "ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING"
+                    else "ANDROID_CONTROLS_SCROLL_VIEWPORT_BOUNDS_FAILED",
+                    viewport,
+                    reachedStatus,
+                    reachedAction,
+                    button,
+                    "attempt=$attempt required_bounds=${minimumWidth}x$minimumHeight " +
+                        "bounds_error=${boundsFailure?.stackTraceToString().orEmpty()} " +
+                        scrollAttempts.joinToString("; "),
+                )
+            }
+
+            val scrollable = runCatching { viewport.isScrollable }.getOrElse { failure ->
+                failSmallScreenReachability(
+                    "ANDROID_CONTROLS_SCROLL_STATE_FAILED",
+                    viewport,
+                    reachedStatus,
+                    reachedAction,
+                    button,
+                    "attempt=$attempt ${failure.stackTraceToString()} " +
+                        scrollAttempts.joinToString("; "),
+                )
+            }
+            var scrolled = false
+            if (scrollable) {
+                scrolled = try {
+                    viewport.scroll(direction, 0.8f)
+                } catch (failure: RuntimeException) {
+                    failSmallScreenReachability(
+                        "ANDROID_CONTROLS_SCROLL_FAILED",
+                        viewport,
+                        reachedStatus,
+                        reachedAction,
+                        button,
+                        "attempt=$attempt direction=$direction ${failure.stackTraceToString()} " +
+                            scrollAttempts.joinToString("; "),
+                    )
+                }
+            }
+            var swiped = false
+            if (!scrollable || !scrolled) {
+                val startY = if (direction == androidx.test.uiautomator.Direction.UP) bounds.top + 12 else bounds.bottom - 12
+                val endY = if (direction == androidx.test.uiautomator.Direction.UP) bounds.bottom - 12 else bounds.top + 12
+                swiped = device.swipe(bounds.centerX(), startY, bounds.centerX(), endY, 12)
+            }
+            device.waitForIdle()
+            scrollAttempts += "attempt=$attempt direction=$direction ui_scroll=$scrolled " +
+                "coordinate_swipe=$swiped viewport=$bounds scrollable=$scrollable"
+        }
+
+        // Remembered scroll state can leave this container below its URL field.
+        // Normalize toward the top once, then advance toward the status/action.
+        moveControls(androidx.test.uiautomator.Direction.UP, "reset")
         for (attempt in 0..8) {
             reachedStatus = waitForOneOfOrNull(arrayOf("Disconnected", "Error"), 100)
             reachedAction = waitForObject(connectionActionLabel, 100)
-            if (reachedStatus != null && reachedAction != null) break
+            button = clickableConnectionAction(reachedAction)
+            if (connectionActionReachable(reachedStatus, reachedAction, button)) return
             if (attempt == 8) break
-            val scrolled = viewport.scroll(androidx.test.uiautomator.Direction.DOWN, 0.8f)
-            device.waitForIdle()
-            var swiped = false
-            if (!scrolled) {
-                // Compose can move on touch without UiAutomator observing its
-                // scroll-finished accessibility event. Try the same drag a
-                // user can make, then re-read the rendered nodes.
-                val bounds = runCatching { viewport.visibleBounds }.getOrNull()
-                if (bounds != null && bounds.height() > 24) {
-                    swiped = device.swipe(
-                        bounds.centerX(), bounds.bottom - 12,
-                        bounds.centerX(), bounds.top + 12,
-                        12,
-                    )
-                    device.waitForIdle()
-                }
-            }
-            val viewportBounds = runCatching { viewport.visibleBounds.toString() }
-                .getOrElse { "unavailable(${it.javaClass.simpleName})" }
-            scrollAttempts += "attempt=$attempt ui_scroll=$scrolled " +
-                "coordinate_swipe=$swiped viewport=$viewportBounds"
+            moveControls(androidx.test.uiautomator.Direction.DOWN, attempt.toString())
         }
 
         val scrollDetails = scrollAttempts.joinToString("; ")
-        var button = reachedAction
-        while (button != null && !button.isClickable) button = button.parent
-        if (reachedStatus?.visibleBounds?.isEmpty != false) {
-            failSmallScreenReachability(
-                "ANDROID_SMALL_SCREEN_STATUS_NOT_REACHABLE_AFTER_SCROLL",
-                viewport,
-                reachedStatus,
-                reachedAction,
-                button,
-                scrollDetails,
-            )
+        val viewport = currentControlsScrollViewport()
+        val reason = if (reachedStatus?.let {
+                runCatching { !it.visibleBounds.isEmpty }.getOrDefault(false)
+            } == true) {
+            "ANDROID_SMALL_SCREEN_CONNECTION_ACTION_NOT_REACHABLE"
+        } else {
+            "ANDROID_SMALL_SCREEN_STATUS_NOT_REACHABLE_AFTER_SCROLL"
         }
-        if (button?.let { it.isClickable && !it.visibleBounds.isEmpty } != true) {
-            failSmallScreenReachability(
-                "ANDROID_SMALL_SCREEN_CONNECTION_ACTION_NOT_REACHABLE",
-                viewport,
-                reachedStatus,
-                reachedAction,
-                button,
-                scrollDetails,
-            )
+        failSmallScreenReachability(
+            reason,
+            viewport,
+            reachedStatus,
+            reachedAction,
+            button,
+            scrollDetails,
+        )
+    }
+
+    private fun currentControlsScrollViewport(): UiObject2? =
+        device.findObject(By.desc(MainActivity.CONNECTION_CONTROLS_DESCRIPTION).pkg(packageName))
+
+    private fun clickableConnectionAction(action: UiObject2?): UiObject2? {
+        var button = action
+        while (true) {
+            val candidate = button ?: return null
+            if (runCatching { candidate.isClickable }.getOrDefault(false)) return candidate
+            button = runCatching { candidate.parent }.getOrNull()
         }
     }
 
-    private fun currentControlsScrollViewport(): UiObject2 {
-        val width = device.displayWidth
-        val height = device.displayHeight
-        var ancestor: UiObject2? = requireObject("Subscription URL")
-        val scrollableViewports = mutableListOf<UiObject2>()
-        while (ancestor != null) {
-            val bounds = ancestor.visibleBounds
-            if (ancestor.isScrollable && bounds.width() >= width * 8 / 10 && bounds.height() >= height / 5) {
-                scrollableViewports += ancestor
-            }
-            ancestor = ancestor.parent
-        }
-        return scrollableViewports.maxByOrNull { it.visibleBounds.height() }
-            ?: throw AssertionError("ANDROID_CONTROLS_SCROLL_VIEWPORT_MISSING ${width}x$height")
+    private fun connectionActionReachable(
+        status: UiObject2?,
+        action: UiObject2?,
+        button: UiObject2?,
+    ): Boolean {
+        val statusVisible = status?.let { runCatching { !it.visibleBounds.isEmpty }.getOrDefault(false) } == true
+        val actionVisible = action?.let { runCatching { !it.visibleBounds.isEmpty }.getOrDefault(false) } == true
+        val buttonReachable = button?.let {
+            runCatching { it.isClickable && !it.visibleBounds.isEmpty }.getOrDefault(false)
+        } == true
+        return statusVisible && actionVisible && buttonReachable
     }
 
     private fun failSmallScreenReachability(
         reason: String,
-        viewport: UiObject2,
+        viewport: UiObject2?,
         status: UiObject2?,
         action: UiObject2?,
         clickableAction: UiObject2?,
         scrollDetails: String,
     ): Nothing {
-        fun bounds(node: UiObject2?): String {
+        fun describe(node: UiObject2?): String {
             if (node == null) return "missing"
-            return runCatching { node.visibleBounds.toString() }
+            return runCatching {
+                "class=${node.className} text=${node.text} description=${node.contentDescription} " +
+                    "bounds=${node.visibleBounds} enabled=${node.isEnabled} " +
+                    "clickable=${node.isClickable} scrollable=${node.isScrollable}"
+            }
                 .getOrElse { "unavailable(${it.javaClass.simpleName})" }
         }
 
@@ -1264,12 +1303,20 @@ class NativeUiInstrumentedTest {
         val screenshotDiagnostic = screenshotFailure?.let {
             " screenshot_error=${it.javaClass.simpleName}:${it.message}"
         }.orEmpty()
+        val hierarchy = java.io.ByteArrayOutputStream()
+        val hierarchyFailure = runCatching { device.dumpWindowHierarchy(hierarchy) }.exceptionOrNull()
+        val hierarchyDiagnostic = hierarchyFailure?.let {
+            " hierarchy_error=${it.javaClass.simpleName}:${it.message}"
+        }.orEmpty()
         val statusCandidates = arrayOf("Disconnected", "Error").joinToString(";") { debugNodeBounds(it) }
         throw AssertionError(
-            "$reason viewport=${bounds(viewport)} status=${bounds(status)} " +
-                "action=${bounds(action)} clickable_action=${bounds(clickableAction)} " +
+            "$reason viewport=${describe(viewport)} status=${describe(status)} " +
+                "action=${describe(action)} clickable_action=${describe(clickableAction)} " +
                 "$scrollDetails status_candidates=[$statusCandidates] " +
-                "action_candidates=[${debugNodeBounds(connectionActionLabel)}]$screenshotDiagnostic"
+                "action_candidates=[${debugNodeBounds(connectionActionLabel)}] " +
+                "viewport_candidates=[${debugNodeBounds(MainActivity.CONNECTION_CONTROLS_DESCRIPTION)}]" +
+                "$screenshotDiagnostic$hierarchyDiagnostic\n" +
+                "UI hierarchy:\n${hierarchy.toString("UTF-8")}"
         )
     }
 

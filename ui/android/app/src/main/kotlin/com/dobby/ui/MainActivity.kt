@@ -44,6 +44,7 @@ import java.util.concurrent.TimeUnit
 class MainActivity : ComponentActivity() {
     companion object {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
+        internal const val CONNECTION_CONTROLS_DESCRIPTION = "Connection controls"
 
         @Volatile
         @JvmField
@@ -526,12 +527,24 @@ private class SessionController(
                 }.orEmpty(),
                 sourceError = snapshot.optString("source_error"),
             )
+            // Command policy consumes only the backend snapshot. The UI projection
+            // below preserves inventory while a source edit is still pending.
             latest = current
             main.post {
                 if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
                 if (current.sessionId != state.session.sessionId) acceptedSequence = 0
+                val displayedSession = if (state.sourceDirty && current.sessionId == state.session.sessionId) {
+                    current.copy(
+                        configured = state.session.configured,
+                        sourceUrl = state.session.sourceUrl,
+                        digest = state.session.digest,
+                        profiles = state.session.profiles,
+                    )
+                } else {
+                    current
+                }
                 state = state.copy(
-                    session = current,
+                    session = displayedSession,
                     source = if (state.sourceDirty || current.sourceUrl.isEmpty()) state.source else current.sourceUrl,
                     error = when {
                         current.sourceError.isNotEmpty() -> current.sourceError
@@ -631,7 +644,8 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(
                 Modifier.heightIn(max = controlsHeight)
-                    .clipToBounds().verticalScroll(rememberScrollState()),
+                    .clipToBounds().verticalScroll(rememberScrollState())
+                    .semantics { contentDescription = MainActivity.CONNECTION_CONTROLS_DESCRIPTION },
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 OutlinedTextField(
