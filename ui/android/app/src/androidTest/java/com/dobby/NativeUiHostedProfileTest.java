@@ -2877,6 +2877,8 @@ public final class NativeUiHostedProfileTest {
         markProgress("disconnect", "surface", "completed");
         markProgress("disconnect", "disconnect-control", "started");
         JSONObject expectedConnection = snapshotResult("");
+        JSONArray profiles = expectedConnection.optJSONArray("profiles");
+        int profileCount = profiles == null ? 0 : profiles.length();
         if ("CONNECTED".equals(expectedConnection.optString("state"))) {
             int activeIndex = activeProfileIndexInLoadedInventory(expectedConnection);
             UiObject2 controls = null;
@@ -2884,7 +2886,7 @@ public final class NativeUiHostedProfileTest {
             if (activeIndex >= 0) {
                 scrollControlsToProfileAction(
                         activeIndex,
-                        expectedConnection.getJSONArray("profiles").length(),
+                        profileCount,
                         deadline);
                 controls = findUiObject("Connection controls");
                 controlsBounds = controls == null ? new Rect() : controls.getVisibleBounds();
@@ -2892,8 +2894,7 @@ public final class NativeUiHostedProfileTest {
             } else {
                 // Auto uses the main Disconnect action; an active selection from
                 // another inventory uses the standalone action near the top.
-                JSONArray profiles = expectedConnection.optJSONArray("profiles");
-                scrollControlsToTop(profiles == null ? 0 : profiles.length(), deadline);
+                scrollControlsToTop(profileCount, deadline);
             }
             JSONObject current = snapshotResult("");
             if (!sameRenderedDisconnectTarget(expectedConnection, current)) {
@@ -2908,6 +2909,9 @@ public final class NativeUiHostedProfileTest {
         }
         tapEnabledControl("Disconnect", deadline);
         markProgress("disconnect", "disconnect-control", "completed");
+        if ("CONNECTED".equals(expectedConnection.optString("state"))) {
+            scrollControlsToTop(profileCount, deadline);
+        }
         markProgress("disconnect", "disconnected-state", "started");
         waitForUiState(
                 "Disconnected",
