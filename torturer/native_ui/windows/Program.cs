@@ -621,8 +621,10 @@ internal static class Program
 
     private static Dictionary<string, object?> ProfileSwitchAction(
         AutomationElement root, IntPtr window, Process process, string identity,
-        string targetId, string competingId, string? protocolUri = null)
+        string targetId, string competingId, string? protocolUri = null, bool observeOnly = false)
     {
+        if (observeOnly && protocolUri is not null)
+            throw new ArgumentException("Profile switch observation cannot dispatch a protocol URI");
         if (!TryGetProfileNumber(targetId, " action", out _) ||
             !TryGetProfileNumber(competingId, " action", out _) || targetId == competingId)
             throw new ArgumentException("Profile switch action requires two distinct profile action identifiers");
@@ -701,6 +703,19 @@ internal static class Program
                         if (current.Name != "Stop" || !current.IsEnabled || current.IsOffscreen)
                             throw new InvalidOperationException("The selected profile action changed from Stop before Invoke");
                         var observedAt = Stopwatch.GetTimestamp();
+                        if (observeOnly)
+                            return new Dictionary<string, object?>
+                            {
+                                ["ready"] = true, ["pid"] = process.Id, ["identity"] = identity,
+                                ["window_handle"] = $"0x{window.ToInt64():X}",
+                                ["target_automation_id"] = targetId, ["competing_automation_id"] = competingId,
+                                ["observe_only"] = true,
+                                ["connect_invoked_at_utc"] = connectedAtUtc,
+                                ["stop_observed_at_utc"] = Timestamp(observedAt),
+                                ["target_at_stop"] = target.ToDiagnostic(),
+                                ["competing_at_stop"] = competing.ToDiagnostic(),
+                                ["connection_action_at_stop"] = connection.ToDiagnostic(),
+                            };
                         if (protocolUri is not null)
                         {
                             var dispatchStarted = Stopwatch.GetTimestamp();
@@ -2075,8 +2090,10 @@ internal static class Program
             }
             if (operation == "cancel-profile-switch")
             {
+                var observeOnly = request.TryGetProperty("observe_only", out var observeOnlyValue) &&
+                    observeOnlyValue.GetBoolean();
                 var result = ProfileSwitchAction(
-                    root, window, process, identity, Text("target"), Text("competing"));
+                    root, window, process, identity, Text("target"), Text("competing"), observeOnly: observeOnly);
                 Console.WriteLine(JsonSerializer.Serialize(result));
                 return 0;
             }

@@ -1337,8 +1337,12 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
 
     first = 1 if initial["active_profile"]["index"] == 0 else 0
     canceled = cancel_switch_profile(initial, first, 0 if first == 1 else 1)
-    ui.activate_profile(first)
-    manual = selected(canceled, first)
+    if ui.platform == "windows":
+        competing_index = 0 if first == 1 else 1
+        checks["windows_manual_profile_stop_observed"] = ui.observe_profile_switch(first, competing_index)
+    else:
+        ui.activate_profile(first)
+    manual = selected(canceled, first, stop_observed=ui.platform == "windows")
     second = 0 if first == 1 else 1
 
     pending_import: dict[str, object] = {}

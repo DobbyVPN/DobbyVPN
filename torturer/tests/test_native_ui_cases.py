@@ -249,6 +249,48 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                 with self.assertRaises(journey.smoke.NativeUISmokeError):
                     controller.cancel_profile_switch(1, 0)
 
+    def test_windows_manual_switch_observation_requires_a_fresh_stop_without_invoking_it(self):
+        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
+        controller.platform = "windows"
+        controller.pid = 42
+        controller.identity = "candidate-ui-instance"
+
+        def response():
+            value = self.windows_cancel_switch_response()
+            value.pop("stop_invoked_at_utc")
+            value.update({
+                "pid": 42,
+                "identity": "candidate-ui-instance",
+                "observe_only": True,
+            })
+            return value
+
+        observed = response()
+        with patch.object(controller, "_call", return_value=observed) as call:
+            self.assertIs(controller.observe_profile_switch(1, 0), observed)
+        call.assert_called_once_with(
+            "cancel-profile-switch", target="Profile 2 action", competing="Profile 1 action",
+            observe_only=True,
+        )
+
+        mutations = (
+            lambda value: value["target_at_stop"].update(name="Connect"),
+            lambda value: value["target_at_stop"].update(enabled=False),
+            lambda value: value["competing_at_stop"].update(enabled=True),
+            lambda value: value.update(stop_observed_at_utc="2026-10-08T11:59:59+00:00"),
+            lambda value: value.update(observe_only=False),
+            lambda value: value.update(stop_invoked_at_utc="2026-10-08T12:00:00.2600000+00:00"),
+            lambda value: value.update(pid=43),
+            lambda value: value.update(identity="another-ui-instance"),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), patch.object(controller, "_call") as call:
+                invalid = response()
+                mutation(invalid)
+                call.return_value = invalid
+                with self.assertRaises(journey.smoke.NativeUISmokeError):
+                    controller.observe_profile_switch(1, 0)
+
     def test_windows_switch_import_dispatches_only_after_fresh_stop_observation(self):
         controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
         controller.platform = "windows"

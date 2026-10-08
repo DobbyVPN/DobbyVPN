@@ -907,14 +907,19 @@ class NativeUIController:
 
     def _profile_switch_action(
         self, index: int, competing_index: int, *, protocol_uri: str | None = None,
+        observe_only: bool = False,
     ) -> dict[str, object]:
-        if self.platform != "windows" or index < 0 or competing_index < 0 or index == competing_index:
+        if self.platform != "windows" or index < 0 or competing_index < 0 or index == competing_index or (
+            observe_only and protocol_uri is not None
+        ):
             raise ValueError("Windows profile transition requires two distinct profile indices")
         target, competing = f"Profile {index + 1} action", f"Profile {competing_index + 1} action"
         operation = "profile-switch-import" if protocol_uri is not None else "cancel-profile-switch"
         fields = {"target": target, "competing": competing}
         if protocol_uri is not None:
             fields["uri"] = protocol_uri
+        if observe_only:
+            fields["observe_only"] = True
         expected_pid = getattr(self, "pid", None)
         expected_identity = getattr(self, "identity", None)
         result = self._call(operation, **fields)
@@ -951,12 +956,15 @@ class NativeUIController:
             raise NativeUISmokeError(
                 f"Windows profile transition did not observe an enabled Stop with competing Connect disabled: {result!r}"
             )
-        timestamp_keys = (
-            "connect_invoked_at_utc", "stop_observed_at_utc",
-            "protocol_dispatch_started_at_utc", "protocol_dispatch_returned_at_utc",
-        ) if protocol_uri is not None else (
-            "connect_invoked_at_utc", "stop_observed_at_utc", "stop_invoked_at_utc",
-        )
+        if protocol_uri is not None:
+            timestamp_keys = (
+                "connect_invoked_at_utc", "stop_observed_at_utc",
+                "protocol_dispatch_started_at_utc", "protocol_dispatch_returned_at_utc",
+            )
+        elif observe_only:
+            timestamp_keys = ("connect_invoked_at_utc", "stop_observed_at_utc")
+        else:
+            timestamp_keys = ("connect_invoked_at_utc", "stop_observed_at_utc", "stop_invoked_at_utc")
         timestamps = [result.get(key) for key in timestamp_keys]
         try:
             parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps]
@@ -968,6 +976,10 @@ class NativeUIController:
             raise NativeUISmokeError(f"Windows profile transition changed the UI process: {result!r}")
         if expected_identity is not None and result.get("identity") != expected_identity:
             raise NativeUISmokeError(f"Windows profile transition changed the UI process identity: {result!r}")
+        if observe_only and (
+            result.get("observe_only") is not True or "stop_invoked_at_utc" in result
+        ):
+            raise NativeUISmokeError(f"Windows profile observation invoked Stop or lacked observe-only evidence: {result!r}")
         if protocol_uri is not None and (
             result.get("protocol_uri") != protocol_uri
             or not isinstance(result.get("window_handle"), str)
@@ -980,6 +992,9 @@ class NativeUIController:
 
     def cancel_profile_switch(self, index: int, competing_index: int) -> dict[str, object]:
         return self._profile_switch_action(index, competing_index)
+
+    def observe_profile_switch(self, index: int, competing_index: int) -> dict[str, object]:
+        return self._profile_switch_action(index, competing_index, observe_only=True)
 
     def switch_profile_and_dispatch_import(
         self, index: int, competing_index: int, url: str,
