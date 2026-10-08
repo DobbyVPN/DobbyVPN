@@ -593,6 +593,138 @@ internal static class Program
             ?? throw new InvalidOperationException($"Native UI element was not found: {automationId}");
     }
 
+    private readonly record struct NativeActionState(
+        AutomationElement? Element,
+        string AutomationId,
+        string? Name,
+        string? ControlType,
+        bool? IsControlElement,
+        bool? Enabled,
+        bool? Offscreen)
+    {
+        public object ToDiagnostic() => new { automation_id = AutomationId, found = Element is not null,
+            name = Name, control_type = ControlType, is_control_element = IsControlElement,
+            enabled = Enabled, offscreen = Offscreen };
+    }
+
+    private static NativeActionState ReadActionState(AutomationElement scope, string automationId)
+    {
+        var element = scope.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
+        if (element is null) return new NativeActionState(null, automationId, null, null, null, null, null);
+        var current = element.Current;
+        return new NativeActionState(element, current.AutomationId, current.Name, current.ControlType.ProgrammaticName,
+            current.IsControlElement, current.IsEnabled, current.IsOffscreen);
+    }
+
+    private static Dictionary<string, object?> CancelProfileSwitch(
+        AutomationElement root, IntPtr window, Process process, string identity,
+        string targetId, string competingId)
+    {
+        if (!TryGetProfileNumber(targetId, " action", out _) ||
+            !TryGetProfileNumber(competingId, " action", out _) || targetId == competingId)
+            throw new ArgumentException("Cancellation requires two distinct profile action identifiers");
+
+        // Keep stable scopes; WinUI recreates profile action peers on each Snapshot.
+        var controls = RequireAutomationId(root, "Connection controls");
+        var viewport = RequireAutomationId(controls, "Profile list viewport");
+        _ = RequireAutomationId(controls, "VPN connection action");
+        var before = ReadActionState(viewport, targetId);
+        var competingBefore = ReadActionState(viewport, competingId);
+        bool CanStop(NativeActionState target, NativeActionState competing, NativeActionState connection)
+        {
+            var connectionName = connection.Name;
+            var connectionIsObserved = connection.Element is not null && connection.AutomationId == "VPN connection action" &&
+                connection.ControlType == ControlType.Button.ProgrammaticName &&
+                connection.IsControlElement == true &&
+                (connectionName is "Connect" or "Auto connect" or "Stop" or "Disconnect") &&
+                connection.Enabled is not null && connection.Offscreen == false;
+            return target.AutomationId == targetId && competing.AutomationId == competingId &&
+                target.ControlType == ControlType.Button.ProgrammaticName && target.IsControlElement == true && target.Name == "Stop" &&
+                target.Enabled == true && target.Offscreen == false &&
+                competing.ControlType == ControlType.Button.ProgrammaticName && competing.IsControlElement == true && competing.Name == "Connect" &&
+                competing.Enabled == false && competing.Offscreen == false && connectionIsObserved &&
+                (connectionName is not ("Connect" or "Auto connect") || connection.Enabled == false);
+        }
+        if (before.AutomationId != targetId || competingBefore.AutomationId != competingId ||
+            before.ControlType != ControlType.Button.ProgrammaticName || before.IsControlElement != true || before.Name != "Connect" ||
+            before.Enabled != true || before.Offscreen != false ||
+            competingBefore.ControlType != ControlType.Button.ProgrammaticName || competingBefore.IsControlElement != true || competingBefore.Name != "Connect" ||
+            competingBefore.Enabled != true || competingBefore.Offscreen != false)
+            throw new InvalidOperationException(
+                $"Profile actions were not visible and enabled before Connect: target={JsonSerializer.Serialize(before.ToDiagnostic())}; " +
+                $"competing={JsonSerializer.Serialize(competingBefore.ToDiagnostic())}");
+
+        if (before.Element is null || !before.Element.TryGetCurrentPattern(InvokePattern.Pattern, out var connectPattern))
+            throw new InvalidOperationException($"Profile action has no native InvokePattern: {targetId}");
+        RequireForeground(window, "profile switch Connect");
+        var clockStarted = Stopwatch.GetTimestamp();
+        var utcStarted = DateTimeOffset.UtcNow;
+        string Timestamp(long tick) => utcStarted.Add(Stopwatch.GetElapsedTime(clockStarted, tick))
+            .ToString("O", CultureInfo.InvariantCulture);
+        var connectedAt = Stopwatch.GetTimestamp();
+        var connectedAtUtc = Timestamp(connectedAt);
+        ((InvokePattern)connectPattern).Invoke();
+
+        var lastTarget = before;
+        var lastCompeting = competingBefore;
+        var lastConnection = default(NativeActionState);
+        string? unavailable = null;
+        var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            try
+            {
+                var target = ReadActionState(viewport, targetId);
+                var competing = ReadActionState(viewport, competingId);
+                var connection = ReadActionState(controls, "VPN connection action");
+                lastTarget = target; lastCompeting = competing; lastConnection = connection;
+                if (CanStop(target, competing, connection))
+                {
+                    RequireForeground(window, "profile switch Stop");
+                    target = ReadActionState(viewport, targetId);
+                    competing = ReadActionState(viewport, competingId);
+                    connection = ReadActionState(controls, "VPN connection action");
+                    lastTarget = target; lastCompeting = competing; lastConnection = connection;
+                    if (CanStop(target, competing, connection))
+                    {
+                        var stopElement = target.Element;
+                        if (stopElement is null ||
+                            !stopElement.TryGetCurrentPattern(InvokePattern.Pattern, out var stopPattern))
+                            throw new InvalidOperationException($"Observed Stop action has no native InvokePattern: {targetId}");
+                        var current = stopElement.Current;
+                        if (current.Name != "Stop" || !current.IsEnabled || current.IsOffscreen)
+                            throw new InvalidOperationException("The selected profile action changed from Stop before Invoke");
+                        var observedAt = Stopwatch.GetTimestamp();
+                        var invokedAt = Stopwatch.GetTimestamp();
+                        ((InvokePattern)stopPattern).Invoke();
+                        return new Dictionary<string, object?>
+                        {
+                            ["ready"] = true, ["pid"] = process.Id, ["identity"] = identity,
+                            ["target_automation_id"] = targetId, ["competing_automation_id"] = competingId,
+                            ["connect_invoked_at_utc"] = connectedAtUtc,
+                            ["stop_observed_at_utc"] = Timestamp(observedAt), ["stop_invoked_at_utc"] = Timestamp(invokedAt),
+                            ["target_at_stop"] = target.ToDiagnostic(), ["competing_at_stop"] = competing.ToDiagnostic(),
+                            ["connection_action_at_stop"] = connection.ToDiagnostic(),
+                        };
+                    }
+                }
+            }
+            catch (ElementNotAvailableException error)
+            {
+                unavailable = error.ToString();
+                Console.Error.WriteLine(unavailable);
+                Console.Error.Flush();
+            }
+            Thread.Sleep(20);
+        }
+        throw new TimeoutException(
+            "Profile switch did not expose an enabled Stop action within five seconds; " +
+            $"last_target={JsonSerializer.Serialize(lastTarget.ToDiagnostic())}; " +
+            $"last_competing={JsonSerializer.Serialize(lastCompeting.ToDiagnostic())}; " +
+            $"last_connection_action={JsonSerializer.Serialize(lastConnection.ToDiagnostic())}; " +
+            $"last_element_unavailable_exception={unavailable ?? "none"}");
+    }
+
     private static System.Windows.Rect PhysicalBounds(AutomationElement element, string description)
     {
         var bounds = element.Current.BoundingRectangle;
@@ -1888,6 +2020,13 @@ internal static class Program
                 if (!element.Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
                 return element;
             }
+            if (operation == "cancel-profile-switch")
+            {
+                var result = CancelProfileSwitch(
+                    root, window, process, identity, Text("target"), Text("competing"));
+                Console.WriteLine(JsonSerializer.Serialize(result));
+                return 0;
+            }
             if (operation == "profile-list-layout")
             {
                 Console.WriteLine(JsonSerializer.Serialize(ProfileListLayout(root, window)));
@@ -2334,6 +2473,8 @@ internal static class Program
             if (++count > 8192)
                 throw new InvalidOperationException($"Accessibility tree exceeds 8192 elements at {path}");
             yield return element;
+            if (depth > 0 && element.Current.AutomationId == "Backend logs")
+                continue;
             trace?.Invoke($"children-start node={count} depth={depth} path={path}");
             var child = walker.GetFirstChild(element);
             trace?.Invoke($"first-child-complete node={count} has_child={child is not null}");

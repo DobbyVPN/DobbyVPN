@@ -891,6 +891,53 @@ class NativeUIController:
     def activate_profile(self, index: int) -> None:
         self._click(f"Profile {index + 1} action")
 
+    def cancel_profile_switch(self, index: int, competing_index: int) -> dict[str, object]:
+        if self.platform != "windows" or index < 0 or competing_index < 0 or index == competing_index:
+            raise ValueError("Windows profile cancellation requires two distinct profile indices")
+        target, competing = f"Profile {index + 1} action", f"Profile {competing_index + 1} action"
+        result = self._call("cancel-profile-switch", target=target, competing=competing)
+        selected = result.get("target_at_stop")
+        other = result.get("competing_at_stop")
+        connection = result.get("connection_action_at_stop")
+        def action_state(value: object, automation_id: str, name: str, enabled: bool) -> bool:
+            return (
+                isinstance(value, dict) and value.get("found") is True
+                and value.get("control_type") == "ControlType.Button"
+                and value.get("is_control_element") is True
+                and value.get("automation_id") == automation_id and value.get("name") == name
+                and value.get("enabled") is enabled and value.get("offscreen") is False
+            )
+        def main_action_state(value: object) -> bool:
+            return (
+                isinstance(value, dict) and value.get("found") is True
+                and value.get("automation_id") == "VPN connection action"
+                and value.get("control_type") == "ControlType.Button"
+                and value.get("is_control_element") is True
+                and value.get("name") in {"Connect", "Auto connect", "Stop", "Disconnect"}
+                and type(value.get("enabled")) is bool and type(value.get("offscreen")) is bool
+                and value.get("offscreen") is False
+                and (value.get("name") not in {"Connect", "Auto connect"} or value.get("enabled") is False)
+            )
+        if (
+            result.get("ready") is not True
+            or result.get("target_automation_id") != target
+            or result.get("competing_automation_id") != competing
+            or not action_state(selected, target, "Stop", True)
+            or not action_state(other, competing, "Connect", False)
+            or not main_action_state(connection)
+        ):
+            raise NativeUISmokeError(f"Windows profile cancellation did not observe an enabled Stop with competing Connect disabled: {result!r}")
+        timestamps = [result.get(key) for key in (
+            "connect_invoked_at_utc", "stop_observed_at_utc", "stop_invoked_at_utc",
+        )]
+        try:
+            parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps]
+        except (AttributeError, TypeError, ValueError) as error:
+            raise NativeUISmokeError(f"Windows profile cancellation timestamps were invalid: {timestamps!r}") from error
+        if any(value.tzinfo is None for value in parsed) or parsed != sorted(parsed):
+            raise NativeUISmokeError(f"Windows profile cancellation timestamps were not chronological: {timestamps!r}")
+        return result
+
     def open_deep_link(self, link: str) -> dict:
         self._open_link(link)
         return self.snapshot()

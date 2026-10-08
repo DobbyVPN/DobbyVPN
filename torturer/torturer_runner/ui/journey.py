@@ -1258,6 +1258,16 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     def cancel_switch_profile(previous: dict, index: int, competing_index: int) -> dict:
         target = f"Profile {index + 1} action"
         competing = f"Profile {competing_index + 1} action"
+        if ui.platform == "windows":
+            checks["windows_profile_switch_stop"] = ui.cancel_profile_switch(index, competing_index)
+            canceled = wait_for_snapshot(
+                lambda value: value.get("state") in {"IDLE", "CONFIGURED"}
+                and value.get("pending_target") is None and value.get("active_profile") is None,
+                "Stop did not cancel the selected profile switch",
+            )
+            if canceled.get("generation", 0) < previous.get("generation", 0):
+                raise NativeUIJourneyError("canceled profile switch moved the session to an older generation")
+            return canceled
         deadline = time.monotonic() + timeout
         ui.activate_profile(index)
         next_ui_check = 0.0

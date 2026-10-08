@@ -185,6 +185,70 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             self.assertIs(controller.connection_action_details(), response)
         call.assert_called_once_with("connection-action-details")
 
+    def windows_cancel_switch_response(self):
+        target, competing = "Profile 2 action", "Profile 1 action"
+        def state(automation_id, name, enabled):
+            return {
+                "found": True, "automation_id": automation_id, "name": name,
+                "control_type": "ControlType.Button", "is_control_element": True,
+                "enabled": enabled, "offscreen": False,
+            }
+        return {
+            "ready": True,
+            "target_automation_id": target,
+            "competing_automation_id": competing,
+            "connect_invoked_at_utc": "2026-10-08T12:00:00.0000000+00:00",
+            "stop_observed_at_utc": "2026-10-08T12:00:00.2500000+00:00",
+            "stop_invoked_at_utc": "2026-10-08T12:00:00.2600000+00:00",
+            "target_at_stop": state(target, "Stop", True),
+            "competing_at_stop": state(competing, "Connect", False),
+            "connection_action_at_stop": {
+                "found": True, "automation_id": "VPN connection action", "name": "Auto connect",
+                "control_type": "ControlType.Button", "is_control_element": True,
+                "enabled": False, "offscreen": False,
+            },
+        }
+
+    def test_windows_cancel_switch_wrapper_accepts_only_observed_stop_and_disabled_connects(self):
+        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
+        controller.platform = "windows"
+        response = self.windows_cancel_switch_response()
+        with patch.object(controller, "_call", return_value=response) as call:
+            self.assertIs(controller.cancel_profile_switch(1, 0), response)
+        call.assert_called_once_with(
+            "cancel-profile-switch", target="Profile 2 action", competing="Profile 1 action",
+        )
+
+        for allowed_name in ("Stop", "Disconnect"):
+            with self.subTest(allowed_main_action=allowed_name):
+                allowed = self.windows_cancel_switch_response()
+                allowed["connection_action_at_stop"].update(name=allowed_name, enabled=True)
+                with patch.object(controller, "_call", return_value=allowed):
+                    self.assertIs(controller.cancel_profile_switch(1, 0), allowed)
+
+        for mutation in (
+            lambda value: value["target_at_stop"].update(name="Disconnect"),
+            lambda value: value["competing_at_stop"].update(enabled=True),
+            lambda value: value["connection_action_at_stop"].update(enabled=True),
+            lambda value: value["connection_action_at_stop"].update(found=False),
+            lambda value: value["connection_action_at_stop"].update(automation_id="Connection controls"),
+            lambda value: value["connection_action_at_stop"].update(control_type="ControlType.Text"),
+            lambda value: value["connection_action_at_stop"].update(is_control_element=False),
+            lambda value: value["connection_action_at_stop"].update(name=""),
+            lambda value: value["connection_action_at_stop"].update(name="Connecting"),
+            lambda value: value["connection_action_at_stop"].update(enabled=None),
+            lambda value: value["connection_action_at_stop"].update(enabled=0),
+            lambda value: value["connection_action_at_stop"].update(offscreen=None),
+            lambda value: value["connection_action_at_stop"].update(offscreen=True),
+            lambda value: value.update(stop_invoked_at_utc="2026-10-08T11:59:59+00:00"),
+        ):
+            with self.subTest(mutation=mutation), patch.object(controller, "_call") as call:
+                invalid = self.windows_cancel_switch_response()
+                mutation(invalid)
+                call.return_value = invalid
+                with self.assertRaises(journey.smoke.NativeUISmokeError):
+                    controller.cancel_profile_switch(1, 0)
+
     def test_snapshot_preserves_readback_of_native_subscription_editor(self):
         controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
         controller.platform = "macos"
