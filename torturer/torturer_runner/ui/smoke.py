@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -33,6 +34,141 @@ from torturer_runner.windows_job import (
 
 class NativeUISmokeError(RuntimeError):
     pass
+
+
+_WINDOWS_TEST_THEME_VARIABLE = "DOBBYVPN_TEST_REQUESTED_THEME"
+_WINDOWS_PALETTE_SEVERITIES = ("DEBUG", "INFO", "WARN", "ERROR")
+_WINDOWS_TEXT_SIZE_SETTINGS_URI = "ms-settings:easeofaccess-display"
+
+
+def _windows_color_orders(color: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Return both channel orders accepted by the existing Windows UIA provider."""
+    return (
+        (color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF),
+        ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF),
+    )
+
+
+def _measure_windows_palette_pixels(
+    screenshot: dict[str, object], row_bounds: object
+) -> dict[str, object]:
+    """Measure one visible row's composited foreground from its captured PNG."""
+    path_value = screenshot.get("path")
+    if not isinstance(path_value, str) or not path_value:
+        raise NativeUISmokeError("Windows palette screenshot path was unavailable")
+    path = Path(path_value)
+
+    def rect(value: object, label: str) -> tuple[float, float, float, float]:
+        if not isinstance(value, dict):
+            raise NativeUISmokeError(f"Windows palette {label} rectangle was unavailable")
+        result: list[float] = []
+        for key in ("x", "y", "width", "height"):
+            item = value.get(key)
+            if type(item) not in (int, float) or not math.isfinite(item):
+                raise NativeUISmokeError(f"Windows palette {label} has invalid {key}: {value!r}")
+            result.append(float(item))
+        if result[2] <= 0 or result[3] <= 0:
+            raise NativeUISmokeError(f"Windows palette {label} rectangle is empty: {value!r}")
+        return tuple(result)  # type: ignore[return-value]
+
+    screen_x, screen_y, screen_width, screen_height = rect(
+        screenshot.get("screen_bounds"), "screenshot screen-bounds"
+    )
+    expected_width, expected_height = screenshot.get("width"), screenshot.get("height")
+    if (
+        type(expected_width) is not int or type(expected_height) is not int
+        or screen_width != expected_width or screen_height != expected_height
+    ):
+        raise NativeUISmokeError(
+            "Windows palette screenshot dimensions do not match its physical screen rectangle: "
+            f"image={expected_width!r}x{expected_height!r} "
+            f"screen={screen_width!r}x{screen_height!r}"
+        )
+    row_x, row_y, row_width, row_height = rect(row_bounds, "row")
+    if (
+        row_x < screen_x or row_y < screen_y
+        or row_x + row_width > screen_x + screen_width
+        or row_y + row_height > screen_y + screen_height
+    ):
+        raise NativeUISmokeError(
+            f"Windows palette row lies outside the captured window: "
+            f"row={row_bounds!r} screen={screenshot.get('screen_bounds')!r}"
+        )
+
+    try:
+        width, height = nonblank_png_dimensions(path)
+        if (width, height) != (expected_width, expected_height):
+            raise NativeUISmokeError(
+                "Windows palette PNG dimensions do not match the capture response: "
+                f"png={width}x{height} response={expected_width}x{expected_height}"
+            )
+        from PIL import Image
+
+        with Image.open(path) as source:
+            if source.format != "PNG":
+                raise NativeUISmokeError(f"Windows palette screenshot is not PNG: {path}")
+            source.load()
+            image = source.convert("RGB")
+    except NativeUISmokeError:
+        raise
+    except Exception as error:
+        raise NativeUISmokeError(
+            f"Windows palette screenshot could not be decoded: {path}: {error}"
+        ) from error
+
+    left = math.ceil(row_x - screen_x)
+    top = math.ceil(row_y - screen_y)
+    right = math.floor(row_x + row_width - screen_x)
+    bottom = math.floor(row_y + row_height - screen_y)
+    if left < 0 or top < 0 or right > width or bottom > height or left >= right or top >= bottom:
+        raise NativeUISmokeError(
+            f"Windows palette row produced an invalid screenshot crop: "
+            f"crop=({left},{top},{right},{bottom}) image={width}x{height}"
+        )
+    crop = image.crop((left, top, right, bottom))
+    if crop.size != (right - left, bottom - top):
+        raise NativeUISmokeError("Windows palette row crop dimensions changed during measurement")
+    counts = Counter(crop.get_flattened_data())
+    background, background_count = counts.most_common(1)[0]
+    candidates = [
+        (
+            sum((channel - background[index]) ** 2 for index, channel in enumerate(color)),
+            color,
+            count,
+        )
+        for color, count in counts.items()
+        if count >= 3 and color != background
+    ]
+    if not candidates:
+        raise NativeUISmokeError(
+            "Windows palette row crop had no visible foreground color supported by three pixels"
+        )
+    distance_squared, foreground, foreground_count = max(candidates)
+
+    def luminance(color: tuple[int, int, int]) -> float:
+        channels = []
+        for component in color:
+            value = component / 255.0
+            channels.append(
+                value / 12.92
+                if value <= 0.04045
+                else ((value + 0.055) / 1.055) ** 2.4
+            )
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+    foreground_luminance, background_luminance = luminance(foreground), luminance(background)
+    contrast_ratio = (
+        max(foreground_luminance, background_luminance) + 0.05
+    ) / (min(foreground_luminance, background_luminance) + 0.05)
+    return {
+        "foreground_rgb": list(foreground),
+        "background_rgb": list(background),
+        "foreground_pixels": foreground_count,
+        "background_pixels": background_count,
+        "distance_squared": distance_squared,
+        "contrast_ratio": round(contrast_ratio, 4),
+        "crop": {"x": left, "y": top, "width": right - left, "height": bottom - top},
+    }
 
 
 def _windows_job_capture_callbacks(deadline: float):
@@ -308,7 +444,10 @@ class NativeUIController:
             request["identity"] = self.identity
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
-        operation_limit = 30.0 if operation in {"profile-list-layout", "scroll-profile-list"} or (
+        operation_limit = 30.0 if operation in {
+            "profile-list-layout", "scroll-profile-list", "connection-action-details",
+            "settings-text-size",
+        } or (
             self.platform == "windows" and operation in {"tree", "resize-window", "windows-baseline", "uia-point"}
         ) else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
@@ -354,9 +493,8 @@ class NativeUIController:
         *,
         windows_content_root_diagnostics: bool = False,
         windows_no_uia_hold_seconds: float | None = None,
+        windows_requested_theme: str | None = None,
     ) -> dict:
-        if self.process is not None or self._alive():
-            raise NativeUISmokeError("native UI is already running")
         if windows_content_root_diagnostics and (
             self.platform != "windows" or import_url is not None
         ):
@@ -372,6 +510,14 @@ class NativeUIController:
                 "Windows no-UIA stability check requires a cold launch "
                 "and a hold from 0 to 30 seconds"
             )
+        if windows_requested_theme is not None and (
+            self.platform != "windows"
+            or import_url is not None
+            or windows_requested_theme not in {"Light", "Dark"}
+        ):
+            raise ValueError("a requested Windows test theme requires a cold Windows launch with Light or Dark")
+        if self.process is not None or self._alive():
+            raise NativeUISmokeError("native UI is already running")
         if self.platform == "macos":
             self._call("preflight")
             if self._call("probe").get("alive"):
@@ -387,11 +533,18 @@ class NativeUIController:
                 f"XAML content-root diagnostic already exists: {content_root_diagnostic_path}"
             )
         app_environment = None
-        if windows_content_root_diagnostics:
+        if self.platform == "windows":
             app_environment = os.environ.copy()
+            # Never let a test theme leak into ordinary or diagnostic launches.
+            app_environment.pop(_WINDOWS_TEST_THEME_VARIABLE, None)
+        if windows_content_root_diagnostics:
+            assert app_environment is not None
             app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"] = str(
                 content_root_diagnostic_path
             )
+        if windows_requested_theme is not None:
+            assert app_environment is not None
+            app_environment[_WINDOWS_TEST_THEME_VARIABLE] = windows_requested_theme
         if self.platform == "macos":
             command = ["open", "-W", "-n"]
             for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET", "DOBBY_LOG_PATH"):
@@ -536,6 +689,7 @@ class NativeUIController:
                         )
                     diagnostics["external_uia_point"] = self._call(
                         "uia-point",
+                        clientApi="com",
                         windowHandle=baseline["windowHandle"],
                         x=screen_geometry["centerX"],
                         y=screen_geometry["centerY"],
@@ -556,6 +710,20 @@ class NativeUIController:
                             if isinstance(payload, str):
                                 payload = payload.encode("utf-8")
                             diagnostics[f"external_uia_point_{stream_name}_base64"] = (
+                                None if payload is None else base64.b64encode(payload).decode("ascii")
+                            )
+                try:
+                    diagnostics["windows_text_size_settings"] = self.inspect_windows_text_size_settings()
+                except Exception as error:
+                    diagnostics["windows_text_size_settings_exception"] = "".join(
+                        traceback.format_exception(error)
+                    )
+                    if isinstance(error, subprocess.CalledProcessError):
+                        for stream_name in ("stdout", "stderr"):
+                            payload = getattr(error, stream_name)
+                            if isinstance(payload, str):
+                                payload = payload.encode("utf-8")
+                            diagnostics[f"windows_text_size_settings_{stream_name}_base64"] = (
                                 None if payload is None else base64.b64encode(payload).decode("ascii")
                             )
             except Exception as error:
@@ -793,6 +961,104 @@ class NativeUIController:
         return {"ready": True, "pid": after.get("pid"), "identity": after.get("identity"),
                 "windowHandle": after.get("windowHandle")}
 
+    def verify_windows_palette_fixture(self, marker: str, severity: str) -> dict[str, object]:
+        """Verify one newly appended severity row through the rendered WinUI log view."""
+        if self.platform != "windows" or not marker or severity not in _WINDOWS_PALETTE_SEVERITIES:
+            raise ValueError("rendered palette fixtures require a Windows UI, marker, and known severity")
+
+        # Bring the appended records into the actual log viewport before
+        # querying UIA colors or capturing the themed view.
+        self._call("scroll-logs", position="bottom")
+        latest: dict = {}
+
+        def tagged_fixture_rows(entries: list[object]) -> list[dict]:
+            rows = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                text = entry.get("text")
+                if not isinstance(text, str) or marker not in text:
+                    continue
+                fields = text.splitlines()[0].split(" · ")
+                # MainWindow.RenderLogs emits timestamp, severity, and source
+                # in the heading; the source may itself contain a middle dot.
+                if len(fields) >= 3 and fields[1] in _WINDOWS_PALETTE_SEVERITIES:
+                    rows.append(entry)
+            return rows
+
+        def fixture_rows_ready() -> bool:
+            nonlocal latest
+            latest = self._call("logs", marker=marker)
+            entries = latest.get("entries")
+            if not isinstance(entries, list):
+                raise NativeUISmokeError("Windows log helper did not return rendered entries")
+            tagged = tagged_fixture_rows(entries)
+            target = [
+                entry for entry in tagged
+                if entry["text"].splitlines()[0].split(" · ")[1] == severity
+            ]
+            return bool(target)
+
+        self._wait(fixture_rows_ready, f"Windows rendered log view did not expose the tagged {severity} palette row")
+        entries = latest.get("entries")
+        assert isinstance(entries, list)
+        tagged = tagged_fixture_rows(entries)
+        target = [
+            entry for entry in tagged
+            if entry["text"].splitlines()[0].split(" · ")[1] == severity
+        ]
+        if len(target) != 1:
+            raise NativeUISmokeError(
+                f"expected exactly one tagged Windows {severity} palette row for {marker}, found {len(target)}"
+            )
+        entry = target[0]
+
+        viewport = latest.get("logs_viewport")
+
+        def rectangle(value: object, label: str) -> tuple[float, float, float, float]:
+            if not isinstance(value, dict):
+                raise NativeUISmokeError(f"Windows {label} bounds were unavailable")
+            coordinates = []
+            for key in ("x", "y", "width", "height"):
+                coordinate = value.get(key)
+                if type(coordinate) not in (int, float) or not math.isfinite(coordinate):
+                    raise NativeUISmokeError(f"Windows {label} has invalid {key}: {value!r}")
+                coordinates.append(float(coordinate))
+            if coordinates[2] <= 0 or coordinates[3] <= 0:
+                raise NativeUISmokeError(f"Windows {label} has an empty screen rectangle: {value!r}")
+            return tuple(coordinates)  # type: ignore[return-value]
+
+        vx, vy, vw, vh = rectangle(viewport, "log viewport")
+
+        text = entry.get("text")
+        if not isinstance(text, str) or not text:
+            raise NativeUISmokeError(f"Windows palette fixture row has no rendered text: {entry!r}")
+        if entry.get("offscreen") is not False or entry.get("visible_in_viewport") is not True:
+            raise NativeUISmokeError(f"Windows rendered {severity} fixture row is not visible in the log viewport")
+        x, y, width, height = rectangle(entry.get("bounds"), f"{severity} fixture row")
+        if x < vx or y < vy or x + width > vx + vw or y + height > vy + vh:
+            raise NativeUISmokeError(
+                f"Windows rendered {severity} fixture row is outside the log viewport: "
+                f"row={entry.get('bounds')!r} viewport={viewport!r}"
+            )
+        foreground = entry.get("foreground")
+        uia_foreground = foreground if type(foreground) is int else None
+        return {
+            "marker": marker,
+            # UIA exposes COLORREF (RGB) and cannot preserve the source brush's
+            # alpha. Keep it as diagnostic evidence; captured pixels are the
+            # palette acceptance measurement performed with the screenshot.
+            "palette": {severity: uia_foreground},
+            "rows": {severity: {
+                "foreground": uia_foreground,
+                "uia_foreground": uia_foreground,
+                "offscreen": False,
+                "bounds": entry["bounds"],
+                "visible_in_viewport": True,
+            }},
+            "logs_viewport": viewport,
+        }
+
     def clear_logs(self) -> dict:
         previous = ""
         initial_view: dict = {}
@@ -841,18 +1107,13 @@ class NativeUIController:
                     palette.setdefault(fields[1], entry["foreground"])
             if not palette:
                 raise NativeUISmokeError("Windows rendered log severity color was unavailable through native accessibility")
-            def color_orders(color: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-                return (
-                    (color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF),
-                    ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF),
-                )
             for severity in ("ERROR", "FATAL", "PANIC"):
                 if severity in palette:
-                    if not any(red > green and red > blue for red, green, blue in color_orders(palette[severity])):
+                    if not any(red > green and red > blue for red, green, blue in _windows_color_orders(palette[severity])):
                         raise NativeUISmokeError(f"Windows {severity} logs are not rendered in a red severity color")
             for severity in ("WARN", "WARNING"):
                 if severity in palette:
-                    if not any(red >= green > blue for red, green, blue in color_orders(palette[severity])):
+                    if not any(red >= green > blue for red, green, blue in _windows_color_orders(palette[severity])):
                         raise NativeUISmokeError(f"Windows {severity} logs are not rendered in an amber severity color")
             if "INFO" in palette:
                 for warning in ("WARN", "WARNING"):
@@ -1072,6 +1333,21 @@ class NativeUIController:
             raise NativeUISmokeError(f"native helper did not scroll the profile list to {position}")
         return result
 
+    def connection_action_details(self) -> dict:
+        """Return a read-only Accessibility snapshot of Stop/connection-action nodes."""
+        return self._call("connection-action-details")
+
+    def inspect_windows_text_size_settings(self) -> dict[str, object]:
+        """Open Windows Text size Settings and inspect its native controls without changing them."""
+        if self.platform != "windows":
+            raise ValueError("Windows Text size Settings inspection is only available on Windows")
+        return self._call(
+            "settings-text-size",
+            unbound=True,
+            action="inspect",
+            uri=_WINDOWS_TEXT_SIZE_SETTINGS_URI,
+        )
+
     def assert_primary_action_and_logs_visible(self) -> dict:
         layout = self.profile_list_layout()
 
@@ -1168,10 +1444,14 @@ class NativeUIController:
             return {"unavailable": "native window is closed"}
         self.capture_count += 1
         path = self.screenshot_dir / f"{self.capture_count:03d}-{milestone}.png"
-        if self._call("capture", path=str(path)).get("ready") is not True:
+        response = self._call("capture", path=str(path))
+        if response.get("ready") is not True:
             raise NativeUISmokeError("native window unavailable for screenshot")
         width, height = nonblank_png_dimensions(path)
-        return {"path": str(path), "width": width, "height": height}
+        result: dict[str, object] = {"path": str(path), "width": width, "height": height}
+        if self.platform == "windows":
+            result["screen_bounds"] = response.get("screen_bounds")
+        return result
 
     def _alive(self) -> bool:
         if self.platform == "windows" and self.process is not None and self.process.poll() is not None:

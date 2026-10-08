@@ -42,6 +42,8 @@ internal static class Program
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
     [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "PostMessageW")]
+    private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW", SetLastError = true)]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
@@ -55,6 +57,48 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
+
+    private const string WindowsTextSizeSettingsUri = "ms-settings:easeofaccess-display";
+    private const uint WmClose = 0x0010;
+
+    private const int UiaBoundingRectanglePropertyId = 30001;
+    private const int UiaProcessIdPropertyId = 30002;
+    private const int UiaControlTypePropertyId = 30003;
+    private const int UiaNamePropertyId = 30005;
+    private const int UiaAutomationIdPropertyId = 30011;
+    private const int UiaIsOffscreenPropertyId = 30022;
+    private static readonly Guid CUIAutomationClassId = new("FF48DBA4-60EF-4201-AA87-54103EEF594E");
+
+    // Only the needed methods are callable. The unused declarations preserve the COM vtable order.
+    [ComImport]
+    [Guid("30CBE57D-D9D0-452A-AB13-7AC5AC4825EE")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IUIAutomationClientCom
+    {
+        [PreserveSig] int CompareElements(IntPtr element1, IntPtr element2, [MarshalAs(UnmanagedType.Bool)] out bool same);
+        [PreserveSig] int CompareRuntimeIds(IntPtr runtimeId1, IntPtr runtimeId2, [MarshalAs(UnmanagedType.Bool)] out bool same);
+        [PreserveSig] int GetRootElement(out IntPtr root);
+        [PreserveSig] int ElementFromHandle(IntPtr window, out IntPtr element);
+        [PreserveSig] int ElementFromPoint(NativePoint point, [MarshalAs(UnmanagedType.Interface)] out IUIAutomationElementCom element);
+    }
+
+    [ComImport]
+    [Guid("D22108AA-8AC5-49A5-837B-37BBB3D7591E")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IUIAutomationElementCom
+    {
+        [PreserveSig] int SetFocus();
+        [PreserveSig] int GetRuntimeId(out IntPtr runtimeId);
+        [PreserveSig] int FindFirst(int scope, IntPtr condition, out IntPtr found);
+        [PreserveSig] int FindAll(int scope, IntPtr condition, out IntPtr found);
+        [PreserveSig] int FindFirstBuildCache(int scope, IntPtr condition, IntPtr cacheRequest, out IntPtr found);
+        [PreserveSig] int FindAllBuildCache(int scope, IntPtr condition, IntPtr cacheRequest, out IntPtr found);
+        [PreserveSig] int BuildUpdatedCache(IntPtr cacheRequest, out IntPtr updatedElement);
+        [PreserveSig]
+        int GetCurrentPropertyValue(
+            int propertyId,
+            [MarshalAs(UnmanagedType.Struct)] out object? value);
+    }
 
     private static NativePoint GetPhysicalClientOrigin(IntPtr window) =>
         InPerMonitorV2DpiContext(() =>
@@ -444,6 +488,137 @@ internal static class Program
     private static string ElapsedMilliseconds(long started) =>
         Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString("F3", CultureInfo.InvariantCulture);
 
+    private static string FormatHresult(int hresult) =>
+        $"0x{unchecked((uint)hresult):X8}";
+
+    private static void ReleaseComObject(
+        object? value,
+        string responseKey,
+        Dictionary<string, object?> response)
+    {
+        if (value is null || !Marshal.IsComObject(value)) return;
+        try
+        {
+            response[responseKey] = Marshal.ReleaseComObject(value);
+        }
+        catch (Exception error)
+        {
+            response[$"{responseKey}Exception"] = error.ToString();
+        }
+    }
+
+    private static void CaptureComPointTargetMetadata(
+        IUIAutomationElementCom target,
+        JsonElement request,
+        Dictionary<string, object?> response)
+    {
+        var propertiesStarted = Stopwatch.GetTimestamp();
+        var hresults = new Dictionary<string, string>();
+        var errors = new Dictionary<string, string>();
+        object? Read(int propertyId, string propertyName)
+        {
+            try
+            {
+                var hresult = target.GetCurrentPropertyValue(propertyId, out var value);
+                hresults[propertyName] = FormatHresult(hresult);
+                if (hresult < 0)
+                    errors[propertyName] = new COMException(
+                        $"GetCurrentPropertyValue failed for {propertyName} ({propertyId})", hresult).ToString();
+                return hresult < 0 ? null : value;
+            }
+            catch (Exception error)
+            {
+                errors[propertyName] = error.ToString();
+                return null;
+            }
+        }
+
+        try
+        {
+            var automationIdValue = Read(UiaAutomationIdPropertyId, "automationId");
+            var nameValue = Read(UiaNamePropertyId, "name");
+            var controlTypeValue = Read(UiaControlTypePropertyId, "controlType");
+            var processIdValue = Read(UiaProcessIdPropertyId, "processId");
+            var boundsValue = Read(UiaBoundingRectanglePropertyId, "bounds");
+            var offscreenValue = Read(UiaIsOffscreenPropertyId, "isOffscreen");
+            response["targetPropertyHresults"] = hresults;
+            if (errors.Count > 0)
+            {
+                response["targetPropertyExceptions"] = errors;
+                response["targetMetadataException"] = string.Join(Environment.NewLine, errors.Values);
+                return;
+            }
+
+            var automationId = automationIdValue as string ?? string.Empty;
+            var name = nameValue as string ?? string.Empty;
+            var controlTypeId = Convert.ToInt32(controlTypeValue, CultureInfo.InvariantCulture);
+            var controlTypeInformation = ControlType.LookupById(controlTypeId);
+            var controlTypeProgrammaticName = controlTypeInformation?.ProgrammaticName
+                ?? $"ControlType.{controlTypeId.ToString(CultureInfo.InvariantCulture)}";
+            var controlType = controlTypeProgrammaticName.StartsWith("ControlType.", StringComparison.Ordinal)
+                ? controlTypeProgrammaticName["ControlType.".Length..]
+                : controlTypeProgrammaticName;
+            var processId = Convert.ToInt32(processIdValue, CultureInfo.InvariantCulture);
+            var isOffscreen = Convert.ToBoolean(offscreenValue, CultureInfo.InvariantCulture);
+            System.Windows.Rect? bounds = null;
+            if (boundsValue is Array coordinates && coordinates.Rank == 1 && coordinates.Length == 4)
+            {
+                bounds = new System.Windows.Rect(
+                    Convert.ToDouble(coordinates.GetValue(0), CultureInfo.InvariantCulture),
+                    Convert.ToDouble(coordinates.GetValue(1), CultureInfo.InvariantCulture),
+                    Convert.ToDouble(coordinates.GetValue(2), CultureInfo.InvariantCulture),
+                    Convert.ToDouble(coordinates.GetValue(3), CultureInfo.InvariantCulture));
+            }
+            else if (boundsValue is not null)
+            {
+                throw new InvalidOperationException("UIA bounding rectangle was not four screen coordinates");
+            }
+            var expectedAutomationId = request.GetProperty("expectedAutomationId").GetString();
+            var expectedName = request.GetProperty("expectedName").GetString();
+            var expectedControlType = request.GetProperty("expectedControlType").GetString();
+            var expectedProcessId = request.GetProperty("expectedProcessId").GetInt32();
+            var matchesExpected = new
+            {
+                automationId = automationId == expectedAutomationId,
+                name = name == expectedName,
+                controlType = controlType == expectedControlType,
+                processId = processId == expectedProcessId,
+                all = automationId == expectedAutomationId && name == expectedName &&
+                      controlType == expectedControlType && processId == expectedProcessId,
+            };
+            response["target"] = new
+            {
+                automationId,
+                name,
+                controlType,
+                controlTypeId,
+                controlTypeProgrammaticName,
+                processId,
+                bounds = bounds is null ? null : RectJson(bounds.Value),
+                boundsCoordinateSpace = "physical-screen-pixels",
+                isOffscreen,
+            };
+            response["expected"] = new
+            {
+                automationId = expectedAutomationId,
+                name = expectedName,
+                controlType = expectedControlType,
+                processId = expectedProcessId,
+            };
+            response["matchesExpected"] = matchesExpected;
+            response["targetMetadataCompleted"] = true;
+        }
+        catch (Exception error)
+        {
+            response["targetPropertyHresults"] = hresults;
+            response["targetMetadataException"] = error.ToString();
+        }
+        finally
+        {
+            response["targetMetadataDurationMs"] = Stopwatch.GetElapsedTime(propertiesStarted).TotalMilliseconds;
+        }
+    }
+
     private static IntPtr ParseWindowHandle(string value)
     {
         var digits = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
@@ -497,6 +672,161 @@ internal static class Program
         }
         GC.KeepAlive(callback);
         return windows.ToArray();
+    }
+
+    private static Process? FindSettingsProcessForSession(int sessionId)
+    {
+        Process? selected = null;
+        foreach (var process in Process.GetProcessesByName("SystemSettings"))
+        {
+            if (process.SessionId != sessionId) { process.Dispose(); continue; }
+            if (selected is not null)
+            {
+                process.Dispose();
+                selected.Dispose();
+                throw new InvalidOperationException($"Ambiguous SystemSettings processes in helper session {sessionId}");
+            }
+            selected = process;
+        }
+        return selected;
+    }
+
+    private static void ValidateSettingsTextSizeRequest(JsonElement request)
+    {
+        var unexpected = request.EnumerateObject().Select(property => property.Name)
+            .Where(name => name is not ("operation" or "executable" or "action" or "uri")).ToArray();
+        if (unexpected.Length > 0) throw new ArgumentException("Unexpected Settings inspection fields: " + string.Join(", ", unexpected));
+        if (string.IsNullOrWhiteSpace(request.GetProperty("executable").GetString()))
+            throw new ArgumentException("Settings inspection requires the helper executable field");
+        if (request.GetProperty("action").GetString() != "inspect" ||
+            request.GetProperty("uri").GetString() != WindowsTextSizeSettingsUri)
+            throw new ArgumentException("Settings helper supports inspect only at the fixed Text size URI");
+    }
+
+    private static int InspectWindowsTextSizeSettings()
+    {
+        using var helper = Process.GetCurrentProcess();
+        var sessionId = helper.SessionId;
+        var response = new Dictionary<string, object?>
+        {
+            ["schema"] = "dobbyvpn.windows-text-size-settings/v1", ["operation"] = "settings-text-size",
+            ["action"] = "inspect", ["uri"] = WindowsTextSizeSettingsUri,
+            ["helper"] = new { processId = helper.Id, sessionId, threadId = GetCurrentThreadId(), userName = Environment.UserName },
+            ["ready"] = false, ["available"] = false, ["newSettingsWindowClosed"] = null,
+        };
+        Process? settings = null;
+        Process? activation = null;
+        var activationAttempted = false;
+        IntPtr[] windowsBefore = Array.Empty<IntPtr>();
+        IntPtr window = IntPtr.Zero;
+        int ownerPid = 0;
+        long ownerStart = 0;
+        string? primaryError = null;
+        var cleanupErrors = new List<string>();
+        try
+        {
+            settings = FindSettingsProcessForSession(sessionId);
+            windowsBefore = settings is null ? Array.Empty<IntPtr>() : EnumerateProcessWindows(settings);
+            response["settingsBefore"] = settings is null ? null : new { pid = settings.Id, windows = DescribeProcessWindows(settings) };
+            activationAttempted = true;
+            activation = Process.Start(new ProcessStartInfo(WindowsTextSizeSettingsUri) { UseShellExecute = true });
+            WaitFor(() =>
+            {
+                settings ??= FindSettingsProcessForSession(sessionId);
+                if (settings is null) return false;
+                var visible = EnumerateProcessWindows(settings).Where(candidate => IsWindowVisible(candidate) && !IsIconic(candidate)).ToArray();
+                if (visible.Length > 1) throw new InvalidOperationException($"Ambiguous visible Settings windows in session {sessionId}");
+                if (visible.Length == 1) { window = visible[0]; return true; }
+                return false;
+            }, "Settings did not expose one visible window in the helper session", seconds: 10);
+            if (settings is null || window == IntPtr.Zero) throw new InvalidOperationException("Settings window unavailable after URI activation");
+            ownerPid = settings.Id;
+            ownerStart = settings.StartTime.ToUniversalTime().Ticks;
+            var existedBefore = windowsBefore.Contains(window);
+            response["settingsAfter"] = new { pid = ownerPid, windows = DescribeProcessWindows(settings) };
+            response["window"] = new { hwnd = $"0x{window.ToInt64():X}", existedBefore, description = DescribeWindow(window) };
+            if (!existedBefore) TracePhase($"settings-text-size-new-window-owned session={sessionId} pid={ownerPid} hwnd=0x{window.ToInt64():X}");
+
+            var root = AutomationElement.FromHandle(window);
+            var slider = root.FindFirst(TreeScope.Descendants, new AndCondition(
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Slider),
+                new PropertyCondition(AutomationElement.NameProperty, "Text size", PropertyConditionFlags.IgnoreCase)));
+            if (slider is null) throw new InvalidOperationException("Exact Text size Slider was not found in the Settings window");
+            var current = slider.Current;
+            object? range = null;
+            string? rangeError = null;
+            try
+            {
+                if (!slider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var pattern))
+                    rangeError = "RangeValuePattern unavailable";
+                else
+                {
+                    var value = ((RangeValuePattern)pattern).Current;
+                    range = new { value = value.Value, minimum = value.Minimum, maximum = value.Maximum,
+                        smallChange = value.SmallChange, largeChange = value.LargeChange, isReadOnly = value.IsReadOnly };
+                }
+            }
+            catch (Exception error) { rangeError = error.ToString(); }
+            var apply = root.FindFirst(TreeScope.Descendants, new AndCondition(
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                new PropertyCondition(AutomationElement.NameProperty, "Apply", PropertyConditionFlags.IgnoreCase)));
+            var bounds = current.BoundingRectangle;
+            response["slider"] = new { identity = DescribeElement(slider), enabled = current.IsEnabled,
+                offscreen = current.IsOffscreen, bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null, range, rangeError };
+            response["apply"] = apply is null ? null : new { identity = DescribeElement(apply), enabled = apply.Current.IsEnabled,
+                offscreen = apply.Current.IsOffscreen, bounds = HasUsableBounds(apply.Current.BoundingRectangle) ? RectJson(apply.Current.BoundingRectangle) : null };
+            var ready = !current.IsOffscreen && HasUsableBounds(bounds) && range is not null && apply is not null;
+            response["ready"] = ready;
+            response["available"] = ready;
+            if (!ready) response["reason"] = "Text size slider, RangeValue data, or Apply control was unavailable or not visible";
+        }
+        catch (Exception error)
+        {
+            primaryError = error.ToString();
+            response["ready"] = false;
+            response["available"] = false;
+        }
+        finally
+        {
+            if (window != IntPtr.Zero && !windowsBefore.Contains(window))
+            {
+                try
+                {
+                    GetWindowThreadProcessId(window, out var actualPid);
+                    if (actualPid == 0) response["newSettingsWindowClosed"] = true;
+                    else
+                    {
+                        using var owner = Process.GetProcessById(actualPid);
+                        if (actualPid != ownerPid || owner.ProcessName != "SystemSettings" || owner.SessionId != sessionId ||
+                            owner.StartTime.ToUniversalTime().Ticks != ownerStart)
+                            throw new InvalidOperationException("Refusing to close a Settings window whose ownership changed");
+                        if (!PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero))
+                            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not close new Settings window");
+                        WaitFor(() => { GetWindowThreadProcessId(window, out var pid); return pid == 0 || pid != ownerPid; }, "New Settings window did not close", seconds: 5);
+                        response["newSettingsWindowClosed"] = true;
+                    }
+                }
+                catch (Exception error) { cleanupErrors.Add(error.ToString()); }
+            }
+            else if (activationAttempted && window == IntPtr.Zero)
+            {
+                response["newSettingsWindowClosed"] = false;
+                cleanupErrors.Add(
+                    "Settings activation exposed no SystemSettings-owned window; cleanup of a potentially new Settings window cannot be verified");
+            }
+            foreach (var process in new[] { settings, activation })
+                try { process?.Dispose(); } catch (Exception error) { cleanupErrors.Add(error.ToString()); }
+        }
+        if (primaryError is not null) response["error"] = primaryError;
+        if (cleanupErrors.Count > 0)
+        {
+            response["cleanupErrors"] = cleanupErrors;
+            response["ready"] = false;
+            response["available"] = false;
+        }
+        response["finishedAtUtc"] = UtcTimestamp();
+        Console.WriteLine(JsonSerializer.Serialize(response));
+        return 0;
     }
 
     private static string DescribeElement(AutomationElement element)
@@ -697,6 +1027,12 @@ internal static class Program
             using var input = JsonDocument.Parse(Console.In.ReadToEnd());
             var request = input.RootElement;
             string Text(string key) => request.GetProperty(key).GetString()!;
+            var operation = Text("operation");
+            if (operation == "settings-text-size")
+            {
+                ValidateSettingsTextSizeRequest(request);
+                return InspectWindowsTextSizeSettings();
+            }
             var expected = Path.GetFullPath(Text("executable"));
             Process? found = null;
             if (request.TryGetProperty("pid", out var requestedPid))
@@ -741,7 +1077,6 @@ internal static class Program
             var identity = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
             if (request.TryGetProperty("identity", out var prior) && prior.GetString() != identity)
                 throw new InvalidOperationException("UI process creation time changed");
-            var operation = Text("operation");
             if (operation == "probe")
             {
                 process.Refresh();
@@ -974,6 +1309,11 @@ internal static class Program
             if (operation == "logs")
             {
                 var logRoot = Find("Backend logs");
+                var paletteMarker = request.TryGetProperty("marker", out var markerValue)
+                    && markerValue.ValueKind == JsonValueKind.String
+                        ? markerValue.GetString() : null;
+                System.Windows.Rect? logViewport = string.IsNullOrEmpty(paletteMarker)
+                    ? null : PhysicalBounds(logRoot, "Backend logs");
                 var entries = Walk(logRoot)
                     .Where(element => element.Current.ControlType == ControlType.Text)
                     .Select(element =>
@@ -986,7 +1326,24 @@ internal static class Program
                             var value = ((TextPattern)pattern).DocumentRange.GetAttributeValue(TextPattern.ForegroundColorAttribute);
                             if (value is int color) foreground = color;
                         }
-                        return new { text, foreground };
+                        bool? offscreen = null;
+                        bool? visibleInViewport = null;
+                        object? bounds = null;
+                        if (logViewport is not null && text.Contains(paletteMarker!, StringComparison.Ordinal))
+                        {
+                            var elementBounds = element.Current.BoundingRectangle;
+                            offscreen = element.Current.IsOffscreen;
+                            if (HasUsableBounds(elementBounds))
+                            {
+                                bounds = RectJson(elementBounds);
+                                visibleInViewport = !offscreen.Value && FullyInside(elementBounds, logViewport.Value);
+                            }
+                            else
+                            {
+                                visibleInViewport = false;
+                            }
+                        }
+                        return new { text, foreground, offscreen, bounds, visible_in_viewport = visibleInViewport };
                     })
                     .Where(entry => entry.text.Length > 0)
                     .ToArray();
@@ -1018,6 +1375,7 @@ internal static class Program
                     ready = true,
                     text = string.Join("\n", entries.Select(entry => entry.text)),
                     entries,
+                    logs_viewport = logViewport is null ? null : RectJson(logViewport.Value),
                     expanded_record = expandedRecord,
                     expansion_verified = expansionVerified
                 }));
@@ -1137,6 +1495,7 @@ internal static class Program
                 return 0;
             }
             long? pasteInvokedAtUnixMs = null;
+            Rectangle? capturedScreenBounds = null;
             switch (operation)
             {
                 case "focus":
@@ -1338,15 +1697,24 @@ internal static class Program
                     }
                     break;
                 case "capture":
-                    Capture(window, process.Id, Text("path"));
+                    capturedScreenBounds = Capture(window, process.Id, Text("path"));
                     break;
                 default: throw new ArgumentException($"Unknown operation: {operation}");
             }
-            Console.WriteLine(JsonSerializer.Serialize(new {
-                ready = true, pid = process.Id, identity,
-                labels = Array.Empty<string>(),
-                paste_invoked_at_unix_ms = pasteInvokedAtUnixMs
-            }));
+            var response = new Dictionary<string, object?>
+            {
+                ["ready"] = true,
+                ["pid"] = process.Id,
+                ["identity"] = identity,
+                ["labels"] = Array.Empty<string>(),
+                ["paste_invoked_at_unix_ms"] = pasteInvokedAtUnixMs,
+            };
+            if (capturedScreenBounds is { } capturedBounds)
+                response["screen_bounds"] = new {
+                    x = capturedBounds.X, y = capturedBounds.Y,
+                    width = capturedBounds.Width, height = capturedBounds.Height,
+                };
+            Console.WriteLine(JsonSerializer.Serialize(response));
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }
@@ -1403,11 +1771,25 @@ internal static class Program
             ["identity"] = identity,
             ["diagnosticOnly"] = true,
             ["schema"] = "dobbyvpn.windows-uia-point/v1",
-            ["maximumAncestors"] = 8,
         };
+        object? comAutomationObject = null;
+        IUIAutomationClientCom? comAutomation = null;
+        IUIAutomationElementCom? comTarget = null;
+        var comPointSucceeded = false;
         var operationStarted = Stopwatch.GetTimestamp();
         try
         {
+            var clientApi = request.TryGetProperty("clientApi", out var clientApiElement)
+                ? clientApiElement.GetString()
+                : "managed";
+            response["clientApi"] = clientApi;
+            if (clientApi is not ("managed" or "com"))
+                throw new ArgumentException("UIA point clientApi must be managed or com");
+            if (clientApi == "managed") response["maximumAncestors"] = 8;
+            response["fromPointMethod"] = clientApi == "com"
+                ? "IUIAutomation::ElementFromPoint"
+                : "System.Windows.Automation.AutomationElement.FromPoint";
+
             var requestedX = request.GetProperty("x").GetInt32();
             var requestedY = request.GetProperty("y").GetInt32();
             var expectedClientX = request.GetProperty("clientOriginX").GetInt32();
@@ -1461,6 +1843,27 @@ internal static class Program
                 adjustedForWindowMove = pointX != requestedX || pointY != requestedY,
             };
 
+            if (clientApi == "com")
+            {
+                var comClientStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    var automationType = Type.GetTypeFromCLSID(CUIAutomationClassId, throwOnError: true)
+                        ?? throw new InvalidOperationException("CUIAutomation COM class was not registered");
+                    comAutomationObject = Activator.CreateInstance(automationType)
+                        ?? throw new InvalidOperationException("CUIAutomation COM activation returned null");
+                    comAutomation = comAutomationObject as IUIAutomationClientCom
+                        ?? throw new InvalidCastException("CUIAutomation did not expose IUIAutomation");
+                    response["comClientInitializationCompleted"] = true;
+                }
+                catch (Exception error)
+                {
+                    response["comClientInitializationException"] = error.ToString();
+                }
+                response["comClientInitializationDurationMs"] =
+                    Stopwatch.GetElapsedTime(comClientStarted).TotalMilliseconds;
+            }
+
             var pointContextStarted = Stopwatch.GetTimestamp();
             try
             {
@@ -1475,21 +1878,50 @@ internal static class Program
                 Stopwatch.GetElapsedTime(pointContextStarted).TotalMilliseconds;
 
             AutomationElement? target = null;
-            var fromPointStarted = Stopwatch.GetTimestamp();
-            response["fromPointAttempted"] = true;
-            try
+            if (clientApi == "com" && comAutomation is null)
             {
-                target = AutomationElement.FromPoint(new System.Windows.Point(pointX, pointY));
-                response["fromPointCompleted"] = true;
-                response["targetFound"] = target is not null;
+                response["fromPointAttempted"] = false;
+                response["fromPointSkipped"] = "CUIAutomation initialization failed; no point query was attempted";
             }
-            catch (Exception error)
+            else
             {
-                response["fromPointException"] = error.ToString();
+                var fromPointStarted = Stopwatch.GetTimestamp();
+                response["fromPointAttempted"] = true;
+                try
+                {
+                    if (clientApi == "com")
+                    {
+                        var hresult = comAutomation!.ElementFromPoint(
+                            new NativePoint { X = pointX, Y = pointY }, out var foundTarget);
+                        comTarget = foundTarget;
+                        response["fromPointHresult"] = FormatHresult(hresult);
+                        response["fromPointCompleted"] = hresult >= 0;
+                        response["targetFound"] = hresult >= 0 && comTarget is not null;
+                        comPointSucceeded = hresult >= 0;
+                        if (hresult < 0)
+                            response["fromPointException"] = new COMException(
+                                "IUIAutomation::ElementFromPoint failed", hresult).ToString();
+                    }
+                    else
+                    {
+                        target = AutomationElement.FromPoint(new System.Windows.Point(pointX, pointY));
+                        response["fromPointCompleted"] = true;
+                        response["targetFound"] = target is not null;
+                    }
+                }
+                catch (Exception error)
+                {
+                    response["fromPointException"] = error.ToString();
+                }
+                response["fromPointDurationMs"] = Stopwatch.GetElapsedTime(fromPointStarted).TotalMilliseconds;
             }
-            response["fromPointDurationMs"] = Stopwatch.GetElapsedTime(fromPointStarted).TotalMilliseconds;
 
-            if (target is not null)
+            if (clientApi == "com" && comPointSucceeded && comTarget is not null)
+            {
+                response["targetMetadataClientApi"] = "com";
+                CaptureComPointTargetMetadata(comTarget, request, response);
+            }
+            else if (clientApi == "managed" && target is not null)
             {
                 var propertiesStarted = Stopwatch.GetTimestamp();
                 try
@@ -1576,6 +2008,8 @@ internal static class Program
         }
         finally
         {
+            ReleaseComObject(comTarget, "comTargetReleaseRemainingReferences", response);
+            ReleaseComObject(comAutomationObject, "comClientReleaseRemainingReferences", response);
             response["durationMs"] = Stopwatch.GetElapsedTime(operationStarted).TotalMilliseconds;
             try
             {
@@ -1594,7 +2028,10 @@ internal static class Program
         return 0;
     }
 
-    private static void Capture(IntPtr window, int expectedPid, string path)
+    private static Rectangle Capture(IntPtr window, int expectedPid, string path) =>
+        InPerMonitorV2DpiContext(() => CapturePhysical(window, expectedPid, path));
+
+    private static Rectangle CapturePhysical(IntPtr window, int expectedPid, string path)
     {
         GetWindowThreadProcessId(window, out var owner);
         if (owner != expectedPid) throw new InvalidOperationException("UI window ownership changed before screenshot");
@@ -1645,5 +2082,6 @@ internal static class Program
         if (afterOwner != expectedPid) throw new InvalidOperationException("UI window ownership changed during screenshot");
         if (!GetWindowRect(window, out var after) || !r.Equals(after))
             throw new InvalidOperationException("Native window changed during screenshot");
+        return target;
     }
 }

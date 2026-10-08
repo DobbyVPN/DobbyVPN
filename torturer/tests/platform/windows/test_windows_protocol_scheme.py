@@ -220,11 +220,19 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller.capture = mock.Mock(side_effect=AssertionError("probe-only start captured the UI"))
             operations: list[str] = []
             root_peer_result = _windows_content_root_probe()
+            settings_result = {
+                "ready": False,
+                "available": False,
+                "error": "Text size slider is unavailable",
+                "cleanupErrors": ["no SystemSettings-owned window was available"],
+            }
 
             def call(operation: str, **_fields: object) -> dict[str, object]:
                 operations.append(operation)
                 if operation == "windows-baseline":
                     return {"ready": True, "pid": 42, "windowHandle": "0x100"}
+                if operation == "settings-text-size":
+                    return settings_result
                 controller.pid = 42
                 controller.identity = "candidate-ui-instance"
                 if operation == "uia-point":
@@ -248,10 +256,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             self.assertEqual(
                 operations,
-                ["probe", "windows-baseline", "uia-point", "probe"],
+                ["probe", "windows-baseline", "uia-point", "settings-text-size", "probe"],
             )
             self.assertEqual(result, controller.windows_content_root_diagnostics)
             self.assertEqual(result["xaml_content_root_peers"], root_peer_result)
+            self.assertEqual(result["windows_text_size_settings"], settings_result)
             self.assertEqual(result["post_probe_process"]["alive"], True)
             controller.snapshot.assert_not_called()
             controller.capture.assert_not_called()
@@ -260,6 +269,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             controller = object.__new__(smoke.NativeUIController)
             controller.logs = Path(directory)
+            controller.platform = "windows"
             controller._timeout = 5.0
             controller._deadline = None
             controller.process = None
@@ -276,6 +286,12 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                     output=point_stdout,
                     stderr=point_stderr,
                 ),
+                subprocess.CalledProcessError(
+                    18,
+                    "Settings inspect",
+                    output=b"Settings helper stdout\n",
+                    stderr=b"no owned window\xff",
+                ),
                 {"alive": True, "pid": 42},
             ))
 
@@ -283,7 +299,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             self.assertEqual(
                 [call.args[0] for call in controller._call.call_args_list],
-                ["windows-baseline", "uia-point", "probe"],
+                ["windows-baseline", "uia-point", "settings-text-size", "probe"],
             )
             self.assertIn(
                 "FromPoint COM call",
@@ -297,6 +313,15 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertEqual(
                 result["external_uia_point_stderr_base64"],
                 base64.b64encode(point_stderr).decode("ascii"),
+            )
+            self.assertIn("Settings inspect", result["windows_text_size_settings_exception"])
+            self.assertEqual(
+                result["windows_text_size_settings_stdout_base64"],
+                base64.b64encode(b"Settings helper stdout\n").decode("ascii"),
+            )
+            self.assertEqual(
+                result["windows_text_size_settings_stderr_base64"],
+                base64.b64encode(b"no owned window\xff").decode("ascii"),
             )
             self.assertEqual(result["post_probe_process"]["alive"], True)
 
@@ -373,19 +398,44 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertIn("walker.GetFirstChild(element)", helper_source)
             self.assertIn("walker.GetNextSibling(child)", helper_source)
             point_start = helper_source.index("private static int MeasureAutomationElementFromPoint(")
-            point_end = helper_source.index("private static void Capture(", point_start)
+            point_end = helper_source.index("private static Rectangle Capture(", point_start)
             point_method = helper_source[point_start:point_end]
+            self.assertIn('request.TryGetProperty("clientApi", out var clientApiElement)', point_method)
+            self.assertIn(': "managed";', point_method)
             self.assertEqual(point_method.count("AutomationElement.FromPoint("), 1)
+            self.assertEqual(point_method.count("comAutomation!.ElementFromPoint("), 1)
             self.assertIn("CapturePointContextBeforeFromPoint(window, pointX, pointY)", point_method)
             self.assertLess(
                 point_method.index("CapturePointContextBeforeFromPoint(window, pointX, pointY)"),
-                point_method.index("AutomationElement.FromPoint("),
+                min(
+                    point_method.index("AutomationElement.FromPoint(new"),
+                    point_method.index("comAutomation!.ElementFromPoint("),
+                ),
             )
             self.assertIn('response["pointContextBeforeFromPoint"]', point_method)
+            self.assertIn('response["clientApi"] = clientApi', point_method)
+            self.assertIn('response["fromPointHresult"]', point_method)
+            self.assertIn('response["targetMetadataClientApi"] = "com"', point_method)
+            self.assertIn('ReleaseComObject(comTarget, "comTargetReleaseRemainingReferences", response)', point_method)
             self.assertIn("walker.GetParent(", point_method)
             self.assertIn("maximumAncestors\"] = 8", point_method)
             self.assertNotIn("GetFirstChild", point_method)
             self.assertNotIn("GetNextSibling", point_method)
+            com_metadata_start = helper_source.index(
+                "private static void CaptureComPointTargetMetadata("
+            )
+            com_metadata_end = helper_source.index(
+                "private static IntPtr ParseWindowHandle(", com_metadata_start
+            )
+            com_metadata_method = helper_source[com_metadata_start:com_metadata_end]
+            self.assertNotIn("TreeWalker", com_metadata_method)
+            self.assertNotIn("FindFirst(", com_metadata_method)
+            self.assertIn("UiaProcessIdPropertyId = 30002", helper_source)
+            self.assertIn("UiaControlTypePropertyId = 30003", helper_source)
+            self.assertIn("UiaNamePropertyId = 30005", helper_source)
+            self.assertIn("UiaAutomationIdPropertyId = 30011", helper_source)
+            self.assertIn("UiaBoundingRectanglePropertyId = 30001", helper_source)
+            self.assertIn("UiaIsOffscreenPropertyId = 30022", helper_source)
             context_start = helper_source.index(
                 "private static Dictionary<string, object?> CapturePointContextBeforeFromPoint("
             )
@@ -396,6 +446,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertIn('if (traceAutomationPoint)\n                return MeasureAutomationElementFromPoint', helper_source)
             self.assertIn('request.GetProperty("windowHandle")', helper_source)
             self.assertIn('self._call(\n                        "uia-point"', smoke_source)
+            self.assertIn('clientApi="com"', smoke_source)
 
             controller = object.__new__(smoke.NativeUIController)
             controller.logs = Path(directory)
@@ -422,6 +473,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertEqual(
                 point_request.kwargs,
                 {
+                    "clientApi": "com",
                     "windowHandle": "0x100",
                     "x": 421,
                     "y": 356,
@@ -733,7 +785,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             'WaitForPasteAvailability(false, "non-text");',
             'WaitForPasteAvailability(true, "text");',
             'pasteInvokedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();',
-            'paste_invoked_at_unix_ms = pasteInvokedAtUnixMs',
+            '["paste_invoked_at_unix_ms"] = pasteInvokedAtUnixMs,',
             'new[] { "Connection configuration", "VPN connection action", "Profile 1 action", "Profile 2 action", "Backend logs" }',
             '[DllImport("user32.dll", SetLastError = true)]\n    private static extern bool SetWindowPos(',
             '[DllImport("user32.dll")]\n    private static extern bool EnumThreadWindows(',

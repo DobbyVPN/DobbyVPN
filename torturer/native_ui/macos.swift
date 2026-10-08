@@ -240,6 +240,116 @@ func rectangle(_ bounds: CGRect) -> [String: Double] {
      "width": Double(bounds.width), "height": Double(bounds.height)]
 }
 
+func diagnosticJSONValue(_ value: CFTypeRef?) -> Any {
+    guard let value else { return NSNull() }
+    if CFGetTypeID(value) == CFBooleanGetTypeID() {
+        return (value as? NSNumber)?.boolValue ?? false
+    }
+    if let string = value as? String { return string }
+    if let number = value as? NSNumber { return number }
+    return String(describing: value)
+}
+
+func connectionActionDetails(_ nodes: [AXUIElement]) -> [String: Any] {
+    func summary(_ element: AXUIElement) -> [String: Any] {
+        var attributes = [String: Any]()
+        var unavailable = [String]()
+        var errors = [String: String]()
+        for (key, attributeName) in [
+            ("AXRole", kAXRoleAttribute), ("AXIdentifier", kAXIdentifierAttribute),
+            ("AXTitle", kAXTitleAttribute), ("AXValue", kAXValueAttribute),
+            ("AXEnabled", kAXEnabledAttribute),
+        ] {
+            do {
+                let value = try attribute(element, attributeName)
+                attributes[key] = diagnosticJSONValue(value)
+                if value == nil { unavailable.append(key) }
+            } catch {
+                attributes[key] = NSNull()
+                errors[key] = String(describing: error)
+            }
+        }
+
+        var actionNames: CFArray?
+        let actionStatus = AXUIElementCopyActionNames(element, &actionNames)
+        if actionStatus == .success {
+            attributes["AXActionNames"] = (actionNames as? [String]) ?? []
+        } else {
+            attributes["AXActionNames"] = NSNull()
+            errors["AXActionNames"] = "AX action-name read failed: \(actionStatus.rawValue)"
+        }
+
+        var result: [String: Any] = [
+            "attributes": attributes,
+            "unavailable_attributes": unavailable,
+            "errors": errors,
+        ]
+        do {
+            result["frame"] = rectangle(try bounds(element))
+        } catch {
+            result["frame"] = NSNull()
+            result["frame_error"] = String(describing: error)
+        }
+        return result
+    }
+
+    var matches = [[String: Any]]()
+    var selectionErrors = [[String: Any]]()
+    for (index, element) in nodes.enumerated() {
+        var matchedBy = [String]()
+        do {
+            if try label(element, kAXIdentifierAttribute) == "VPN connection action" {
+                matchedBy.append("identifier")
+            }
+        } catch {
+            selectionErrors.append(["node_index": index, "field": "AXIdentifier", "error": String(describing: error)])
+        }
+        do {
+            if try names(element).contains("Stop") { matchedBy.append("name") }
+        } catch {
+            selectionErrors.append(["node_index": index, "field": "name", "error": String(describing: error)])
+        }
+        guard !matchedBy.isEmpty else { continue }
+
+        var item: [String: Any] = ["matched_by": matchedBy, "node": summary(element)]
+        do {
+            if let parent = try axElement(element, kAXParentAttribute) {
+                item["nearest_parent"] = summary(parent)
+            } else {
+                item["nearest_parent"] = NSNull()
+            }
+        } catch {
+            item["nearest_parent"] = NSNull()
+            item["nearest_parent_error"] = String(describing: error)
+        }
+        do {
+            if let children = try attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+                let limit = 24
+                item["direct_child_count"] = children.count
+                item["direct_children_omitted"] = max(0, children.count - limit)
+                item["direct_children"] = children.prefix(limit).map(summary)
+            } else {
+                item["direct_child_count"] = 0
+                item["direct_children_omitted"] = 0
+                item["direct_children"] = []
+                item["direct_children_unavailable"] = true
+            }
+        } catch {
+            item["direct_children"] = []
+            item["direct_children_error"] = String(describing: error)
+        }
+        matches.append(item)
+    }
+
+    return [
+        "ready": true,
+        "match_count": matches.count,
+        "matches": matches,
+        "selection_error_count": selectionErrors.count,
+        "selection_errors": selectionErrors,
+    ]
+}
+
 func contained(_ child: CGRect, by parent: CGRect, tolerance: CGFloat = 1) -> Bool {
     child.minX >= parent.minX - tolerance && child.minY >= parent.minY - tolerance &&
         child.maxX <= parent.maxX + tolerance && child.maxY <= parent.maxY + tolerance
@@ -721,6 +831,9 @@ func run() throws -> [String: Any] {
                     "window_count": windows.count, "window_id": try identifier(window),
                     "labels": labels, "enabled_controls": enabled, "link_urls": try linkURLs(nodes)]
         }
+        if operation == "connection-action-details" {
+            return connectionActionDetails(nodes)
+        }
         if operation == "resize-window" {
             guard let requestedWidth = request["width"] as? NSNumber,
                   let requestedHeight = request["height"] as? NSNumber else {
@@ -763,6 +876,10 @@ func run() throws -> [String: Any] {
             // read-only tree within Python's existing action deadline.
             FileHandle.standardError.write(Data("\(readError) during tree discovery; retrying\n".utf8))
             return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity]
+        }
+        if operation == "connection-action-details" {
+            return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity,
+                    "match_count": 0, "matches": [], "tree_error": String(describing: error)]
         }
         throw error
     }

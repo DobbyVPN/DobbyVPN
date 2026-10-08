@@ -10,6 +10,8 @@ from unittest.mock import patch
 from torturer_runner import subscription_fixture
 from torturer_runner.ui import journey
 
+WINDOWS_NATIVE_UI_HELPER = Path(__file__).resolve().parents[1] / "native_ui" / "windows" / "Program.cs"
+
 
 class NativeUICaseFixtureTests(unittest.TestCase):
     class FakeClock:
@@ -41,6 +43,10 @@ class NativeUICaseFixtureTests(unittest.TestCase):
 
             def capture(self, name):
                 events.append(f"capture:{name}")
+
+            def connection_action_details(self):
+                events.append("connection-action-details")
+                return {"ready": True, "matches": []}
 
             def snapshot(self):
                 events.append("ui-snapshot")
@@ -156,6 +162,8 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             self.assertEqual(base.stopped_snapshots, 31)
             self.assertEqual(events.count("inspect_cleanup"), 1)
             self.assertIn("click:Stop", events)
+            self.assertEqual(events.count("connection-action-details"), 1)
+            self.assertLess(events.index("connection-action-details"), events.index("click:Stop"))
             self.assertNotIn("click:VPN connection action", events)
 
     def test_auto_recovery_stop_keeps_windows_action_identifier(self):
@@ -167,6 +175,70 @@ class NativeUICaseFixtureTests(unittest.TestCase):
 
             self.assertIn("click:VPN connection action", events)
             self.assertNotIn("click:Stop", events)
+            self.assertNotIn("connection-action-details", events)
+
+    def test_connection_action_details_wrapper_is_read_only_operation(self):
+        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
+        response = {"ready": True, "match_count": 1}
+        with patch.object(controller, "_call", return_value=response) as call:
+            self.assertIs(controller.connection_action_details(), response)
+        call.assert_called_once_with("connection-action-details")
+
+    def test_windows_text_size_settings_wrapper_is_unbound_and_inspect_only(self):
+        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
+        controller.platform = "windows"
+        response = {"ready": False, "available": False}
+        with patch.object(controller, "_call", return_value=response) as call:
+            self.assertIs(controller.inspect_windows_text_size_settings(), response)
+        call.assert_called_once_with(
+            "settings-text-size",
+            unbound=True,
+            action="inspect",
+            uri=journey.smoke._WINDOWS_TEXT_SIZE_SETTINGS_URI,
+        )
+
+        controller.platform = "macos"
+        with patch.object(controller, "_call") as call:
+            with self.assertRaisesRegex(ValueError, "only available on Windows"):
+                controller.inspect_windows_text_size_settings()
+        call.assert_not_called()
+
+    def test_windows_text_size_dispatch_rejects_mutation_and_scopes_before_app_resolution(self):
+        source = WINDOWS_NATIVE_UI_HELPER.read_text(encoding="utf-8")
+        dispatch = source.index('if (operation == "settings-text-size")')
+        product_resolution = source.index('var expected = Path.GetFullPath(Text("executable"));')
+        validation = source.index("private static void ValidateSettingsTextSizeRequest")
+        inspection = source.index("private static int InspectWindowsTextSizeSettings")
+        inspection_end = source.index("private static string DescribeElement", inspection)
+
+        self.assertLess(dispatch, product_resolution)
+        self.assertLess(validation, inspection)
+        self.assertIn('request.GetProperty("action").GetString() != "inspect"', source[validation:inspection])
+        self.assertIn('request.GetProperty("uri").GetString() != WindowsTextSizeSettingsUri', source[validation:inspection])
+
+        operation = source[inspection:inspection_end]
+        self.assertIn('Process.Start(new ProcessStartInfo(WindowsTextSizeSettingsUri)', operation)
+        ownership_phase = operation.index("settings-text-size-new-window-owned")
+        uia_query = operation.index("FindFirst(TreeScope.Descendants")
+        self.assertLess(ownership_phase, uia_query)
+        self.assertIn('AutomationElement.NameProperty, "Text size"', operation)
+        self.assertIn("RangeValuePattern.Pattern", operation)
+        self.assertIn('AutomationElement.NameProperty, "Apply"', operation)
+        self.assertNotIn(".SetValue(", operation)
+        self.assertNotIn(".Invoke()", operation)
+        self.assertNotIn("Walk(", operation)
+        self.assertIn("windowsBefore.Contains(window)", operation)
+        self.assertIn("owner.StartTime.ToUniversalTime().Ticks != ownerStart", operation)
+        self.assertIn("else if (activationAttempted && window == IntPtr.Zero)", operation)
+        self.assertIn('response["newSettingsWindowClosed"] = false', operation)
+        self.assertIn("cleanup of a potentially new Settings window cannot be verified", operation)
+        self.assertIn('response["error"] = primaryError', operation)
+        self.assertIn('response["cleanupErrors"] = cleanupErrors', operation)
+
+        smoke_source = Path(journey.smoke.__file__).read_text(encoding="utf-8")
+        operation_limit = smoke_source.index("operation_limit = 30.0")
+        operation_timeout = smoke_source.index("operation_timeout = min", operation_limit)
+        self.assertIn('"settings-text-size"', smoke_source[operation_limit:operation_timeout])
 
     def test_auto_recovery_stop_does_not_arm_when_throughput_is_not_positive(self):
         with tempfile.TemporaryDirectory() as temporary:

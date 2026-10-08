@@ -11,6 +11,7 @@ interactive scheduled-task boundary.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -19,7 +20,9 @@ import sys
 import threading
 import time
 import traceback
-from typing import Any
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Iterator
 
 from torturer_contract.scenarios import ScenarioStep
 from torturer_runner.native_cases import (
@@ -33,6 +36,7 @@ from torturer_runner.native_cases import (
 
 from ..adapters.cli import SubprocessRunner, _ensure_directory
 from ..adapters.factory import adapter_for_platform
+from ..diagnostics import add_exception_notes
 from . import smoke
 
 
@@ -185,12 +189,254 @@ def _require_complete_checks(checks: dict[str, object], platform: str | None = N
     """Fail closed when an evidence-producing step returned false/missing data."""
     required = set(_REQUIRED_TRUE_CHECKS)
     if platform == "windows":
-        required.add("rendered_stderr_capture_label")
+        required.update({"rendered_stderr_capture_label", "windows_rendered_log_palette"})
     failed = sorted(key for key in required if checks.get(key) is not True)
     if failed:
         raise NativeUIJourneyError(
             "required native UI checks did not pass: " + ", ".join(failed)
         )
+
+
+@contextmanager
+def _windows_diagnostic_log_lock(log_path: Path) -> Iterator[None]:
+    """Share the diagnostics writer's byte-zero lock during the short append."""
+    if os.name != "nt":
+        yield
+        return
+    import msvcrt
+
+    lock_path = log_path.with_name(log_path.name + ".lock")
+    with lock_path.open("r+b", buffering=0) as lock_file:
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _append_windows_palette_fixture(
+    log_path: Path, marker: str, severity: str, process_sequence: int
+) -> dict[str, object]:
+    """Append one deterministic display row without replacing the real backend log."""
+    if (
+        not marker
+        or severity not in smoke._WINDOWS_PALETTE_SEVERITIES
+        or type(process_sequence) is not int
+        or process_sequence < 1
+        or not log_path.is_file()
+    ):
+        raise NativeUIJourneyError(f"existing run-scoped Windows backend log is unavailable: {log_path}")
+    row = {
+        "schema": "dobby.log/v1",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": "windows-native-ui-test",
+        "level": severity,
+        "event": "test.rendered-palette",
+        "message": f"synthetic rendered palette fixture {marker} {severity}",
+        "process_id": os.getpid(),
+        "run_id": marker,
+        "process_sequence": process_sequence,
+    }
+    payload = b"\n" + json.dumps(
+        row, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8") + b"\n"
+    try:
+        with _windows_diagnostic_log_lock(log_path):
+            descriptor = os.open(
+                str(log_path), os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0)
+            )
+            try:
+                written = os.write(descriptor, payload)
+                if written != len(payload):
+                    raise OSError(f"short append: wrote {written} of {len(payload)} bytes")
+            finally:
+                os.close(descriptor)
+    except OSError as error:
+        raise NativeUIJourneyError(f"could not append Windows palette fixtures to {log_path}: {error}") from error
+    return {
+        "marker": marker,
+        "synthetic": True,
+        "severity": severity,
+    }
+
+
+def _exercise_windows_rendered_log_palette(
+    ui: Any,
+    log_path: Path,
+    timeout: float,
+    checks: dict[str, object],
+) -> None:
+    """Render and inspect each severity color under both WinUI themes."""
+    evidence: dict[str, dict[str, object]] = {}
+    checks["windows_rendered_log_palette_evidence"] = evidence
+    primary: BaseException | None = None
+    restore_errors: list[BaseException] = []
+    fixture_sequence = 0
+    try:
+        ui.close()
+        for theme in ("Light", "Dark"):
+            _native_ui_action(
+                ui,
+                f"start-{theme.lower()}-palette-frontend",
+                f"windows-palette-{theme.lower()}-startup",
+                timeout,
+                lambda theme=theme: ui.start(windows_requested_theme=theme),
+            )
+            marker = f"windows-l3-{theme.lower()}-{uuid.uuid4().hex}"
+            try:
+                log_path.resolve().relative_to(ui.logs.resolve())
+            except ValueError as error:
+                raise NativeUIJourneyError(
+                    f"Windows palette fixture path is outside the current run logs: {log_path}"
+                ) from error
+            theme_evidence: dict[str, object] = {
+                "marker": marker,
+                "fixtures": [],
+                "palette": {},
+                "uia_palette": {},
+                "rows": {},
+                "logs_viewport": {},
+                "screenshots": {},
+            }
+            evidence[theme] = theme_evidence
+            for severity in smoke._WINDOWS_PALETTE_SEVERITIES:
+                fixture_sequence += 1
+                fixture = _append_windows_palette_fixture(
+                    log_path, marker, severity, fixture_sequence
+                )
+                fixtures = theme_evidence["fixtures"]
+                assert isinstance(fixtures, list)
+                fixtures.append(fixture)
+                rendered = _native_ui_action(
+                    ui,
+                    f"verify-{theme.lower()}-{severity.lower()}-palette",
+                    f"windows-palette-{theme.lower()}-{severity.lower()}-rendered",
+                    timeout,
+                    lambda marker=marker, severity=severity: ui.verify_windows_palette_fixture(
+                        marker, severity
+                    ),
+                    milestone=f"windows-l3-palette-{theme.lower()}-{severity.lower()}",
+                )
+                palette = theme_evidence["palette"]
+                uia_palette = theme_evidence["uia_palette"]
+                rows = theme_evidence["rows"]
+                viewports = theme_evidence["logs_viewport"]
+                screenshots = theme_evidence["screenshots"]
+                assert isinstance(palette, dict)
+                assert isinstance(uia_palette, dict)
+                assert isinstance(rows, dict)
+                assert isinstance(viewports, dict)
+                assert isinstance(screenshots, dict)
+                rendered_rows = rendered["rows"]
+                if not isinstance(rendered_rows, dict):
+                    raise NativeUIJourneyError(f"Windows {severity} row evidence was unavailable")
+                row = rendered_rows.get(severity)
+                if not isinstance(row, dict):
+                    raise NativeUIJourneyError(f"Windows {severity} row bounds were unavailable")
+                screenshot = rendered.get("screenshot")
+                if not isinstance(screenshot, dict):
+                    raise NativeUIJourneyError(f"Windows {severity} screenshot metadata was unavailable")
+                pixel_measurement = smoke._measure_windows_palette_pixels(
+                    screenshot, row.get("bounds")
+                )
+                palette[severity] = pixel_measurement["foreground_rgb"]
+                uia_colors = rendered.get("palette")
+                uia_palette[severity] = (
+                    uia_colors.get(severity) if isinstance(uia_colors, dict) else None
+                )
+                rows[severity] = {
+                    **row,
+                    "pixel_measurement": pixel_measurement,
+                }
+                viewports[severity] = rendered["logs_viewport"]
+                screenshots[severity] = rendered["screenshot"]
+            palette = theme_evidence["palette"]
+            if not isinstance(palette, dict) or set(palette) != set(smoke._WINDOWS_PALETTE_SEVERITIES):
+                raise NativeUIJourneyError(
+                    f"Windows {theme} palette evidence did not cover all four severities"
+                )
+            measured_colors = {
+                tuple(color) for color in palette.values()
+                if isinstance(color, list) and len(color) == 3
+            }
+            if len(measured_colors) != len(smoke._WINDOWS_PALETTE_SEVERITIES):
+                raise NativeUIJourneyError(
+                    f"Windows {theme} severity logs did not render four distinct captured foreground colors"
+                )
+            rows = theme_evidence["rows"]
+            assert isinstance(rows, dict)
+            debug_row, info_row = rows.get("DEBUG"), rows.get("INFO")
+            debug_pixels = debug_row.get("pixel_measurement") if isinstance(debug_row, dict) else None
+            info_pixels = info_row.get("pixel_measurement") if isinstance(info_row, dict) else None
+            debug_distance = debug_pixels.get("distance_squared") if isinstance(debug_pixels, dict) else None
+            info_distance = info_pixels.get("distance_squared") if isinstance(info_pixels, dict) else None
+            if (
+                type(debug_distance) is not int or type(info_distance) is not int
+                or debug_distance >= info_distance
+            ):
+                raise NativeUIJourneyError(
+                    f"Windows {theme} DEBUG text was not visually more muted than INFO: "
+                    f"DEBUG distance={debug_distance!r} INFO distance={info_distance!r}"
+                )
+            warn, error_color = palette.get("WARN"), palette.get("ERROR")
+            if not isinstance(warn, list) or not (warn[0] >= warn[1] > warn[2]):
+                raise NativeUIJourneyError(
+                    f"Windows {theme} WARN logs were not captured in an amber severity color: {warn!r}"
+                )
+            if not isinstance(error_color, list) or not (
+                error_color[0] > error_color[1] and error_color[0] > error_color[2]
+            ):
+                raise NativeUIJourneyError(
+                    f"Windows {theme} ERROR logs were not captured in a red severity color: {error_color!r}"
+                )
+            _native_ui_action(
+                ui,
+                f"close-{theme.lower()}-palette-frontend",
+                f"windows-palette-{theme.lower()}-close",
+                timeout,
+                ui.close,
+            )
+
+        light = evidence["Light"]["palette"]
+        dark = evidence["Dark"]["palette"]
+        if not isinstance(light, dict) or not isinstance(dark, dict):
+            raise NativeUIJourneyError("Windows light/dark palette evidence was not retained")
+        if light.get("INFO") == dark.get("INFO"):
+            raise NativeUIJourneyError(
+                "Windows INFO logs captured the same foreground color in forced light and dark themes"
+            )
+    except BaseException as error:
+        primary = error
+    finally:
+        try:
+            with ui.bounded_by(min(timeout, 15.0)):
+                ui.close_for_cleanup()
+        except BaseException as error:
+            restore_errors.append(error)
+        try:
+            _native_ui_action(
+                ui,
+                "restart-normal-palette-frontend",
+                "windows-palette-normal-frontend-restore",
+                timeout,
+                ui.start,
+            )
+            evidence["normal_frontend"] = {"restarted": True, "requested_theme": None}
+        except BaseException as error:
+            restore_errors.append(error)
+
+    if primary is not None:
+        for index, error in enumerate(restore_errors, start=1):
+            add_exception_notes(primary, f"Windows palette restore {index}", error)
+        raise primary
+    if restore_errors:
+        failure = NativeUIJourneyError("Windows palette test could not restore the normal frontend")
+        for index, error in enumerate(restore_errors, start=1):
+            add_exception_notes(failure, f"Windows palette restore {index}", error)
+        raise failure from restore_errors[0]
+    checks["windows_rendered_log_palette"] = True
 
 
 def same_active_generation(current: dict, previous: dict) -> bool:
@@ -1635,6 +1881,16 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
         if not cleanup_verified(args.timeout):
             raise NativeUIJourneyError("final native Disconnect cleanup was not verified")
         checks["final_cleanup_verified"] = True
+        if args.platform == "windows":
+            log_path = os.environ.get("DOBBY_LOG_PATH")
+            if not log_path:
+                raise NativeUIJourneyError("Windows rendered palette test requires the run-scoped DOBBY_LOG_PATH")
+            _exercise_windows_rendered_log_palette(
+                ui,
+                Path(log_path),
+                request_timeout,
+                checks,
+            )
         _require_complete_checks(checks, args.platform)
     except BaseException as error:
         primary = error
@@ -1725,6 +1981,16 @@ def _exercise_auto_recovery_stop(ui: Any, base: Any, marker: Path, timeout: floa
 
     ui._wait(stop_is_rendered, "Auto recovery did not render an enabled Stop control")
     ui.capture("auto-recovery-stop")
+    if ui.platform == "macos":
+        try:
+            ui.connection_action_details()
+        except Exception as error:
+            print(
+                "Read-only connection-action-details inspection failed before the unchanged Stop click: "
+                + _exception_details(error),
+                file=sys.stderr,
+                flush=True,
+            )
     ui._click("Stop" if ui.platform == "macos" else "VPN connection action")
     deadline = time.monotonic() + timeout
     stopped: dict[str, object] = {}
