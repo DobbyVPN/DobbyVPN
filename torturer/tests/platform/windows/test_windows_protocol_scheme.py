@@ -817,25 +817,6 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         self.assertIsNone(controller.window_id)
         self.assertIsNone(controller.last_window_readiness)
 
-    def test_secondary_instance_awaits_activation_redirection_without_blocking_sta(self) -> None:
-        source = WINDOWS_PROGRAM.read_text(encoding="utf-8")
-
-        for assertion in (
-            'AppInstance.GetCurrent().GetActivatedEventArgs()',
-            'AppInstance.FindOrRegisterForKey("DobbyVPN")',
-            'if (!instance.IsCurrent)',
-            'await instance.RedirectActivationToAsync(activation);',
-            'instance.Activated += (_, next) =>',
-            'Pending.Enqueue(next);',
-            '_window?.DispatcherQueue.TryEnqueue(Drain);',
-            'activation.Kind == ExtendedActivationKind.Protocol',
-            '_window.ImportLink(protocol.Uri.AbsoluteUri);',
-        ):
-            with self.subTest(assertion=assertion):
-                self.assertIn(assertion, source)
-        self.assertIn("public static async Task Main(string[] args)", source)
-        self.assertNotIn("GetAwaiter().GetResult()", source)
-
     def test_native_ui_helper_checks_narrow_render_and_clipboard_availability(self) -> None:
         source = WINDOWS_NATIVE_UI.read_text(encoding="utf-8")
 

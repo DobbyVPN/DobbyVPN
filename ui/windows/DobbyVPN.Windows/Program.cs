@@ -12,14 +12,17 @@ internal static class Program
     private static MainWindow? _window;
 
     [STAThread]
-    public static async Task Main(string[] args)
+    public static void Main(string[] args)
     {
+        if (System.Threading.Thread.CurrentThread.GetApartmentState() != System.Threading.ApartmentState.STA)
+            throw new InvalidOperationException("WinUI entrypoint requires an STA thread.");
+
         WinRT.ComWrappersSupport.InitializeComWrappers();
         var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
         var instance = AppInstance.FindOrRegisterForKey("DobbyVPN");
         if (!instance.IsCurrent)
         {
-            await instance.RedirectActivationToAsync(activation);
+            Task.Run(async () => await instance.RedirectActivationToAsync(activation)).GetAwaiter().GetResult();
             return;
         }
         Pending.Enqueue(activation);
