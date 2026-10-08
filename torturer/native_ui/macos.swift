@@ -380,17 +380,57 @@ func profileScrollParts(_ profileView: AXUIElement) throws -> (area: AXUIElement
     return (area, try bounds(area), try axElement(area, kAXVerticalScrollBarAttribute))
 }
 
+func profileScrollRange(
+    _ scrollbar: AXUIElement,
+    viewport: CGRect,
+    required: Bool = false
+) throws -> (value: Double, minimum: Double, maximum: Double)? {
+    let role = try label(scrollbar, kAXRoleAttribute)
+    try require(role == kAXScrollBarRole, "Profile list vertical control is not an AXScrollBar: \(role)")
+    let rawValue = try attribute(scrollbar, kAXValueAttribute)
+    let rawMinimum = try attribute(scrollbar, kAXMinValueAttribute)
+    let rawMaximum = try attribute(scrollbar, kAXMaxValueAttribute)
+    let details = "Profile list viewport=\(rectangle(viewport)); AXScrollBar role=\(role) " +
+        "AXMinValue=\(String(describing: rawMinimum)) AXMaxValue=\(String(describing: rawMaximum)) " +
+        "AXValue=\(String(describing: rawValue))"
+
+    if rawMinimum == nil && rawMaximum == nil {
+        guard let rawValue else {
+            if required { throw HelperError("Profile list AXScrollBar has no numeric value; \(details)") }
+            return nil
+        }
+        guard CFGetTypeID(rawValue) != CFBooleanGetTypeID(),
+              let value = rawValue as? NSNumber,
+              value.doubleValue.isFinite, (0.0...1.0).contains(value.doubleValue) else {
+            throw HelperError("Profile list AXScrollBar has an invalid normalized value; \(details)")
+        }
+        // Inference, not an AX contract: NSScroller documents 0 at the top and 1 at the bottom.
+        return (value.doubleValue, 0, 1)
+    }
+
+    guard let rawValue, CFGetTypeID(rawValue) != CFBooleanGetTypeID(),
+          let value = rawValue as? NSNumber,
+          let rawMinimum, CFGetTypeID(rawMinimum) != CFBooleanGetTypeID(),
+          let minimum = rawMinimum as? NSNumber,
+          let rawMaximum, CFGetTypeID(rawMaximum) != CFBooleanGetTypeID(),
+          let maximum = rawMaximum as? NSNumber else {
+        throw HelperError("Profile list AXScrollBar exposes a partial or non-numeric range; \(details)")
+    }
+    let current = value.doubleValue
+    let lower = minimum.doubleValue
+    let upper = maximum.doubleValue
+    guard current.isFinite, lower.isFinite, upper.isFinite, upper > lower,
+          current >= lower, current <= upper else {
+        throw HelperError("Profile list AXScrollBar exposes an invalid numeric range; \(details)")
+    }
+    return (current, lower, upper)
+}
+
 func profileScrollPercent(_ profileView: AXUIElement) throws -> Double? {
     let parts = try profileScrollParts(profileView)
-    guard let scrollbar = parts.scrollbar else { return nil }
-    guard let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber,
-          let minimum = try attribute(scrollbar, kAXMinValueAttribute) as? NSNumber,
-          let maximum = try attribute(scrollbar, kAXMaxValueAttribute) as? NSNumber else {
-        return nil
-    }
-    let range = maximum.doubleValue - minimum.doubleValue
-    guard range > 0 else { return nil }
-    return min(100, max(0, (value.doubleValue - minimum.doubleValue) / range * 100))
+    guard let scrollbar = parts.scrollbar,
+          let range = try profileScrollRange(scrollbar, viewport: parts.bounds) else { return nil }
+    return min(100, max(0, (range.value - range.minimum) / (range.maximum - range.minimum) * 100))
 }
 
 func profileRowDetails(_ nodes: [AXUIElement]) throws -> [[String: Any]] {
@@ -555,63 +595,8 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
         initialLayoutError = error
     }
 
-    func diagnosticAttribute(_ element: AXUIElement, _ name: String) -> String {
-        do {
-            guard let value = try attribute(element, name) else { return "<unavailable>" }
-            if let text = value as? String { return String(reflecting: text) }
-            return String(describing: value)
-        } catch {
-            return "<error: \(error)>"
-        }
-    }
-    func diagnosticBounds(_ element: AXUIElement) -> String {
-        do { return String(describing: rectangle(try bounds(element))) }
-        catch { return "<error: \(error)>" }
-    }
-    func diagnosticElement(_ element: AXUIElement) -> String {
-        "role=\(diagnosticAttribute(element, kAXRoleAttribute)) " +
-            "identifier=\(diagnosticAttribute(element, kAXIdentifierAttribute)) " +
-            "bounds=\(diagnosticBounds(element))"
-    }
-    func numericAttribute(_ name: String) -> (number: NSNumber?, detail: String, error: Error?) {
-        do {
-            guard let value = try attribute(scrollbar, name) else { return (nil, "<unavailable>", nil) }
-            guard let number = value as? NSNumber else {
-                return (nil, "<non-numeric: \(String(describing: value))>", nil)
-            }
-            return (number, String(describing: number), nil)
-        } catch {
-            return (nil, "<error: \(error)>", error)
-        }
-    }
-    let minimum = numericAttribute(kAXMinValueAttribute)
-    let maximum = numericAttribute(kAXMaxValueAttribute)
-    let value = numericAttribute(kAXValueAttribute)
-    guard let minimumValue = minimum.number, let maximumValue = maximum.number,
-          maximumValue.doubleValue > minimumValue.doubleValue else {
-        let layoutDetails: String
-        if let initialLayout {
-            layoutDetails = "scroll_position=\(String(describing: initialLayout["scroll_position"] ?? NSNull())) " +
-                "profile_viewport=\(String(describing: initialLayout["profile_viewport"] ?? NSNull())) " +
-                "visible_profile_actions=\(String(describing: initialLayout["visible_profile_actions"] ?? NSNull())) " +
-                "profile_rows=\(String(describing: initialLayout["profile_rows"] ?? NSNull()))"
-        } else {
-            let error = initialLayoutError.map { String(describing: $0) } ?? "layout unavailable"
-            layoutDetails = "<error: \(error)>"
-        }
-        let rangeDetails =
-            "profile-area {\(diagnosticElement(profileParts.area))}; " +
-            "scrollbar {\(diagnosticElement(scrollbar))}; " +
-            "AXMinValue=\(minimum.detail) AXMaxValue=\(maximum.detail) AXValue=\(value.detail); " +
-            "layout {\(layoutDetails)}"
-        if let readError = minimum.error ?? maximum.error {
-            FileHandle.standardError.write(Data("Profile list range read failed; \(rangeDetails)\n".utf8))
-            throw readError
-        }
-        throw HelperError(
-            "Profile list does not expose an overflowing vertical range; " +
-                rangeDetails
-        )
+    guard let range = try profileScrollRange(scrollbar, viewport: profileParts.bounds, required: true) else {
+        throw HelperError("Profile list AXScrollBar has no measurable position")
     }
     guard var layout = initialLayout else {
         if let initialLayoutError { throw initialLayoutError }
@@ -621,8 +606,7 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
         var settable = DarwinBoolean(false)
         if AXUIElementIsAttributeSettable(scrollbar, kAXValueAttribute as CFString, &settable) == .success,
            settable.boolValue {
-            let targetValue = minimumValue.doubleValue +
-                (maximumValue.doubleValue - minimumValue.doubleValue) * targetPercent / 100
+            let targetValue = range.minimum + (range.maximum - range.minimum) * targetPercent / 100
             if AXUIElementSetAttributeValue(
                 scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
             ) == .success {
