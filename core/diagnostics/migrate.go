@@ -10,27 +10,9 @@ import (
 // Migrate only oversized histories. A record is streamed in pieces when it is
 // larger than the buffer; rotation occurs solely between records.
 func migrateHistory(path string, limit int64) (resultErr error) {
-	oversized := false
-	var original os.FileInfo
-	for _, name := range []string{path + PreviousSuffix, path} {
-		info, err := os.Stat(name)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return &os.PathError{Op: "migrate diagnostic", Path: name, Err: os.ErrInvalid}
-		}
-		if info.Size() > limit {
-			needsMigration, scanErr := hasRecordAfterLimit(name, limit, info.Size())
-			if scanErr != nil {
-				return scanErr
-			}
-			oversized = oversized || needsMigration
-		}
-		original = info
+	oversized, original, err := historyNeedsMigration(path, limit)
+	if err != nil {
+		return err
 	}
 	if !oversized {
 		return nil
@@ -85,6 +67,30 @@ func migrateHistory(path string, limit int64) (resultErr error) {
 	}
 
 	return os.Rename(stage, path)
+}
+
+func historyNeedsMigration(path string, limit int64) (needsMigration bool, original os.FileInfo, resultErr error) {
+	for _, name := range []string{path + PreviousSuffix, path} {
+		info, err := os.Stat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return false, nil, &os.PathError{Op: "migrate diagnostic", Path: name, Err: os.ErrInvalid}
+		}
+		if info.Size() > limit {
+			recordAfterLimit, scanErr := hasRecordAfterLimit(name, limit, info.Size())
+			if scanErr != nil {
+				return false, nil, scanErr
+			}
+			needsMigration = needsMigration || recordAfterLimit
+		}
+		original = info
+	}
+	return needsMigration, original, nil
 }
 
 // A complete record may cross the rotation threshold because WriteRecord

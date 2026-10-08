@@ -74,21 +74,47 @@ func TestStderrRetainsOvershootRotationAndPanic(t *testing.T) {
 
 func TestStderrRestartKeepsClearBoundaryAcrossRawLines(t *testing.T) {
 	if path := os.Getenv("DOBBY_TEST_STDERR_RESTART_CHILD"); path != "" {
-		if err := CaptureStderr(path, ""); err != nil {
-			panic(err)
-		}
-		checkStderrOwnership(t)
-		if err := stderrCapture.rotate(); err != nil {
-			panic(err)
-		}
-		checkStderrOwnership(t)
-		if _, err := fmt.Fprintln(Stderr, "post-clear raw marker"); err != nil {
-			panic(err)
-		}
+		runStderrRestartChild(t, path)
 		return
 	}
 
 	path := filepath.Join(t.TempDir(), "backend.stderr")
+	writeRawClearFixture(t, path)
+	before, captureErr := Capture([]string{path})
+	if captureErr != nil {
+		_ = before.Close()
+		t.Fatal(captureErr)
+	}
+	if len(before.Inputs) != 1 {
+		closeErr := before.Close()
+		t.Fatalf("captured %d raw input generations before restart, want 1: %v", len(before.Inputs), closeErr)
+	}
+	originalID, clearOffset := before.Inputs[0].ID, before.Inputs[0].Size
+	if closeErr := before.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	runStderrRestartChildProcess(t, path)
+	assertStderrClearView(t, path, originalID, clearOffset)
+}
+
+func runStderrRestartChild(t *testing.T, path string) {
+	t.Helper()
+	if err := CaptureStderr(path, ""); err != nil {
+		panic(err)
+	}
+	checkStderrOwnership(t)
+	if err := stderrCapture.rotate(); err != nil {
+		panic(err)
+	}
+	checkStderrOwnership(t)
+	if _, err := fmt.Fprintln(Stderr, "post-clear raw marker"); err != nil {
+		panic(err)
+	}
+}
+
+func writeRawClearFixture(t *testing.T, path string) {
+	t.Helper()
 	first := []byte("pre-clear raw first\n")
 	tail := append(append([]byte(nil), first...), []byte("pre-clear raw second\n")...)
 	prefixSize := Threshold - int64(len(first)) + 2
@@ -96,35 +122,25 @@ func TestStderrRestartKeepsClearBoundaryAcrossRawLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := file.Truncate(prefixSize); err != nil {
+	if truncateErr := file.Truncate(prefixSize); truncateErr != nil {
 		_ = file.Close()
-		t.Fatal(err)
+		t.Fatal(truncateErr)
 	}
-	if _, err := file.WriteAt([]byte("\n"), prefixSize-1); err != nil {
+	if _, separatorErr := file.WriteAt([]byte("\n"), prefixSize-1); separatorErr != nil {
 		_ = file.Close()
-		t.Fatal(err)
+		t.Fatal(separatorErr)
 	}
-	if _, err := file.WriteAt(tail, prefixSize); err != nil {
+	if _, tailErr := file.WriteAt(tail, prefixSize); tailErr != nil {
 		_ = file.Close()
-		t.Fatal(err)
+		t.Fatal(tailErr)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := file.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
+}
 
-	before, err := Capture([]string{path})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(before.Inputs) != 1 {
-		t.Fatalf("captured %d raw input generations before restart, want 1", len(before.Inputs))
-	}
-	originalID := before.Inputs[0].ID
-	clearOffsets := map[string]int64{originalID: before.Inputs[0].Size}
-	if err := before.Close(); err != nil {
-		t.Fatal(err)
-	}
-
+func runStderrRestartChildProcess(t *testing.T, path string) {
+	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -133,21 +149,25 @@ func TestStderrRestartKeepsClearBoundaryAcrossRawLines(t *testing.T) {
 	defer cancel()
 	child := exec.CommandContext(ctx, executable, "-test.run=^TestStderrRestartKeepsClearBoundaryAcrossRawLines$")
 	child.Env = append(os.Environ(), "DOBBY_TEST_STDERR_RESTART_CHILD="+path)
-	output, err := runStderrChild(t, child)
+	output, childErr := runStderrChild(t, child)
 	if len(output) > 0 {
 		t.Logf("%s", output)
 	}
-	if err != nil {
-		t.Fatalf("stderr restart child: %v", err)
+	if childErr != nil {
+		t.Fatalf("stderr restart child: %v", childErr)
 	}
+}
 
-	after, err := Capture([]string{path})
-	if err != nil {
-		t.Fatal(err)
+func assertStderrClearView(t *testing.T, path, originalID string, clearOffset int64) {
+	t.Helper()
+	after, captureErr := Capture([]string{path})
+	if captureErr != nil {
+		_ = after.Close()
+		t.Fatal(captureErr)
 	}
 	defer func() {
-		if err := after.Close(); err != nil {
-			t.Error(err)
+		if closeErr := after.Close(); closeErr != nil {
+			t.Error(closeErr)
 		}
 	}()
 	var visible bytes.Buffer
@@ -159,8 +179,8 @@ func TestStderrRestartKeepsClearBoundaryAcrossRawLines(t *testing.T) {
 				t.Errorf("raw rotation changed the cleared generation identity: before=%s after=%s", originalID, input.ID)
 			}
 		}
-		start, ok := clearOffsets[input.ID]
-		if !ok {
+		start := clearOffset
+		if input.ID != originalID {
 			start = input.Size - 4096
 			if start < 0 {
 				start = 0
@@ -169,9 +189,9 @@ func TestStderrRestartKeepsClearBoundaryAcrossRawLines(t *testing.T) {
 		if input.Size-start > 4096 {
 			start = input.Size - 4096
 		}
-		chunk := make([]byte, input.Size-start)
-		if _, err := input.File.ReadAt(chunk, start); err != nil && err != io.EOF {
-			t.Fatal(err)
+		chunk := make([]byte, int(input.Size-start))
+		if _, readErr := input.File.ReadAt(chunk, start); readErr != nil && readErr != io.EOF {
+			t.Fatal(readErr)
 		}
 		_, _ = visible.Write(chunk)
 	}

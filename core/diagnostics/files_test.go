@@ -65,8 +65,8 @@ func TestReopenKeepsClearBoundaryAcrossWholeRecordOverflow(t *testing.T) {
 	}
 	writeRecord(t, writer, anchor)
 	writeRecord(t, writer, "current\n") // Rotates the complete crossing record to .previous.
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := writer.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	before, err := Capture([]string{path})
@@ -79,8 +79,8 @@ func TestReopenKeepsClearBoundaryAcrossWholeRecordOverflow(t *testing.T) {
 		boundary[input.ID] = input.Size
 		ids[filepath.Base(input.Path)] = input.ID
 	}
-	if err := before.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := before.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	// Reopening a writer is the startup path that invokes migrateHistory.
@@ -90,8 +90,8 @@ func TestReopenKeepsClearBoundaryAcrossWholeRecordOverflow(t *testing.T) {
 	}
 	writeRecord(t, restarted, "post-clear\n")
 	defer func() {
-		if err := restarted.Close(); err != nil {
-			t.Error(err)
+		if closeErr := restarted.Close(); closeErr != nil {
+			t.Error(closeErr)
 		}
 	}()
 
@@ -100,8 +100,8 @@ func TestReopenKeepsClearBoundaryAcrossWholeRecordOverflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := after.Close(); err != nil {
-			t.Error(err)
+		if closeErr := after.Close(); closeErr != nil {
+			t.Error(closeErr)
 		}
 	}()
 	var visible bytes.Buffer
@@ -110,18 +110,22 @@ func TestReopenKeepsClearBoundaryAcrossWholeRecordOverflow(t *testing.T) {
 			t.Errorf("startup migration replaced %s identity: before=%s after=%s", filepath.Base(input.Path), previousID, input.ID)
 		}
 		offset := boundary[input.ID]
-		if _, err := input.CopyTo(&visible, offset); err != nil {
-			t.Fatal(err)
+		if _, copyErr := input.CopyTo(&visible, offset); copyErr != nil {
+			t.Fatal(copyErr)
 		}
 	}
 	if got := visible.String(); got != "post-clear\n" {
 		t.Errorf("clear view exposed prior records or lost the new record: %q", got)
 	}
 
-	// Clear affects the view only; raw export continues to include retained history.
+	assertExportContains(t, path, anchor, "current\n", "post-clear\n")
+}
+
+func assertExportContains(t *testing.T, path string, retained ...string) {
+	t.Helper()
 	destination := filepath.Join(t.TempDir(), "logs.gz")
-	if err := ExportGzip(destination, []string{path}, "header\n"); err != nil {
-		t.Fatal(err)
+	if exportErr := ExportGzip(destination, []string{path}, "header\n"); exportErr != nil {
+		t.Fatal(exportErr)
 	}
 	archive, err := os.Open(destination)
 	if err != nil {
@@ -134,12 +138,12 @@ func TestReopenKeepsClearBoundaryAcrossWholeRecordOverflow(t *testing.T) {
 	}
 	exported, readErr := io.ReadAll(compressed)
 	closeErr := errors.Join(compressed.Close(), archive.Close())
-	if err := errors.Join(readErr, closeErr); err != nil {
-		t.Fatal(err)
+	if finalErr := errors.Join(readErr, closeErr); finalErr != nil {
+		t.Fatal(finalErr)
 	}
-	for _, retained := range []string{anchor, "current\n", "post-clear\n"} {
-		if !bytes.Contains(exported, []byte(retained)) {
-			t.Errorf("raw export lost retained record %q", retained)
+	for _, marker := range retained {
+		if !bytes.Contains(exported, []byte(marker)) {
+			t.Errorf("raw export lost retained record %q", marker)
 		}
 	}
 }
@@ -185,8 +189,8 @@ func TestOpenWriterPreservesIdentityForUnterminatedOverflowTail(t *testing.T) {
 		t.Fatalf("captured %d inputs, want 1", len(before.Inputs))
 	}
 	identity := before.Inputs[0].ID
-	if err := before.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := before.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	writer, err := openWriter(path, limit)
@@ -194,8 +198,8 @@ func TestOpenWriterPreservesIdentityForUnterminatedOverflowTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := writer.Close(); err != nil {
-			t.Error(err)
+		if closeErr := writer.Close(); closeErr != nil {
+			t.Error(closeErr)
 		}
 	}()
 	after, err := Capture([]string{path})
@@ -203,8 +207,8 @@ func TestOpenWriterPreservesIdentityForUnterminatedOverflowTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := after.Close(); err != nil {
-			t.Error(err)
+		if closeErr := after.Close(); closeErr != nil {
+			t.Error(closeErr)
 		}
 	}()
 	if len(after.Inputs) != 1 || after.Inputs[0].ID != identity {

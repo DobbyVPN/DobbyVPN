@@ -27,12 +27,14 @@ type rawCapture struct {
 // Raw descriptors have no whole-record framing. Preserve their file identities;
 // the capture monitor owns rename rotation rather than structured migration.
 func openRawCapture(path string) (*os.File, error) {
+	// #nosec G703 -- Raw log paths come from local logger configuration or app-private directories, not network input.
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	var file *os.File
 	err := withFileLock(path, func() error {
 		for _, name := range []string{path + PreviousSuffix, path} {
+			// #nosec G703 -- name is the configured local raw log path plus its fixed generation suffix.
 			info, err := os.Stat(name)
 			if errors.Is(err, os.ErrNotExist) {
 				continue

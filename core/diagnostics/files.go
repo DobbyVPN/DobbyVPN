@@ -33,6 +33,7 @@ func withFileLock(path string, operation func() error) (resultErr error) {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
+	// #nosec G703 -- Diagnostic paths come from local logger configuration or app-private directories, not remote control input.
 	if info, err := os.Stat(path); err == nil {
 		if err := preservePermissions(lock, info); err != nil {
 			return err
