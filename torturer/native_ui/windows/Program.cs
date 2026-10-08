@@ -153,6 +153,7 @@ internal static class Program
     private const uint ProcessVmRead = 0x0010;
     private const uint MiniDumpWithFullMemory = 0x00000002;
     private const uint MiniDumpWithThreadInfo = 0x00001000;
+    private const int UiaElementNotAvailableHResult = unchecked((int)0x80040201);
 
     private const int UiaBoundingRectanglePropertyId = 30001;
     private const int UiaProcessIdPropertyId = 30002;
@@ -926,7 +927,7 @@ internal static class Program
             throw new ArgumentException("Profile switch import requires a DobbyVPN import URI");
 
         var traceBaseline = firstBaselinePairCompleted is not null;
-        // Keep stable scopes; WinUI recreates profile action peers on each Snapshot.
+        // Reacquire dynamic control scopes for each sample; WinUI recreates profile action peers on each Snapshot.
         AutomationElement FindScope(AutomationElement scope, string automationId)
         {
             if (!traceBaseline) return RequireAutomationId(scope, automationId);
@@ -946,6 +947,9 @@ internal static class Program
         var controls = FindScope(root, "Connection controls");
         _ = FindScope(controls, "Profile list viewport");
         _ = FindScope(controls, "VPN connection action");
+        static bool IsElementUnavailable(Exception error) =>
+            error is ElementNotAvailableException ||
+            error is COMException comError && comError.HResult == UiaElementNotAvailableHResult;
         NativeActionState before = default;
         NativeActionState competingBefore = default;
         Dictionary<string, object?>? lastBaselineSample = null;
@@ -958,7 +962,8 @@ internal static class Program
                 TracePhase($"profile-switch-baseline-cache-read-start utc={UtcTimestamp()} sample={sampleNumber}");
             try
             {
-                var states = ReadActionStates(controls, targetId, competingId, "VPN connection action");
+                var sampleControls = FindScope(root, "Connection controls");
+                var states = ReadActionStates(sampleControls, targetId, competingId, "VPN connection action");
                 if (trace)
                     TracePhase($"profile-switch-baseline-cache-read-complete utc={UtcTimestamp()} sample={sampleNumber} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} states={JsonSerializer.Serialize(states.ToDictionary(pair => pair.Key, pair => pair.Value.ToDiagnostic(), StringComparer.Ordinal))}");
                 return states;
@@ -1009,7 +1014,7 @@ internal static class Program
                     Console.Error.Flush();
                     return ready;
                 }
-                catch (ElementNotAvailableException error)
+                catch (Exception error) when (IsElementUnavailable(error))
                 {
                     latestBaselineException = error.ToString();
                     lastBaselineSample = new Dictionary<string, object?>
@@ -1105,7 +1110,8 @@ internal static class Program
             sample[$"{label}_read_started_at_utc"] = Timestamp(started);
             try
             {
-                var states = ReadActionStates(controls, targetId, competingId, "VPN connection action");
+                var sampleControls = FindScope(root, "Connection controls");
+                var states = ReadActionStates(sampleControls, targetId, competingId, "VPN connection action");
                 sample[$"{label}_states"] = states.ToDictionary(
                     pair => pair.Key, pair => pair.Value.ToDiagnostic(), StringComparer.Ordinal);
                 return states;
@@ -1212,7 +1218,7 @@ internal static class Program
                     }
                 }
             }
-            catch (ElementNotAvailableException error)
+            catch (Exception error) when (IsElementUnavailable(error))
             {
                 unavailable = error.ToString();
                 Console.Error.WriteLine(unavailable);
