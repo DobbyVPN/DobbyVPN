@@ -14,6 +14,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Threading;
 using System.Windows.Automation;
+using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 using Forms = System.Windows.Forms;
 
@@ -61,9 +62,24 @@ internal static class Program
         IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out UIntPtr result);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint numberOfInputs, NativeInput[] inputs, int size);
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
-    private static extern IntPtr ShellExecuteW(IntPtr window, string operation, string file,
-        string? parameters, string? directory, int showCommand);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, EntryPoint = "ShellExecuteExW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShellExecuteEx(ref ShellExecuteInfo executeInfo);
+    [DllImport("kernel32.dll", EntryPoint = "GetProcessId", SetLastError = true)]
+    private static extern uint GetProcessIdRaw(IntPtr process);
+    [DllImport("kernel32.dll", EntryPoint = "GetProcessTimes", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimesRaw(IntPtr process, out NativeFileTime creationTime,
+        out NativeFileTime exitTime, out NativeFileTime kernelTime, out NativeFileTime userTime);
+    [DllImport("kernel32.dll", EntryPoint = "GetExitCodeProcess", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder imageName, ref uint size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetCursorPos(out NativePoint point);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW", SetLastError = true)]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
@@ -79,6 +95,25 @@ internal static class Program
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct NativeFileTime { public uint Low, High; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ShellExecuteInfo
+    {
+        public int Size;
+        public uint Mask;
+        public IntPtr Owner;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Verb;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? File;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Parameters;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Directory;
+        public int ShowCommand;
+        public IntPtr Instance;
+        public IntPtr IdList;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Class;
+        public IntPtr ClassKey;
+        public uint HotKey;
+        public IntPtr IconOrMonitor;
+        public IntPtr Process;
+    }
     // INPUT and MOUSEINPUT use a pointer-sized dwExtraInfo on both architectures.
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeInput
@@ -619,6 +654,163 @@ internal static class Program
             current.IsControlElement, current.IsEnabled, current.IsOffscreen);
     }
 
+    private static Dictionary<string, object?> DescribeProtocolRegistration()
+    {
+        var result = new Dictionary<string, object?> { ["registry_view"] = RegistryView.Default.ToString() };
+        try
+        {
+            using var classes = RegistryKey.OpenBaseKey(RegistryHive.ClassesRoot, RegistryView.Default);
+            using var scheme = classes.OpenSubKey("dobbyvpn", writable: false);
+            result["scheme_key_found"] = scheme is not null;
+            if (scheme is null) return result;
+            result["url_protocol_present"] = scheme.GetValueNames().Contains("URL Protocol", StringComparer.OrdinalIgnoreCase);
+            result["url_protocol"] = scheme.GetValue("URL Protocol", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            using var open = scheme.OpenSubKey("shell\\open", writable: false);
+            result["open_verb_found"] = open is not null;
+            if (open is null) return result;
+            using var command = open.OpenSubKey("command", writable: false);
+            result["command_key_found"] = command is not null;
+            if (command is not null)
+            {
+                result["command"] = command.GetValue(string.Empty, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+                result["delegate_execute"] = command.GetValue("DelegateExecute", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            }
+            using var dde = open.OpenSubKey("ddeexec", writable: false);
+            result["ddeexec_key_found"] = dde is not null;
+        }
+        catch (Exception error) { result["error"] = error.ToString(); }
+        return result;
+    }
+
+    private static Dictionary<string, object?> DescribeShellProcess(IntPtr processHandle)
+    {
+        var result = new Dictionary<string, object?> { ["handle_returned"] = processHandle != IntPtr.Zero };
+        if (processHandle == IntPtr.Zero) return result;
+
+        var processId = GetProcessIdRaw(processHandle);
+        if (processId == 0)
+            result["pid_error"] = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).ToString();
+        else
+            result["pid"] = processId;
+
+        if (GetProcessTimesRaw(processHandle, out var creation, out _, out _, out _))
+        {
+            var fileTime = unchecked((long)(((ulong)creation.High << 32) | creation.Low));
+            result["creation_identity"] = DateTime.FromFileTimeUtc(fileTime).Ticks.ToString(CultureInfo.InvariantCulture);
+        }
+        else
+            result["creation_identity_error"] = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).ToString();
+
+        var imagePath = new StringBuilder(32768);
+        uint imagePathSize = (uint)imagePath.Capacity;
+        if (QueryFullProcessImageName(processHandle, 0, imagePath, ref imagePathSize))
+            result["image_path"] = imagePath.ToString();
+        else
+            result["image_path_error"] = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).ToString();
+
+        if (GetExitCodeProcess(processHandle, out var exitCode))
+        {
+            result["exit_code"] = exitCode;
+            result["still_active"] = exitCode == 259;
+        }
+        else
+            result["exit_code_error"] = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).ToString();
+        return result;
+    }
+
+    private static Dictionary<string, object?> ShellDispatchEvidence(
+        string protocolUri, IntPtr window, int pid, string identity,
+        Dictionary<string, object?> effectiveRegistration, Func<long, string> timestamp)
+    {
+        const uint SeeMaskNoCloseProcess = 0x00000040;
+        // The STA helper has no shell message loop to finish an asynchronous DDE handoff.
+        const uint SeeMaskNoAsync = 0x00000100;
+        var executeInfo = new ShellExecuteInfo
+        {
+            Size = Marshal.SizeOf<ShellExecuteInfo>(),
+            Mask = SeeMaskNoCloseProcess | SeeMaskNoAsync,
+            Owner = window,
+            Verb = "open",
+            File = protocolUri,
+            ShowCommand = 1,
+        };
+        var dispatchStarted = Stopwatch.GetTimestamp();
+        bool returned = false;
+        int? lastError = null;
+        Exception? callException = null;
+        try
+        {
+            returned = ShellExecuteEx(ref executeInfo);
+            if (!returned) lastError = Marshal.GetLastWin32Error();
+        }
+        catch (Exception error) { callException = error; }
+        var dispatchReturned = Stopwatch.GetTimestamp();
+
+        var processHandle = executeInfo.Process;
+        Dictionary<string, object?> processEvidence;
+        try { processEvidence = DescribeShellProcess(processHandle); }
+        catch (Exception error)
+        {
+            processEvidence = new Dictionary<string, object?>
+            {
+                ["handle_returned"] = processHandle != IntPtr.Zero,
+                ["observation_error"] = error.ToString(),
+            };
+        }
+
+        bool? handleClosed = null;
+        Exception? handleCloseException = null;
+        if (processHandle != IntPtr.Zero)
+        {
+            try
+            {
+                handleClosed = CloseHandle(processHandle);
+                if (handleClosed != true)
+                    handleCloseException = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            catch (Exception error) { handleCloseException = error; }
+        }
+
+        var shellResult = executeInfo.Instance.ToInt64();
+        var context = $"uri={protocolUri}; pid={pid}; identity={identity}; window=0x{window.ToInt64():X}; " +
+            $"dispatch_started={timestamp(dispatchStarted)}; dispatch_returned={timestamp(dispatchReturned)}; " +
+            $"shell_execute_returned={returned}; hinstance={shellResult}; last_error={lastError?.ToString(CultureInfo.InvariantCulture) ?? "null"}; " +
+            $"registration={JsonSerializer.Serialize(effectiveRegistration)}; " +
+            $"launched_process={JsonSerializer.Serialize(processEvidence)}; " +
+            $"process_handle_closed={handleClosed?.ToString() ?? "null"}; " +
+            $"process_handle_close_error={handleCloseException?.ToString() ?? "null"}";
+        Exception? dispatchException = callException;
+        if (dispatchException is null && !returned)
+        {
+            dispatchException = lastError is int code
+                ? new System.ComponentModel.Win32Exception(code, "ShellExecuteExW returned false")
+                : new InvalidOperationException("ShellExecuteExW returned false without a Win32 error code");
+        }
+        if (dispatchException is null && shellResult <= 32)
+            dispatchException = new InvalidOperationException("ShellExecuteExW returned an error HINSTANCE");
+        if (handleCloseException is not null)
+        {
+            Exception cleanup = dispatchException is null
+                ? handleCloseException
+                : new AggregateException("Shell dispatch and handle cleanup both failed", dispatchException, handleCloseException);
+            throw new InvalidOperationException($"Shell process handle cleanup failed; {context}", cleanup);
+        }
+        if (dispatchException is not null)
+            throw new InvalidOperationException($"ShellExecuteExW failed; {context}", dispatchException);
+
+        return new Dictionary<string, object?>
+        {
+            ["protocol_dispatch_started_at_utc"] = timestamp(dispatchStarted),
+            ["protocol_dispatch_returned_at_utc"] = timestamp(dispatchReturned),
+            ["shell_execute_returned"] = returned,
+            ["shell_execute_result"] = shellResult,
+            ["shell_execute_last_error"] = lastError,
+            ["effective_protocol_registration"] = effectiveRegistration,
+            ["shell_execute_process"] = processEvidence,
+            ["shell_execute_process_handle_closed"] = handleClosed,
+        };
+    }
+
     private static Dictionary<string, object?> ProfileSwitchAction(
         AutomationElement root, IntPtr window, Process process, string identity,
         string targetId, string competingId, string? protocolUri = null, bool observeOnly = false)
@@ -665,6 +857,7 @@ internal static class Program
 
         if (before.Element is null || !before.Element.TryGetCurrentPattern(InvokePattern.Pattern, out var connectPattern))
             throw new InvalidOperationException($"Profile action has no native InvokePattern: {targetId}");
+        var registration = protocolUri is null ? null : DescribeProtocolRegistration();
         RequireForeground(window, "profile switch Connect");
         var clockStarted = Stopwatch.GetTimestamp();
         var utcStarted = DateTimeOffset.UtcNow;
@@ -718,34 +911,24 @@ internal static class Program
                             };
                         if (protocolUri is not null)
                         {
-                            var dispatchStarted = Stopwatch.GetTimestamp();
-                            IntPtr shellResult;
-                            try { shellResult = ShellExecuteW(window, "open", protocolUri, null, null, 1); }
+                            Dictionary<string, object?> dispatchEvidence;
+                            try
+                            {
+                                dispatchEvidence = ShellDispatchEvidence(
+                                    protocolUri, window, process.Id, identity, registration!, Timestamp);
+                            }
                             catch (Exception error)
                             {
                                 var dispatchFailedAt = Stopwatch.GetTimestamp();
                                 throw new InvalidOperationException(
-                                    $"ShellExecuteW threw for the observed profile switch import; " +
+                                    $"ShellExecuteExW failed for the observed profile switch import; " +
                                     $"uri={protocolUri}; pid={process.Id}; identity={identity}; " +
-                                    $"window=0x{window.ToInt64():X}; " +
-                                    $"dispatch_started={Timestamp(dispatchStarted)}; " +
-                                    $"dispatch_failed_at={Timestamp(dispatchFailedAt)}; " +
+                                    $"window=0x{window.ToInt64():X}; dispatch_failed_at={Timestamp(dispatchFailedAt)}; " +
                                     $"target={JsonSerializer.Serialize(target.ToDiagnostic())}; " +
                                     $"competing={JsonSerializer.Serialize(competing.ToDiagnostic())}; " +
                                     $"connection={JsonSerializer.Serialize(connection.ToDiagnostic())}", error);
                             }
-                            var dispatchReturned = Stopwatch.GetTimestamp();
-                            if (shellResult.ToInt64() <= 32)
-                                throw new InvalidOperationException(
-                                    $"ShellExecuteW failed for the observed pending profile switch; " +
-                                    $"hinstance={shellResult.ToInt64()}; uri={protocolUri}; " +
-                                    $"pid={process.Id}; identity={identity}; window=0x{window.ToInt64():X}; " +
-                                    $"dispatch_started={Timestamp(dispatchStarted)}; " +
-                                    $"dispatch_returned={Timestamp(dispatchReturned)}; " +
-                                    $"target={JsonSerializer.Serialize(target.ToDiagnostic())}; " +
-                                    $"competing={JsonSerializer.Serialize(competing.ToDiagnostic())}; " +
-                                    $"connection={JsonSerializer.Serialize(connection.ToDiagnostic())}");
-                            return new Dictionary<string, object?>
+                            var result = new Dictionary<string, object?>
                             {
                                 ["ready"] = true, ["pid"] = process.Id, ["identity"] = identity,
                                 ["window_handle"] = $"0x{window.ToInt64():X}",
@@ -753,13 +936,12 @@ internal static class Program
                                 ["protocol_uri"] = protocolUri,
                                 ["connect_invoked_at_utc"] = connectedAtUtc,
                                 ["stop_observed_at_utc"] = Timestamp(observedAt),
-                                ["protocol_dispatch_started_at_utc"] = Timestamp(dispatchStarted),
-                                ["protocol_dispatch_returned_at_utc"] = Timestamp(dispatchReturned),
-                                ["shell_execute_result"] = shellResult.ToInt64(),
                                 ["target_at_stop"] = target.ToDiagnostic(),
                                 ["competing_at_stop"] = competing.ToDiagnostic(),
                                 ["connection_action_at_stop"] = connection.ToDiagnostic(),
                             };
+                            foreach (var field in dispatchEvidence) result[field.Key] = field.Value;
+                            return result;
                         }
                         if (!stopElement.TryGetCurrentPattern(InvokePattern.Pattern, out var stopPattern))
                             throw new InvalidOperationException($"Observed Stop action has no native InvokePattern: {targetId}");
