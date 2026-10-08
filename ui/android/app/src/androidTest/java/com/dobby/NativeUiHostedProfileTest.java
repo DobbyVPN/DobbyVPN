@@ -2383,16 +2383,185 @@ public final class NativeUiHostedProfileTest {
     }
 
     private void scrollControlsToLastProfile(long deadline) throws Exception {
+        scrollControlsToProfileAction(23, 24, deadline);
+    }
+
+    private void scrollControlsToProfileAction(int targetIndex, int profileCount, long deadline)
+            throws Exception {
         UiDevice device = uiDevice();
-        int width = device.getDisplayWidth();
-        int height = device.getDisplayHeight();
-        while (System.currentTimeMillis() < deadline) {
-            UiObject2 last = findUiObject("Profile 24 action");
-            if (last != null && !last.getVisibleBounds().isEmpty()) return;
-            device.swipe(width / 2, height * 2 / 3, width / 2, height / 4, 12);
+        int firstVisible = -1;
+        int lastVisible = -1;
+        for (int swipes = 0; swipes <= profileCount + 2
+                && System.currentTimeMillis() < deadline; swipes++) {
+            UiObject2 viewport = findUiObject("Connection controls");
+            Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+            if (viewportBounds.isEmpty()) {
+                SystemClock.sleep(POLL_MILLIS);
+                continue;
+            }
+            UiObject2 target = findUiObject("Profile " + (targetIndex + 1) + " action");
+            UiObject2 targetButton = target;
+            while (targetButton != null && !targetButton.isClickable()) {
+                targetButton = targetButton.getParent();
+            }
+            if (targetButton != null
+                    && Rect.intersects(viewportBounds, targetButton.getVisibleBounds())) {
+                return;
+            }
+
+            firstVisible = -1;
+            lastVisible = -1;
+            for (int index = 0; index < profileCount; index++) {
+                UiObject2 visibleAction = findUiObject("Profile " + (index + 1) + " action");
+                if (visibleAction == null
+                        || !Rect.intersects(viewportBounds, visibleAction.getVisibleBounds())) {
+                    continue;
+                }
+                if (firstVisible < 0) firstVisible = index;
+                lastVisible = index;
+            }
+            if (firstVisible >= 0 && targetIndex >= firstVisible && targetIndex <= lastVisible) {
+                throw profileActionVisibilityFailure(
+                        "target row is visible without a clickable action",
+                        targetIndex,
+                        viewportBounds,
+                        firstVisible,
+                        lastVisible);
+            }
+            boolean towardLaterProfiles = firstVisible < 0 || targetIndex > lastVisible;
+            if (swipes == profileCount + 2
+                    || !swipeControlsViewport(device, viewportBounds, towardLaterProfiles)) {
+                throw profileActionVisibilityFailure(
+                        "bounded controls-viewport swipe could not reveal the target row",
+                        targetIndex,
+                        viewportBounds,
+                        firstVisible,
+                        lastVisible);
+            }
+            waitForIdleBounded(device, deadline);
             SystemClock.sleep(POLL_MILLIS);
         }
-        throw new IllegalStateException("ANDROID_PROFILE_LIST_SCROLL_TIMEOUT");
+        throw profileActionVisibilityFailure(
+                "target action did not become visible before the existing deadline",
+                targetIndex,
+                new Rect(),
+                firstVisible,
+                lastVisible);
+    }
+
+    private boolean swipeControlsViewport(
+            UiDevice device, Rect viewportBounds, boolean towardLaterProfiles) {
+        int margin = Math.min(12, Math.max(1, viewportBounds.height() / 10));
+        int top = viewportBounds.top + margin;
+        int bottom = viewportBounds.bottom - margin;
+        if (viewportBounds.isEmpty() || bottom <= top || viewportBounds.width() <= 0) return false;
+        int x = viewportBounds.centerX();
+        int startY = towardLaterProfiles ? bottom : top;
+        int endY = towardLaterProfiles ? top : bottom;
+        return device.swipe(x, startY, x, endY, 12);
+    }
+
+    private void scrollControlsToTop(int profileCount, long deadline) throws Exception {
+        UiDevice device = uiDevice();
+        for (int swipes = 0; swipes <= profileCount + 2
+                && System.currentTimeMillis() < deadline; swipes++) {
+            UiObject2 viewport = findUiObject("Connection controls");
+            Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+            UiObject2 sourceField = findUiObject("Subscription URL");
+            if (sourceField != null
+                    && !viewportBounds.isEmpty()
+                    && Rect.intersects(viewportBounds, sourceField.getVisibleBounds())) {
+                return;
+            }
+            if (swipes == profileCount + 2 || viewportBounds.isEmpty()
+                    || !swipeControlsViewport(device, viewportBounds, false)) {
+                throw profileActionVisibilityFailure(
+                        "could not return the controls viewport to its rendered source field",
+                        -1,
+                        viewportBounds,
+                        -1,
+                        -1);
+            }
+            waitForIdleBounded(device, deadline);
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw profileActionVisibilityFailure(
+                "source field did not return before the existing deadline",
+                -1,
+                new Rect(),
+                -1,
+                -1);
+    }
+
+    private int activeProfileIndexInLoadedInventory(JSONObject snapshot) throws Exception {
+        if (!"PROFILE_INDEX".equals(snapshot.optString("active_mode"))) return -1;
+        String loadedDigest = snapshot.optString("digest");
+        if (loadedDigest.isEmpty() || !loadedDigest.equals(snapshot.optString("active_digest"))) {
+            return -1;
+        }
+        int activeIndex = snapshot.optInt("active_index", -1);
+        JSONObject activeProfile = snapshot.optJSONObject("active_profile");
+        JSONArray profiles = snapshot.optJSONArray("profiles");
+        if (activeIndex < 0 || activeProfile == null || profiles == null
+                || activeIndex >= profiles.length()) {
+            return -1;
+        }
+        return activeProfile.optInt("index", -1) == activeIndex ? activeIndex : -1;
+    }
+
+    private void verifyVisibleProfileDisconnectAction(
+            int targetIndex, Rect viewportBounds) throws Exception {
+        String profileLabel = "Profile " + (targetIndex + 1) + " action";
+        UiObject2 profileAction = findUiObject(profileLabel);
+        while (profileAction != null && !profileAction.isClickable()) {
+            profileAction = profileAction.getParent();
+        }
+        UiObject2 disconnectLabel = findUiObject("Disconnect");
+        UiObject2 disconnectAction = disconnectLabel;
+        while (disconnectAction != null && !disconnectAction.isClickable()) {
+            disconnectAction = disconnectAction.getParent();
+        }
+        Rect profileBounds = profileAction == null ? new Rect() : profileAction.getVisibleBounds();
+        Rect labelBounds = disconnectLabel == null ? new Rect() : disconnectLabel.getVisibleBounds();
+        Rect disconnectBounds = disconnectAction == null ? new Rect() : disconnectAction.getVisibleBounds();
+        if (profileAction == null
+                || disconnectLabel == null
+                || disconnectAction == null
+                || !profileAction.isEnabled()
+                || !disconnectAction.isEnabled()
+                || viewportBounds.isEmpty()
+                || !Rect.intersects(viewportBounds, profileBounds)
+                || !Rect.intersects(viewportBounds, labelBounds)
+                || !Rect.intersects(viewportBounds, disconnectBounds)
+                || !profileBounds.contains(labelBounds)
+                || !profileBounds.contains(disconnectBounds)) {
+            throw profileActionVisibilityFailure(
+                    "Disconnect is not the enabled rendered action for the active inventory row",
+                    targetIndex,
+                    viewportBounds,
+                    -1,
+                    -1);
+        }
+    }
+
+    private AssertionError profileActionVisibilityFailure(
+            String reason,
+            int targetIndex,
+            Rect viewportBounds,
+            int minimumVisibleIndex,
+            int maximumVisibleIndex) {
+        String targetLabel = targetIndex < 0 ? "none" : "Profile " + (targetIndex + 1) + " action";
+        String message = "ANDROID_PROFILE_ACTION_VISIBILITY_FAILED: " + reason
+                + ", target=" + targetLabel
+                + ", viewport=" + viewportBounds.toShortString()
+                + ", visible_profile_range=" + minimumVisibleIndex + ".." + maximumVisibleIndex;
+        try {
+            return new AssertionError(message + "\nui_hierarchy_xml:\n" + dumpUiHierarchy());
+        } catch (Exception diagnosticFailure) {
+            AssertionError failure = new AssertionError(message);
+            failure.addSuppressed(diagnosticFailure);
+            return failure;
+        }
     }
 
     private void tapEnabledControl(String label, long deadline) throws Exception {
@@ -2707,6 +2876,36 @@ public final class NativeUiHostedProfileTest {
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
         markProgress("disconnect", "surface", "completed");
         markProgress("disconnect", "disconnect-control", "started");
+        JSONObject expectedConnection = snapshotResult("");
+        if ("CONNECTED".equals(expectedConnection.optString("state"))) {
+            int activeIndex = activeProfileIndexInLoadedInventory(expectedConnection);
+            UiObject2 controls = null;
+            Rect controlsBounds = new Rect();
+            if (activeIndex >= 0) {
+                scrollControlsToProfileAction(
+                        activeIndex,
+                        expectedConnection.getJSONArray("profiles").length(),
+                        deadline);
+                controls = findUiObject("Connection controls");
+                controlsBounds = controls == null ? new Rect() : controls.getVisibleBounds();
+                verifyVisibleProfileDisconnectAction(activeIndex, controlsBounds);
+            } else {
+                // The active selection belongs to an older inventory, so the
+                // existing standalone Disconnect action is the only valid UI target.
+                JSONArray profiles = expectedConnection.optJSONArray("profiles");
+                scrollControlsToTop(profiles == null ? 0 : profiles.length(), deadline);
+            }
+            JSONObject current = snapshotResult("");
+            if (!sameRenderedDisconnectTarget(expectedConnection, current)) {
+                throw profileActionVisibilityFailure(
+                        "backend selection changed before the rendered Disconnect action; before="
+                                + expectedConnection + ", current=" + current,
+                        activeIndex,
+                        controlsBounds,
+                        -1,
+                        -1);
+            }
+        }
         tapEnabledControl("Disconnect", deadline);
         markProgress("disconnect", "disconnect-control", "completed");
         markProgress("disconnect", "disconnected-state", "started");
@@ -2714,6 +2913,16 @@ public final class NativeUiHostedProfileTest {
                 "Disconnected",
                 remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
         markProgress("disconnect", "disconnected-state", "completed");
+    }
+
+    private boolean sameRenderedDisconnectTarget(JSONObject expected, JSONObject current) {
+        return "CONNECTED".equals(current.optString("state"))
+                && expected.optLong("generation", -1L) == current.optLong("generation", -2L)
+                && expected.optString("digest").equals(current.optString("digest"))
+                && expected.optString("active_digest").equals(current.optString("active_digest"))
+                && expected.optString("active_mode").equals(current.optString("active_mode"))
+                && expected.optInt("active_index", -1) == current.optInt("active_index", -2)
+                && current.optJSONObject("pending_target") == null;
     }
 
     private JSONObject runAutoRecoveryStop(
