@@ -1913,6 +1913,10 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
 
     ui._click("VPN connection action")
     active_again = selected(restored_absent, None)
+    # The CLI can report CONNECTED before the frontend's snapshot poll renders
+    # it; establish the visible Disconnect precondition before holding Configure.
+    ui.wait_status("Connected")
+    require_disconnect_control()
 
     # Keep a subscription GET held while the user invokes Disconnect. This
     # proves Configure does not block the foreground action or log refresh.
