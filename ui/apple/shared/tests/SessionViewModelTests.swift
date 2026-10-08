@@ -31,6 +31,48 @@ final class SessionViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRepeatedUnchangedTypedValueDoesNotConfigureAgain() async throws {
+        let fixture = try ViewModelFixture()
+        let source = "https://example.invalid/held-typed-source"
+        fixture.client.holdConfigure(source)
+        defer {
+            fixture.client.releaseConfigure(source)
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        let model = DobbySessionViewModel(client: fixture.client)
+        await waitForSnapshot(model) { $0.sessionID == "test-session" }
+
+        model.sourceChanged(source)
+        let firstStarted = await waitUntil(timeout: 2) {
+            fixture.client.startedConfigureSources == [source]
+        }
+        XCTAssertTrue(firstStarted)
+
+        model.sourceChanged(source)
+        try await Task.sleep(nanoseconds: 450_000_000)
+        XCTAssertTrue(model.loading, "The original Configure should remain held during the repeated edit")
+        XCTAssertEqual(fixture.client.startedConfigureSources, [source],
+                       "An unchanged edit must not queue a second Configure behind the held request")
+        XCTAssertEqual(fixture.client.maximumConcurrentConfigures, 1)
+
+        fixture.client.releaseConfigure(source)
+        let accepted = await waitUntil(timeout: 2) {
+            model.inventoryReady && model.snapshot.sourceURL == source
+        }
+        XCTAssertTrue(accepted, "The original typed Configure should still be accepted")
+        try await Task.sleep(nanoseconds: 450_000_000)
+        XCTAssertEqual(fixture.client.startedConfigureSources, [source])
+        XCTAssertEqual(fixture.client.completedConfigureSources, [source])
+        XCTAssertEqual(fixture.client.maximumConcurrentConfigures, 1)
+
+        model.sourceChanged(source)
+        try await Task.sleep(nanoseconds: 450_000_000)
+        XCTAssertEqual(fixture.client.startedConfigureSources, [source],
+                       "Typing the already accepted URL again must not refetch its inventory")
+        XCTAssertTrue(model.inventoryReady)
+    }
+
+    @MainActor
     func testPasteIsImmediateFencesOldResultAndLeavesStopAndLogsResponsive() async throws {
         let fixture = try ViewModelFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

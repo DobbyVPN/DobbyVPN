@@ -95,6 +95,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func sourceChanged(_ value: String, immediate: Bool = false) {
+        if !immediate && value == sourceText { return }
         sourceText = value
         sourceIsDirty = true
         importError = ""
