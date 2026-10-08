@@ -1825,8 +1825,28 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError("the frontend did not render Disconnected after stopping the absent profile")
     checks["absent_active_profile_disconnect"] = True
 
+    fixture.replace_response(original_profile)
+    restore_absent_url = url + ("&" if "?" in url else "?") + "restore-after-absent-disconnect=1"
+    restore_absent_before_gets = stats()["subscription_gets"]
+    ui.type_source(restore_absent_url)
+    restored_absent = wait_for_snapshot(
+        lambda value: value.get("source_url") == restore_absent_url
+        and value.get("digest") == initial.get("digest"),
+        "the original inventory was not restored after the absent-profile Disconnect",
+    )
+    wait_for_gets(restore_absent_before_gets + 1, "restoring the original inventory did not complete exactly one request")
+    if (
+        restored_absent.get("source_kind") != "URL"
+        or restored_absent.get("state") not in {"IDLE", "CONFIGURED"}
+        or restored_absent.get("active_profile") is not None
+        or restored_absent.get("pending_target") is not None
+        or restored_absent.get("session_id") != disconnected_absent.get("session_id")
+        or restored_absent.get("generation") != disconnected_absent.get("generation")
+    ):
+        raise NativeUIJourneyError("restoring the original inventory changed the disconnected session")
+
     ui._click("VPN connection action")
-    active_again = selected(disconnected_absent, None)
+    active_again = selected(restored_absent, None)
 
     # Keep a subscription GET held while the user invokes Disconnect. This
     # proves Configure does not block the foreground action or log refresh.
