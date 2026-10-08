@@ -101,6 +101,9 @@ public struct DobbyRootView: View {
                                     HStack {
                                         VStack(alignment: .leading) {
                                             Text(profile.name)
+#if os(macOS)
+                                                .accessibilityIdentifier("Profile \(profile.index + 1) description")
+#endif
                                             Text(profile.protocolName)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)

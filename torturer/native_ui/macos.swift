@@ -400,73 +400,65 @@ func profileRowDetails(_ nodes: [AXUIElement]) throws -> [[String: Any]] {
         return Int(identifier.dropFirst(prefix.count).dropLast(suffix.count))
     }
 
+    var descriptions = [Int: String]()
+    var descriptionOrder = [Int]()
+    var protocols = [Int: String]()
     var actions = [Int: String]()
     for element in nodes {
         let id = try identifier(element)
-        guard let index = number(in: id, suffix: " action"),
-              try label(element, kAXRoleAttribute) == kAXButtonRole else { continue }
-        let title = try names(element).first { $0 != id } ?? ""
-        try require(!title.isEmpty, "Profile \(index) has no native action title")
-        if let existing = actions[index] {
-            try require(existing == title, "Profile \(index) has conflicting native action titles")
-        } else {
+        if let index = number(in: id, suffix: " description") {
+            let role = try label(element, kAXRoleAttribute)
+            try require(role == kAXStaticTextRole,
+                        "Profile \(index) description identifier is not native text")
+            guard let description = try names(element).first(where: { $0 != id }), !description.isEmpty else {
+                throw HelperError("Profile \(index) has no native description text")
+            }
+            try require(descriptions[index] == nil, "Profile \(index) has duplicate native description labels")
+            descriptions[index] = description
+            descriptionOrder.append(index)
+        } else if let index = number(in: id, suffix: " protocol") {
+            let role = try label(element, kAXRoleAttribute)
+            try require(role == kAXStaticTextRole,
+                        "Profile \(index) protocol identifier is not native text")
+            let protocolNames = try names(element).filter { $0 != id }
+            guard let protocolLabel = protocolNames.first(where: { $0.contains(" · ") }) ?? protocolNames.first else {
+                throw HelperError("Profile \(index) has no native protocol text")
+            }
+            let protocolName: String
+            if let separator = protocolLabel.range(of: " · ", options: .backwards) {
+                protocolName = String(protocolLabel[separator.upperBound...])
+            } else {
+                protocolName = protocolLabel
+            }
+            try require(protocols[index] == nil, "Profile \(index) has duplicate native protocol labels")
+            protocols[index] = protocolName
+        } else if let index = number(in: id, suffix: " action") {
+            let role = try label(element, kAXRoleAttribute)
+            try require(role == kAXButtonRole,
+                        "Profile \(index) action identifier is not a native button")
+            let title = try names(element).first { $0 != id } ?? ""
+            try require(!title.isEmpty, "Profile \(index) has no native action title")
+            if let existing = actions[index] {
+                try require(existing == title, "Profile \(index) has conflicting native action titles")
+                throw HelperError("Profile \(index) has duplicate native action controls")
+            }
             actions[index] = title
         }
     }
 
-    var rows = [[String: Any]]()
-    var seen = Set<Int>()
-    for element in nodes {
-        let id = try identifier(element)
-        guard let index = number(in: id, suffix: " protocol"),
-              try label(element, kAXRoleAttribute) == kAXStaticTextRole else { continue }
-        try require(seen.insert(index).inserted, "Profile \(index) has duplicate native protocol labels")
-
-        let protocolNames = try names(element).filter { $0 != id }
-        guard let protocolLabel = protocolNames.first(where: { $0.contains(" · ") }) ?? protocolNames.first else {
-            throw HelperError("Profile \(index) has no native protocol text")
+    let descriptionIndices = Set(descriptions.keys)
+    let protocolIndices = Set(protocols.keys)
+    let actionIndices = Set(actions.keys)
+    try require(descriptionIndices == protocolIndices,
+                "Rendered profile descriptions and protocols did not have matching identifiers")
+    try require(descriptionIndices == actionIndices,
+                "Rendered profile descriptions and actions did not have matching identifiers")
+    return try descriptionOrder.map { index in
+        guard let name = descriptions[index], let protocolName = protocols[index], let action = actions[index] else {
+            throw HelperError("Profile \(index) is missing rendered description, protocol, or action metadata")
         }
-        let protocolName: String
-        if let separator = protocolLabel.range(of: " · ", options: .backwards) {
-            protocolName = String(protocolLabel[separator.upperBound...])
-        } else {
-            protocolName = protocolLabel
-        }
-
-        guard let parent = try axElement(element, kAXParentAttribute),
-              let siblings = try attribute(parent, kAXChildrenAttribute) as? [AXUIElement] else {
-            throw HelperError("Profile \(index) has no native name row; protocol=\(protocolLabel)")
-        }
-        let parentRole = try label(parent, kAXRoleAttribute)
-        var nameElements = [AXUIElement]()
-        var siblingEvidence = [[String: Any]]()
-        for sibling in siblings {
-            let role = try label(sibling, kAXRoleAttribute)
-            let siblingID = try identifier(sibling)
-            let siblingNames = try names(sibling)
-            siblingEvidence.append(["role": role, "identifier": siblingID, "names": siblingNames])
-            if role == kAXStaticTextRole && siblingID.isEmpty { nameElements.append(sibling) }
-        }
-        guard nameElements.count == 1 else {
-            throw HelperError(
-                "Profile \(index) has missing or ambiguous native name text; " +
-                "protocol=\(protocolLabel) parentRole=\(parentRole) siblings=\(siblingEvidence)"
-            )
-        }
-        guard let name = try names(nameElements[0]).first else {
-            throw HelperError(
-                "Profile \(index) native name element had no text; " +
-                "protocol=\(protocolLabel) parentRole=\(parentRole) siblings=\(siblingEvidence)"
-            )
-        }
-        guard let action = actions[index] else {
-            throw HelperError("Profile \(index) has no native action control")
-        }
-        rows.append(["index": index, "name": name, "protocol": protocolName, "action": action])
+        return ["index": index, "name": name, "protocol": protocolName, "action": action]
     }
-
-    try require(seen == Set(actions.keys), "Rendered profile descriptions and actions did not have matching identifiers")
-    return rows
 }
 
 func profileListLayout(_ nodes: [AXUIElement]) throws -> [String: Any] {
