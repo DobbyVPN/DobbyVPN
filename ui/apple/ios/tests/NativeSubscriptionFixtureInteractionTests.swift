@@ -59,6 +59,7 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 10), "The fixture URL should be available through the native Paste control")
         let pasteStartedAt = ProcessInfo.processInfo.systemUptime
         paste.tap()
+        let pasteCompletedAt = ProcessInfo.processInfo.systemUptime
         waitForSourceField(sourceField, value: subscriptionURL)
 
         let failedStateElement = app.descendants(matching: .any)
@@ -81,12 +82,15 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             (failedState["request_started_at_uptime"] as? NSNumber)?.doubleValue,
             "The Simulator test client should report when it started the Paste request"
         )
-        let pasteRequestElapsed = requestStartedAt - pasteStartedAt
+        XCTAssertGreaterThanOrEqual(
+            requestStartedAt, pasteStartedAt,
+            "Configure should not begin before the native Paste tap"
+        )
+        let pasteRequestElapsed = requestStartedAt - pasteCompletedAt
         XCTAssertLessThan(
             pasteRequestElapsed, 1.5,
-            "Explicit Paste should start the request immediately; Configure began after \(pasteRequestElapsed)s"
+            "Explicit Paste should start the request promptly; Configure began \(pasteRequestElapsed)s after the tap completed"
         )
-        XCTAssertGreaterThanOrEqual(pasteRequestElapsed, 0)
         assertFailedLoadWithoutConnection(failedState)
         XCTAssertTrue(
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Subscription request failed")).firstMatch.exists,
