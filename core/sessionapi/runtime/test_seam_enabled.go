@@ -284,7 +284,7 @@ func (s *recoveryStopSeam) monitorTiming(interval time.Duration, threshold int) 
 	return interval, threshold
 }
 
-func testHealthMonitorTiming(interval time.Duration, threshold int) (time.Duration, int) {
+func testHealthMonitorTiming(interval time.Duration, threshold int) (checkInterval time.Duration, failureThreshold int) {
 	return stopSeam.monitorTiming(interval, threshold)
 }
 

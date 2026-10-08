@@ -11,6 +11,6 @@ func configureTestSeams(*Options) {}
 
 // This inert hook keeps test-only monitor timing out of ordinary product
 // binaries.
-func testHealthMonitorTiming(interval time.Duration, threshold int) (time.Duration, int) {
+func testHealthMonitorTiming(interval time.Duration, threshold int) (checkInterval time.Duration, failureThreshold int) {
 	return interval, threshold
 }
