@@ -187,6 +187,7 @@ class NativeUiInstrumentedTest {
         // Incomplete or invalid URLs must leave Connect disabled without fetching.
         dismissNativeInputAfterTextEntry()
         verifyURLOnlyConnectionSurface()
+        appendFreshPaletteMarkers()
         verifyLogThemeColors()
 
         verifyLogScrollingAndClear()
@@ -572,6 +573,16 @@ class NativeUiInstrumentedTest {
         val destination = File(context.filesDir, "diagnostics/native_logs.jsonl")
         NativeVpnBridge.storeNativeDiagnostic({ destination }, raw) { _, failure ->
             throw AssertionError("ANDROID_SYNTHETIC_LOG_WRITE_FAILED", failure)
+        }
+    }
+
+    private fun appendFreshPaletteMarkers() {
+        val context = instrumentation.targetContext
+        val prefix = "stress-palette-${System.nanoTime()}"
+        paletteMarkers = listOf("INFO", "DEBUG", "WARN", "ERROR").map { level ->
+            val marker = "$prefix-${level.lowercase()}"
+            appendSyntheticDiagnostic(context, marker, level)
+            marker
         }
     }
 
