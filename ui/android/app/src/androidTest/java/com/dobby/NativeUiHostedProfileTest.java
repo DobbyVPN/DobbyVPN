@@ -2890,8 +2890,8 @@ public final class NativeUiHostedProfileTest {
                 controlsBounds = controls == null ? new Rect() : controls.getVisibleBounds();
                 verifyVisibleProfileDisconnectAction(activeIndex, controlsBounds);
             } else {
-                // The active selection belongs to an older inventory, so the
-                // existing standalone Disconnect action is the only valid UI target.
+                // Auto uses the main Disconnect action; an active selection from
+                // another inventory uses the standalone action near the top.
                 JSONArray profiles = expectedConnection.optJSONArray("profiles");
                 scrollControlsToTop(profiles == null ? 0 : profiles.length(), deadline);
             }

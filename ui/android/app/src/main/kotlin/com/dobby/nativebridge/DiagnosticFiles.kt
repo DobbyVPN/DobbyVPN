@@ -6,6 +6,7 @@ import java.io.FileInputStream
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -31,7 +32,7 @@ internal object DiagnosticFiles {
 
     private fun migrate(file: File) {
         val paths = listOf(previous(file), file)
-        if (paths.none { it.length() > THRESHOLD }) return
+        if (paths.none { it.length() > THRESHOLD && hasRecordAfterThreshold(it) }) return
         val stage = File.createTempFile(".diagnostic-migration-", ".jsonl", file.parentFile)
         var output: FileOutputStream? = null
         var original: Throwable? = null
@@ -90,6 +91,25 @@ internal object DiagnosticFiles {
                 if (original != null) original.addSuppressed(cleanupFailure) else throw cleanupFailure
             }
         }
+    }
+
+    // A final whole record can overflow the rotation boundary. Keep its file
+    // identity on startup unless another record follows it.
+    private fun hasRecordAfterThreshold(file: File): Boolean {
+        val size = file.length()
+        if (size <= THRESHOLD) return false
+        RandomAccessFile(file, "r").use { input ->
+            input.seek(THRESHOLD - 1)
+            var remaining = size - THRESHOLD // Exclude the final byte, as an EOF newline is not a following record.
+            val buffer = ByteArray(65_536)
+            while (remaining > 0) {
+                val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                if (count < 0) return false
+                if ((0 until count).any { buffer[it] == 10.toByte() }) return true
+                remaining -= count
+            }
+        }
+        return false
     }
 
     data class Input(val file: File, val stream: FileInputStream, val length: Long)

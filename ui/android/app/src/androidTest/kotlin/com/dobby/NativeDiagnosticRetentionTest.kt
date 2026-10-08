@@ -3,11 +3,13 @@ package com.dobby
 import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.dobby.nativebridge.DiagnosticFiles
 import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.ui.StructuredLogs
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +20,51 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NativeDiagnosticRetentionTest {
+    @Test
+    fun clearBoundarySurvivesStartupWithFinalRecordBeyondRotationThreshold() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = File(context.cacheDir, "diagnostic-overflow-${System.nanoTime()}")
+        assertTrue(directory.mkdir())
+        try {
+            val native = File(directory, "native.jsonl")
+            val boundary = File(directory, "view.json")
+            val view = StructuredLogs(listOf(native.path), boundary)
+            val finalRecord = "{\"message\":\"pre-clear overflow record\"}\n"
+            RandomAccessFile(native, "rw").use { output ->
+                output.setLength(DiagnosticFiles.THRESHOLD - 2)
+                output.seek(DiagnosticFiles.THRESHOLD - 2)
+                output.write(10)
+                output.write(finalRecord.toByteArray(Charsets.UTF_8))
+            }
+
+            val beforeClear = view.readWithRetainedBoundary()
+            assertEquals("", beforeClear.error)
+            assertEquals(listOf("pre-clear overflow record"), beforeClear.entries.map { it.message })
+            view.clear()
+            val cleared = view.readWithRetainedBoundary()
+            assertEquals("", cleared.error)
+            assertTrue(cleared.entries.isEmpty())
+            val clearBoundary = cleared.clearBoundary ?: error("Clear did not retain file boundaries")
+            val oldFileID = beforeClear.entries.single().id.substringBeforeLast(':')
+            assertEquals(native.length(), clearBoundary[oldFileID] ?: -1L)
+
+            val firstAfterClear = "{\"message\":\"first after clear\"}\n"
+            DiagnosticFiles.append(native, firstAfterClear.toByteArray(Charsets.UTF_8))
+            val afterRestartAppend = view.readWithRetainedBoundary(beforeClear.entries, clearBoundary)
+            assertEquals("", afterRestartAppend.error)
+            assertEquals(listOf("first after clear"), afterRestartAppend.entries.map { it.message })
+            assertFalse(afterRestartAppend.retainedEntriesVisible ?: true)
+            RandomAccessFile(File(native.path + ".previous"), "r").use { input ->
+                val bytes = ByteArray(finalRecord.toByteArray(Charsets.UTF_8).size)
+                input.seek(input.length() - bytes.size)
+                input.readFully(bytes)
+                assertArrayEquals(finalRecord.toByteArray(Charsets.UTF_8), bytes)
+            }
+        } finally {
+            assertTrue(directory.deleteRecursively())
+        }
+    }
+
     @Test
     fun structuredViewKeepsOrderingRawDetailsAndDurableClear() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
