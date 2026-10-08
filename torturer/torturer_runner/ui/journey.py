@@ -1114,8 +1114,9 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         if not same_active_generation(current, previous):
             raise NativeUIJourneyError(message)
 
-    def require_disconnect_control() -> dict:
-        view = ui.snapshot()
+    def require_disconnect_control(view: dict | None = None) -> dict:
+        if view is None:
+            view = ui.snapshot()
         if view.get("status") != "Connected":
             raise NativeUIJourneyError("active connection status was not visible during subscription loading")
         controls = view.get("enabled_controls", [])
@@ -1919,8 +1920,8 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     active_again = selected(restored_absent, None)
     # The CLI can report CONNECTED before the frontend's snapshot poll renders
     # it; establish the visible Disconnect precondition before holding Configure.
-    ui.wait_status("Connected")
-    require_disconnect_control()
+    connected_view = ui.wait_status("Connected")
+    require_disconnect_control(connected_view)
 
     # Keep a subscription GET held while the user invokes Disconnect. This
     # proves Configure does not block the foreground action or log refresh.
