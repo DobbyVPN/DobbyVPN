@@ -3,6 +3,7 @@ package diagnostics
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -48,6 +49,169 @@ func TestWholeRecordsRotateAndReplacePrevious(t *testing.T) {
 	}
 	if got := readFile(t, path); got != "fourth\n" {
 		t.Fatal(got)
+	}
+}
+
+func TestReopenKeepsClearBoundaryAcrossWholeRecordOverflow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.jsonl")
+	const limit int64 = 32
+	anchor := "pre-clear anchor crosses threshold\n"
+	if int64(len(anchor)) <= limit {
+		t.Fatal("test anchor must cross the threshold")
+	}
+	writer, err := openWriter(path, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRecord(t, writer, anchor)
+	writeRecord(t, writer, "current\n") // Rotates the complete crossing record to .previous.
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := Capture([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := make(map[string]int64, len(before.Inputs))
+	ids := make(map[string]string, len(before.Inputs))
+	for _, input := range before.Inputs {
+		boundary[input.ID] = input.Size
+		ids[filepath.Base(input.Path)] = input.ID
+	}
+	if err := before.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopening a writer is the startup path that invokes migrateHistory.
+	restarted, err := openWriter(path, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRecord(t, restarted, "post-clear\n")
+	defer func() {
+		if err := restarted.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	after, err := Capture([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := after.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	var visible bytes.Buffer
+	for _, input := range after.Inputs {
+		if previousID, ok := ids[filepath.Base(input.Path)]; ok && previousID != input.ID {
+			t.Errorf("startup migration replaced %s identity: before=%s after=%s", filepath.Base(input.Path), previousID, input.ID)
+		}
+		offset := boundary[input.ID]
+		if _, err := input.CopyTo(&visible, offset); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := visible.String(); got != "post-clear\n" {
+		t.Errorf("clear view exposed prior records or lost the new record: %q", got)
+	}
+
+	// Clear affects the view only; raw export continues to include retained history.
+	destination := filepath.Join(t.TempDir(), "logs.gz")
+	if err := ExportGzip(destination, []string{path}, "header\n"); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed, err := gzip.NewReader(archive)
+	if err != nil {
+		_ = archive.Close()
+		t.Fatal(err)
+	}
+	exported, readErr := io.ReadAll(compressed)
+	closeErr := errors.Join(compressed.Close(), archive.Close())
+	if err := errors.Join(readErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+	for _, retained := range []string{anchor, "current\n", "post-clear\n"} {
+		if !bytes.Contains(exported, []byte(retained)) {
+			t.Errorf("raw export lost retained record %q", retained)
+		}
+	}
+}
+
+func TestMigrationDetectsNewlineAtThresholdBeforeFileEnd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.jsonl")
+	const limit int64 = 8
+	if err := os.WriteFile(path, []byte("1234567\nlegacy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := openWriter(path, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := writer.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if got := readFile(t, path+PreviousSuffix); got != "1234567\n" {
+		t.Fatalf("record ending at threshold was not migrated: %q", got)
+	}
+	if got := readFile(t, path); got != "legacy\n" {
+		t.Fatalf("record after exact-threshold newline was not retained: %q", got)
+	}
+}
+
+func TestOpenWriterPreservesIdentityForUnterminatedOverflowTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.jsonl")
+	const limit int64 = 8
+	content := []byte("unterminated crossing tail")
+	if int64(len(content)) <= limit {
+		t.Fatal("test tail must cross the threshold")
+	}
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := Capture([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Inputs) != 1 {
+		t.Fatalf("captured %d inputs, want 1", len(before.Inputs))
+	}
+	identity := before.Inputs[0].ID
+	if err := before.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	writer, err := openWriter(path, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := writer.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	after, err := Capture([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := after.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if len(after.Inputs) != 1 || after.Inputs[0].ID != identity {
+		t.Fatalf("startup migration changed unterminated-tail identity: before=%s after=%v", identity, after.Inputs)
+	}
+	if got := readFile(t, path); string(content) != got {
+		t.Fatalf("startup migration changed unterminated tail: got %q", got)
 	}
 }
 

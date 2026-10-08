@@ -23,7 +23,13 @@ func migrateHistory(path string, limit int64) (resultErr error) {
 		if !info.Mode().IsRegular() {
 			return &os.PathError{Op: "migrate diagnostic", Path: name, Err: os.ErrInvalid}
 		}
-		oversized = oversized || info.Size() > limit
+		if info.Size() > limit {
+			needsMigration, scanErr := hasRecordAfterLimit(name, limit, info.Size())
+			if scanErr != nil {
+				return scanErr
+			}
+			oversized = oversized || needsMigration
+		}
 		original = info
 	}
 	if !oversized {
@@ -79,6 +85,33 @@ func migrateHistory(path string, limit int64) (resultErr error) {
 	}
 
 	return os.Rename(stage, path)
+}
+
+// A complete record may cross the rotation threshold because WriteRecord
+// rotates only before the next write. Preserve that generation (and its file
+// identity) when the crossing record is the final record in the file. A
+// newline after the crossing record proves there is additional history to
+// normalize. Exclude the final byte so a newline exactly at EOF is valid.
+func hasRecordAfterLimit(path string, limit, size int64) (found bool, resultErr error) {
+	file, err := OpenInput(path)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	reader := bufio.NewReaderSize(io.NewSectionReader(file, limit-1, size-limit), 64*1024)
+	for {
+		_, err := reader.ReadSlice('\n')
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			return false, nil
+		default:
+			return false, err
+		}
+	}
 }
 
 func streamMigration(input io.Reader, path string, limit int64, size *int64, atStart *bool) (resultErr error) {
