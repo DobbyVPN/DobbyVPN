@@ -530,11 +530,6 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
     guard let scrollbar = profileParts.scrollbar else {
         throw HelperError("Profile list viewport has no native vertical scrollbar")
     }
-    guard let minimum = try attribute(scrollbar, kAXMinValueAttribute) as? NSNumber,
-          let maximum = try attribute(scrollbar, kAXMaxValueAttribute) as? NSNumber,
-          maximum.doubleValue > minimum.doubleValue else {
-        throw HelperError("Profile list does not expose an overflowing vertical range")
-    }
     let targetID = position == "top" ? "Profile 1 action" : position == "bottom" ? "Profile 24 action" : nil
     func currentLayout() throws -> [String: Any] {
         try retryTransientAccessibilityReads(
@@ -551,13 +546,83 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
         guard let actual = layout["scroll_position"] as? Double else { return false }
         return abs(actual - targetPercent) <= 1
     }
-    var layout = try currentLayout()
+
+    var initialLayout: [String: Any]?
+    var initialLayoutError: Error?
+    do {
+        initialLayout = try currentLayout()
+    } catch {
+        initialLayoutError = error
+    }
+
+    func diagnosticAttribute(_ element: AXUIElement, _ name: String) -> String {
+        do {
+            guard let value = try attribute(element, name) else { return "<unavailable>" }
+            if let text = value as? String { return String(reflecting: text) }
+            return String(describing: value)
+        } catch {
+            return "<error: \(error)>"
+        }
+    }
+    func diagnosticBounds(_ element: AXUIElement) -> String {
+        do { return String(describing: rectangle(try bounds(element))) }
+        catch { return "<error: \(error)>" }
+    }
+    func diagnosticElement(_ element: AXUIElement) -> String {
+        "role=\(diagnosticAttribute(element, kAXRoleAttribute)) " +
+            "identifier=\(diagnosticAttribute(element, kAXIdentifierAttribute)) " +
+            "bounds=\(diagnosticBounds(element))"
+    }
+    func numericAttribute(_ name: String) -> (number: NSNumber?, detail: String, error: Error?) {
+        do {
+            guard let value = try attribute(scrollbar, name) else { return (nil, "<unavailable>", nil) }
+            guard let number = value as? NSNumber else {
+                return (nil, "<non-numeric: \(String(describing: value))>", nil)
+            }
+            return (number, String(describing: number), nil)
+        } catch {
+            return (nil, "<error: \(error)>", error)
+        }
+    }
+    let minimum = numericAttribute(kAXMinValueAttribute)
+    let maximum = numericAttribute(kAXMaxValueAttribute)
+    let value = numericAttribute(kAXValueAttribute)
+    guard let minimumValue = minimum.number, let maximumValue = maximum.number,
+          maximumValue.doubleValue > minimumValue.doubleValue else {
+        let layoutDetails: String
+        if let initialLayout {
+            layoutDetails = "scroll_position=\(String(describing: initialLayout["scroll_position"] ?? NSNull())) " +
+                "profile_viewport=\(String(describing: initialLayout["profile_viewport"] ?? NSNull())) " +
+                "visible_profile_actions=\(String(describing: initialLayout["visible_profile_actions"] ?? NSNull())) " +
+                "profile_rows=\(String(describing: initialLayout["profile_rows"] ?? NSNull()))"
+        } else {
+            let error = initialLayoutError.map { String(describing: $0) } ?? "layout unavailable"
+            layoutDetails = "<error: \(error)>"
+        }
+        let rangeDetails =
+            "profile-area {\(diagnosticElement(profileParts.area))}; " +
+            "scrollbar {\(diagnosticElement(scrollbar))}; " +
+            "AXMinValue=\(minimum.detail) AXMaxValue=\(maximum.detail) AXValue=\(value.detail); " +
+            "layout {\(layoutDetails)}"
+        if let readError = minimum.error ?? maximum.error {
+            FileHandle.standardError.write(Data("Profile list range read failed; \(rangeDetails)\n".utf8))
+            throw readError
+        }
+        throw HelperError(
+            "Profile list does not expose an overflowing vertical range; " +
+                rangeDetails
+        )
+    }
+    guard var layout = initialLayout else {
+        if let initialLayoutError { throw initialLayoutError }
+        throw HelperError("Native profile-list layout was unavailable before scrolling")
+    }
     if !targetVisible(layout) {
         var settable = DarwinBoolean(false)
         if AXUIElementIsAttributeSettable(scrollbar, kAXValueAttribute as CFString, &settable) == .success,
            settable.boolValue {
-            let targetValue = minimum.doubleValue +
-                (maximum.doubleValue - minimum.doubleValue) * targetPercent / 100
+            let targetValue = minimumValue.doubleValue +
+                (maximumValue.doubleValue - minimumValue.doubleValue) * targetPercent / 100
             if AXUIElementSetAttributeValue(
                 scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
             ) == .success {

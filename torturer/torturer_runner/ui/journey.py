@@ -2039,7 +2039,14 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     expected_logs_control = "Backend logs" if ui.platform == "windows" else "Connection logs"
     if not {"Profile 1 action", "Profile 2 action", expected_logs_control}.issubset(set(layout_view.get("labels", []))):
         raise NativeUIJourneyError("the long profile list hid the top profile actions or desktop logs pane")
-    _exercise_long_profile_list_viewport(ui)
+    def verify_long_profile_list() -> dict[str, object]:
+        _exercise_long_profile_list_viewport(ui)
+        return {"verified": True}
+
+    _native_ui_action(
+        ui, "long-profile-list", "subscription-controls", timeout,
+        verify_long_profile_list,
+    )
     if ui.platform == "windows":
         _exercise_windows_text_size_layout(ui, base, timeout, large_layout, checks)
 
