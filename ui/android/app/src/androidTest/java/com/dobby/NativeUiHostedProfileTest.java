@@ -1060,7 +1060,9 @@ public final class NativeUiHostedProfileTest {
 
             JSONObject emptyInventory = snapshotResult("");
             JSONArray profiles = emptyInventory.optJSONArray("profiles");
-            UiObject2 connect = findUiObject(CONNECTION_ACTION_LABEL);
+            UiObject2 connectLabel = findUiObject(CONNECTION_ACTION_LABEL);
+            UiObject2 connect = connectLabel;
+            while (connect != null && !connect.isClickable()) connect = connect.getParent();
             boolean sourceMatches = subscriptionURL.equals(emptyInventory.optString("source_url"));
             boolean backendUnconfigured = !emptyInventory.optBoolean("configured");
             boolean inventoryEmpty = profiles == null || profiles.length() == 0;
@@ -1069,7 +1071,8 @@ public final class NativeUiHostedProfileTest {
             boolean retryAbsent = retry == null;
             boolean profile1ActionAbsent = profile1Action == null;
             Boolean connectEnabled = connect == null ? null : connect.isEnabled();
-            boolean connectPresentAndDisabled = connect != null && Boolean.FALSE.equals(connectEnabled);
+            boolean connectPresentAndDisabled = connectLabel != null
+                    && connect != null && Boolean.FALSE.equals(connectEnabled);
             ArrayList<String> failedPredicates = new ArrayList<>();
             if (!sourceMatches) failedPredicates.add("sourceMatches");
             if (!backendUnconfigured) failedPredicates.add("backendUnconfigured");
@@ -1086,7 +1089,8 @@ public final class NativeUiHostedProfileTest {
                                 + ", inventoryEmpty=" + inventoryEmpty
                                 + ", retryAbsent=" + retryAbsent
                                 + ", profile1ActionAbsent=" + profile1ActionAbsent
-                                + ", connectPresent=" + (connect != null)
+                                + ", connectPresent=" + (connectLabel != null)
+                                + ", connectActionFound=" + (connect != null)
                                 + ", connectEnabled=" + connectEnabled + "}");
                 try {
                     StringBuilder uiDetails = new StringBuilder("Held saved URL matching UI nodes:")
@@ -2670,6 +2674,7 @@ public final class NativeUiHostedProfileTest {
         markProgress("disconnect", "recovery-stop-state", "observed");
         String stopScreenshot = latestScreenshotLabel();
         UiObject2 mainAction = findUiObject(CONNECTION_ACTION_LABEL);
+        while (mainAction != null && !mainAction.isClickable()) mainAction = mainAction.getParent();
         if (mainAction == null || !mainAction.isEnabled()) {
             throw new IllegalStateException("ANDROID_TEST_RECOVERY_STOP_UI_INVALID");
         }
@@ -3027,6 +3032,7 @@ public final class NativeUiHostedProfileTest {
                 || !"STOP".equals(snapshot.optString("primary_action"))) return false;
         UiObject2 reconnecting = findUiObject("Reconnecting");
         UiObject2 mainAction = findUiObject(CONNECTION_ACTION_LABEL);
+        while (mainAction != null && !mainAction.isClickable()) mainAction = mainAction.getParent();
         UiObject2 stopText = findUiObject("Stop");
         if (reconnecting == null || mainAction == null || stopText == null
                 || !mainAction.isEnabled() || !stopText.isEnabled()) return false;
