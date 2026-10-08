@@ -28,6 +28,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.Configurator
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import com.dobby.ui.MainActivity
@@ -942,11 +943,16 @@ class NativeUiInstrumentedTest {
             By.desc(label).pkg(packageName),
         )
         val deadline = System.currentTimeMillis() + timeoutMillis
-        while (System.currentTimeMillis() < deadline) {
-            for (selector in selectors) {
-                for (candidate in device.findObjects(selector)) {
-                    if (!candidate.visibleBounds.isEmpty) return candidate
+        poll@ while (System.currentTimeMillis() < deadline) {
+            try {
+                for (selector in selectors) {
+                    for (candidate in device.findObjects(selector)) {
+                        if (!candidate.visibleBounds.isEmpty) return candidate
+                    }
                 }
+            } catch (stale: StaleObjectException) {
+                CompleteThrowableReporter.report(instrumentation, stale)
+                continue@poll
             }
             Thread.sleep(100)
         }
