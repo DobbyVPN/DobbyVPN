@@ -2707,9 +2707,7 @@ public final class NativeUiHostedProfileTest {
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
         markProgress("disconnect", "surface", "completed");
         markProgress("disconnect", "disconnect-control", "started");
-        tapUiControl(
-                CONNECTION_ACTION_LABEL,
-                remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
+        tapEnabledControl("Disconnect", deadline);
         markProgress("disconnect", "disconnect-control", "completed");
         markProgress("disconnect", "disconnected-state", "started");
         waitForUiState(
