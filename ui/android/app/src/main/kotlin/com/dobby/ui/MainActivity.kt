@@ -11,6 +11,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +43,23 @@ import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+private const val SOURCE_EDITOR_STATE = "com.dobby.ui.SOURCE_EDITOR_STATE"
+private const val SOURCE_TEXT = "source"
+private const val SOURCE_DIRTY = "dirty"
+private const val SOURCE_LOAD_ERROR = "load_error"
+private const val SOURCE_LOAD_PENDING = "load_pending"
+
+internal data class FrozenLogViewState(
+    val entries: List<LogEntry>,
+    val scrollY: Int,
+    val expandedIds: Set<String>,
+    val clearBoundary: Map<String, Long>,
+)
+
+internal class RetainedLogViewModel : ViewModel() {
+    var frozenView: FrozenLogViewState? = null
+}
+
 class MainActivity : ComponentActivity() {
     companion object {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
@@ -52,6 +71,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private lateinit var controller: SessionController
+    private lateinit var retainedLogViewModel: RetainedLogViewModel
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -63,8 +83,14 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         current = this
         NativeGoSession.attach(this)
-        controller = SessionController(this, savedInstanceState?.getBundle(LOG_VIEW_STATE))
-        if (intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
+        retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
+        controller = SessionController(
+            this,
+            savedInstanceState?.getBundle(LOG_VIEW_STATE),
+            savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
+            retainedLogViewModel,
+        )
+        if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -78,6 +104,8 @@ class MainActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
         if (::controller.isInitialized) {
             controller.saveLogViewState()?.let { outState.putBundle(LOG_VIEW_STATE, it) }
+            controller.saveSourceEditorState()?.let { outState.putBundle(SOURCE_EDITOR_STATE, it) }
+                ?: outState.remove(SOURCE_EDITOR_STATE)
         }
     }
 
@@ -153,8 +181,14 @@ private data class ScreenState(
 private class SessionController(
     private val activity: MainActivity,
     private var restoredLogViewState: Bundle? = null,
+    restoredSourceEditorState: Bundle? = null,
+    private val retainedLogViewModel: RetainedLogViewModel,
 ) {
-    var state by mutableStateOf(ScreenState())
+    var state by mutableStateOf(ScreenState(
+        source = restoredSourceEditorState?.getString(SOURCE_TEXT).orEmpty(),
+        sourceDirty = restoredSourceEditorState?.getBoolean(SOURCE_DIRTY) == true,
+        loadError = restoredSourceEditorState?.getString(SOURCE_LOAD_ERROR).orEmpty(),
+    ))
         private set
 
     private val main = Handler(Looper.getMainLooper())
@@ -172,6 +206,12 @@ private class SessionController(
     private var debounce: Runnable? = null
     private var restoredLoad = ""
     private var acceptedSequence = 0L
+    private var restoredPendingSource = restoredSourceEditorState
+        ?.takeIf { it.getBoolean(SOURCE_LOAD_PENDING) && it.getString(SOURCE_LOAD_ERROR).isNullOrEmpty() }
+        ?.getString(SOURCE_TEXT)
+    @Volatile private var retainedLogViewState = retainedLogViewModel.frozenView
+    @Volatile private var retainedLogViewValid: Boolean? = null
+    @Volatile private var latestClearBoundary: Map<String, Long>? = null
     private val clipboard = activity.getSystemService(ClipboardManager::class.java)
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
         refreshClipboard()
@@ -194,6 +234,7 @@ private class SessionController(
     }
 
     fun sourceChanged(value: String, immediate: Boolean = false) {
+        restoredPendingSource = null
         val source = value.trim()
         val uri = runCatching { java.net.URI(source) }.getOrNull()
         val alreadyAccepted = !immediate && uri?.scheme?.lowercase() == "https" &&
@@ -284,9 +325,41 @@ private class SessionController(
                 }
                 return null
             }
-            find(content)?.saveState()
+            find(content)?.let { logView ->
+                if (logView.hasStableState()) {
+                    val boundary = latestClearBoundary
+                    retainedLogViewModel.frozenView = if (boundary == null) null else {
+                        logView.frozenState(boundary.toMap())?.takeIf {
+                            diagnosticView.entriesVisibleAfterClear(it.entries, boundary)
+                        }
+                    }
+                    retainedLogViewState = retainedLogViewModel.frozenView
+                }
+                logView.saveState()
+            }
         }
     }.getOrNull()
+
+    fun saveSourceEditorState(): Bundle? {
+        if (!state.sourceDirty) return null
+        return Bundle().apply {
+            putString(SOURCE_TEXT, state.source)
+            putBoolean(SOURCE_DIRTY, true)
+            putString(SOURCE_LOAD_ERROR, state.loadError)
+            putBoolean(SOURCE_LOAD_PENDING,
+                state.loadError.isEmpty() && (restoredPendingSource != null || scheduledSource != null || pendingLoad != null || loadInFlight || inFlightSource != null))
+        }
+    }
+
+    fun restoreRetainedLogView(view: LiveLogView) {
+        val retained = retainedLogViewState ?: return
+        val valid = retainedLogViewValid ?: return
+        if (retainedLogViewState !== retained) return
+        if (valid) view.restoreFrozenState(retained) else view.resetToLatest()
+        retainedLogViewState = null
+        retainedLogViewValid = null
+        retainedLogViewModel.frozenView = null
+    }
 
     fun isStopTarget(index: Int?): Boolean {
         val s = state.session
@@ -438,8 +511,15 @@ private class SessionController(
 
 
     private fun readLogs() {
-        val (entries, error) = diagnosticView.read()
-        main.post { state = state.copy(logs = entries, logsError = error) }
+        val retained = retainedLogViewState
+        val result = diagnosticView.readWithRetainedBoundary(retained?.entries, retained?.clearBoundary)
+        main.post {
+            latestClearBoundary = result.clearBoundary
+            if (retained != null && retainedLogViewState === retained) {
+                retainedLogViewValid = result.retainedEntriesVisible == true
+            }
+            state = state.copy(logs = result.entries, logsError = result.error)
+        }
     }
 
     fun clearLogs() {
@@ -553,6 +633,10 @@ private class SessionController(
                     },
                     busy = if (clearBusy) false else state.busy,
                 )
+                restoredPendingSource?.takeIf { current.sessionId.isNotEmpty() }?.let { source ->
+                    restoredPendingSource = null
+                    importSubscription(source)
+                }
                 val restoreKey = current.sessionId + "|" + state.source
                 if (!current.configured && !state.sourceDirty && state.source.isNotEmpty() && restoredLoad != restoreKey) {
                     restoredLoad = restoreKey
@@ -759,7 +843,10 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
             factory = { controller.createLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f)
                 .clipToBounds(),
-            update = { it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor) },
+            update = {
+                controller.restoreRetainedLogView(it)
+                it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor)
+            },
         )
     }
 }
@@ -812,6 +899,31 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         }.groupBy({ it.first }, { it.second }).mapValues { (_, offsets) -> offsets.maxOrNull() ?: 0L }
         putStringArrayList("visible_stream_ids", ArrayList(visibleBoundaries.keys))
         putLongArray("visible_stream_offsets", visibleBoundaries.values.toLongArray())
+    }
+
+    fun hasStableState(): Boolean = hasRendered && !awaitingRestoredEntries
+
+    fun frozenState(clearBoundary: Map<String, Long>): FrozenLogViewState? = if (following) null else {
+        FrozenLogViewState(rendered.toList(), scrollY, expanded.toSet(), clearBoundary.toMap())
+    }
+
+    fun restoreFrozenState(state: FrozenLogViewState) {
+        following = false
+        expanded.clear()
+        expanded.addAll(state.expandedIds)
+        restoredScrollY = state.scrollY.coerceAtLeast(0)
+        awaitingRestoredEntries = false
+        restoredVisibleBoundaries = null
+        hasRendered = true
+        render(state.entries)
+    }
+
+    fun resetToLatest() {
+        following = true
+        expanded.clear()
+        restoredScrollY = null
+        awaitingRestoredEntries = false
+        restoredVisibleBoundaries = null
     }
 
     override fun onInterceptTouchEvent(event: android.view.MotionEvent): Boolean {

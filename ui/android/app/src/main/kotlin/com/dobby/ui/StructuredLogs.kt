@@ -8,6 +8,13 @@ import java.time.Instant
 
 data class LogEntry(val id: String, val timestamp: String, val level: String, val source: String, val message: String, val raw: String, val time: Instant?)
 
+internal data class LogReadResult(
+    val entries: List<LogEntry>,
+    val error: String,
+    val clearBoundary: Map<String, Long>?,
+    val retainedEntriesVisible: Boolean?,
+)
+
 internal class StructuredLogs(private val paths: List<String>, private val boundary: File) {
     private fun names() = paths.flatMap { listOf(it + ".previous", it) }
     private fun identity(input: java.io.FileInputStream): String = Os.fstat(input.fd).let { "${it.st_dev}:${it.st_ino}" }
@@ -28,11 +35,20 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
         catch (failure: Exception) { atomic.failWrite(output); throw failure }
     }
 
-    fun read(): Pair<List<LogEntry>, String> {
+    fun read(): Pair<List<LogEntry>, String> = readWithRetainedBoundary(null, null).let { it.entries to it.error }
+
+    fun readWithRetainedBoundary(
+        retainedEntries: List<LogEntry>? = null,
+        retainedClearBoundary: Map<String, Long>? = null,
+    ): LogReadResult {
         val entries = mutableListOf<LogEntry>()
         val errors = mutableListOf<String>()
         val offsets = try { if (boundary.exists()) JSONObject(AtomicFile(boundary).openRead().bufferedReader().use { it.readText() }) else JSONObject() }
-            catch (failure: Exception) { return emptyList<LogEntry>() to "Viewing boundary: ${failure.stackTraceToString()}" }
+            catch (failure: Exception) { return LogReadResult(emptyList(), "Viewing boundary: ${failure.stackTraceToString()}", null, false) }
+        val clearBoundary = offsets.keys().asSequence().associateWith { offsets.optLong(it) }
+        val retainedEntriesVisible = retainedEntries?.let {
+            retainedClearBoundary == clearBoundary && entriesVisibleAfterClear(it, clearBoundary)
+        }
         names().forEach { path ->
             try {
                 File(path).inputStream().use { input ->
@@ -73,7 +89,13 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
         val datedEntries = datedPositions.map { entries[it] }.sortedWith(compareBy<LogEntry> { it.time })
         val ordered = entries.toMutableList()
         datedPositions.zip(datedEntries).forEach { (position, entry) -> ordered[position] = entry }
-        return ordered to errors.joinToString("\n")
+        return LogReadResult(ordered, errors.joinToString("\n"), clearBoundary, retainedEntriesVisible)
+    }
+
+    fun entriesVisibleAfterClear(entries: List<LogEntry>, clearBoundary: Map<String, Long>): Boolean = entries.all { entry ->
+        val separator = entry.id.lastIndexOf(':')
+        val offset = entry.id.substring(separator + 1).toLongOrNull()
+        separator >= 0 && offset != null && offset >= clearBoundary.getOrDefault(entry.id.substring(0, separator), 0L)
     }
 
     companion object {

@@ -191,7 +191,7 @@ class NativeUiInstrumentedTest {
         appendFreshPaletteMarkers()
         verifyLogThemeColors()
 
-        verifyLogScrollingAndClear()
+        verifyLogScrollingAndClear(expectedSource = "invalidprofile")
 
         // Navigate only after typing so a real control transition proves the
         // Entry focus/IME teardown completed and the entered source survives
@@ -686,7 +686,7 @@ class NativeUiInstrumentedTest {
         return checkNotNull(found[0]) { "ANDROID_LOG_VIEW_MISSING" }
     }
 
-    private fun verifyLogScrollingAndClear() {
+    private fun verifyLogScrollingAndClear(expectedSource: String? = null) {
         val context = instrumentation.targetContext
         val processRestartFixture = File(context.filesDir, "test-clear-process-restart.json")
         check(!processRestartFixture.exists() || processRestartFixture.delete()) {
@@ -717,13 +717,27 @@ class NativeUiInstrumentedTest {
             Selection.removeSelection(text)
         }
 
+        val sourceSelector = By.clazz("android.widget.EditText").pkg(packageName)
+        val sourceBeforeRecreate = if (expectedSource == null) null else device.findObject(sourceSelector)?.text?.toString()
+        check(expectedSource == null || sourceBeforeRecreate == expectedSource) {
+            "ANDROID_UI_SOURCE_DRAFT_NOT_READY expected=$expectedSource actual=$sourceBeforeRecreate"
+        }
         instrumentation.runOnMainSync { MainActivity.current?.recreate() }
         waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)
         waitForTextContaining("$prefix-79")
         val restored = requireObject("Connection logs").text.orEmpty()
-        check(restored == frozen && !restored.contains(pending) && logScrollY() > 0
-                && logScrollY() <= frozenScrollY + 32) {
-            "ANDROID_LOG_FROZEN_VIEW_DID_NOT_SURVIVE_ACTIVITY_RECREATION " + logGeometry()
+        val restoredScrollY = logScrollY()
+        val textEqual = restored == frozen
+        val pendingAbsent = !restored.contains(pending)
+        val scrollInRange = restoredScrollY > 0 && restoredScrollY <= frozenScrollY + 32
+        val sourceAfterRecreate = if (expectedSource == null) null else device.findObject(sourceSelector)?.text?.toString()
+        val sourcePreserved = expectedSource == null || sourceAfterRecreate == sourceBeforeRecreate
+        check(textEqual && pendingAbsent && scrollInRange && sourcePreserved) {
+            "ANDROID_LOG_FROZEN_VIEW_DID_NOT_SURVIVE_ACTIVITY_RECREATION " +
+                "text_equal=$textEqual pending_absent=$pendingAbsent scroll_in_range=$scrollInRange " +
+                "expected_scroll_y=$frozenScrollY actual_scroll_y=$restoredScrollY " +
+                "source_preserved=$sourcePreserved expected_source=$expectedSource " +
+                "source_before=$sourceBeforeRecreate source_after=$sourceAfterRecreate " + logGeometry()
         }
         val scrollDeadline = System.currentTimeMillis() + 10_000
         while (logCanScrollDown() && System.currentTimeMillis() < scrollDeadline) {
