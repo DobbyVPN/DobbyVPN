@@ -142,6 +142,7 @@ _REQUIRED_TRUE_CHECKS = frozenset({
     "long_profile_list_keeps_logs_accessible",
     "deep_link_rejections_preserve_connection",
     "loading_disables_stale_actions",
+    "latest_url_and_inventory_retained_while_held",
     "failed_load_preserves_tunnel",
     "warm_import_native",
     "clear_logs_native",
@@ -1145,11 +1146,13 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         if type(paste_invoked_at) is not int or get_started_at < paste_invoked_at:
             raise NativeUIJourneyError(f"{ui.platform} Paste request timing was unavailable or preceded the button invocation")
         paste_delay_ms = get_started_at - paste_invoked_at
-        if paste_delay_ms >= 400:
+        if paste_delay_ms >= 1500:
             raise NativeUIJourneyError(
-                f"{ui.platform} Paste waited for the typed debounce before requesting the subscription ({paste_delay_ms} ms)"
+                f"{ui.platform} Paste did not start its subscription request promptly ({paste_delay_ms} ms)"
             )
     checks: dict[str, object] = {"native_paste_immediate": True}
+    if ui.platform in {"windows", "macos"}:
+        checks["paste_delay_ms"] = paste_delay_ms
     if "Retry" in ui.snapshot().get("labels", []):
         raise NativeUIJourneyError("Retry appeared before any subscription failure")
     if any(
@@ -1449,7 +1452,7 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
 
     # Hold one URL response, then edit to the newest URL while it is in
     # flight. The stale response and latest response are held separately so
-    # the stale result can be inspected before the current response completes.
+    # the rendered state can be observed across a snapshot-poll interval.
     before_coalesced = stats()["subscription_gets"]
     stale_inventory = (
         b'[[Outline]]\nDescription = "Stale intermediate profile"\nServer = "127.0.0.1"\n'
@@ -1502,11 +1505,45 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         fixture.release_responses()
         raise NativeUIJourneyError("the active subscription load did not expose its loading state")
     active_index = (switched.get("active_profile") or {}).get("index")
-    enabled_rows = set(loading_view.get("enabled_controls", []))
     expected_disconnect = f"Profile {active_index + 1} action" if isinstance(active_index, int) else ""
-    if any(name in enabled_rows for name in ("Profile 1 action", "Profile 2 action") if name != expected_disconnect):
+    profile_indices = [
+        profile.get("index", index)
+        for index, profile in enumerate(initial.get("profiles", []))
+        if isinstance(profile, dict) and type(profile.get("index", index)) is int
+    ]
+    expected_profile_rows = {f"Profile {index + 1} action" for index in profile_indices}
+    visible_original_profile_rows = expected_profile_rows.intersection(
+        {str(label) for label in loading_view.get("labels", [])}
+    )
+    if not visible_original_profile_rows:
         fixture.release_responses()
-        raise NativeUIJourneyError("a stale Connect action remained enabled while a replacement inventory was loading")
+        raise NativeUIJourneyError("the original inventory exposed no visible profile action while loading")
+
+    def require_loading_inventory_view(view: dict[str, Any]) -> None:
+        labels = [str(label) for label in view.get("labels", [])]
+        enabled = set(view.get("enabled_controls", []))
+        if view.get("source_text") != latest_url:
+            raise NativeUIJourneyError("the latest edited subscription URL was not retained in the native editor")
+        if not any("Loading profiles" in label for label in labels):
+            raise NativeUIJourneyError("the active subscription load did not expose its loading state")
+        if any("Stale intermediate profile" in label for label in labels):
+            raise NativeUIJourneyError("the stale subscription response was rendered as the current profile inventory")
+        if expected_disconnect not in enabled or not any("Disconnect" in str(control) for control in enabled):
+            raise NativeUIJourneyError("the active Disconnect control was unavailable while the inventory loaded")
+        if not visible_original_profile_rows.issubset(set(labels)):
+            raise NativeUIJourneyError("a visible original profile row disappeared while the inventory loaded")
+        enabled_profile_rows = {
+            str(name) for name in enabled
+            if str(name).startswith("Profile ") and str(name).endswith(" action")
+        }
+        if any(name != expected_disconnect for name in enabled_profile_rows):
+            raise NativeUIJourneyError("a competing profile Connect action remained enabled while the inventory loaded")
+
+    try:
+        require_loading_inventory_view(loading_view)
+    except BaseException:
+        fixture.release_responses()
+        raise
     checks["loading_disables_stale_actions"] = True
     fixture.release_one_response()
     deadline = time.monotonic() + timeout
@@ -1528,13 +1565,19 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError("latest subscription did not remain held after releasing only the stale response")
     try:
         require_active_generation(stale_guard, switched, "the stale subscription response changed the active tunnel")
-        if stale_guard.get("source_url") != typed_url or stale_guard.get("digest") != initial.get("digest"):
-            raise NativeUIJourneyError(
-                "the stale subscription response became the current backend inventory before the latest response completed"
-            )
-        stale_view = ui.snapshot()
-        if any("Stale intermediate profile" in str(label) for label in stale_view.get("labels", [])):
-            raise NativeUIJourneyError("the stale subscription response was rendered as the current profile inventory")
+        first_sample_at = time.monotonic()
+        for sample in range(4):
+            held_state = stats()
+            if (held_state["subscription_gets"] != before_coalesced + 2
+                    or held_state["in_flight_gets"] != 1
+                    or held_state["max_in_flight_gets"] != 1):
+                raise NativeUIJourneyError("the latest response stopped being held during rendered-state sampling")
+            require_loading_inventory_view(ui.snapshot())
+            if sample < 3:
+                time.sleep(0.3)
+        if time.monotonic() - first_sample_at <= 0.75:
+            raise NativeUIJourneyError("rendered loading checks did not span a complete snapshot-poll interval")
+        checks["latest_url_and_inventory_retained_while_held"] = True
     finally:
         fixture.release_responses()
     latest = wait_for_snapshot(

@@ -185,6 +185,24 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             self.assertIs(controller.connection_action_details(), response)
         call.assert_called_once_with("connection-action-details")
 
+    def test_snapshot_preserves_readback_of_native_subscription_editor(self):
+        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
+        controller.platform = "macos"
+        controller.window_id = None
+        controller.reconnecting_seen = False
+        response = {
+            "ready": True,
+            "window_count": 1,
+            "window_id": "window-1",
+            "labels": ["Connected"],
+            "enabled_controls": [],
+            "source_text": "https://example.invalid/latest",
+        }
+        with patch.object(controller, "_call", return_value=response) as call:
+            snapshot = controller.snapshot()
+        call.assert_called_once_with("tree")
+        self.assertEqual(snapshot["source_text"], "https://example.invalid/latest")
+
     def test_macos_connection_action_requires_exact_enabled_native_press(self):
         source = MACOS_NATIVE_UI_HELPER.read_text(encoding="utf-8")
         press_start = source.index("func pressConnectionAction(")

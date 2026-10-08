@@ -333,6 +333,176 @@ final class SessionViewModelTests: XCTestCase {
         XCTAssertTrue(stopped, "The active profile outside the new inventory must still be disconnectable")
     }
 
+    @MainActor
+    func testHeldSupersededLoadKeepsDisplayedInventoryUntilNewestLoadSucceeds() async throws {
+        let original = "https://example.invalid/original"
+        let stale = "https://example.invalid/stale"
+        let newest = "https://example.invalid/newest"
+        let originalProfiles: [[String: Any]] = [
+            ["index": 0, "protocol": "Outline", "description": "Original one"],
+            ["index": 1, "protocol": "Xray", "description": "Original active"],
+        ]
+        let fixture = try ViewModelFixture(initialSource: original)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        fixture.client.setSnapshotOverrides([
+            "configured": true,
+            "source_url": original,
+            "digest": "original-digest",
+            "profiles": originalProfiles,
+            "state": "CONNECTED",
+            "primary_action": "STOP",
+            "active_profile": originalProfiles[1],
+            "active_digest": "original-digest",
+            "active_mode": "PROFILE_INDEX",
+            "active_index": 1,
+            "can_switch": true,
+        ])
+        fixture.client.setConfigureSnapshotOverrides(stale, values: [
+            "configured": true,
+            "source_url": stale,
+            "digest": "stale-digest",
+            "profiles": [["index": 0, "protocol": "Outline", "description": "Stale response"]],
+            "sequence": 2,
+            "generation": 8,
+            "state": "CONNECTED",
+            "primary_action": "STOP",
+            "active_profile": originalProfiles[1],
+            "active_digest": "original-digest",
+            "active_mode": "PROFILE_INDEX",
+            "active_index": 1,
+            "pending_target": ["digest": "original-digest", "mode": "PROFILE_INDEX", "index": 1],
+            "last_failure": ["code": "RECOVERY_PROBE_FAILED", "message": "previous probe failed"],
+            "recovering": true,
+            "can_switch": false,
+        ])
+        fixture.client.setConfigureSnapshotOverrides(newest, values: [
+            "configured": true,
+            "source_url": newest,
+            "digest": "newest-digest",
+            "profiles": [["index": 0, "protocol": "TrustTunnel", "description": "Newest profile"]],
+            "sequence": 3,
+            "generation": 9,
+            "state": "CONNECTED",
+            "primary_action": "STOP",
+            "active_profile": originalProfiles[1],
+            "active_digest": "original-digest",
+            "active_mode": "PROFILE_INDEX",
+            "active_index": 1,
+            "pending_target": NSNull(),
+            "last_failure": NSNull(),
+            "recovering": false,
+            "can_switch": true,
+        ])
+        fixture.client.holdConfigure(stale)
+        fixture.client.holdConfigure(newest)
+        fixture.client.failNextConfigure(newest)
+        let model = DobbySessionViewModel(client: fixture.client)
+        await waitForSnapshot(model) { $0.sourceURL == original && $0.digest == "original-digest" }
+
+        model.sourceChanged(stale, immediate: true)
+        let staleStarted = await waitUntil(timeout: 2) { fixture.client.startedConfigureSources == [stale] }
+        XCTAssertTrue(staleStarted)
+        model.sourceChanged(newest, immediate: true)
+        fixture.client.releaseConfigure(stale)
+        let newestStarted = await waitUntil(timeout: 2) {
+            fixture.client.startedConfigureSources == [stale, newest]
+        }
+        XCTAssertTrue(newestStarted)
+
+        let staleSnapshotPolled = await waitUntil(timeout: 2) { model.snapshot.sequence == 2 }
+        XCTAssertTrue(staleSnapshotPolled, "The stale completion should still refresh live session state")
+        XCTAssertTrue(model.loading, "The newest held request must remain visible as loading")
+        XCTAssertEqual(model.sourceText, newest)
+        XCTAssertEqual(model.snapshot.sourceURL, original)
+        XCTAssertEqual(model.snapshot.digest, "original-digest")
+        XCTAssertEqual(model.snapshot.profiles.map(\.name), ["Original one", "Original active"])
+        XCTAssertTrue(model.snapshot.configured)
+        XCTAssertEqual(model.snapshot.generation, 8)
+        XCTAssertEqual(model.snapshot.state, "CONNECTED")
+        XCTAssertEqual(model.snapshot.primaryAction, "STOP")
+        XCTAssertEqual(model.snapshot.activeProfile?.name, "Original active")
+        XCTAssertEqual(model.snapshot.activeDigest, "original-digest")
+        XCTAssertEqual(model.snapshot.activeMode, "PROFILE_INDEX")
+        XCTAssertEqual(model.snapshot.activeIndex, 1)
+        XCTAssertEqual(model.snapshot.pendingTarget?.mode, "PROFILE_INDEX")
+        XCTAssertEqual(model.snapshot.pendingTarget?.index, 1)
+        XCTAssertEqual(model.snapshot.lastFailure?.code, "RECOVERY_PROBE_FAILED")
+        XCTAssertEqual(model.snapshot.lastFailure?.message, "previous probe failed")
+        XCTAssertTrue(model.snapshot.recovering)
+        XCTAssertFalse(model.snapshot.canSwitch)
+        XCTAssertEqual(model.status, "Reconnecting")
+        XCTAssertFalse(model.inventoryReady)
+        XCTAssertTrue(model.canAct(1), "The active Disconnect action must stay available during loading")
+        XCTAssertFalse(model.canAct(0), "A competing Connect action must stay disabled during loading")
+        XCTAssertEqual(fixture.client.maximumConcurrentConfigures, 1)
+
+        fixture.client.releaseConfigure(newest)
+        let newestFailed = await waitUntil(timeout: 2) { !model.loading && !model.loadError.isEmpty }
+        XCTAssertTrue(newestFailed, "The newest Configure failure should be reported")
+        XCTAssertEqual(model.sourceText, newest)
+        XCTAssertEqual(model.snapshot.sourceURL, original)
+        XCTAssertEqual(model.snapshot.digest, "original-digest")
+        XCTAssertEqual(model.snapshot.profiles.map(\.name), ["Original one", "Original active"])
+        XCTAssertEqual(model.snapshot.generation, 8)
+        XCTAssertTrue(model.snapshot.recovering)
+        XCTAssertEqual(model.snapshot.pendingTarget?.index, 1)
+        XCTAssertEqual(model.snapshot.lastFailure?.code, "RECOVERY_PROBE_FAILED")
+        XCTAssertFalse(model.snapshot.canSwitch)
+        XCTAssertTrue(model.canAct(1))
+        XCTAssertEqual(fixture.client.startedConfigureSources, [stale, newest])
+
+        model.retryLoad()
+        let retried = await waitUntil(timeout: 2) {
+            model.inventoryReady && model.snapshot.sourceURL == newest && model.snapshot.digest == "newest-digest"
+        }
+        XCTAssertTrue(retried, "Retry should admit the newest inventory after its receipt is accepted")
+        XCTAssertEqual(model.sourceText, newest)
+        XCTAssertEqual(model.snapshot.profiles.map(\.name), ["Newest profile"])
+        XCTAssertEqual(model.snapshot.generation, 9)
+        XCTAssertEqual(model.snapshot.activeProfile?.name, "Original active")
+        XCTAssertEqual(model.snapshot.activeDigest, "original-digest")
+        XCTAssertEqual(model.snapshot.activeMode, "PROFILE_INDEX")
+        XCTAssertEqual(model.snapshot.activeIndex, 1)
+        XCTAssertNil(model.snapshot.pendingTarget)
+        XCTAssertNil(model.snapshot.lastFailure)
+        XCTAssertFalse(model.snapshot.recovering)
+        XCTAssertTrue(model.snapshot.canSwitch)
+        XCTAssertEqual(fixture.client.startedConfigureSources, [stale, newest, newest])
+        XCTAssertEqual(fixture.client.maximumConcurrentConfigures, 1)
+    }
+
+    @MainActor
+    func testNewSessionInventoryReplacesDisplayedInventoryWhileSourceIsDirty() async throws {
+        let original = "https://example.invalid/original-session"
+        let replacement = "https://example.invalid/replacement-session"
+        let fixture = try ViewModelFixture(initialSource: original)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        fixture.client.setSnapshotOverrides([
+            "configured": true,
+            "source_url": original,
+            "digest": "original-session-digest",
+            "profiles": [["index": 0, "protocol": "Outline", "description": "Original session profile"]],
+        ])
+        let model = DobbySessionViewModel(client: fixture.client)
+        await waitForSnapshot(model) { $0.sourceURL == original && $0.digest == "original-session-digest" }
+        model.sourceChanged("not a subscription URL")
+
+        fixture.client.replaceSession(
+            id: "replacement-session",
+            source: replacement,
+            digest: "replacement-session-digest",
+            profiles: [["index": 0, "protocol": "Xray", "description": "Replacement session profile"]]
+        )
+        model.refreshSnapshot()
+        await waitForSnapshot(model) { $0.sessionID == "replacement-session" }
+
+        XCTAssertEqual(model.sourceText, "not a subscription URL", "An edited field stays visible while its request is invalid")
+        XCTAssertEqual(model.snapshot.sourceURL, replacement)
+        XCTAssertEqual(model.snapshot.digest, "replacement-session-digest")
+        XCTAssertEqual(model.snapshot.profiles.map(\.name), ["Replacement session profile"])
+        XCTAssertTrue(fixture.client.startedConfigureSources.isEmpty)
+    }
+
     func testProfileMetadataKeepsOrderProtocolAndEmptyDescriptionFallback() throws {
         let data = Data(#"[{"index":0,"protocol":"Outline","description":""},{"index":1,"protocol":"Xray","description":"Second profile"}]"#.utf8)
         let profiles = try JSONDecoder().decode([DobbyProfile].self, from: data)
@@ -391,6 +561,7 @@ private final class ViewModelTestClient: DobbySessionClient, @unchecked Sendable
 
     private let condition = NSCondition()
     private var sequence: Int64 = 1
+    private var sessionID = "test-session"
     private var configuredSource: String
     private var inventoryConfigured: Bool
     private var heldSources = Set<String>()
@@ -455,6 +626,15 @@ private final class ViewModelTestClient: DobbySessionClient, @unchecked Sendable
         configureSnapshotOverrides[source] = values
     }
 
+    func replaceSession(id: String, source: String, digest: String, profiles: [[String: Any]]) {
+        condition.lock(); defer { condition.unlock() }
+        sessionID = id
+        sequence = 1
+        configuredSource = source
+        inventoryConfigured = true
+        snapshotOverrides = ["digest": digest, "profiles": profiles]
+    }
+
     func holdStarts() {
         condition.lock(); defer { condition.unlock() }
         startsHeld = true
@@ -491,7 +671,7 @@ private final class ViewModelTestClient: DobbySessionClient, @unchecked Sendable
             let source = configuredSource
             let configured = inventoryConfigured
             var result: [String: Any] = [
-                "session_id": "test-session", "sequence": currentSequence, "generation": 1,
+                "session_id": sessionID, "sequence": currentSequence, "generation": 1,
                 "state": "CONNECTED", "primary_action": "STOP", "configured": configured,
                 "source_url": source, "source_error": "", "digest": "digest",
                 "active_digest": "digest", "active_mode": "AUTO_SELECT", "can_switch": true,

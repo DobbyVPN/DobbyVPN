@@ -274,9 +274,17 @@ public sealed partial class MainWindow : Window
         try
         {
             var result = await ReadSnapshotAsync();
-            if (result.SessionId == _snapshot?.SessionId && result.Sequence < Math.Max(_snapshot.Sequence, _acceptedSequence)) return;
-            var recoveringFromSnapshotError = _snapshot is null || StatusText.Text == "Error";
-            if (result.SessionId != _snapshot?.SessionId) _acceptedSequence = 0;
+            var previous = _snapshot;
+            if (result.SessionId == previous?.SessionId && result.Sequence < Math.Max(previous.Sequence, _acceptedSequence)) return;
+            var recoveringFromSnapshotError = previous is null || StatusText.Text == "Error";
+            if (result.SessionId != previous?.SessionId) _acceptedSequence = 0;
+            else if (_sourceDirty && previous is not null)
+            {
+                result.Configured = previous.Configured;
+                result.SourceUrl = previous.SourceUrl;
+                result.Digest = previous.Digest;
+                result.Profiles = previous.Profiles;
+            }
             _snapshot = result;
             StatusText.Text = result.Recovering ? "Reconnecting" : result.State switch
             {
@@ -772,14 +780,14 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("generation")] public long Generation { get; init; }
         [JsonPropertyName("state")] public string State { get; init; } = "IDLE";
         [JsonPropertyName("primary_action")] public string PrimaryAction { get; init; } = "NONE";
-        [JsonPropertyName("configured")] public bool Configured { get; init; }
-        [JsonPropertyName("source_url")] public string SourceUrl { get; init; } = "";
+        [JsonPropertyName("configured")] public bool Configured { get; set; }
+        [JsonPropertyName("source_url")] public string SourceUrl { get; set; } = "";
         [JsonPropertyName("source_error")] public string SourceError { get; init; } = "";
         [JsonPropertyName("active_profile")] public Profile? ActiveProfile { get; init; }
         [JsonPropertyName("last_failure")] public Failure? LastFailure { get; init; }
         [JsonPropertyName("recovering")] public bool Recovering { get; init; }
-        [JsonPropertyName("digest")] public string Digest { get; init; } = "";
-        [JsonPropertyName("profiles")] public Profile[] Profiles { get; init; } = [];
+        [JsonPropertyName("digest")] public string Digest { get; set; } = "";
+        [JsonPropertyName("profiles")] public Profile[] Profiles { get; set; } = [];
         [JsonPropertyName("active_digest")] public string ActiveDigest { get; init; } = "";
         [JsonPropertyName("active_mode")] public string ActiveMode { get; init; } = "";
         [JsonPropertyName("active_index")] public int ActiveIndex { get; init; }

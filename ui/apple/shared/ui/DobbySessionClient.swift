@@ -16,14 +16,14 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let generation: Int64
     public let state: String
     public let primaryAction: String
-    public let configured: Bool
-    public let sourceURL: String
+    public internal(set) var configured: Bool
+    public internal(set) var sourceURL: String
     public let sourceError: String
     public let activeProfile: DobbyProfile?
     public let lastFailure: DobbyFailure?
     public let recovering: Bool
-    public let digest: String
-    public let profiles: [DobbyProfile]
+    public internal(set) var digest: String
+    public internal(set) var profiles: [DobbyProfile]
     public let activeDigest: String
     public let activeMode: String
     public let activeIndex: Int

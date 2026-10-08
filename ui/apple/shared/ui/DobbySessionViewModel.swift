@@ -187,8 +187,16 @@ public final class DobbySessionViewModel: ObservableObject {
                 switch decoded {
                 case let .success((value, reattached)):
                     if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
-                    if value.sessionID != self.snapshot.sessionID { self.acceptedSequence = 0 }
-                    self.snapshot = value
+                    let sameSession = value.sessionID == self.snapshot.sessionID
+                    if !sameSession { self.acceptedSequence = 0 }
+                    var displayedValue = value
+                    if sameSession && self.sourceIsDirty {
+                        displayedValue.configured = self.snapshot.configured
+                        displayedValue.sourceURL = self.snapshot.sourceURL
+                        displayedValue.digest = self.snapshot.digest
+                        displayedValue.profiles = self.snapshot.profiles
+                    }
+                    self.snapshot = displayedValue
                     if let failure = value.lastFailure {
                         let details = "\(failure.message) (\(failure.code))"
                         if self.lastFailure != details { self.recordError(details) }

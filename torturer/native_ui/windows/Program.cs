@@ -2036,6 +2036,7 @@ internal static class Program
                 string[] labels;
                 string[] enabled_controls;
                 string[] help_texts;
+                string? source_text = null;
                 try
                 {
                     TracePhase("tree-uia-targeted-start");
@@ -2055,6 +2056,12 @@ internal static class Program
                     if (profileCount >= 8192)
                         throw new InvalidOperationException("Visible profile actions exceed 8192 controls");
 
+                    var sourceEditor = visibleControls.FirstOrDefault(element =>
+                        element.Current.AutomationId == "Connection configuration");
+                    if (sourceEditor is not null &&
+                        sourceEditor.TryGetCurrentPattern(ValuePattern.Pattern, out var sourceValue))
+                        source_text = ((ValuePattern)sourceValue).Current.Value;
+
                     labels = visibleControls.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
                         .Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
                     enabled_controls = visibleControls.Where(e => e.Current.IsEnabled)
@@ -2069,7 +2076,7 @@ internal static class Program
                     Console.Error.WriteLine(error.ToString());
                     Console.Error.Flush();
                     Console.WriteLine(JsonSerializer.Serialize(new {
-                        ready = false, alive = true, pid = process.Id, identity
+                        ready = false, alive = true, pid = process.Id, identity, source_text
                     }));
                     return 0;
                 }
@@ -2077,12 +2084,12 @@ internal static class Program
                 {
                     Console.WriteLine(JsonSerializer.Serialize(new {
                         ready = false, alive = true, pid = process.Id, identity,
-                        uiaError = error.ToString()
+                        uiaError = error.ToString(), source_text
                     }));
                     return 0;
                 }
                 Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true, pid = process.Id, identity, labels, enabled_controls, help_texts
+                    ready = true, pid = process.Id, identity, labels, enabled_controls, help_texts, source_text
                 }));
                 return 0;
             }

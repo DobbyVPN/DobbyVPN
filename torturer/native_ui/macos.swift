@@ -944,9 +944,21 @@ func run() throws -> [String: Any] {
         if operation == "tree" {
             let labels = try nodes.flatMap(names)
             let enabled = try nodes.filter { (try attribute($0, kAXEnabledAttribute)) as? Bool == true }.flatMap(names)
-            return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity,
-                    "window_count": windows.count, "window_id": try identifier(window),
-                    "labels": labels, "enabled_controls": enabled, "link_urls": try linkURLs(nodes)]
+            var sourceText: Any = NSNull()
+            var sourceTextError: String?
+            do {
+                sourceText = try label(find(nodes, "Connection configuration", editor: true), kAXValueAttribute)
+            } catch {
+                sourceTextError = String(describing: error)
+            }
+            var tree: [String: Any] = [
+                "ready": true, "alive": true, "pid": Int(pid), "identity": identity,
+                "window_count": windows.count, "window_id": try identifier(window),
+                "labels": labels, "enabled_controls": enabled, "link_urls": try linkURLs(nodes),
+                "source_text": sourceText,
+            ]
+            if let sourceTextError { tree["source_text_error"] = sourceTextError }
+            return tree
         }
         if operation == "connection-action-details" {
             return connectionActionDetails(nodes)

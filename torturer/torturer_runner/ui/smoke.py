@@ -852,6 +852,7 @@ class NativeUIController:
             "status": status,
             "labels": labels,
             "enabled_controls": value.get("enabled_controls", []),
+            "source_text": value.get("source_text"),
             "help_texts": value.get("help_texts", []),
             "link_urls": value.get("link_urls", []),
             "reconnecting_seen": self.reconnecting_seen,
