@@ -1349,13 +1349,20 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     ) -> None:
         if pending is not None:
             expected = pending.get("pending_target")
-            if not (
+            pending_matches = (
                 isinstance(expected, dict)
                 and expected.get("mode") == "PROFILE_INDEX"
                 and expected.get("index") == second
-            ):
+            )
+            selected_is_starting = (
+                pending.get("state") in {"PROBING", "PREPARING"}
+                and pending.get("active_mode") == "PROFILE_INDEX"
+                and pending.get("active_index") == second
+                and pending.get("active_digest") == pending.get("digest")
+            )
+            if not (pending_matches or selected_is_starting):
                 raise NativeUIJourneyError(
-                    "desktop import test did not begin from the selected profile's pending switch target"
+                    "desktop import test did not begin from the selected profile's switch transition"
                 )
             source_snapshot = pending
         elif ui.platform != "windows" or dispatch_result is None:
