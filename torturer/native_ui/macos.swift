@@ -1061,15 +1061,30 @@ func run() throws -> [String: Any] {
             throw HelperError("Log scroll position must be top or bottom")
         }
         let view = try find(nodes, "Connection logs", editor: true)
-        guard let positionValue = try axValue(view, kAXPositionAttribute),
-              let sizeValue = try axValue(view, kAXSizeAttribute) else {
-            throw HelperError("Native log viewer has no accessible bounds")
+        func bounds(_ element: AXUIElement, name: String) throws -> CGRect {
+            guard let positionValue = try axValue(element, kAXPositionAttribute),
+                  let sizeValue = try axValue(element, kAXSizeAttribute) else {
+                throw HelperError("Native \(name) has no accessible bounds")
+            }
+            var origin = CGPoint.zero
+            var size = CGSize.zero
+            try require(AXValueGetValue(positionValue, .cgPoint, &origin), "Could not read native \(name) position")
+            try require(AXValueGetValue(sizeValue, .cgSize, &size), "Could not read native \(name) size")
+            let rect = CGRect(origin: origin, size: size)
+            try require(origin.x.isFinite && origin.y.isFinite && size.width.isFinite && size.height.isFinite &&
+                            size.width > 0 && size.height > 0,
+                        "Native \(name) has invalid bounds: \(rect)")
+            return rect
         }
-        var origin = CGPoint.zero
-        var size = CGSize.zero
-        try require(AXValueGetValue(positionValue, .cgPoint, &origin), "Could not read native log position")
-        try require(AXValueGetValue(sizeValue, .cgSize, &size), "Could not read native log size")
-        try require(size.width > 0 && size.height > 0, "Native log viewer has empty bounds")
+        func pointDescription(_ point: CGPoint) -> String {
+            String(format: "(x=%.1f,y=%.1f)", point.x, point.y)
+        }
+        func rectDescription(_ rect: CGRect) -> String {
+            if rect.isNull { return "(null)" }
+            return String(format: "(x=%.1f,y=%.1f,width=%.1f,height=%.1f)",
+                          rect.origin.x, rect.origin.y, rect.width, rect.height)
+        }
+        let viewBounds = try bounds(view, name: "log text view")
 
         var parent: AXUIElement? = view
         var scrollArea: AXUIElement?
@@ -1086,6 +1101,58 @@ func run() throws -> [String: Any] {
               let scrollbar = try axElement(area, kAXVerticalScrollBarAttribute) else {
             throw HelperError("Native log viewer does not expose a vertical scrollbar")
         }
+        guard let window = nodes.first else {
+            throw HelperError("Native application window is unavailable for log scrolling")
+        }
+        let scrollAreaBounds = try bounds(area, name: "log scroll area")
+        let windowBounds = try bounds(window, name: "main window")
+        let originalTextCenter = CGPoint(x: viewBounds.midX, y: viewBounds.midY)
+        // AXPosition and AXUIElementCopyElementAtPosition share screen coordinates.
+        // Clip the document view to its scroll viewport and window before aiming input.
+        let visibleBounds = viewBounds.intersection(scrollAreaBounds).intersection(windowBounds)
+        let chosenPoint = !visibleBounds.isNull && visibleBounds.width > 0 && visibleBounds.height > 0
+            ? CGPoint(x: visibleBounds.midX, y: visibleBounds.midY) : nil
+        FileHandle.standardError.write(Data((
+            "scroll-logs geometry textview=\(rectDescription(viewBounds)) " +
+                "scrollarea=\(rectDescription(scrollAreaBounds)) window=\(rectDescription(windowBounds)) " +
+                "visible=\(rectDescription(visibleBounds)) textview-center=\(pointDescription(originalTextCenter)) " +
+                "chosen-point=\(chosenPoint.map(pointDescription) ?? "(none)")\n"
+        ).utf8))
+        guard let chosenPoint else {
+            throw HelperError("Native log text view does not intersect its visible scroll area and window")
+        }
+        var hitElement: AXUIElement?
+        let hitTestResult = AXUIElementCopyElementAtPosition(root, Float(chosenPoint.x), Float(chosenPoint.y), &hitElement)
+        guard hitTestResult == .success, let hit = hitElement else {
+            FileHandle.standardError.write(Data((
+                "scroll-logs AX hit-test point=\(pointDescription(chosenPoint)) " +
+                    "result=\(hitTestResult.rawValue) hit=none\n"
+            ).utf8))
+            throw HelperError(
+                "AX hit-test failed for visible log point \(pointDescription(chosenPoint)); " +
+                    "AXError=\(hitTestResult.rawValue)"
+            )
+        }
+        let hitRole = try label(hit, kAXRoleAttribute)
+        let hitIdentifier = try identifier(hit)
+        func belongsToLogView(_ element: AXUIElement) throws -> (matches: Bool, depth: Int) {
+            var current: AXUIElement? = element
+            for depth in 0..<16 {
+                guard let node = current else { return (false, depth) }
+                if CFEqual(node, view) || CFEqual(node, area) { return (true, depth) }
+                current = try axElement(node, kAXParentAttribute)
+            }
+            return (false, 16)
+        }
+        let ancestry = try belongsToLogView(hit)
+        FileHandle.standardError.write(Data((
+            "scroll-logs AX hit-test point=\(pointDescription(chosenPoint)) result=0 " +
+                "hit-role=\(hitRole) hit-id=\(hitIdentifier.isEmpty ? "(none)" : hitIdentifier) " +
+                "belongs-to-log-view=\(ancestry.matches) ancestor-depth=\(ancestry.depth)\n"
+        ).utf8))
+        try require(ancestry.matches,
+                    "AX hit-test point did not resolve within the log view/scroll area: " +
+                        "role=\(hitRole) identifier=\(hitIdentifier) ancestor-depth=\(ancestry.depth)")
         var sample = try visibleCharacterRange(view)
         var characterCount = sample.characterCount
         try require(characterCount > 0, "Native log viewer has no content to scroll")
@@ -1120,20 +1187,29 @@ func run() throws -> [String: Any] {
                 "scroll-logs native-phaseful-gesture target=\(position) start-range=\(rangeDescription(range)) " +
                     "characters=\(characterCount) scrollbar=\(scrollbarValueDescription())\n"
             ).utf8))
-            let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
             guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                      mouseCursorPosition: center, mouseButton: .left) else {
+                                      mouseCursorPosition: chosenPoint, mouseButton: .left) else {
                 throw HelperError("Could not position the pointer over native logs")
             }
             moved.post(tap: .cghidEventTap)
+            FileHandle.standardError.write(Data((
+                "scroll-logs CGEvent mouseMoved post-called point=\(pointDescription(chosenPoint))\n"
+            ).utf8))
             func postScrollEvent(_ delta: Int32, phase: CGScrollPhase) throws {
                 guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
                                           wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else {
                     throw HelperError("Could not create native log scroll event")
                 }
-                event.location = center
+                event.location = chosenPoint
                 event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+                let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous)
+                let emittedPhase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
                 event.post(tap: .cghidEventTap)
+                FileHandle.standardError.write(Data((
+                    "scroll-logs CGEvent scroll post-called delta=\(delta) requested-phase=\(phase.rawValue) " +
+                        "field-phase=\(emittedPhase) continuous=\(continuous) " +
+                        "point=\(pointDescription(event.location))\n"
+                ).utf8))
             }
             var reached = false
             let maximumScrollEvents = 64
