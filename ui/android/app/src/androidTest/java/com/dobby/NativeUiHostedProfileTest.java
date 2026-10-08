@@ -2418,52 +2418,73 @@ public final class NativeUiHostedProfileTest {
             String subscriptionURL, long deadline) throws Exception {
         String targetLabel = "Profile " + (targetIndex + 1) + " action";
         String competingLabel = "Profile " + (competingIndex + 1) + " action";
+        UiDevice device = uiDevice();
+        boolean pendingObserved = false;
+        boolean stopEnabled = false;
+        boolean targetEnabled = false;
+        boolean competingDisabled = false;
+        Rect competingBounds = new Rect();
         while (System.currentTimeMillis() < deadline) {
             JSONObject state = snapshotResult("");
             JSONObject pending = state.optJSONObject("pending_target");
-            if (pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
+            boolean pendingMatches = pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
                     && pending.optInt("index", -1) == targetIndex
-                    && state.optString("digest").equals(pending.optString("digest"))) {
+                    && state.optString("digest").equals(pending.optString("digest"));
+            if (pendingMatches) {
+                pendingObserved = true;
                 UiObject2 stop = findUiObject("Stop");
                 while (stop != null && !stop.isClickable()) stop = stop.getParent();
-                if (stop == null || !stop.isEnabled()) {
-                    throw new AssertionError("Pending profile selection did not retain an enabled Stop action");
-                }
+                stopEnabled = stop != null && stop.isEnabled();
+
                 UiObject2 target = findUiObject(targetLabel);
                 while (target != null && !target.isClickable()) target = target.getParent();
-                if (target == null || !target.isEnabled()) {
-                    throw new AssertionError("Pending profile target did not retain its Stop action");
-                }
+                targetEnabled = target != null && target.isEnabled();
+
                 UiObject2 competing = findUiObject(competingLabel);
                 while (competing != null && !competing.isClickable()) competing = competing.getParent();
-                if (competing == null || competing.isEnabled()) {
-                    throw new AssertionError("Competing profile Connect remained enabled during switching");
+                competingDisabled = competing != null && !competing.isEnabled();
+                competingBounds = competing == null ? new Rect() : competing.getVisibleBounds();
+
+                if (stopEnabled && targetEnabled && competingDisabled && !competingBounds.isEmpty()) {
+                    if (!device.click(competingBounds.centerX(), competingBounds.centerY())) {
+                        throw new AssertionError("Could not inject a competing tap during profile switching");
+                    }
+                    JSONObject afterCompetingTap = snapshotResult("");
+                    if (!selectionRemainsTarget(afterCompetingTap, targetIndex, state.optString("digest"))) {
+                        throw new AssertionError("Competing tap displaced the authoritative profile target");
+                    }
+                    Activity activity = MainActivity.current;
+                    if (activity == null) throw new AssertionError("Android Activity missing during profile selection");
+                    int requests = subscriptionFixtureState().getInt("subscription_gets");
+                    deliverWarmImport(subscriptionURL);
+                    JSONObject afterImport = snapshotResult("");
+                    if (MainActivity.current != activity
+                            || subscriptionFixtureState().getInt("subscription_gets") != requests
+                            || !state.optString("digest").equals(afterImport.optString("digest"))) {
+                        throw new AssertionError("Warm import changed the in-flight selection or reloaded its inventory");
+                    }
+                    if (!selectionRemainsTarget(afterImport, targetIndex, state.optString("digest"))) {
+                        throw new AssertionError("Warm import superseded the pending profile selection");
+                    }
+                    return;
                 }
-                Rect competingBounds = competing.getVisibleBounds();
-                if (competingBounds.isEmpty() || !uiDevice().click(
-                        competingBounds.centerX(), competingBounds.centerY())) {
-                    throw new AssertionError("Could not inject a competing tap during profile switching");
-                }
-                JSONObject afterCompetingTap = snapshotResult("");
-                if (!selectionRemainsTarget(afterCompetingTap, targetIndex, state.optString("digest"))) {
-                    throw new AssertionError("Competing tap displaced the authoritative profile target");
-                }
-                Activity activity = MainActivity.current;
-                if (activity == null) throw new AssertionError("Android Activity missing during profile selection");
-                int requests = subscriptionFixtureState().getInt("subscription_gets");
-                deliverWarmImport(subscriptionURL);
-                JSONObject afterImport = snapshotResult("");
-                if (MainActivity.current != activity
-                        || subscriptionFixtureState().getInt("subscription_gets") != requests
-                        || !state.optString("digest").equals(afterImport.optString("digest"))) {
-                    throw new AssertionError("Warm import changed the in-flight selection or reloaded its inventory");
-                }
-                if (!selectionRemainsTarget(afterImport, targetIndex, state.optString("digest"))) {
-                    throw new AssertionError("Warm import superseded the pending profile selection");
-                }
-                return;
             }
-            SystemClock.sleep(20L);
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining > 0) SystemClock.sleep(Math.min(20L, remaining));
+        }
+        if (pendingObserved) {
+            if (!stopEnabled) {
+                throw new AssertionError("Pending profile selection did not retain an enabled Stop action");
+            }
+            if (!targetEnabled) {
+                throw new AssertionError("Pending profile target did not retain its Stop action");
+            }
+            if (!competingDisabled) {
+                throw new AssertionError("Competing profile Connect remained enabled during switching");
+            }
+            if (competingBounds.isEmpty()) {
+                throw new AssertionError("Could not inject a competing tap during profile switching");
+            }
         }
         throw new AssertionError("Pending profile transition was not rendered before selection completed");
     }
@@ -2483,57 +2504,73 @@ public final class NativeUiHostedProfileTest {
     }
 
     private void verifyPendingAutoTransition(String subscriptionURL, long deadline) throws Exception {
+        boolean pendingObserved = false;
+        boolean stopEnabled = false;
+        boolean profileActionsDisabled = false;
         while (System.currentTimeMillis() < deadline) {
             JSONObject state = snapshotResult("");
             JSONObject pending = state.optJSONObject("pending_target");
-            if (pending != null && "AUTO_SELECT".equals(pending.optString("mode"))
-                    && state.optString("digest").equals(pending.optString("digest"))) {
+            boolean pendingMatches = pending != null && "AUTO_SELECT".equals(pending.optString("mode"))
+                    && state.optString("digest").equals(pending.optString("digest"));
+            if (pendingMatches) {
+                pendingObserved = true;
                 UiObject2 stop = findUiObject("Stop");
                 while (stop != null && !stop.isClickable()) stop = stop.getParent();
-                if (stop == null || !stop.isEnabled()) {
-                    throw new AssertionError("Auto selection did not expose its enabled Stop action");
-                }
+                stopEnabled = stop != null && stop.isEnabled();
+                profileActionsDisabled = true;
                 for (int index = 0; index < state.getJSONArray("profiles").length(); index++) {
                     UiObject2 profile = findUiObject("Profile " + (index + 1) + " action");
                     while (profile != null && !profile.isClickable()) profile = profile.getParent();
                     if (profile == null || profile.isEnabled()) {
-                        throw new AssertionError("Profile Connect remained enabled during Auto selection");
+                        profileActionsDisabled = false;
+                        break;
                     }
                 }
 
-                int requests = subscriptionFixtureState().getInt("subscription_gets");
-                String importedURL = urlWithQuery(subscriptionURL, "android-pending-auto", "1");
-                expectedRenderedSource = importedURL;
-                subscriptionFixturePost("/hold", new byte[0]);
-                long generationDuringLoad = state.optLong("generation");
-                try {
-                    deliverWarmImport(importedURL);
-                    waitForSubscriptionGets(requests + 1,
-                            remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-                    JSONObject heldRequest = waitForInFlightGets(1,
-                            remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-                    JSONObject duringLoad = snapshotResult("");
-                    generationDuringLoad = duringLoad.optLong("generation");
-                    if (!autoSelectionRemainsAuthoritative(duringLoad, state.optString("digest"))
-                            || heldRequest.getInt("subscription_gets") != requests + 1
-                            || heldRequest.getInt("max_in_flight_gets") > 1) {
-                        throw new AssertionError("Import changed the pending Auto selection or duplicated its load");
+                if (stopEnabled && profileActionsDisabled) {
+                    int requests = subscriptionFixtureState().getInt("subscription_gets");
+                    String importedURL = urlWithQuery(subscriptionURL, "android-pending-auto", "1");
+                    expectedRenderedSource = importedURL;
+                    subscriptionFixturePost("/hold", new byte[0]);
+                    long generationDuringLoad = state.optLong("generation");
+                    try {
+                        deliverWarmImport(importedURL);
+                        waitForSubscriptionGets(requests + 1,
+                                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                        JSONObject heldRequest = waitForInFlightGets(1,
+                                remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                        JSONObject duringLoad = snapshotResult("");
+                        generationDuringLoad = duringLoad.optLong("generation");
+                        if (!autoSelectionRemainsAuthoritative(duringLoad, state.optString("digest"))
+                                || heldRequest.getInt("subscription_gets") != requests + 1
+                                || heldRequest.getInt("max_in_flight_gets") > 1) {
+                            throw new AssertionError("Import changed the pending Auto selection or duplicated its load");
+                        }
+                    } finally {
+                        subscriptionFixturePost("/release", new byte[0]);
                     }
-                } finally {
-                    subscriptionFixturePost("/release", new byte[0]);
+                    JSONObject completed = waitForInFlightGets(0,
+                            remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                    JSONObject afterLoad = waitForSessionSource(importedURL,
+                            remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+                    if (completed.getInt("subscription_gets") != requests + 1
+                            || generationDuringLoad != afterLoad.optLong("generation")
+                            || !autoSelectionRemainsAuthoritative(afterLoad, state.optString("digest"))) {
+                        throw new AssertionError("Import interrupted or replaced the authoritative Auto connection");
+                    }
+                    return;
                 }
-                JSONObject completed = waitForInFlightGets(0,
-                        remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-                JSONObject afterLoad = waitForSessionSource(importedURL,
-                        remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-                if (completed.getInt("subscription_gets") != requests + 1
-                        || generationDuringLoad != afterLoad.optLong("generation")
-                        || !autoSelectionRemainsAuthoritative(afterLoad, state.optString("digest"))) {
-                    throw new AssertionError("Import interrupted or replaced the authoritative Auto connection");
-                }
-                return;
             }
-            SystemClock.sleep(20L);
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining > 0) SystemClock.sleep(Math.min(20L, remaining));
+        }
+        if (pendingObserved) {
+            if (!stopEnabled) {
+                throw new AssertionError("Auto selection did not expose its enabled Stop action");
+            }
+            if (!profileActionsDisabled) {
+                throw new AssertionError("Profile Connect remained enabled during Auto selection");
+            }
         }
         throw new AssertionError("Pending Auto selection was not rendered before connection completed");
     }
