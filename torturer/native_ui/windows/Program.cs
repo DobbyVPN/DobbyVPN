@@ -149,6 +149,8 @@ internal static class Program
     private const uint InputMouse = 0;
     private const uint MouseEventLeftDown = 0x0002;
     private const uint MouseEventLeftUp = 0x0004;
+    private const uint MouseEventWheel = 0x0800;
+    private const int WheelDelta = 120;
     private const uint ProcessQueryInformation = 0x0400;
     private const uint ProcessVmRead = 0x0010;
     private const uint MiniDumpWithFullMemory = 0x00000002;
@@ -2038,12 +2040,12 @@ internal static class Program
         return bounds;
     }
 
-    private static NativeInput CreateMouseInput(uint flags) => new()
+    private static NativeInput CreateMouseInput(uint flags, uint mouseData = 0) => new()
     {
         Type = InputMouse,
         Union = new NativeInputUnion
         {
-            Mouse = new NativeMouseInput { Flags = flags, ExtraInfo = UIntPtr.Zero },
+            Mouse = new NativeMouseInput { MouseData = mouseData, Flags = flags, ExtraInfo = UIntPtr.Zero },
         },
     };
 
@@ -2755,8 +2757,51 @@ internal static class Program
                 if (scroll.Current.VerticalScrollPercent < 0)
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll range");
                 RequireForeground(window, "log scrolling");
-                logRoot.SetFocus();
-                Forms.SendKeys.SendWait(position == "top" ? "{HOME}" : "{END}");
+
+                var logBounds = PhysicalBounds(logRoot, "Backend logs");
+                if (logRoot.Current.IsOffscreen)
+                    throw new InvalidOperationException("Native log viewport is offscreen");
+                var windowBounds = GetPhysicalWindowRect(window);
+                var visibleLeft = Math.Max(logBounds.Left, windowBounds.Left);
+                var visibleTop = Math.Max(logBounds.Top, windowBounds.Top);
+                var visibleRight = Math.Min(logBounds.Right, windowBounds.Right);
+                var visibleBottom = Math.Min(logBounds.Bottom, windowBounds.Bottom);
+                if (visibleRight <= visibleLeft || visibleBottom <= visibleTop)
+                    throw new InvalidOperationException("Native log viewport has no visible area inside its window");
+                var point = new NativePoint
+                {
+                    X = checked((int)Math.Round((visibleLeft + visibleRight) / 2, MidpointRounding.AwayFromZero)),
+                    Y = checked((int)Math.Round((visibleTop + visibleBottom) / 2, MidpointRounding.AwayFromZero)),
+                };
+                var pointWindow = WindowFromPoint(point);
+                var pointRoot = pointWindow == IntPtr.Zero ? IntPtr.Zero : GetAncestor(pointWindow, GaRoot);
+                if (pointRoot != window)
+                    throw new InvalidOperationException(
+                        $"Refusing log wheel input at ({point.X},{point.Y}): WindowFromPoint root " +
+                        $"0x{pointRoot.ToInt64():X} does not match candidate 0x{window.ToInt64():X}");
+                Marshal.SetLastPInvokeError(0);
+                if (!SetCursorPos(point.X, point.Y))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
+                        $"Could not move the pointer to the visible log viewport at ({point.X},{point.Y})");
+                Marshal.SetLastPInvokeError(0);
+                if (!GetCursorPos(out var cursor))
+                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
+                        "Could not verify the pointer position before log wheel input");
+                if (cursor.X != point.X || cursor.Y != point.Y)
+                    throw new InvalidOperationException(
+                        $"Pointer did not reach the visible log viewport: expected=({point.X},{point.Y}) " +
+                        $"actual=({cursor.X},{cursor.Y})");
+                if (GetForegroundWindow() != window)
+                    throw new InvalidOperationException("Native window lost foreground before log wheel input");
+
+                var wheelDelta = position == "top" ? WheelDelta : -WheelDelta;
+                var wheelInput = CreateMouseInput(MouseEventWheel, unchecked((uint)wheelDelta));
+                Marshal.SetLastPInvokeError(0);
+                var inserted = SendInput(1, new[] { wheelInput }, Marshal.SizeOf<NativeInput>());
+                var sendInputError = Marshal.GetLastPInvokeError();
+                if (inserted != 1)
+                    throw new InvalidOperationException(
+                        $"SendInput inserted {inserted} of 1 log wheel events; lastError={sendInputError}");
                 scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
                 Thread.Sleep(100);
                 var actual = scroll.Current.VerticalScrollPercent;
