@@ -1276,6 +1276,8 @@ public final class NativeUiHostedProfileTest {
                 // fetching it again, so every malformed link must render its
                 // own new feedback before the unchanged state is checked.
                 deliverWarmImport(subscriptionURL);
+                waitForPreviousInvalidImportFeedbackToClear(
+                        invalidLinks[index - 1][1], deadline);
                 waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
                 if (findUiObject("Error") != null) {
                     throw new AssertionError("Accepted URL did not clear the preceding deep-link error");
@@ -1303,6 +1305,28 @@ public final class NativeUiHostedProfileTest {
                         + link + "): " + after);
             }
         }
+    }
+
+    private void waitForPreviousInvalidImportFeedbackToClear(String previousFeedback, long deadline)
+            throws Exception {
+        UiDevice device = uiDevice();
+        while (System.currentTimeMillis() < deadline) {
+            UiObject2 error = findUiObject("Error");
+            UiObject2 failed = findUiObject("Failed");
+            if (error == null && failed == null) return;
+            if (failed != null) throw new IllegalStateException("ANDROID_UI_DISCONNECT_FAILED");
+            if (findUiObject(previousFeedback) == null) {
+                // Do not wait through a different Error state. The second
+                // state read avoids treating a just-cleared prior node as a
+                // new failure while the rendered tree is changing.
+                if (findUiObject("Error") == null && findUiObject("Failed") == null) return;
+                throw new IllegalStateException("ANDROID_UI_DISCONNECT_FAILED");
+            }
+            waitForIdleBounded(device, deadline);
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining > 0) Thread.sleep(Math.min(POLL_MILLIS, remaining));
+        }
+        throw new IllegalStateException("ANDROID_UI_DISCONNECT_FAILED");
     }
 
     private SSLSocketFactory createSubscriptionControlSocketFactory(String caPem) throws Exception {
