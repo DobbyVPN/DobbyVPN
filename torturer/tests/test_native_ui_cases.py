@@ -359,22 +359,39 @@ class NativeUICaseFixtureTests(unittest.TestCase):
 
     def test_macos_connection_action_requires_exact_enabled_native_press(self):
         source = MACOS_NATIVE_UI_HELPER.read_text(encoding="utf-8")
-        press_start = source.index("func pressConnectionAction(")
-        press_end = source.index("\nfunc key(", press_start)
-        press_operation = source[press_start:press_end]
-        self.assertIn("try find(nodes, expectedIdentifier)", press_operation)
-        self.assertIn("actualIdentifier == expectedIdentifier", press_operation)
-        self.assertIn("kAXEnabledAttribute) as? Bool", press_operation)
-        self.assertIn("AXUIElementCopyActionNames(element, &rawActionNames)", press_operation)
-        self.assertIn("AXActionNames", press_operation)
-        self.assertIn("actionNames.contains(kAXPressAction as String)", press_operation)
-        self.assertIn("try press(element)", press_operation)
+        validation_start = source.index("func verifiedConnectionAction(")
+        validation_end = source.index("\nfunc key(", validation_start)
+        validation = source[validation_start:validation_end]
+        self.assertIn("try find(nodes, expectedIdentifier)", validation)
+        self.assertIn("actualIdentifier == expectedIdentifier", validation)
+        self.assertIn("kAXEnabledAttribute) as? Bool", validation)
+        self.assertIn("AXUIElementCopyActionNames(element, &rawActionNames)", validation)
+        self.assertIn("AXActionNames", validation)
+        self.assertIn("actionNames.contains(kAXPressAction as String)", validation)
+        self.assertIn("return element", validation)
+        self.assertNotIn("try press(element)", validation)
 
-        click_start = source.index('case "click":')
+        connection_start = source.index(
+            'if operation == "click", let target = request["target"] as? String'
+        )
+        generic_nodes = source.index("let nodes: [AXUIElement]", connection_start)
+        connection_click = source[connection_start:generic_nodes]
+        self.assertIn('target == "VPN connection action"', connection_click)
+        self.assertIn("try activate()", connection_click)
+        retry_start = connection_click.index("try retryTransientAccessibilityReads(")
+        self.assertLess(connection_click.index("try activate()"), retry_start)
+        self.assertIn("attribute(root, kAXWindowsAttribute)", connection_click)
+        self.assertIn("verifiedConnectionAction(elements(window), identifier: target)", connection_click)
+        closure_end = connection_click.index("\n        guard let element else", retry_start)
+        press_index = connection_click.index("try press(element)")
+        self.assertLess(closure_end, press_index)
+        self.assertEqual(connection_click.count("try press(element)"), 1)
+
+        switch_start = source.index("switch operation {")
+        click_start = source.index('case "click":', switch_start)
         click_end = source.index('case "type":', click_start)
         click_operation = source[click_start:click_end]
-        self.assertIn('if target == "VPN connection action"', click_operation)
-        self.assertIn("try pressConnectionAction(nodes, identifier: target)", click_operation)
+        self.assertNotIn('target == "VPN connection action"', click_operation)
         self.assertIn('label($0, kAXRoleAttribute) == kAXButtonRole', click_operation)
         self.assertIn("try press(find(buttons, target))", click_operation)
 
