@@ -13,6 +13,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Automation;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
@@ -871,7 +872,7 @@ internal static class Program
     private static Dictionary<string, object?> ProfileSwitchAction(
         AutomationElement root, IntPtr window, Process process, string identity,
         string targetId, string competingId, string? protocolUri = null, bool observeOnly = false,
-        JsonElement? request = null)
+        JsonElement? request = null, Action? firstBaselinePairCompleted = null)
     {
         if (observeOnly && protocolUri is not null)
             throw new ArgumentException("Profile switch observation cannot dispatch a protocol URI");
@@ -882,14 +883,51 @@ internal static class Program
                 "dobbyvpn://import?url=", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Profile switch import requires a DobbyVPN import URI");
 
+        var traceBaseline = firstBaselinePairCompleted is not null;
         // Keep stable scopes; WinUI recreates profile action peers on each Snapshot.
-        var controls = RequireAutomationId(root, "Connection controls");
-        var viewport = RequireAutomationId(controls, "Profile list viewport");
-        _ = RequireAutomationId(controls, "VPN connection action");
+        AutomationElement FindScope(AutomationElement scope, string automationId)
+        {
+            if (!traceBaseline) return RequireAutomationId(scope, automationId);
+            TracePhase($"profile-switch-find-start utc={UtcTimestamp()} automation_id={JsonSerializer.Serialize(automationId)}");
+            try
+            {
+                var element = RequireAutomationId(scope, automationId);
+                TracePhase($"profile-switch-find-complete utc={UtcTimestamp()} automation_id={JsonSerializer.Serialize(automationId)}");
+                return element;
+            }
+            catch (Exception error)
+            {
+                TracePhase($"profile-switch-find-exception utc={UtcTimestamp()} automation_id={JsonSerializer.Serialize(automationId)} error={JsonSerializer.Serialize(error.ToString())}");
+                throw;
+            }
+        }
+        var controls = FindScope(root, "Connection controls");
+        var viewport = FindScope(controls, "Profile list viewport");
+        _ = FindScope(controls, "VPN connection action");
         NativeActionState before = default;
         NativeActionState competingBefore = default;
         Dictionary<string, object?>? lastBaselineSample = null;
         string? latestBaselineException = null;
+        var baselineSampleNumber = 0;
+        NativeActionState ReadBaselineActionState(AutomationElement scope, string automationId, string role, bool trace)
+        {
+            var started = Stopwatch.GetTimestamp();
+            if (trace)
+                TracePhase($"profile-switch-baseline-read-start utc={UtcTimestamp()} sample=1 role={role} automation_id={JsonSerializer.Serialize(automationId)}");
+            try
+            {
+                var state = ReadActionState(scope, automationId);
+                if (trace)
+                    TracePhase($"profile-switch-baseline-read-complete utc={UtcTimestamp()} sample=1 role={role} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} state={JsonSerializer.Serialize(state.ToDiagnostic())}");
+                return state;
+            }
+            catch (Exception error)
+            {
+                if (trace)
+                    TracePhase($"profile-switch-baseline-read-exception utc={UtcTimestamp()} sample=1 role={role} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} error={JsonSerializer.Serialize(error.ToString())}");
+                throw;
+            }
+        }
         bool CanConnect(NativeActionState target, NativeActionState competing) =>
             target.AutomationId == targetId && target.ControlType == ControlType.Button.ProgrammaticName &&
             target.IsControlElement == true && target.Name == "Connect" && target.Enabled == true && target.Offscreen == false &&
@@ -900,12 +938,14 @@ internal static class Program
         {
             WaitFor(() =>
             {
+                var sampleNumber = Interlocked.Increment(ref baselineSampleNumber);
                 var sampledTarget = default(NativeActionState);
                 var sampledCompeting = default(NativeActionState);
                 try
                 {
-                    sampledTarget = ReadActionState(viewport, targetId);
-                    sampledCompeting = ReadActionState(viewport, competingId);
+                    sampledTarget = ReadBaselineActionState(viewport, targetId, "target", traceBaseline && sampleNumber == 1);
+                    sampledCompeting = ReadBaselineActionState(viewport, competingId, "competing", traceBaseline && sampleNumber == 1);
+                    firstBaselinePairCompleted?.Invoke();
                     var ready = CanConnect(sampledTarget, sampledCompeting);
                     if (ready)
                     {
@@ -2125,8 +2165,12 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        CancellationTokenSource? profileSwitchWatchdogCancellation = null;
+        Task? profileSwitchWatchdog = null;
+        var profileSwitchBaselineState = 0; // 0=waiting for a complete pair, 1=disarmed, 2=watchdog capture started.
         try
         {
+            if (args.Length == 0) TracePhase($"main-entry utc={UtcTimestamp()}");
             if (args.Length == 2 && args[0] == "--subscription-certificate")
             {
                 using var key = RSA.Create(2048);
@@ -2151,6 +2195,8 @@ internal static class Program
             var request = input.RootElement;
             string Text(string key) => request.GetProperty(key).GetString()!;
             var operation = Text("operation");
+            if (operation == "cancel-profile-switch")
+                TracePhase($"profile-switch-request-parsed utc={UtcTimestamp()} target={JsonSerializer.Serialize(Text("target"))} competing={JsonSerializer.Serialize(Text("competing"))}");
             if (operation == "settings-text-size")
             {
                 ValidateSettingsTextSizeRequest(request);
@@ -2158,6 +2204,8 @@ internal static class Program
             }
             var expected = Path.GetFullPath(Text("executable"));
             Process? found = null;
+            if (operation == "cancel-profile-switch")
+                TracePhase($"profile-switch-process-validation-start utc={UtcTimestamp()} pid={(request.TryGetProperty("pid", out var cancelPid) ? cancelPid.ToString() : "unbound")}");
             if (request.TryGetProperty("pid", out var requestedPid))
             {
                 try { found = Process.GetProcessById(requestedPid.GetInt32()); }
@@ -2200,6 +2248,47 @@ internal static class Program
             var identity = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
             if (request.TryGetProperty("identity", out var prior) && prior.GetString() != identity)
                 throw new InvalidOperationException("UI process creation time changed");
+            if (operation == "cancel-profile-switch")
+            {
+                TracePhase($"profile-switch-process-identity-verified utc={UtcTimestamp()} pid={process.Id} identity={identity}");
+                const int watchdogDelayMilliseconds = 3000;
+                profileSwitchWatchdogCancellation = new CancellationTokenSource();
+                var cancellationToken = profileSwitchWatchdogCancellation.Token;
+                var requestForDump = request.Clone();
+                var verifiedPid = process.Id;
+                var verifiedIdentity = identity;
+                TracePhase($"profile-switch-prebaseline-watchdog-armed utc={UtcTimestamp()} delay_ms={watchdogDelayMilliseconds} pid={verifiedPid} identity={verifiedIdentity}");
+                profileSwitchWatchdog = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(watchdogDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    if (Interlocked.CompareExchange(ref profileSwitchBaselineState, 2, 0) != 0)
+                        return;
+
+                    var dumpStarted = Stopwatch.GetTimestamp();
+                    TracePhase($"profile-switch-prebaseline-dump-start utc={UtcTimestamp()} pid={verifiedPid} identity={verifiedIdentity} apartment={Thread.CurrentThread.GetApartmentState()}");
+                    try
+                    {
+                        using var dumpProcess = Process.GetProcessById(verifiedPid);
+                        var dump = CapturePointFailureDump(
+                            dumpProcess, verifiedIdentity, requestForDump,
+                            "cancel-profile-switch did not complete its first baseline pair within three seconds",
+                            "profile-switch-prebaseline");
+                        TracePhase($"profile-switch-prebaseline-dump-complete utc={UtcTimestamp()} duration_ms={Stopwatch.GetElapsedTime(dumpStarted).TotalMilliseconds:F3} result={JsonSerializer.Serialize(dump)}");
+                    }
+                    catch (Exception error)
+                    {
+                        TracePhase($"profile-switch-prebaseline-dump-exception utc={UtcTimestamp()} duration_ms={Stopwatch.GetElapsedTime(dumpStarted).TotalMilliseconds:F3} error={JsonSerializer.Serialize(error.ToString())}");
+                    }
+                });
+            }
             if (operation == "probe")
             {
                 process.Refresh();
@@ -2282,6 +2371,8 @@ internal static class Program
             }
             else
             {
+                if (operation == "cancel-profile-switch")
+                    TracePhase($"profile-switch-main-window-read-start utc={UtcTimestamp()} pid={process.Id}");
                 process.Refresh();
                 if (traceAutomationPoint)
                 {
@@ -2295,12 +2386,16 @@ internal static class Program
                 {
                     window = process.MainWindowHandle;
                 }
+                if (operation == "cancel-profile-switch")
+                    TracePhase($"profile-switch-main-window-read-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
             }
             if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
             if (traceWin32Baseline)
                 TracePhase($"configure-tree-win32-baseline-window-discovery-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
             var visible = window != IntPtr.Zero && IsWindowVisible(window);
             var minimized = window != IntPtr.Zero && IsIconic(window);
+            if (operation == "cancel-profile-switch")
+                TracePhase($"profile-switch-window-visibility utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X} visible={visible} minimized={minimized}");
             if ((!visible || minimized) && !traceAutomationPoint)
             {
                 uint windowOwnerPid = 0;
@@ -2326,7 +2421,11 @@ internal static class Program
                     TracePhase($"configure-tree-win32-baseline-incomplete utc={UtcTimestamp()} elapsed_ms={ElapsedMilliseconds(baselineStarted)}");
                 return 0;
             }
+            if (operation == "cancel-profile-switch")
+                TracePhase($"profile-switch-window-owner-read-start utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
             var windowThreadId = GetWindowThreadProcessId(window, out var owner);
+            if (operation == "cancel-profile-switch")
+                TracePhase($"profile-switch-window-owner-read-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X} thread={windowThreadId} owner_pid={owner}");
             if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
             if (traceWin32Baseline)
             {
@@ -2379,8 +2478,12 @@ internal static class Program
                 return pointQueryResult;
             }
             if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
+            if (operation == "cancel-profile-switch")
+                TracePhase($"profile-switch-uia-root-start utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
             var root = AutomationElement.FromHandle(window);
             if (traceTree) TracePhase("tree-uia-root-complete");
+            if (operation == "cancel-profile-switch")
+                TracePhase($"profile-switch-uia-root-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
             if (operation == "resize-window")
             {
                 if (!GetWindowRect(window, out var original))
@@ -2443,7 +2546,11 @@ internal static class Program
                 var observeOnly = request.TryGetProperty("observe_only", out var observeOnlyValue) &&
                     observeOnlyValue.GetBoolean();
                 var result = ProfileSwitchAction(
-                    root, window, process, identity, Text("target"), Text("competing"), observeOnly: observeOnly);
+                    root, window, process, identity, Text("target"), Text("competing"), observeOnly: observeOnly,
+                    request: request, firstBaselinePairCompleted: () =>
+                    {
+                        Interlocked.CompareExchange(ref profileSwitchBaselineState, 1, 0);
+                    });
                 Console.WriteLine(JsonSerializer.Serialize(result));
                 return 0;
             }
@@ -2899,7 +3006,22 @@ internal static class Program
             Console.WriteLine(JsonSerializer.Serialize(response));
             return 0;
         }
-        catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        catch (Exception error) { Console.Error.WriteLine(error); Console.Error.Flush(); return 1; }
+        finally
+        {
+            if (profileSwitchWatchdogCancellation is not null)
+            {
+                Interlocked.CompareExchange(ref profileSwitchBaselineState, 1, 0);
+                profileSwitchWatchdogCancellation.Cancel();
+                try { profileSwitchWatchdog?.GetAwaiter().GetResult(); }
+                catch (Exception error)
+                {
+                    try { TracePhase($"profile-switch-prebaseline-watchdog-cleanup-exception utc={UtcTimestamp()} error={JsonSerializer.Serialize(error.ToString())}"); }
+                    catch { /* Preserve the request's original exception if stderr is already unavailable. */ }
+                }
+                profileSwitchWatchdogCancellation.Dispose();
+            }
+        }
     }
 
     private static IEnumerable<AutomationElement> Walk(AutomationElement root, Action<string>? trace = null)

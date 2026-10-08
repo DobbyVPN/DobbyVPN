@@ -211,13 +211,18 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         }
 
     def test_windows_cancel_switch_wrapper_accepts_only_observed_stop_and_disabled_connects(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
         controller.platform = "windows"
+        controller.logs = Path(temporary.name)
+        controller._windows_wer_dump_dir = None
         response = self.windows_cancel_switch_response()
         with patch.object(controller, "_call", return_value=response) as call:
             self.assertIs(controller.cancel_profile_switch(1, 0), response)
         call.assert_called_once_with(
             "cancel-profile-switch", target="Profile 2 action", competing="Profile 1 action",
+            dumpDirectory=str(Path(temporary.name) / "windows-wer-dumps"),
         )
 
         for allowed_name in ("Stop", "Disconnect"):
@@ -251,8 +256,16 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                     controller.cancel_profile_switch(1, 0)
 
     def test_windows_manual_switch_observation_requires_a_fresh_stop_without_invoking_it(self):
-        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
-        controller.platform = "windows"
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        helper = root / "native-ui-helper.exe"
+        helper.touch()
+        controller = journey.smoke.NativeUIController(
+            "windows", root / "DobbyVPN.exe", root / "source.url", 20.0,
+            helper=helper, screenshot_dir=root / "logs" / "screenshots",
+        )
+        self.assertIsNone(controller._windows_wer_dump_dir)
         controller.pid = 42
         controller.identity = "candidate-ui-instance"
 
@@ -267,12 +280,28 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             return value
 
         observed = response()
-        with patch.object(controller, "_call", return_value=observed) as call:
-            self.assertIs(controller.observe_profile_switch(1, 0), observed)
-        call.assert_called_once_with(
-            "cancel-profile-switch", target="Profile 2 action", competing="Profile 1 action",
-            observe_only=True,
+        native_result = SimpleNamespace(
+            returncode=0, args=[str(helper)], stdout=json.dumps(observed).encode("utf-8"), stderr=b"",
         )
+        with (
+            patch.object(journey.smoke, "_windows_job_capture_callbacks", return_value=(None, None, None)) as capture,
+            patch.object(journey.smoke, "_native_run", return_value=native_result) as native_run,
+        ):
+            self.assertEqual(controller.observe_profile_switch(1, 0), observed)
+        capture.assert_called_once()
+        native_run.assert_called_once()
+        dump_directory = controller.logs / "windows-wer-dumps"
+        self.assertTrue(dump_directory.is_dir())
+        self.assertEqual(json.loads(native_run.call_args.kwargs["input_bytes"]), {
+            "operation": "cancel-profile-switch",
+            "executable": str(controller.executable),
+            "target": "Profile 2 action",
+            "competing": "Profile 1 action",
+            "dumpDirectory": str(dump_directory),
+            "observe_only": True,
+            "pid": 42,
+            "identity": "candidate-ui-instance",
+        })
 
         mutations = (
             lambda value: value["target_at_stop"].update(name="Connect"),
