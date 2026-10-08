@@ -97,63 +97,115 @@ class AndroidScreenshotCollectionTests(unittest.TestCase):
                     )
 
     def test_failure_checkpoints_and_installed_icon_are_retained(self) -> None:
-        labels = (
-            "startup", "about-metadata", "landscape-large-font",
-            "small-screen-scroll-failure", "failure",
-        )
         root = Path("/data/user/0/com.dobby.vpn/files/dobbyvpn-rendered-screenshots/")
-        payloads: dict[str, bytes] = {}
-        records = []
-        for label in labels:
-            path = str(root / f"{label}.png")
-            payload = f"png-payload-{label}".encode()
-            payloads[path] = payload
-            records.append(
-                b"INSTRUMENTATION_STATUS: stream=DOBBY_UI_SCREENSHOT "
-                + f"label={label} path={path} bytes={len(payload)} "
-                  f"sha256={sha256(payload).hexdigest()} width=720 height=1280".encode()
-            )
-
         icon_path = str(root / "installed-launcher-artwork.png")
         icon = b"installed launcher PNG payload"
-        payloads[icon_path] = icon
-        records.append(
-            b"INSTRUMENTATION_STATUS: stream=DOBBY_INSTALLED_LAUNCHER_ARTWORK "
-            + f"path={icon_path} bytes={len(icon)} sha256={sha256(icon).hexdigest()} "
-              "width=512 height=512 sampled_colors=135".encode()
+        failure_orders = (
+            ("startup", "about-metadata", "small-screen-scroll-failure", "failure"),
+            (
+                "startup", "about-metadata", "landscape-large-font",
+                "small-screen-scroll-failure", "failure",
+            ),
         )
-        stdout = b"\n".join(records) + b"\n"
 
+        def marker(label: str, payload: bytes, width: int, height: int) -> bytes:
+            path = str(root / f"{label}.png")
+            return (
+                b"INSTRUMENTATION_STATUS: stream=DOBBY_UI_SCREENSHOT "
+                + f"label={label} path={path} bytes={len(payload)} "
+                  f"sha256={sha256(payload).hexdigest()} width={width} height={height}".encode()
+            )
+
+        def dimensions(label: str, index: int) -> tuple[int, int]:
+            if index == 1 and label in {"small-screen-scroll-failure", "failure"}:
+                return (360, 640)
+            if label in {"landscape-large-font", "small-screen-scroll-failure", "failure"}:
+                return (1280, 720)
+            return (720, 1280)
+
+        for index, labels in enumerate(failure_orders):
+            with self.subTest(labels=labels):
+                payloads = {
+                    str(root / f"{label}.png"): f"png-payload-{index}-{label}".encode()
+                    for label in labels
+                }
+                payloads[icon_path] = icon
+                records = [
+                    marker(
+                        label,
+                        payloads[str(root / f"{label}.png")],
+                        *dimensions(label, index),
+                    )
+                    for label in labels
+                ]
+                records.append(
+                    b"INSTRUMENTATION_STATUS: stream=DOBBY_INSTALLED_LAUNCHER_ARTWORK "
+                    + f"path={icon_path} bytes={len(icon)} sha256={sha256(icon).hexdigest()} "
+                      "width=512 height=512 sampled_colors=135".encode()
+                )
+                stdout = b"\n".join(records) + b"\n"
+
+                with tempfile.TemporaryDirectory() as name:
+                    work = Path(name)
+                    pulled: list[str] = []
+
+                    def adb_call(_adb, _serial, arguments, **_kwargs):
+                        self.assertEqual(arguments[0], "pull")
+                        remote, destination = arguments[1:]
+                        Path(destination).write_bytes(payloads[remote])
+                        pulled.append(Path(remote).name)
+                        return subprocess.CompletedProcess(("adb",), 0, b"pulled", b"")
+
+                    with mock.patch.object(local_vm_android, "_adb_call", side_effect=adb_call):
+                        local_vm_android._collect_rendered_screenshots(
+                            "adb", "emulator-5554", stdout, succeeded=False,
+                            run_dir=work, logs=work / "logs", timeout=5,
+                            environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
+                        )
+                        local_vm_android._collect_launcher_artwork(
+                            "adb", "emulator-5554", stdout, succeeded=False,
+                            run_dir=work, logs=work / "logs", timeout=5,
+                            environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
+                        )
+
+                    expected = [*(f"{label}.png" for label in labels), "installed-launcher-artwork.png"]
+                    self.assertEqual(pulled, expected)
+                    for filename in expected:
+                        self.assertEqual(
+                            (work / "logs/screenshots/android" / filename).read_bytes(),
+                            payloads[str(root / filename)],
+                        )
+
+        invalid_labels = (
+            "startup", "small-screen-scroll-failure", "about-metadata", "failure",
+        )
+        invalid_payloads = {
+            str(root / f"{label}.png"): f"invalid-order-{label}".encode()
+            for label in invalid_labels
+        }
+        invalid_markers = b"\n".join(
+            marker(label, invalid_payloads[str(root / f"{label}.png")], 720, 1280)
+            for label in invalid_labels
+        ) + b"\n"
         with tempfile.TemporaryDirectory() as name:
             work = Path(name)
-            pulled: list[str] = []
+            pulled_invalid: list[str] = []
 
-            def adb_call(_adb, _serial, arguments, **_kwargs):
-                self.assertEqual(arguments[0], "pull")
-                remote, destination = arguments[1:]
-                Path(destination).write_bytes(payloads[remote])
-                pulled.append(Path(remote).name)
+            def record_invalid_pull(_adb, _serial, arguments, **_kwargs):
+                pulled_invalid.append(arguments[1])
                 return subprocess.CompletedProcess(("adb",), 0, b"pulled", b"")
 
-            with mock.patch.object(local_vm_android, "_adb_call", side_effect=adb_call):
-                local_vm_android._collect_rendered_screenshots(
-                    "adb", "emulator-5554", stdout, succeeded=False,
-                    run_dir=work, logs=work / "logs", timeout=5,
-                    environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
-                )
-                local_vm_android._collect_launcher_artwork(
-                    "adb", "emulator-5554", stdout, succeeded=False,
-                    run_dir=work, logs=work / "logs", timeout=5,
-                    environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
-                )
+            with mock.patch.object(
+                local_vm_android, "_adb_call", side_effect=record_invalid_pull,
+            ):
+                with self.assertRaisesRegex(Exception, "must follow the about or large-font layout frame"):
+                    local_vm_android._collect_rendered_screenshots(
+                        "adb", "emulator-5554", invalid_markers, succeeded=False,
+                        run_dir=work, logs=work / "logs", timeout=5,
+                        environment={"ADB_SERVER_SOCKET": "tcp:localhost:5037"},
+                    )
 
-            expected = [*(f"{label}.png" for label in labels), "installed-launcher-artwork.png"]
-            self.assertEqual(pulled, expected)
-            for filename in expected:
-                self.assertEqual(
-                    (work / "logs/screenshots/android" / filename).read_bytes(),
-                    payloads[str(root / filename)],
-                )
+            self.assertEqual(pulled_invalid, [])
 
     def test_success_requires_the_full_local_screenshot_sequence(self) -> None:
         labels = (

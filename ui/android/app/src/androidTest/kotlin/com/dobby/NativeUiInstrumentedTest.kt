@@ -20,6 +20,7 @@ import android.text.Selection
 import android.view.WindowInsets
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
@@ -1250,7 +1251,9 @@ class NativeUiInstrumentedTest {
                         scrollAttempts.joinToString("; "),
                 )
             }
+            val beforeNativeScroll = scrollGeometrySnapshot()
             var scrolled = false
+            var afterNativeScroll = "not_attempted"
             if (scrollable) {
                 scrolled = try {
                     viewport.scroll(direction, 0.8f)
@@ -1261,20 +1264,41 @@ class NativeUiInstrumentedTest {
                         reachedStatus,
                         reachedAction,
                         button,
-                        "attempt=$attempt direction=$direction ${failure.stackTraceToString()} " +
+                        "attempt=$attempt direction=$direction before_native_scroll=$beforeNativeScroll " +
+                            "${failure.stackTraceToString()} " +
                             scrollAttempts.joinToString("; "),
                     )
                 }
+                afterNativeScroll = scrollGeometrySnapshot()
             }
             var swiped = false
+            var beforeSwipe = "not_attempted"
+            var afterSwipe = "not_attempted"
             if (!scrollable || !scrolled) {
                 val startY = if (direction == androidx.test.uiautomator.Direction.UP) bounds.top + 12 else bounds.bottom - 12
                 val endY = if (direction == androidx.test.uiautomator.Direction.UP) bounds.bottom - 12 else bounds.top + 12
-                swiped = device.swipe(bounds.centerX(), startY, bounds.centerX(), endY, 12)
+                beforeSwipe = scrollGeometrySnapshot()
+                swiped = try {
+                    device.swipe(bounds.centerX(), startY, bounds.centerX(), endY, 12)
+                } catch (failure: RuntimeException) {
+                    failSmallScreenReachability(
+                        "ANDROID_CONTROLS_SCROLL_SWIPE_FAILED",
+                        viewport,
+                        reachedStatus,
+                        reachedAction,
+                        button,
+                        "attempt=$attempt direction=$direction before_swipe=$beforeSwipe " +
+                            "${failure.stackTraceToString()} " + scrollAttempts.joinToString("; "),
+                    )
+                }
+                afterSwipe = scrollGeometrySnapshot()
             }
             device.waitForIdle()
             scrollAttempts += "attempt=$attempt direction=$direction ui_scroll=$scrolled " +
-                "coordinate_swipe=$swiped viewport=$bounds scrollable=$scrollable"
+                "coordinate_swipe=$swiped viewport=$bounds scrollable=$scrollable " +
+                "before_native_scroll=$beforeNativeScroll after_native_scroll=$afterNativeScroll " +
+                "before_swipe=$beforeSwipe after_swipe=$afterSwipe " +
+                "after_idle=${scrollGeometrySnapshot()}"
         }
 
         // Remembered scroll state can leave this container below its URL field.
@@ -1310,6 +1334,90 @@ class NativeUiInstrumentedTest {
 
     private fun currentControlsScrollViewport(): UiObject2? =
         device.findObject(By.desc(MainActivity.CONNECTION_CONTROLS_DESCRIPTION).pkg(packageName))
+
+    private fun scrollGeometrySnapshot(): String {
+        val lookupErrors = mutableListOf<String>()
+        fun find(label: String, selector: BySelector): UiObject2? = try {
+            device.findObject(selector)
+        } catch (failure: RuntimeException) {
+            lookupErrors += "$label.lookup_error=${failure.stackTraceToString()}"
+            null
+        }
+
+        fun visible(label: String, node: UiObject2?): String {
+            if (node == null) return "$label=missing"
+            return try {
+                "$label={class=${node.className} text=${node.text} " +
+                    "description=${node.contentDescription} bounds=${node.visibleBounds} " +
+                    "enabled=${node.isEnabled} clickable=${node.isClickable} " +
+                    "scrollable=${node.isScrollable}}"
+            } catch (failure: RuntimeException) {
+                "$label.error=${failure.stackTraceToString()}"
+            }
+        }
+
+        val viewport = find(
+            "viewport",
+            By.desc(MainActivity.CONNECTION_CONTROLS_DESCRIPTION).pkg(packageName),
+        )
+        val action = find("action", By.desc(connectionActionLabel).pkg(packageName))
+        val autoConnect = find("auto_connect", By.text("Auto connect").pkg(packageName))
+        return "visible_bounds=[${visible("viewport", viewport)}; " +
+            "${visible("action", action)}; ${visible("auto_connect", autoConnect)}] " +
+            "accessibility=${accessibilityControlBoundsSnapshot()} " +
+            "${lookupErrors.joinToString(" ")}"
+    }
+
+    private fun accessibilityControlBoundsSnapshot(): String {
+        val root = try {
+            instrumentation.uiAutomation.rootInActiveWindow
+        } catch (failure: RuntimeException) {
+            return "root_error=${failure.stackTraceToString()}"
+        } ?: return "root=missing"
+
+        val nodes = mutableListOf<String>()
+        val pending = java.util.ArrayDeque<AccessibilityNodeInfo>()
+        pending.addLast(root)
+        while (pending.isNotEmpty()) {
+            val node = pending.removeLast()
+            try {
+                val text = node.text?.toString().orEmpty()
+                val description = node.contentDescription?.toString().orEmpty()
+                val target = when {
+                    description == MainActivity.CONNECTION_CONTROLS_DESCRIPTION -> "viewport"
+                    description == connectionActionLabel -> "action"
+                    text == "Auto connect" || description == "Auto connect" -> "auto_connect"
+                    text == "Disconnected" || description == "Disconnected" -> "status"
+                    else -> null
+                }
+                if (target != null || node === root) {
+                    val bounds = Rect()
+                    node.getBoundsInScreen(bounds)
+                    val name = target ?: "active_root"
+                    nodes += "$name={class=${node.className} text=$text description=$description " +
+                        "bounds_in_screen=$bounds visible=${node.isVisibleToUser} " +
+                        "enabled=${node.isEnabled} clickable=${node.isClickable} " +
+                        "scrollable=${node.isScrollable}}"
+                }
+                for (index in 0 until node.childCount) {
+                    try {
+                        node.getChild(index)?.let(pending::addLast)
+                    } catch (failure: RuntimeException) {
+                        nodes += "child[$index]_error=${failure.stackTraceToString()}"
+                    }
+                }
+            } catch (failure: RuntimeException) {
+                nodes += "node_error=${failure.stackTraceToString()}"
+            } finally {
+                try {
+                    node.recycle()
+                } catch (failure: RuntimeException) {
+                    nodes += "node_recycle_error=${failure.stackTraceToString()}"
+                }
+            }
+        }
+        return if (nodes.isEmpty()) "target_nodes=missing" else nodes.joinToString("; ")
+    }
 
     private fun clickableConnectionAction(action: UiObject2?): UiObject2? {
         var button = action
@@ -1374,6 +1482,7 @@ class NativeUiInstrumentedTest {
         clickableAction: UiObject2?,
         scrollDetails: String,
     ): Nothing {
+        val scrollGeometry = scrollGeometrySnapshot()
         fun describe(node: UiObject2?): String {
             if (node == null) return "missing"
             return runCatching {
@@ -1413,6 +1522,7 @@ class NativeUiInstrumentedTest {
                 "auto_connect_candidates=[${debugNodeBounds("Auto connect")}] " +
                 "minimum_visible_target=${minimumTargetPx}px minimum_visible_label_line=${minimumLabelPx}px " +
                 "density=${metrics?.density} scaled_density=${metrics?.scaledDensity} font_scale=$fontScale " +
+                "final_scroll_geometry=$scrollGeometry " +
                 "viewport_candidates=[${debugNodeBounds(MainActivity.CONNECTION_CONTROLS_DESCRIPTION)}]" +
                 "$screenshotDiagnostic$hierarchyDiagnostic\n" +
                 "UI hierarchy:\n${hierarchy.toString("UTF-8")}"

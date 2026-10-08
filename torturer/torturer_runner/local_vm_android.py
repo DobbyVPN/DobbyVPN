@@ -689,13 +689,20 @@ def _collect_rendered_screenshots(
                     "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: local failure "
                     "milestones are out of order"
                 )
-            if diagnostic_count and tuple(prior_labels) != (
-                *_LOCAL_REQUIRED_SCREENSHOT_LABELS[:3],
-                _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT,
+            diagnostic_labels = tuple(prior_labels)
+            if diagnostic_count and diagnostic_labels not in (
+                (
+                    *_LOCAL_REQUIRED_SCREENSHOT_LABELS[:2],
+                    _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT,
+                ),
+                (
+                    *_LOCAL_REQUIRED_SCREENSHOT_LABELS[:3],
+                    _LOCAL_FAILURE_DIAGNOSTIC_SCREENSHOT,
+                ),
             ):
                 raise _error(
                     "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: small-screen diagnostic frame "
-                    "must follow the large-font layout frame"
+                    "must follow the about or large-font layout frame"
                 )
     seen: dict[str, tuple[str, int, str, int, int]] = {}
     for match in matches:
