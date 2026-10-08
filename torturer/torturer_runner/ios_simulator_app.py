@@ -934,6 +934,37 @@ def _collect_ios_native_log(
     return native_log_copy
 
 
+def _run_install_observations(
+    runner: CommandRunner,
+    queries: Sequence[tuple[str, Sequence[str], float]],
+    *,
+    budget: RunBudget,
+    failure: BaseException | None = None,
+) -> list[tuple[str, CommandResult | BaseException]]:
+    """Run read-only install diagnostics inside the functional budget."""
+    observations: list[tuple[str, CommandResult | BaseException]] = []
+    for label, command, timeout in queries:
+        try:
+            result: CommandResult | BaseException = _require_success(
+                runner, command, label, budget=budget, timeout_seconds=timeout
+            )
+        except BaseException as error:
+            if failure is not None:
+                result = error
+            elif isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            else:
+                result = error
+                traceback.print_exception(error, file=sys.stderr)
+        if failure is None:
+            observations.append((label, result))
+        elif isinstance(result, BaseException):
+            add_exception_notes(failure, label, result)
+        else:
+            add_stream_notes(failure, label, result.stdout, result.stderr)
+    return observations
+
+
 def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path, ...]:
     """Copy retained iOS artifacts into a local guest manifest directory."""
     source_dir = _ios_diagnostics_directory(work_dir)
@@ -1378,14 +1409,52 @@ def run_ios_simulator_app_contract(
                 "verify-app-bundle",
                 f"SwiftUI Simulator build produced no app bundle: {app_path}",
             )
+
+        def install_app() -> CommandResult:
+            preflight_queries = (
+                ("install_preflight_disk_free", ["/bin/df", "-Pk", str(app_path)], 2),
+                ("install_preflight_app_size", ["/usr/bin/du", "-sk", str(app_path)], 2),
+                (f"install_preflight_simulator_state_{simulator.udid}", ["xcrun", "simctl", "list", "devices", "-j"], 2),
+            )
+            observations = _run_install_observations(runner, preflight_queries, budget=budget)
+            started_at = datetime.now(timezone.utc)
+            try:
+                result = _require_success(
+                    runner,
+                    simctl_install_command(simulator.udid, app_path),
+                    "install",
+                    budget=budget,
+                )
+            except Exception as install_error:
+                for label, observation in observations:
+                    if isinstance(observation, BaseException):
+                        add_exception_notes(install_error, label, observation)
+                    else:
+                        add_stream_notes(install_error, label, observation.stdout, observation.stderr)
+                try:
+                    ended_at = datetime.now(timezone.utc)
+                    log_start = started_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                    log_end = ended_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                    log_query = [
+                        "/usr/bin/log", "show", "--style", "compact", "--start", log_start, "--end", log_end, "--predicate",
+                        '(process == "installd" OR process == "CoreSimulatorService" '
+                        'OR process == "SimulatorTrampoline" OR process == "simctl")',
+                    ]
+                    _run_install_observations(
+                        runner,
+                        (("install_failure_processes", ["/bin/ps", "-A", "-o", "pid,ppid,state,etime,comm"], 5),
+                         ("install_failure_unified_logs", log_query, 10)),
+                        budget=budget, failure=install_error,
+                    )
+                    install_error.add_note(f"install_interval_utc={started_at.isoformat(timespec='milliseconds')}/{ended_at.isoformat(timespec='milliseconds')}")
+                except BaseException as diagnostic_error:
+                    add_exception_notes(install_error, "install_failure_diagnostic_collection", diagnostic_error)
+                raise
+            return result
+
         _timed_stage(
             "install",
-            lambda: _require_success(
-                runner,
-                simctl_install_command(simulator.udid, app_path),
-                "install",
-                budget=budget,
-            ),
+            install_app,
         )
         app_installed = True
         test_environment = None

@@ -342,39 +342,52 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             "/usr/bin/open", "-a", "Simulator", "--args",
             "-CurrentDeviceUDID", udid.upper(),
         ]
-        clock = [0.0]
-        commands: list[tuple[list[str], float | None]] = []
 
         class Runner:
+            def __init__(self, clock, commands):
+                self.clock = clock
+                self.commands = commands
+
             def run(self, command, *, cwd=None, timeout_seconds=None):
                 del cwd
                 arguments = list(command)
-                commands.append((arguments, timeout_seconds))
+                self.commands.append((arguments, timeout_seconds))
                 if arguments[:4] == ["xcrun", "simctl", "list", "devices"]:
-                    inventory = {
-                        "devices": {
-                            "com.apple.CoreSimulator.SimRuntime.iOS-17-5": [{
-                                "isAvailable": True,
-                                "name": "iPhone 15",
-                                "udid": udid,
-                            }],
-                        },
-                    }
+                    inventory = {"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-17-5": [{
+                        "isAvailable": True,
+                        "name": "iPhone 15",
+                        "state": "Booted",
+                        "udid": udid,
+                    }]}}
                     return ios_simulator_app.CommandResult(0, json.dumps(inventory), "")
+                if arguments[:2] == ["/bin/df", "-Pk"]:
+                    return ios_simulator_app.CommandResult(0, "disk0 100 40 60 40%\n", "")
+                if arguments[:2] == ["/usr/bin/du", "-sk"]:
+                    return ios_simulator_app.CommandResult(0, "15360\tDobby-Vpn-Simulator.app\n", "")
                 if arguments[:3] == ["xcrun", "--sdk", "iphonesimulator"]:
                     return ios_simulator_app.CommandResult(0, "17.5", "")
                 if arguments == open_command:
                     self.open_simulator_timeout = timeout_seconds
                     return ios_simulator_app.CommandResult(0, "", "")
                 if arguments[:3] == ["xcrun", "simctl", "install"]:
-                    self.asserted_install_timeout = timeout_seconds
-                    clock[0] += (timeout_seconds or 0) + ios_simulator_app.COMMAND_TERMINATION_RESERVE_SECONDS
+                    self.install_timeout = timeout_seconds
+                    self.clock[0] += (timeout_seconds or 0) + ios_simulator_app.COMMAND_TERMINATION_RESERVE_SECONDS
                     error = ios_simulator_app.IOSSimulatorAppContractError(
-                        "iOS command timed out after 180s"
+                        f"iOS command timed out after {timeout_seconds:g}s"
                     )
                     error.stdout = b"install stdout\x00\xff"
                     error.stderr = b"install stderr\n"
                     raise error
+                if arguments[:2] == ["/bin/ps", "-A"]:
+                    self.clock[0] += timeout_seconds or 0
+                    return ios_simulator_app.CommandResult(
+                        7, "process snapshot\x00\xff\n", "ps diagnostic stderr\n"
+                    )
+                if arguments[:3] == ["/usr/bin/log", "show", "--style"]:
+                    self.clock[0] += timeout_seconds or 0
+                    return ios_simulator_app.CommandResult(
+                        0, "installd diagnostic log\x00\n", "unified log stderr\n"
+                    )
                 if arguments[:3] == ["xcrun", "simctl", "shutdown"]:
                     self.shutdown_timeout = timeout_seconds
                     return ios_simulator_app.CommandResult(0, "", "")
@@ -385,56 +398,90 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                     return ios_simulator_app.CommandResult(0, "", "")
                 raise AssertionError(f"unexpected command: {arguments}")
 
-        runner = Runner()
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            work_dir = root / "work"
-            contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
-            contract.app_path(work_dir).mkdir(parents=True)
-            (root / "candidate" / "ui" / "apple" / "ios" / "iosApp.xcodeproj").mkdir(parents=True)
-            budget = ios_simulator_app.RunBudget(
-                max_seconds=345,
-                cleanup_reserve_seconds=120,
-                clock=lambda: clock[0],
-            )
-            with mock.patch.object(
-                ios_simulator_app, "_read_simulator_hardware_keyboard_override", return_value=False
-            ):
-                with self.assertRaises(ios_simulator_app.IOSSimulatorStageError) as caught:
-                    ios_simulator_app.run_ios_simulator_app_contract(
-                        candidate_root=root / "candidate",
-                        work_dir=work_dir,
-                        runner=runner,
-                        budget=budget,
-                        native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
+        for lane_seconds, expected_install_timeout, diagnostics_run in (
+            (345, 180, False),
+            (600, 300, True),
+        ):
+            with self.subTest(lane_seconds=lane_seconds):
+                clock = [0.0]
+                commands: list[tuple[list[str], float | None]] = []
+                runner = Runner(clock, commands)
+                with tempfile.TemporaryDirectory() as name:
+                    root = Path(name)
+                    work_dir = root / "work"
+                    contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
+                    contract.app_path(work_dir).mkdir(parents=True)
+                    (root / "candidate" / "ui" / "apple" / "ios" / "iosApp.xcodeproj").mkdir(parents=True)
+                    budget = ios_simulator_app.RunBudget(
+                        max_seconds=lane_seconds,
+                        cleanup_reserve_seconds=120,
+                        clock=lambda: clock[0],
                     )
+                    with mock.patch.object(
+                        ios_simulator_app, "_read_simulator_hardware_keyboard_override", return_value=False
+                    ):
+                        with self.assertRaises(ios_simulator_app.IOSSimulatorStageError) as caught:
+                            ios_simulator_app.run_ios_simulator_app_contract(
+                                candidate_root=root / "candidate",
+                                work_dir=work_dir,
+                                runner=runner,
+                                budget=budget,
+                                native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
+                            )
+                    failure_report = ios_simulator_app.retain_ios_failure_diagnostic(
+                        work_dir, caught.exception
+                    )
+                    report = failure_report.read_text(encoding="utf-8")
 
-        failure = caught.exception
-        self.assertEqual(failure.stage, "install")
-        self.assertEqual(failure.timeout_seconds, 180)
-        self.assertIsNotNone(failure.elapsed_seconds)
-        self.assertIn("elapsed", str(failure))
-        notes = "\n".join(failure.__notes__)
-        self.assertIn("install stdout\x00\\xff", notes)
-        self.assertIn("install stderr", notes)
-        # The remaining lane budget still caps the five-minute stage limit.
-        self.assertEqual(runner.asserted_install_timeout, 180)
-        self.assertEqual(runner.open_simulator_timeout, 30)
-        command_arguments = [arguments for arguments, _ in commands]
-        open_index = command_arguments.index(open_command)
-        install_index = command_arguments.index(
-            [
-                "xcrun", "simctl", "install", udid.upper(),
-                str(contract.app_path(work_dir)),
-            ]
-        )
-        self.assertLess(open_index, install_index)
-        # The simulated install and its bounded process-group stop consume 225s
-        # of a 345s run. Cleanup still receives the reserved 120s; the shutdown
-        # command leaves its own 45s process-stop bound inside that window.
-        self.assertEqual(clock[0], 225)
-        self.assertEqual(budget.cleanup_timeout(), 120)
-        self.assertEqual(runner.shutdown_timeout, 75)
+                failure = caught.exception
+                self.assertEqual(failure.stage, "install")
+                self.assertEqual(failure.timeout_seconds, expected_install_timeout)
+                self.assertEqual(failure.__cause__.stdout, b"install stdout\x00\xff")
+                self.assertEqual(failure.__cause__.stderr, b"install stderr\n")
+                self.assertIsNotNone(failure.elapsed_seconds)
+                self.assertIn("elapsed", str(failure))
+                notes = "\n".join(failure.__notes__)
+                for expected in (
+                    "install stdout\x00\\xff",
+                    "install stderr",
+                    "15360\tDobby-Vpn-Simulator.app",
+                    f"install_preflight_simulator_state_{udid.upper()}_stdout:",
+                    "install_preflight_disk_free_stdout:",
+                ):
+                    self.assertIn(expected, notes)
+                self.assertEqual(runner.install_timeout, expected_install_timeout)
+                self.assertEqual(runner.open_simulator_timeout, 30)
+
+                command_arguments = [arguments for arguments, _ in commands]
+                def index(prefix):
+                    return next(
+                        i for i, arguments in enumerate(command_arguments)
+                        if arguments[:len(prefix)] == prefix
+                    )
+                self.assertLess(index(open_command), index(["/bin/df", "-Pk"]))
+                self.assertLess(index(["/bin/df", "-Pk"]), index(["/usr/bin/du", "-sk"]))
+                self.assertLess(index(["/usr/bin/du", "-sk"]), index(["xcrun", "simctl", "list", "devices", "-j"]))
+                self.assertLess(index(["xcrun", "simctl", "list", "devices", "-j"]), index(["xcrun", "simctl", "install"]))
+                if diagnostics_run:
+                    self.assertIn("process snapshot\x00ÿ", notes)
+                    self.assertIn("ps diagnostic stderr", notes)
+                    self.assertIn("installd diagnostic log\x00", notes)
+                    self.assertIn("unified log stderr", notes)
+                    self.assertIn("install_interval_utc=", notes)
+                    self.assertIn("installd diagnostic log", report)
+                    self.assertLess(index(["xcrun", "simctl", "install"]), index(["/bin/ps", "-A"]))
+                    self.assertLess(index(["/bin/ps", "-A"]), index(["/usr/bin/log", "show"]))
+                    self.assertLess(index(["/usr/bin/log", "show"]), index(["xcrun", "simctl", "shutdown"]))
+                    self.assertEqual(clock[0], 360)
+                else:
+                    self.assertNotIn("process snapshot", notes)
+                    self.assertFalse(any(arguments[0] == "/bin/ps" for arguments in command_arguments))
+                    self.assertFalse(any(arguments[0] == "/usr/bin/log" for arguments in command_arguments))
+                    self.assertIn("functional budget before cleanup reserve", notes)
+                    self.assertEqual(clock[0], 225)
+                self.assertIn("install stdout", report)
+                self.assertEqual(budget.cleanup_timeout(), 120)
+                self.assertEqual(runner.shutdown_timeout, 75)
 
     def test_stalled_process_pipe_drain_is_bounded_and_keeps_all_available_output(self) -> None:
         process = mock.Mock()
