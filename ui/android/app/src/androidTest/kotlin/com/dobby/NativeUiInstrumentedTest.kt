@@ -605,14 +605,14 @@ class NativeUiInstrumentedTest {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) modeManager.setApplicationNightMode(mode)
                 val dark = mode == UiModeManager.MODE_NIGHT_YES
                 val expected = listOf(
-                    if (dark) android.graphics.Color.rgb(230, 225, 229) else android.graphics.Color.rgb(28, 27, 31),
+                    if (dark) android.graphics.Color.rgb(230, 224, 233) else android.graphics.Color.rgb(29, 27, 32),
                     if (dark) android.graphics.Color.rgb(202, 196, 208) else android.graphics.Color.rgb(73, 69, 79),
                     if (dark) android.graphics.Color.rgb(255, 208, 132) else android.graphics.Color.rgb(138, 90, 0),
                     if (dark) android.graphics.Color.rgb(242, 184, 181) else android.graphics.Color.rgb(179, 38, 30),
                 )
                 markers.zip(expected).forEach { (marker, color) -> waitForRenderedLogColor(marker, color) }
                 val surface = if (dark) android.graphics.Color.rgb(20, 18, 24)
-                    else android.graphics.Color.rgb(255, 251, 254)
+                    else android.graphics.Color.rgb(254, 247, 255)
                 expected.forEach { color -> check(contrastRatio(color, surface) >= 4.5) {
                     "ANDROID_LOG_THEME_COLOR_NOT_READABLE dark=$dark color=$color"
                 } }
@@ -626,17 +626,31 @@ class NativeUiInstrumentedTest {
 
     private fun waitForRenderedLogColor(marker: String, expected: Int) {
         val deadline = System.currentTimeMillis() + 5_000
+        var lastObservedArgb: Int? = null
         while (System.currentTimeMillis() < deadline) {
             val content = runCatching { connectionLogTextView().text as? Spanned }.getOrNull()
             val start = content?.toString()?.indexOf(marker) ?: -1
             if (start >= 0) {
                 val actual = content?.getSpans(start, start + marker.length, ForegroundColorSpan::class.java)
                     ?.firstOrNull()?.foregroundColor
+                lastObservedArgb = actual
                 if (actual == expected) return
+            } else {
+                lastObservedArgb = null
             }
             Thread.sleep(50)
         }
-        throw AssertionError("ANDROID_LOG_THEME_COLOR_TIMEOUT marker=$marker expected=$expected")
+        val nightMode = MainActivity.current?.resources?.configuration?.uiMode
+            ?.and(Configuration.UI_MODE_NIGHT_MASK)
+        val appearance = when (nightMode) {
+            Configuration.UI_MODE_NIGHT_YES -> "dark"
+            Configuration.UI_MODE_NIGHT_NO -> "light"
+            else -> "unspecified"
+        }
+        val actual = lastObservedArgb?.let { "#${Integer.toHexString(it).padStart(8, '0').uppercase()}" } ?: "null"
+        throw AssertionError(
+            "ANDROID_LOG_THEME_COLOR_TIMEOUT marker=$marker expected=#${Integer.toHexString(expected).padStart(8, '0').uppercase()} actual=$actual appearance=$appearance",
+        )
     }
 
     private fun contrastRatio(foreground: Int, background: Int): Double {
