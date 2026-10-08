@@ -613,9 +613,12 @@ class NativeUiInstrumentedTest {
                 markers.zip(expected).forEach { (marker, color) -> waitForRenderedLogColor(marker, color) }
                 val surface = if (dark) android.graphics.Color.rgb(20, 18, 24)
                     else android.graphics.Color.rgb(254, 247, 255)
-                expected.forEach { color -> check(contrastRatio(color, surface) >= 4.5) {
-                    "ANDROID_LOG_THEME_COLOR_NOT_READABLE dark=$dark color=$color"
-                } }
+                expected.forEach { color ->
+                    val contrast = contrastRatio(color, surface)
+                    check(contrast >= 4.5) {
+                        "ANDROID_LOG_THEME_COLOR_NOT_READABLE dark=$dark color=$color surface=$surface contrast=$contrast"
+                    }
+                }
             }
         } finally {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -660,9 +663,9 @@ class NativeUiInstrumentedTest {
                 return if (normalized <= 0.04045) normalized / 12.92
                     else Math.pow((normalized + 0.055) / 1.055, 2.4)
             }
-            return 0.2126 * channel(android.graphics.Color.red(color))
-                + 0.7152 * channel(android.graphics.Color.green(color))
-                + 0.0722 * channel(android.graphics.Color.blue(color))
+            return 0.2126 * channel(android.graphics.Color.red(color)) +
+                0.7152 * channel(android.graphics.Color.green(color)) +
+                0.0722 * channel(android.graphics.Color.blue(color))
         }
         val first = luminance(foreground)
         val second = luminance(background)
