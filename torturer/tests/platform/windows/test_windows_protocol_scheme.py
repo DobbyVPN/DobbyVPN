@@ -14,7 +14,6 @@ from unittest import mock
 
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[4]
-WINDOWS_PROGRAM = PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/Program.cs"
 WINDOWS_MAIN_WINDOW = PRODUCT_ROOT / "ui/windows/DobbyVPN.Windows/MainWindow.xaml.cs"
 WINDOWS_NATIVE_UI = PRODUCT_ROOT / "torturer/native_ui/windows/Program.cs"
 WINDOWS_COMPONENTS = PRODUCT_ROOT / "ui/windows/installer/AppComponents.wxs"
