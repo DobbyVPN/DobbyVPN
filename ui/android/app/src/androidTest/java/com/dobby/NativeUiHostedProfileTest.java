@@ -2391,18 +2391,36 @@ public final class NativeUiHostedProfileTest {
         UiDevice device = uiDevice();
         int firstVisible = -1;
         int lastVisible = -1;
-        for (int swipes = 0; swipes <= profileCount + 2
-                && System.currentTimeMillis() < deadline; swipes++) {
+        int swipes = 0;
+        UiLookupCounters firstTargetLookup = new UiLookupCounters();
+        String firstTargetNodeDiagnostics = null;
+        List<Throwable> firstTargetDiagnosticFailures = new ArrayList<>();
+        UiObject2 enumeratedTarget = null;
+        UiObject2 enumeratedTargetAncestor = null;
+        String targetLabel = "Profile " + (targetIndex + 1) + " action";
+        while (swipes <= profileCount + 2 && System.currentTimeMillis() < deadline) {
             UiObject2 viewport = findUiObject("Connection controls");
             Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
             if (viewportBounds.isEmpty()) {
                 SystemClock.sleep(POLL_MILLIS);
                 continue;
             }
-            UiObject2 target = findUiObject("Profile " + (targetIndex + 1) + " action");
+            UiLookupCounters targetLookup = new UiLookupCounters();
+            targetLookup.attempts++;
+            UiObject2 target = findUiObject(targetLabel, targetLookup);
             UiObject2 targetButton = target;
             while (targetButton != null && !targetButton.isClickable()) {
                 targetButton = targetButton.getParent();
+            }
+            if (firstTargetLookup.attempts == 0) {
+                firstTargetLookup = targetLookup;
+                StringBuilder firstNodes = new StringBuilder();
+                appendStoppedRecoveryNodeFields(
+                        firstNodes, "first_target_node", target, firstTargetDiagnosticFailures);
+                appendStoppedRecoveryNodeFields(
+                        firstNodes, "first_clickable_ancestor", targetButton,
+                        firstTargetDiagnosticFailures);
+                firstTargetNodeDiagnostics = firstNodes.toString();
             }
             if (targetButton != null
                     && Rect.intersects(viewportBounds, targetButton.getVisibleBounds())) {
@@ -2411,8 +2429,18 @@ public final class NativeUiHostedProfileTest {
 
             firstVisible = -1;
             lastVisible = -1;
+            enumeratedTarget = null;
+            enumeratedTargetAncestor = null;
             for (int index = 0; index < profileCount; index++) {
                 UiObject2 visibleAction = findUiObject("Profile " + (index + 1) + " action");
+                if (index == targetIndex) {
+                    enumeratedTarget = visibleAction;
+                    enumeratedTargetAncestor = visibleAction;
+                    while (enumeratedTargetAncestor != null
+                            && !enumeratedTargetAncestor.isClickable()) {
+                        enumeratedTargetAncestor = enumeratedTargetAncestor.getParent();
+                    }
+                }
                 if (visibleAction == null
                         || !Rect.intersects(viewportBounds, visibleAction.getVisibleBounds())) {
                     continue;
@@ -2420,33 +2448,52 @@ public final class NativeUiHostedProfileTest {
                 if (firstVisible < 0) firstVisible = index;
                 lastVisible = index;
             }
-            if (firstVisible >= 0 && targetIndex >= firstVisible && targetIndex <= lastVisible) {
-                throw profileActionVisibilityFailure(
-                        "target row is visible without a clickable action",
-                        targetIndex,
-                        viewportBounds,
-                        firstVisible,
-                        lastVisible);
+            boolean targetCandidateVisible = enumeratedTarget != null
+                    && Rect.intersects(viewportBounds, enumeratedTarget.getVisibleBounds());
+            if (targetCandidateVisible) {
+                if (enumeratedTargetAncestor != null
+                        && Rect.intersects(
+                                viewportBounds, enumeratedTargetAncestor.getVisibleBounds())) {
+                    return;
+                }
+                throw profileActionLookupFailure(
+                        "visible target candidate has no intersecting clickable action",
+                        targetIndex, viewportBounds, firstVisible, lastVisible,
+                        firstTargetLookup, firstTargetNodeDiagnostics,
+                        firstTargetDiagnosticFailures,
+                        enumeratedTarget, enumeratedTargetAncestor);
+            }
+            boolean targetWithinVisibleRange = firstVisible >= 0
+                    && targetIndex >= firstVisible && targetIndex <= lastVisible;
+            if (targetWithinVisibleRange) {
+                waitForIdleBounded(device, deadline);
+                SystemClock.sleep(POLL_MILLIS);
+                continue;
             }
             boolean towardLaterProfiles = firstVisible < 0 || targetIndex > lastVisible;
             if (swipes == profileCount + 2
                     || !swipeControlsViewport(device, viewportBounds, towardLaterProfiles)) {
-                throw profileActionVisibilityFailure(
+                throw profileActionLookupFailure(
                         "bounded controls-viewport swipe could not reveal the target row",
-                        targetIndex,
-                        viewportBounds,
-                        firstVisible,
-                        lastVisible);
+                        targetIndex, viewportBounds, firstVisible, lastVisible,
+                        firstTargetLookup, firstTargetNodeDiagnostics,
+                        firstTargetDiagnosticFailures,
+                        enumeratedTarget, enumeratedTargetAncestor);
             }
+            swipes++;
             waitForIdleBounded(device, deadline);
             SystemClock.sleep(POLL_MILLIS);
         }
-        throw profileActionVisibilityFailure(
-                "target action did not become visible before the existing deadline",
-                targetIndex,
-                new Rect(),
-                firstVisible,
-                lastVisible);
+        AssertionError failure = profileActionVisibilityFailure(
+                "target action did not become visible before the existing deadline\n"
+                        + firstTargetLookupDiagnostics(
+                                firstTargetLookup, firstTargetNodeDiagnostics),
+                targetIndex, new Rect(), firstVisible, lastVisible);
+        for (Throwable diagnosticFailure : firstTargetDiagnosticFailures) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
+        }
+        throw failure;
     }
 
     private boolean swipeControlsViewport(
@@ -2562,6 +2609,40 @@ public final class NativeUiHostedProfileTest {
             failure.addSuppressed(diagnosticFailure);
             return failure;
         }
+    }
+
+    private AssertionError profileActionLookupFailure(String reason, int targetIndex,
+            Rect viewportBounds, int minimumVisibleIndex, int maximumVisibleIndex,
+            UiLookupCounters firstLookup, String firstTargetDiagnostics,
+            List<Throwable> firstLookupDiagnosticFailures,
+            UiObject2 enumeratedTarget, UiObject2 enumeratedAncestor) {
+        StringBuilder diagnostic = new StringBuilder();
+        List<Throwable> diagnosticFailures = new ArrayList<>();
+        diagnostic.append(firstTargetLookupDiagnostics(firstLookup, firstTargetDiagnostics));
+        appendStoppedRecoveryNodeFields(diagnostic, "enumerated_target_node", enumeratedTarget, diagnosticFailures);
+        appendStoppedRecoveryNodeFields(diagnostic, "enumerated_clickable_ancestor", enumeratedAncestor, diagnosticFailures);
+        AssertionError failure = profileActionVisibilityFailure(
+                reason + "\n" + diagnostic, targetIndex, viewportBounds,
+                minimumVisibleIndex, maximumVisibleIndex);
+        for (Throwable diagnosticFailure : diagnosticFailures) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
+        }
+        for (Throwable diagnosticFailure : firstLookupDiagnosticFailures) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
+        }
+        return failure;
+    }
+
+    private String firstTargetLookupDiagnostics(UiLookupCounters lookup, String nodeDiagnostics) {
+        return "first_target_lookup attempts=" + lookup.attempts
+                + " description_candidates=" + lookup.descriptionCandidates
+                + " text_candidates=" + lookup.textCandidates
+                + " visible_matches=" + lookup.visibleMatches
+                + " empty_bounds=" + lookup.emptyBounds
+                + " stale_objects=" + lookup.staleObjects + '\n'
+                + (nodeDiagnostics == null ? "first_target_nodes=not_observed\n" : nodeDiagnostics);
     }
 
     private void tapEnabledControl(String label, long deadline) throws Exception {
