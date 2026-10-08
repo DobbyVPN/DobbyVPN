@@ -328,7 +328,7 @@ class AndroidRenderedScreenshotRetentionTests(unittest.TestCase):
 
             adapter._adb = mock.Mock(side_effect=pull)
             remote = (
-                "/data/user/0/com.dobby.vpn/cache/"
+                "/data/user/0/com.dobby.vpn/files/"
                 "dobbyvpn-rendered-screenshots/0004-configure-surface.png"
             )
             retained = []

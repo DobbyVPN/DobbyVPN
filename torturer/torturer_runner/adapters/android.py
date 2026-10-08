@@ -131,7 +131,7 @@ _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
     ),
 }
 _ANDROID_SCREENSHOT_PATH = re.compile(
-    r"^/data/user/0/com\.dobby\.vpn/cache/"
+    r"^/data/user/0/com\.dobby\.vpn/files/"
     r"dobbyvpn-rendered-screenshots/([A-Za-z0-9_-]+\.png)$"
 )
 _ANDROID_RECOVERY_STOP_SCREENSHOT = re.compile(

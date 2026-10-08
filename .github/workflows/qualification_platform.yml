@@ -439,7 +439,7 @@ jobs:
           screenshot_count=0
           collection_status=0
           while IFS= read -r line; do
-            if [[ ! "$line" =~ ^INSTRUMENTATION_STATUS:\ stream=DOBBY_UI_SCREENSHOT\ label=([A-Za-z0-9_-]+)\ path=(/data/user/0/com\.dobby\.vpn/cache/dobbyvpn-rendered-screenshots/[A-Za-z0-9_-]+\.png)\ bytes=([0-9]+)\ sha256=([0-9a-f]{64})\ width=([1-9][0-9]*)\ height=([1-9][0-9]*)$ ]]; then
+            if [[ ! "$line" =~ ^INSTRUMENTATION_STATUS:\ stream=DOBBY_UI_SCREENSHOT\ label=([A-Za-z0-9_-]+)\ path=(/data/user/0/com\.dobby\.vpn/files/dobbyvpn-rendered-screenshots/[A-Za-z0-9_-]+\.png)\ bytes=([0-9]+)\ sha256=([0-9a-f]{64})\ width=([1-9][0-9]*)\ height=([1-9][0-9]*)$ ]]; then
               printf 'Android UI screenshot marker is malformed; the complete original marker remains in %s: %s\n' "$ui_stdout" "$line" >&2
               collection_status=1
               continue

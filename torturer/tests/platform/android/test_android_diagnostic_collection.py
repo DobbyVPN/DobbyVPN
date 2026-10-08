@@ -101,7 +101,7 @@ class AndroidScreenshotCollectionTests(unittest.TestCase):
             "startup", "about-metadata", "landscape-large-font",
             "small-screen-scroll-failure", "failure",
         )
-        root = Path("/data/user/0/com.dobby.vpn/cache/dobbyvpn-rendered-screenshots/")
+        root = Path("/data/user/0/com.dobby.vpn/files/dobbyvpn-rendered-screenshots/")
         payloads: dict[str, bytes] = {}
         records = []
         for label in labels:

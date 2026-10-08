@@ -60,8 +60,9 @@ class NativeUiInstrumentedTest {
         // Instrumentation executes in the target application's UID. The
         // instrumentation APK's Context points at a different sandbox, which
         // is not writable from this process. Keep rendered frames in the
-        // target app's cache, where the test process can create and pull them.
-        instrumentation.targetContext.cacheDir,
+        // target app's files, where Android's cache eviction will not remove
+        // them before the host can pull them after instrumentation completes.
+        instrumentation.targetContext.filesDir,
         "dobbyvpn-rendered-screenshots",
     )
 

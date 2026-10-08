@@ -45,18 +45,18 @@ _DIAGNOSTICS_DIRECTORY = f"/data/user/0/{APP_PACKAGE}/files/diagnostics"
 _NATIVE_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/native_logs.jsonl"
 _GO_LOG_PATH = f"{_DIAGNOSTICS_DIRECTORY}/go_app_logs.jsonl"
 PROBE_ROOT_GLOB = "/data/local/tmp/dobbyvpn-probe-*"
-_SCREENSHOT_ROOT = "/data/user/0/com.dobby.vpn/cache/dobbyvpn-rendered-screenshots/"
+_SCREENSHOT_ROOT = "/data/user/0/com.dobby.vpn/files/dobbyvpn-rendered-screenshots/"
 _SCREENSHOT_MARKER = re.compile(
     rb"^(?:DOBBY_UI_SCREENSHOT|INSTRUMENTATION_STATUS: stream=DOBBY_UI_SCREENSHOT) "
     rb"label=([A-Za-z0-9_-]+) "
-    rb"path=(/data/user/0/com\.dobby\.vpn/cache/dobbyvpn-rendered-screenshots/"
+    rb"path=(/data/user/0/com\.dobby\.vpn/files/dobbyvpn-rendered-screenshots/"
     rb"[A-Za-z0-9_-]+\.png) bytes=([0-9]+) sha256=([0-9a-f]{64}) "
     rb"width=([1-9][0-9]*) height=([1-9][0-9]*)$",
     re.MULTILINE,
 )
 _LAUNCHER_ARTWORK_MARKER = re.compile(
     rb"^(?:DOBBY_INSTALLED_LAUNCHER_ARTWORK|INSTRUMENTATION_STATUS: stream=DOBBY_INSTALLED_LAUNCHER_ARTWORK) "
-    rb"path=(/data/user/0/com\.dobby\.vpn/cache/dobbyvpn-rendered-screenshots/"
+    rb"path=(/data/user/0/com\.dobby\.vpn/files/dobbyvpn-rendered-screenshots/"
     rb"installed-launcher-artwork\.png) bytes=([0-9]+) sha256=([0-9a-f]{64}) "
     rb"width=([1-9][0-9]*) height=([1-9][0-9]*) sampled_colors=([0-9]+)$",
     re.MULTILINE,

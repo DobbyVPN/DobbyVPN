@@ -34,7 +34,7 @@ class NativeUiSmallScreenLogViewportTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val packageName = instrumentation.targetContext.packageName
     private val screenshotDirectory = File(
-        instrumentation.targetContext.cacheDir,
+        instrumentation.targetContext.filesDir,
         "dobbyvpn-rendered-screenshots",
     )
 

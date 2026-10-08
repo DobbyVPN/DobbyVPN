@@ -278,9 +278,10 @@ public final class NativeUiHostedProfileTest {
     private int processColdImportInitialGets = -1;
     private final File screenshotDirectory = new File(
             // Instrumentation executes in the target application's UID. The
-            // instrumentation APK's cache is a different sandbox and is not
-            // writable from this process.
-            context.getCacheDir(), "dobbyvpn-rendered-screenshots");
+            // instrumentation APK's files directory is a different sandbox and
+            // is not writable from this process. The target app's files survive
+            // cache eviction until the host pulls the screenshots.
+            context.getFilesDir(), "dobbyvpn-rendered-screenshots");
 
     @Before
     public void configureBoundedSelectorPolling() {
