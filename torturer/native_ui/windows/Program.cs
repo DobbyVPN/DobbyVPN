@@ -865,27 +865,76 @@ internal static class Program
             .ToString("O", CultureInfo.InvariantCulture);
         var connectedAt = Stopwatch.GetTimestamp();
         var connectedAtUtc = Timestamp(connectedAt);
-        ((InvokePattern)connectPattern).Invoke();
+        Console.Error.WriteLine($"native-ui-phase=profile-switch-connect-invoke-start started_at_utc={connectedAtUtc}");
+        Console.Error.Flush();
+        var invokeReturned = false;
+        try
+        {
+            ((InvokePattern)connectPattern).Invoke();
+            invokeReturned = true;
+        }
+        finally
+        {
+            var invokeFinished = Stopwatch.GetTimestamp();
+            Console.Error.WriteLine(
+                $"native-ui-phase=profile-switch-connect-invoke-finish started_at_utc={connectedAtUtc} " +
+                $"finished_at_utc={Timestamp(invokeFinished)} returned={invokeReturned} " +
+                $"duration_ms={Stopwatch.GetElapsedTime(connectedAt, invokeFinished).TotalMilliseconds}");
+            Console.Error.Flush();
+        }
 
         var lastTarget = before;
         var lastCompeting = competingBefore;
         var lastConnection = default(NativeActionState);
         string? unavailable = null;
         var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
-        while (Stopwatch.GetTimestamp() < deadline)
+        var observation = 0;
+        void TraceObservation(Dictionary<string, object?> sample)
         {
+            sample["observation"] = ++observation;
+            sample["recorded_at_utc"] = Timestamp(Stopwatch.GetTimestamp());
+            Console.Error.WriteLine(
+                $"native-ui-phase=profile-switch-observation {JsonSerializer.Serialize(sample)}");
+            Console.Error.Flush();
+        }
+        NativeActionState ReadTimed(
+            AutomationElement scope, string automationId, Dictionary<string, object?> sample, string label)
+        {
+            var started = Stopwatch.GetTimestamp();
+            sample[$"{label}_read_started_at_utc"] = Timestamp(started);
             try
             {
-                var target = ReadActionState(viewport, targetId);
-                var competing = ReadActionState(viewport, competingId);
-                var connection = ReadActionState(controls, "VPN connection action");
+                var state = ReadActionState(scope, automationId);
+                sample[$"{label}_state"] = state.ToDiagnostic();
+                return state;
+            }
+            catch (Exception error)
+            {
+                sample[$"{label}_exception"] = error.ToString();
+                throw;
+            }
+            finally
+            {
+                var finished = Stopwatch.GetTimestamp();
+                sample[$"{label}_read_finished_at_utc"] = Timestamp(finished);
+                sample[$"{label}_read_duration_ms"] = Stopwatch.GetElapsedTime(started, finished).TotalMilliseconds;
+            }
+        }
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var sample = new Dictionary<string, object?>();
+            try
+            {
+                var target = ReadTimed(viewport, targetId, sample, "poll_target");
+                var competing = ReadTimed(viewport, competingId, sample, "poll_competing");
+                var connection = ReadTimed(controls, "VPN connection action", sample, "poll_connection");
                 lastTarget = target; lastCompeting = competing; lastConnection = connection;
                 if (CanStop(target, competing, connection))
                 {
                     RequireForeground(window, "profile switch Stop");
-                    target = ReadActionState(viewport, targetId);
-                    competing = ReadActionState(viewport, competingId);
-                    connection = ReadActionState(controls, "VPN connection action");
+                    target = ReadTimed(viewport, targetId, sample, "verify_target");
+                    competing = ReadTimed(viewport, competingId, sample, "verify_competing");
+                    connection = ReadTimed(controls, "VPN connection action", sample, "verify_connection");
                     lastTarget = target; lastCompeting = competing; lastConnection = connection;
                     if (CanStop(target, competing, connection))
                     {
@@ -964,6 +1013,10 @@ internal static class Program
                 unavailable = error.ToString();
                 Console.Error.WriteLine(unavailable);
                 Console.Error.Flush();
+            }
+            finally
+            {
+                TraceObservation(sample);
             }
             Thread.Sleep(20);
         }
