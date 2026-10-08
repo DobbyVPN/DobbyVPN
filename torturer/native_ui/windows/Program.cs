@@ -2299,6 +2299,8 @@ internal static class Program
             if (operation == "logs")
             {
                 var logRoot = Find("Backend logs");
+                var verifyDetails = request.TryGetProperty("verify_details", out var verifyDetailsValue) &&
+                    verifyDetailsValue.GetBoolean();
                 var paletteMarker = request.TryGetProperty("marker", out var markerValue)
                     && markerValue.ValueKind == JsonValueKind.String
                         ? markerValue.GetString() : null;
@@ -2339,26 +2341,29 @@ internal static class Program
                     .ToArray();
                 string expandedRecord = "";
                 var expansionVerified = false;
-                var details = Walk(logRoot).FirstOrDefault(element =>
-                    element.Current.Name == "Details" &&
-                    element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _));
-                if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
+                if (verifyDetails)
                 {
-                    var control = (ExpandCollapsePattern)expand;
-                    var wasExpanded = control.Current.ExpandCollapseState == ExpandCollapseState.Expanded;
-                    try
+                    var details = Walk(logRoot).FirstOrDefault(element =>
+                        element.Current.Name == "Details" &&
+                        element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _));
+                    if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
                     {
-                        if (!wasExpanded) control.Expand();
-                        expandedRecord = Walk(logRoot)
-                            .Where(element => element.Current.ControlType == ControlType.Text)
-                            .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
-                                ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
-                            .FirstOrDefault(value => value.TrimStart().StartsWith("{", StringComparison.Ordinal)) ?? "";
-                        expansionVerified = expandedRecord.Length > 0;
-                    }
-                    finally
-                    {
-                        if (!wasExpanded) control.Collapse();
+                        var control = (ExpandCollapsePattern)expand;
+                        var wasExpanded = control.Current.ExpandCollapseState == ExpandCollapseState.Expanded;
+                        try
+                        {
+                            if (!wasExpanded) control.Expand();
+                            expandedRecord = Walk(logRoot)
+                                .Where(element => element.Current.ControlType == ControlType.Text)
+                                .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
+                                    ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
+                                .FirstOrDefault(value => value.TrimStart().StartsWith("{", StringComparison.Ordinal)) ?? "";
+                            expansionVerified = expandedRecord.Length > 0;
+                        }
+                        finally
+                        {
+                            if (!wasExpanded) control.Collapse();
+                        }
                     }
                 }
                 Console.WriteLine(JsonSerializer.Serialize(new {

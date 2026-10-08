@@ -1190,9 +1190,15 @@ class NativeUIController:
             return bool(previous)
         self._wait(live_logs, "native log view did not show structured live records")
         if self.platform == "windows":
-            rendered = initial_view.get("entries", [])
-            if not any(isinstance(entry, dict) and " · " in entry.get("text", "") for entry in rendered):
+            readiness_entries = initial_view.get("entries", [])
+            if not any(
+                isinstance(entry, dict) and " · " in entry.get("text", "")
+                for entry in readiness_entries
+            ):
                 raise NativeUISmokeError("Windows log entries did not expose rendered structured text")
+            self._call("scroll-logs", position="top")
+            initial_view = self._call("logs", verify_details=True)
+            rendered = initial_view.get("entries", [])
             if not initial_view.get("expansion_verified"):
                 raise NativeUISmokeError("Windows structured log Details did not reveal the original record")
             capture_row = next((
@@ -1246,7 +1252,6 @@ class NativeUIController:
                     if quiet in palette and palette[quiet] == palette["INFO"]:
                         raise NativeUISmokeError("Windows debug/trace logs are not visually muted")
 
-            self._call("scroll-logs", position="top")
             frozen_position = self._call("log-position")
             frozen = self._call("logs").get("text", "")
             original_window = self.resize_window(640, 640)
