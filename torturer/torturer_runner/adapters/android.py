@@ -137,8 +137,8 @@ _ANDROID_SCREENSHOT_PATH = re.compile(
 _ANDROID_RECOVERY_STOP_SCREENSHOT = re.compile(
     r"^[0-9]{4}-disconnect-recovery-stop-state\.png$"
 )
-_ANDROID_RECOVERY_IDLE_SCREENSHOT = re.compile(
-    r"^[0-9]{4}-disconnect-disconnected-state\.png$"
+_ANDROID_RECOVERY_STOPPED_SCREENSHOT = re.compile(
+    r"^[0-9]{4}-disconnect-stopped-state\.png$"
 )
 _ANDROID_REQUIRED_RENDERED_STAGES = frozenset({"surface"})
 
@@ -1104,6 +1104,8 @@ class AndroidAdapter:
             "main_stop_enabled",
             "competing_profile_actions_disabled",
             "profile_actions_verified_while_visible",
+            "competing_profile_actions_enabled_after_stop",
+            "primary_auto_connect_enabled",
             "stop_clicked",
             "final_idle",
             "cleanup_complete",
@@ -1142,17 +1144,38 @@ class AndroidAdapter:
             raise ScenarioExecutionError(
                 "ANDROID_AUTO_RECOVERY_STOP_FACTS_INVALID"
             )
+        rendered_status = value.get("rendered_status")
+        rendered_failure_code = value.get("rendered_failure_code")
+        rendered_failure_message = value.get("rendered_failure_message")
+        if rendered_status == "Failed":
+            if (
+                rendered_failure_code != "RUNTIME_FAILED"
+                or rendered_failure_message
+                != "connected health check failed: test recovery Stop health fault"
+            ):
+                raise ScenarioExecutionError(
+                    "ANDROID_AUTO_RECOVERY_STOP_RENDERED_FAILURE_INVALID"
+                )
+        elif rendered_status == "Disconnected":
+            if rendered_failure_code != "" or rendered_failure_message != "":
+                raise ScenarioExecutionError(
+                    "ANDROID_AUTO_RECOVERY_STOP_RENDERED_FAILURE_INVALID"
+                )
+        else:
+            raise ScenarioExecutionError(
+                "ANDROID_AUTO_RECOVERY_STOP_RENDERED_STATUS_INVALID"
+            )
         stop_label = value.get("stop_screenshot_label")
-        idle_label = value.get("idle_screenshot_label")
+        stopped_label = value.get("stopped_screenshot_label")
         labels = value.get("screenshot_labels")
         if (
             not isinstance(stop_label, str)
             or _ANDROID_RECOVERY_STOP_SCREENSHOT.fullmatch(stop_label) is None
-            or not isinstance(idle_label, str)
-            or _ANDROID_RECOVERY_IDLE_SCREENSHOT.fullmatch(idle_label) is None
+            or not isinstance(stopped_label, str)
+            or _ANDROID_RECOVERY_STOPPED_SCREENSHOT.fullmatch(stopped_label) is None
             or not isinstance(labels, list)
             or stop_label not in labels
-            or idle_label not in labels
+            or stopped_label not in labels
         ):
             raise ScenarioExecutionError(
                 "ANDROID_AUTO_RECOVERY_STOP_SCREENSHOTS_INVALID"
@@ -1166,7 +1189,7 @@ class AndroidAdapter:
         )
         screenshot_paths = {
             "recovery_stop": screenshot_root / stop_label,
-            "disconnected": screenshot_root / idle_label,
+            "stopped": screenshot_root / stopped_label,
         }
         if any(not path.is_file() for path in screenshot_paths.values()):
             raise AndroidScreenshotCollectionError(

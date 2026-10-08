@@ -189,7 +189,11 @@ def _require_complete_checks(checks: dict[str, object], platform: str | None = N
     """Fail closed when an evidence-producing step returned false/missing data."""
     required = set(_REQUIRED_TRUE_CHECKS)
     if platform == "windows":
-        required.update({"rendered_stderr_capture_label", "windows_rendered_log_palette"})
+        required.update({
+            "rendered_stderr_capture_label",
+            "windows_rendered_log_palette",
+            "windows_text_size_150_layout",
+        })
     failed = sorted(key for key in required if checks.get(key) is not True)
     if failed:
         raise NativeUIJourneyError(
@@ -683,16 +687,74 @@ def _rects_overlap(left: tuple[float, float, float, float], right: tuple[float, 
     return min(lx + lw, rx + rw) - max(lx, rx) > 1 and min(ly + lh, ry + rh) - max(ly, ry) > 1
 
 
+def _assert_rendered_profile_rows(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not value or len(value) > 24:
+        count = len(value) if isinstance(value, list) else "unavailable"
+        raise NativeUIJourneyError(f"desktop rendered profile snapshot contained {count} rows")
+
+    rows: list[dict[str, object]] = []
+    previous_index = 0
+    for row in value:
+        if not isinstance(row, dict):
+            raise NativeUIJourneyError("desktop rendered profile row was not a metadata object")
+        index = row.get("index")
+        if type(index) is not int or not 1 <= index <= 24 or index <= previous_index:
+            raise NativeUIJourneyError(
+                f"desktop rendered profile rows were duplicated or out of source order: index={index!r}"
+            )
+        previous_index = index
+        expected_name = "Profile 1" if index == 1 else f"Layout profile {index}"
+        normalized: dict[str, object] = {"index": index}
+        for field, expected in (("name", expected_name), ("protocol", "OUTLINE"), ("action", "Connect")):
+            observed = row.get(field)
+            if observed != expected:
+                raise NativeUIJourneyError(
+                    f"desktop rendered profile row {index} had {field}={observed!r}; expected {expected!r}"
+                )
+            normalized[field] = observed
+        rows.append(normalized)
+    return rows
+
+
+def _accumulate_rendered_profile_rows(
+    snapshot: object,
+    accumulated: dict[int, dict[str, object]],
+) -> None:
+    for row in _assert_rendered_profile_rows(snapshot):
+        index = row["index"]
+        assert type(index) is int
+        previous = accumulated.get(index)
+        if previous is not None:
+            if previous != row:
+                raise NativeUIJourneyError(f"desktop rendered profile {index} changed metadata while scrolling")
+            continue
+        if accumulated and index <= next(reversed(accumulated)):
+            raise NativeUIJourneyError(f"desktop realized profile {index} after a later source row")
+        accumulated[index] = row
+
+
+def _assert_complete_rendered_profile_rows(accumulated: dict[int, dict[str, object]]) -> None:
+    expected = list(range(1, 25))
+    observed = list(accumulated)
+    if observed != expected:
+        missing = [index for index in expected if index not in accumulated]
+        raise NativeUIJourneyError(
+            f"desktop scrolling did not realize all 24 source-ordered profiles; observed={observed!r} missing={missing!r}"
+        )
+
+
 def _assert_profile_list_layout(
     layout: object,
     *,
-    edge: str,
-    visible_action: str,
+    edge: str | None,
+    visible_action: str | None,
+    expected_scroll_position: float | None = None,
 ) -> None:
     if not isinstance(layout, dict) or layout.get("ready") is not True:
         raise NativeUIJourneyError("desktop profile-list layout evidence was not ready")
-    if edge not in {"top", "bottom"}:
+    if edge not in {None, "top", "bottom"}:
         raise ValueError(f"unsupported profile-list edge: {edge}")
+    rows = _assert_rendered_profile_rows(layout.get("profile_rows"))
 
     bounds = {name: _layout_rect(layout, name) for name in (
         "window", "controls", "profile_viewport", "connection_action", "logs",
@@ -726,20 +788,39 @@ def _assert_profile_list_layout(
         raise NativeUIJourneyError(f"desktop profile list did not return to the top: {scroll_position!r}%")
     if edge == "bottom" and scroll_position < 95:
         raise NativeUIJourneyError(f"desktop profile list did not reach the bottom: {scroll_position!r}%")
+    if expected_scroll_position is not None and abs(scroll_position - expected_scroll_position) > 1:
+        raise NativeUIJourneyError(
+            f"desktop profile list did not reach {expected_scroll_position}%: {scroll_position!r}%"
+        )
 
     visible_actions = layout.get("visible_profile_actions")
     if not isinstance(visible_actions, list) or any(not isinstance(action, str) for action in visible_actions):
         raise NativeUIJourneyError("desktop profile-list layout did not report visible profile actions")
-    if visible_action not in visible_actions:
+    if visible_action is not None and visible_action not in visible_actions:
         raise NativeUIJourneyError(f"{visible_action} was not reachable inside the bounded profile viewport")
+
+    if not rows:
+        raise NativeUIJourneyError("desktop profile-list layout had no realized profile rows")
 
 
 def _exercise_long_profile_list_viewport(ui) -> None:
     """Prove the bottom synthetic profile remains reachable without using it."""
 
+    accumulated: dict[int, dict[str, object]] = {}
     try:
+        top = ui.scroll_profile_list("top")
+        _assert_profile_list_layout(top, edge="top", visible_action="Profile 1 action")
+        _accumulate_rendered_profile_rows(top.get("profile_rows"), accumulated)
+        for position in range(10, 100, 10):
+            sample = ui.scroll_profile_list(str(position))
+            _assert_profile_list_layout(
+                sample, edge=None, visible_action=None, expected_scroll_position=float(position)
+            )
+            _accumulate_rendered_profile_rows(sample.get("profile_rows"), accumulated)
+
         bottom = ui.scroll_profile_list("bottom")
         _assert_profile_list_layout(bottom, edge="bottom", visible_action="Profile 24 action")
+        _accumulate_rendered_profile_rows(bottom.get("profile_rows"), accumulated)
 
         rendered_logs = ui._call("logs")
         if rendered_logs.get("ready") is not True or not str(rendered_logs.get("text", "")).strip():
@@ -756,10 +837,12 @@ def _exercise_long_profile_list_viewport(ui) -> None:
                 raise NativeUIJourneyError("desktop logs had no readable viewport at the bottom of the long profile list")
         elif not str(visible_log_position.get("visible_first_record", "")).strip():
             raise NativeUIJourneyError("desktop logs had no visible record at the bottom of the long profile list")
+        _assert_complete_rendered_profile_rows(accumulated)
     except BaseException as primary_error:
         try:
             top = ui.scroll_profile_list("top")
             _assert_profile_list_layout(top, edge="top", visible_action="Profile 1 action")
+            _accumulate_rendered_profile_rows(top.get("profile_rows"), accumulated)
         except BaseException as restore_error:
             raise BaseExceptionGroup(
                 "long profile-list verification and top restoration failed",
@@ -769,9 +852,217 @@ def _exercise_long_profile_list_viewport(ui) -> None:
     else:
         top = ui.scroll_profile_list("top")
         _assert_profile_list_layout(top, edge="top", visible_action="Profile 1 action")
+        _accumulate_rendered_profile_rows(top.get("profile_rows"), accumulated)
+        _assert_complete_rendered_profile_rows(accumulated)
 
 
-def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float) -> dict[str, bool]:
+def _windows_text_size_state(
+    value: object,
+    context: str,
+    *,
+    require_ready: bool = True,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise NativeUIJourneyError(f"Windows Text size {context} returned no Settings response: {value!r}")
+    if require_ready and (value.get("ready") is not True or value.get("available") is not True):
+        raise NativeUIJourneyError(f"Windows Text size {context} was incomplete: {value!r}")
+    slider = value.get("slider")
+    apply = value.get("apply")
+    range_value = slider.get("range") if isinstance(slider, dict) else None
+    if not isinstance(slider, dict) or not isinstance(range_value, dict) or not isinstance(apply, dict):
+        raise NativeUIJourneyError(f"Windows Text size {context} omitted native Slider/Apply evidence: {value!r}")
+    numbers: dict[str, float] = {}
+    for name in ("value", "minimum", "maximum"):
+        number = range_value.get(name)
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number):
+            raise NativeUIJourneyError(f"Windows Text size {context} had invalid RangeValue {name}: {number!r}")
+        numbers[name] = float(number)
+    if numbers["minimum"] >= numbers["maximum"] or not numbers["minimum"] <= numbers["value"] <= numbers["maximum"]:
+        raise NativeUIJourneyError(f"Windows Text size {context} reported inconsistent RangeValue bounds: {numbers!r}")
+    if range_value.get("isReadOnly") is not False:
+        raise NativeUIJourneyError(f"Windows Text size {context} Slider was not writable: {value!r}")
+    if slider.get("enabled") is not True or slider.get("offscreen") is not False:
+        raise NativeUIJourneyError(f"Windows Text size {context} Slider was not enabled and visible: {value!r}")
+    if apply.get("offscreen") is not False or type(apply.get("enabled")) is not bool:
+        raise NativeUIJourneyError(f"Windows Text size {context} Apply control was not readable and visible: {value!r}")
+    return {
+        "value": numbers["value"],
+        "minimum": numbers["minimum"],
+        "maximum": numbers["maximum"],
+        "apply_enabled": apply["enabled"],
+    }
+
+
+def _exercise_windows_text_size_layout(
+    ui: Any,
+    base: Any,
+    timeout: float,
+    inventory_snapshot: dict[str, object],
+    checks: dict[str, object],
+) -> None:
+    """Exercise the 24-row desktop layout at actual Windows Text size 150%."""
+    evidence: dict[str, object] = {}
+    checks["windows_text_size_layout_evidence"] = evidence
+    primary: BaseException | None = None
+    restore_errors: list[BaseException] = []
+    original: int | None = None
+    target = 150
+    setting_mutation_attempted = False
+
+    try:
+        initial = ui.inspect_windows_text_size_settings()
+        evidence["original_inspection"] = initial
+        state = _windows_text_size_state(initial, "original inspection")
+        original_value = state["value"]
+        if not isinstance(original_value, float) or abs(original_value - round(original_value)) > 0.01:
+            raise NativeUIJourneyError(f"Windows Text size original value was not a whole percentage: {original_value!r}")
+        original = int(round(original_value))
+        if state["apply_enabled"] is not False:
+            raise NativeUIJourneyError("Windows Text size Apply was already enabled before the test mutation")
+        if target <= original:
+            raise NativeUIJourneyError(f"Windows Text size test target {target}% was not larger than original {original}%")
+        if not state["minimum"] <= target <= state["maximum"]:
+            raise NativeUIJourneyError(
+                f"Windows Text size test target {target}% fell outside measured bounds "
+                f"{state['minimum']}..{state['maximum']}"
+            )
+
+        # Only take ownership of restoration after a clean, unchanged baseline.
+        # A pre-existing enabled Apply button may represent the user's pending
+        # setting; failing this diagnostic must not commit or overwrite it.
+        setting_mutation_attempted = True
+        applied = _native_ui_action(
+            ui,
+            "apply-windows-text-size-150",
+            "windows-text-size-150-apply",
+            timeout,
+            lambda: ui.apply_windows_text_size(target, original),
+        )
+        evidence["apply_150"] = applied
+        applied_state = _windows_text_size_state(applied, "150% apply")
+        if applied.get("applyInvoked") is not True or applied_state["value"] != target or applied_state["apply_enabled"] is not False:
+            raise NativeUIJourneyError(f"Windows Text size did not apply and settle at {target}%: {applied!r}")
+        _native_ui_action(ui, "close-before-text-size-reopen", "windows-text-size-close", timeout, ui.close)
+        _native_ui_action(
+            ui,
+            "reopen-at-text-size-150",
+            "windows-text-size-150-reopen",
+            timeout,
+            ui.start,
+            milestone="windows-text-size-150-startup",
+        )
+        reopened = base._snapshot(min(timeout, 30), "NATIVE_TEXT_SIZE_REOPEN_STATUS_FAILED")
+        evidence["reopened_snapshot"] = reopened
+        if reopened.get("configured") is not True or len(reopened.get("profiles", [])) != 24:
+            raise NativeUIJourneyError("Windows app reopen at 150% did not restore the 24-profile inventory")
+        if not same_active_generation(reopened, inventory_snapshot):
+            raise NativeUIJourneyError(
+                "reopening Windows at 150% changed or interrupted the active connection generation"
+            )
+        rendered = ui.snapshot()
+        required_labels = {"Profile 1 action", "Profile 2 action", "Backend logs"}
+        if not required_labels.issubset(set(rendered.get("labels", []))):
+            raise NativeUIJourneyError(f"Windows 150% reopen hid profile actions or Backend logs: {rendered!r}")
+        top = ui.profile_list_layout()
+        _assert_profile_list_layout(top, edge="top", visible_action="Profile 1 action")
+        evidence["top_layout_150"] = top
+        _exercise_long_profile_list_viewport(ui)
+        screenshot = ui.capture("windows-text-size-150-layout")
+        if not isinstance(screenshot, dict) or not isinstance(screenshot.get("path"), str):
+            raise NativeUIJourneyError(f"Windows 150% layout screenshot was not retained: {screenshot!r}")
+        evidence["screenshot_150"] = screenshot
+    except BaseException as error:
+        primary = error
+    finally:
+        if original is not None and setting_mutation_attempted:
+            current_state: dict[str, object] | None = None
+            try:
+                before_restore = ui.inspect_windows_text_size_settings()
+                evidence["before_restore_inspection"] = before_restore
+                if before_restore.get("ready") is not True or before_restore.get("available") is not True:
+                    restore_errors.append(NativeUIJourneyError(
+                        f"Windows Text size restore inspection was incomplete: {before_restore!r}"
+                    ))
+                current_state = _windows_text_size_state(
+                    before_restore, "restore inspection", require_ready=False
+                )
+            except BaseException as error:
+                restore_errors.append(error)
+
+            if current_state is not None:
+                current_value = current_state["value"]
+                try:
+                    restore_target = False
+                    if current_value == original:
+                        restore_target = current_state["apply_enabled"] is True
+                    elif current_value == target:
+                        restore_target = True
+                    else:
+                        raise NativeUIJourneyError(
+                            f"Windows Text size changed to unrelated value {current_value!r}% "
+                            f"during the test; refusing to overwrite it (original={original}%, target={target}%)"
+                        )
+
+                    if restore_target:
+                        restored = ui.apply_windows_text_size(original, int(round(float(current_value))))
+                        evidence["restore_apply"] = restored
+                        try:
+                            restored_state = _windows_text_size_state(restored, "original-value restore")
+                            if restored.get("applyInvoked") is not True or restored_state["value"] != original or restored_state["apply_enabled"] is not False:
+                                raise NativeUIJourneyError(f"Windows Text size did not restore to {original}%: {restored!r}")
+                        except BaseException as error:
+                            restore_errors.append(error)
+                except BaseException as error:
+                    restore_errors.append(error)
+
+            try:
+                final_inspection = ui.inspect_windows_text_size_settings()
+                evidence["final_inspection"] = final_inspection
+                if final_inspection.get("ready") is not True or final_inspection.get("available") is not True:
+                    raise NativeUIJourneyError(
+                        f"Windows Text size final verification was incomplete: {final_inspection!r}"
+                    )
+                final_state = _windows_text_size_state(final_inspection, "final verification")
+                if final_state["value"] != original or final_state["apply_enabled"] is not False:
+                    raise NativeUIJourneyError(
+                        f"Windows Text size final state was {final_state!r}; expected {original}% with Apply disabled"
+                    )
+                evidence["restored_original"] = original
+            except BaseException as error:
+                restore_errors.append(error)
+
+        if setting_mutation_attempted:
+            try:
+                with ui.bounded_by(min(timeout, 15.0)):
+                    ui.close_for_cleanup()
+            except BaseException as error:
+                restore_errors.append(error)
+            try:
+                _native_ui_action(
+                    ui,
+                    "restart-windows-text-size-original-frontend",
+                    "windows-text-size-original-reopen",
+                    timeout,
+                    ui.start,
+                    milestone="windows-text-size-original-startup",
+                )
+                evidence["original_frontend_reopened"] = True
+            except BaseException as error:
+                restore_errors.append(error)
+
+    if primary is not None:
+        for index, error in enumerate(restore_errors, start=1):
+            add_exception_notes(primary, f"Windows Text size restore {index}", error)
+        raise primary
+    if restore_errors:
+        failure = NativeUIJourneyError("Windows Text size test could not restore its original setting and frontend")
+        for index, error in enumerate(restore_errors, start=1):
+            add_exception_notes(failure, f"Windows Text size restore {index}", error)
+        raise failure from restore_errors[0]
+    checks["windows_text_size_150_layout"] = True
+
+
+def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float) -> dict[str, object]:
     initial = base._snapshot(min(timeout, 30), "NATIVE_SELECTION_STATUS_FAILED")
     if len(initial.get("profiles", [])) < 2:
         raise NativeUIJourneyError("Native switching qualification requires two supplied profiles")
@@ -858,7 +1149,7 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
             raise NativeUIJourneyError(
                 f"{ui.platform} Paste waited for the typed debounce before requesting the subscription ({paste_delay_ms} ms)"
             )
-    checks: dict[str, bool] = {"native_paste_immediate": True}
+    checks: dict[str, object] = {"native_paste_immediate": True}
     if "Retry" in ui.snapshot().get("labels", []):
         raise NativeUIJourneyError("Retry appeared before any subscription failure")
     if any(
@@ -1578,6 +1869,8 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     if not {"Profile 1 action", "Profile 2 action", expected_logs_control}.issubset(set(layout_view.get("labels", []))):
         raise NativeUIJourneyError("the long profile list hid the top profile actions or desktop logs pane")
     _exercise_long_profile_list_viewport(ui)
+    if ui.platform == "windows":
+        _exercise_windows_text_size_layout(ui, base, timeout, large_layout, checks)
 
     fixture.replace_response(previous_inventory)
     restore_layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=restore"

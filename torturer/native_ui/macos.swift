@@ -393,6 +393,82 @@ func profileScrollPercent(_ profileView: AXUIElement) throws -> Double? {
     return min(100, max(0, (value.doubleValue - minimum.doubleValue) / range * 100))
 }
 
+func profileRowDetails(_ nodes: [AXUIElement]) throws -> [[String: Any]] {
+    func number(in identifier: String, suffix: String) -> Int? {
+        let prefix = "Profile "
+        guard identifier.hasPrefix(prefix), identifier.hasSuffix(suffix) else { return nil }
+        return Int(identifier.dropFirst(prefix.count).dropLast(suffix.count))
+    }
+
+    var actions = [Int: String]()
+    for element in nodes {
+        let id = try identifier(element)
+        guard let index = number(in: id, suffix: " action"),
+              try label(element, kAXRoleAttribute) == kAXButtonRole else { continue }
+        let title = try names(element).first { $0 != id } ?? ""
+        try require(!title.isEmpty, "Profile \(index) has no native action title")
+        if let existing = actions[index] {
+            try require(existing == title, "Profile \(index) has conflicting native action titles")
+        } else {
+            actions[index] = title
+        }
+    }
+
+    var rows = [[String: Any]]()
+    var seen = Set<Int>()
+    for element in nodes {
+        let id = try identifier(element)
+        guard let index = number(in: id, suffix: " protocol"),
+              try label(element, kAXRoleAttribute) == kAXStaticTextRole else { continue }
+        try require(seen.insert(index).inserted, "Profile \(index) has duplicate native protocol labels")
+
+        let protocolNames = try names(element).filter { $0 != id }
+        guard let protocolLabel = protocolNames.first(where: { $0.contains(" · ") }) ?? protocolNames.first else {
+            throw HelperError("Profile \(index) has no native protocol text")
+        }
+        let protocolName: String
+        if let separator = protocolLabel.range(of: " · ", options: .backwards) {
+            protocolName = String(protocolLabel[separator.upperBound...])
+        } else {
+            protocolName = protocolLabel
+        }
+
+        guard let parent = try axElement(element, kAXParentAttribute),
+              let siblings = try attribute(parent, kAXChildrenAttribute) as? [AXUIElement] else {
+            throw HelperError("Profile \(index) has no native name row; protocol=\(protocolLabel)")
+        }
+        let parentRole = try label(parent, kAXRoleAttribute)
+        var nameElements = [AXUIElement]()
+        var siblingEvidence = [[String: Any]]()
+        for sibling in siblings {
+            let role = try label(sibling, kAXRoleAttribute)
+            let siblingID = try identifier(sibling)
+            let siblingNames = try names(sibling)
+            siblingEvidence.append(["role": role, "identifier": siblingID, "names": siblingNames])
+            if role == kAXStaticTextRole && siblingID.isEmpty { nameElements.append(sibling) }
+        }
+        guard nameElements.count == 1 else {
+            throw HelperError(
+                "Profile \(index) has missing or ambiguous native name text; " +
+                "protocol=\(protocolLabel) parentRole=\(parentRole) siblings=\(siblingEvidence)"
+            )
+        }
+        guard let name = try names(nameElements[0]).first else {
+            throw HelperError(
+                "Profile \(index) native name element had no text; " +
+                "protocol=\(protocolLabel) parentRole=\(parentRole) siblings=\(siblingEvidence)"
+            )
+        }
+        guard let action = actions[index] else {
+            throw HelperError("Profile \(index) has no native action control")
+        }
+        rows.append(["index": index, "name": name, "protocol": protocolName, "action": action])
+    }
+
+    try require(seen == Set(actions.keys), "Rendered profile descriptions and actions did not have matching identifiers")
+    return rows
+}
+
 func profileListLayout(_ nodes: [AXUIElement]) throws -> [String: Any] {
     guard let window = nodes.first,
           try label(window, kAXRoleAttribute) == kAXWindowRole else {
@@ -442,12 +518,20 @@ func profileListLayout(_ nodes: [AXUIElement]) throws -> [String: Any] {
         "connection_action": rectangle(actionBounds),
         "logs": rectangle(logsBounds),
         "scroll_position": scrollPosition,
+        "profile_rows": try profileRowDetails(nodes),
         "visible_profile_actions": visibleActions,
     ]
 }
 
 func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [String: Any] {
-    try require(position == "top" || position == "bottom", "Profile list position must be top or bottom")
+    let targetPercent: Double
+    if position == "top" { targetPercent = 0 }
+    else if position == "bottom" { targetPercent = 100 }
+    else if let requested = Double(position), requested.isFinite, requested >= 0, requested <= 100 {
+        targetPercent = requested
+    } else {
+        throw HelperError("Profile list position must be top, bottom, or a finite percentage from 0 to 100")
+    }
     guard let window = nodes.first else { throw HelperError("Profile list window is unavailable") }
     let profileView = try find(nodes, "Profile list viewport")
     let profileParts = try profileScrollParts(profileView)
@@ -459,7 +543,7 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
           maximum.doubleValue > minimum.doubleValue else {
         throw HelperError("Profile list does not expose an overflowing vertical range")
     }
-    let targetID = position == "top" ? "Profile 1 action" : "Profile 24 action"
+    let targetID = position == "top" ? "Profile 1 action" : position == "bottom" ? "Profile 24 action" : nil
     func currentLayout() throws -> [String: Any] {
         try retryTransientAccessibilityReads(
             context: "reading native profile-list geometry",
@@ -469,14 +553,19 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
         }
     }
     func targetVisible(_ layout: [String: Any]) -> Bool {
-        (layout["visible_profile_actions"] as? [String])?.contains(targetID) == true
+        if let targetID {
+            return (layout["visible_profile_actions"] as? [String])?.contains(targetID) == true
+        }
+        guard let actual = layout["scroll_position"] as? Double else { return false }
+        return abs(actual - targetPercent) <= 1
     }
     var layout = try currentLayout()
     if !targetVisible(layout) {
         var settable = DarwinBoolean(false)
         if AXUIElementIsAttributeSettable(scrollbar, kAXValueAttribute as CFString, &settable) == .success,
            settable.boolValue {
-            let targetValue = position == "top" ? minimum.doubleValue : maximum.doubleValue
+            let targetValue = minimum.doubleValue +
+                (maximum.doubleValue - minimum.doubleValue) * targetPercent / 100
             if AXUIElementSetAttributeValue(
                 scrollbar, kAXValueAttribute as CFString, NSNumber(value: targetValue) as CFTypeRef
             ) == .success {
@@ -498,9 +587,14 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
         var reached = false
         for delta in [100, -100] {
             var unchanged = 0
-            var priorDistance = position == "top"
-                ? (layout["scroll_position"] as? Double ?? 0)
-                : 100 - (layout["scroll_position"] as? Double ?? 0)
+            var priorDistance: Double
+            if position == "top" {
+                priorDistance = layout["scroll_position"] as? Double ?? 0
+            } else if position == "bottom" {
+                priorDistance = 100 - (layout["scroll_position"] as? Double ?? 0)
+            } else {
+                priorDistance = abs((layout["scroll_position"] as? Double ?? targetPercent) - targetPercent)
+            }
             for _ in 0..<24 {
                 guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line,
                                           wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
@@ -514,9 +608,11 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
                     reached = true
                     break
                 }
-                let scrollPosition = layout["scroll_position"] as? Double
-                    ?? (position == "top" ? 0 : 100)
-                let distance = position == "top" ? scrollPosition : 100 - scrollPosition
+                let scrollPosition = layout["scroll_position"] as? Double ?? targetPercent
+                let distance: Double
+                if position == "top" { distance = scrollPosition }
+                else if position == "bottom" { distance = 100 - scrollPosition }
+                else { distance = abs(scrollPosition - targetPercent) }
                 if distance < priorDistance {
                     unchanged = 0
                 } else {
@@ -527,10 +623,10 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
             }
             if reached { break }
         }
-        try require(reached, "Profile list did not scroll to \(position); \(targetID) was not visible")
+        try require(reached, "Profile list did not scroll to \(position)")
     }
     layout = try currentLayout()
-    try require(targetVisible(layout), "Profile list did not expose \(targetID) at \(position)")
+    try require(targetVisible(layout), "Profile list did not settle at \(position)")
     return layout
 }
 

@@ -447,6 +447,7 @@ class InformationRetentionTests(unittest.TestCase):
             if args.platform == "windows":
                 native_checks["rendered_stderr_capture_label"] = True
                 native_checks["windows_rendered_log_palette"] = True
+                native_checks["windows_text_size_150_layout"] = True
 
             palette_log = args.raw_log_dir / "service.log"
             palette_log.touch()

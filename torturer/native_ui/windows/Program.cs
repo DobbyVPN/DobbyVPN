@@ -75,6 +75,8 @@ internal static class Program
     [StructLayout(LayoutKind.Sequential)] private struct NativeFileTime { public uint Low, High; }
 
     private const string WindowsTextSizeSettingsUri = "ms-settings:easeofaccess-display";
+    private const string WindowsTextSizeSliderAutomationId = "SystemSettings_EaseOfAccess_Experience_TextScalingDesktop_Slider";
+    private const string WindowsTextSizeApplyAutomationId = "SystemSettings_EaseOfAccess_Experience_TextScalingDesktop_ButtonRemove";
     private const uint WmClose = 0x0010;
     private const uint WmNull = 0x0000;
     private const uint SmtoAbortIfHung = 0x0002;
@@ -588,6 +590,18 @@ internal static class Program
         element.Left >= viewport.Left && element.Top >= viewport.Top &&
         element.Right <= viewport.Right && element.Bottom <= viewport.Bottom;
 
+    private static bool TryGetProfileNumber(string automationId, string suffix, out int number)
+    {
+        const string prefix = "Profile ";
+        number = 0;
+        if (!automationId.StartsWith(prefix, StringComparison.Ordinal) ||
+            !automationId.EndsWith(suffix, StringComparison.Ordinal))
+            return false;
+
+        var numberText = automationId.Substring(prefix.Length, automationId.Length - prefix.Length - suffix.Length);
+        return int.TryParse(numberText, NumberStyles.None, CultureInfo.InvariantCulture, out number) && number > 0;
+    }
+
     private static Dictionary<string, object?> ProfileListLayout(AutomationElement root, IntPtr window)
     {
         var controls = RequireAutomationId(root, "Connection controls");
@@ -602,29 +616,48 @@ internal static class Program
         }
 
         var viewportBounds = PhysicalBounds(profileViewport, "Profile list viewport");
-        var profileButtons = profileViewport.FindAll(
-            TreeScope.Descendants,
-            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button));
+        var profileElements = profileViewport.FindAll(TreeScope.Descendants, new OrCondition(
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text),
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)));
         var visibleActions = new List<(int Number, string AutomationId)>();
-        foreach (AutomationElement button in profileButtons)
+        var profileNames = new Dictionary<int, (string Name, string Protocol)>();
+        var profileActions = new Dictionary<int, string>();
+        var profileOrder = new List<int>();
+        foreach (AutomationElement element in profileElements)
         {
-            var automationId = button.Current.AutomationId;
-            const string prefix = "Profile ";
-            const string suffix = " action";
-            if (!automationId.StartsWith(prefix, StringComparison.Ordinal) ||
-                !automationId.EndsWith(suffix, StringComparison.Ordinal) ||
-                automationId.Length <= prefix.Length + suffix.Length)
-                continue;
+            var automationId = element.Current.AutomationId;
+            if (TryGetProfileNumber(automationId, " description", out var descriptionNumber))
+            {
+                var renderedText = element.Current.Name;
+                var separator = renderedText.LastIndexOf(" · ", StringComparison.Ordinal);
+                if (separator <= 0 || separator + 3 >= renderedText.Length ||
+                    !profileNames.TryAdd(descriptionNumber,
+                        (renderedText[..separator], renderedText[(separator + 3)..])))
+                    throw new InvalidOperationException(
+                        $"Profile {descriptionNumber} has missing, duplicate, or malformed rendered description text: {renderedText}");
+                profileOrder.Add(descriptionNumber);
+            }
+            else if (TryGetProfileNumber(automationId, " action", out var actionNumber))
+            {
+                if (!profileActions.TryAdd(actionNumber, element.Current.Name))
+                    throw new InvalidOperationException($"Profile {actionNumber} has duplicate rendered action controls");
 
-            var numberText = automationId.Substring(
-                prefix.Length, automationId.Length - prefix.Length - suffix.Length);
-            if (!int.TryParse(numberText, NumberStyles.None, CultureInfo.InvariantCulture, out var number) || number < 1)
-                continue;
-
-            var actionBounds = button.Current.BoundingRectangle;
-            if (HasUsableBounds(actionBounds) && FullyInside(actionBounds, viewportBounds))
-                visibleActions.Add((number, automationId));
+                var actionBounds = element.Current.BoundingRectangle;
+                if (element.Current.ControlType == ControlType.Button && HasUsableBounds(actionBounds) &&
+                    FullyInside(actionBounds, viewportBounds))
+                    visibleActions.Add((actionNumber, automationId));
+            }
         }
+
+        if (profileNames.Count != profileActions.Count || profileNames.Keys.Any(index => !profileActions.ContainsKey(index)))
+            throw new InvalidOperationException("Rendered profile descriptions and actions did not have matching identifiers");
+        var profileRows = profileOrder.Select(index => new Dictionary<string, object?>
+        {
+            ["index"] = index,
+            ["name"] = profileNames[index].Name,
+            ["protocol"] = profileNames[index].Protocol,
+            ["action"] = profileActions[index],
+        }).ToArray();
 
         return new Dictionary<string, object?>
         {
@@ -635,6 +668,7 @@ internal static class Program
             ["connection_action"] = RectJson(PhysicalBounds(connectionAction, "VPN connection action")),
             ["logs"] = RectJson(PhysicalBounds(logs, "Backend logs")),
             ["scroll_position"] = scrollPosition,
+            ["profile_rows"] = profileRows,
             ["visible_profile_actions"] = visibleActions
                 .OrderBy(action => action.Number)
                 .Select(action => action.AutomationId)
@@ -647,8 +681,12 @@ internal static class Program
         IntPtr window,
         string position)
     {
-        if (position is not ("top" or "bottom"))
-            throw new ArgumentException("Profile list scroll position must be top or bottom");
+        double targetPosition;
+        if (position == "top") targetPosition = 0;
+        else if (position == "bottom") targetPosition = 100;
+        else if (!double.TryParse(position, NumberStyles.Float, CultureInfo.InvariantCulture, out targetPosition) ||
+                 !double.IsFinite(targetPosition) || targetPosition < 0 || targetPosition > 100)
+            throw new ArgumentException("Profile list position must be top, bottom, or a finite percentage from 0 to 100");
 
         var viewport = RequireAutomationId(root, "Profile list viewport");
         if (!viewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
@@ -657,18 +695,20 @@ internal static class Program
         if (scroll.Current.VerticalScrollPercent < 0)
             throw new InvalidOperationException("Profile list viewport does not expose a vertical scroll range");
 
-        var targetPosition = position == "top" ? 0d : 100d;
         scroll.SetScrollPercent(ScrollPattern.NoScroll, targetPosition);
         WaitFor(() =>
         {
             var actualPosition = scroll.Current.VerticalScrollPercent;
-            return position == "top" ? actualPosition <= 1 : actualPosition >= 99;
+            return position == "top" ? actualPosition <= 1 : position == "bottom"
+                ? actualPosition >= 99 : Math.Abs(actualPosition - targetPosition) <= 1;
         }, $"Profile list viewport did not scroll to {position}", seconds: 3);
 
         var layout = ProfileListLayout(root, window);
         if (layout["scroll_position"] is not double measuredPosition)
             throw new InvalidOperationException("Profile list viewport did not report its scroll position after scrolling");
-        if (position == "top" ? measuredPosition > 1 : measuredPosition < 99)
+        var settled = position == "top" ? measuredPosition <= 1 : position == "bottom"
+            ? measuredPosition >= 99 : Math.Abs(measuredPosition - targetPosition) <= 1;
+        if (!settled)
             throw new InvalidOperationException(
                 $"Profile list viewport did not remain at {position}; position={measuredPosition.ToString(CultureInfo.InvariantCulture)}");
         return layout;
@@ -892,13 +932,26 @@ internal static class Program
     private static void ValidateSettingsTextSizeRequest(JsonElement request)
     {
         var unexpected = request.EnumerateObject().Select(property => property.Name)
-            .Where(name => name is not ("operation" or "executable" or "action" or "uri")).ToArray();
+            .Where(name => name is not ("operation" or "executable" or "action" or "uri" or "target" or "expectedCurrent")).ToArray();
         if (unexpected.Length > 0) throw new ArgumentException("Unexpected Settings inspection fields: " + string.Join(", ", unexpected));
         if (string.IsNullOrWhiteSpace(request.GetProperty("executable").GetString()))
-            throw new ArgumentException("Settings inspection requires the helper executable field");
-        if (request.GetProperty("action").GetString() != "inspect" ||
-            request.GetProperty("uri").GetString() != WindowsTextSizeSettingsUri)
-            throw new ArgumentException("Settings helper supports inspect only at the fixed Text size URI");
+            throw new ArgumentException("Settings Text size operation requires the helper executable field");
+        if (request.GetProperty("uri").GetString() != WindowsTextSizeSettingsUri)
+            throw new ArgumentException("Settings helper supports only the fixed Text size URI");
+
+        var action = request.GetProperty("action").GetString();
+        if (action == "inspect")
+        {
+            if (request.TryGetProperty("target", out _) || request.TryGetProperty("expectedCurrent", out _))
+                throw new ArgumentException("Settings inspection does not accept mutation fields");
+            return;
+        }
+        if (action != "apply") throw new ArgumentException("Settings Text size action must be inspect or apply");
+        if (!request.TryGetProperty("target", out var target) || target.ValueKind != JsonValueKind.Number ||
+            !target.TryGetInt32(out var targetValue) || targetValue <= 0 ||
+            !request.TryGetProperty("expectedCurrent", out var expected) || expected.ValueKind != JsonValueKind.Number ||
+            !expected.TryGetInt32(out var expectedValue) || expectedValue <= 0)
+            throw new ArgumentException("Settings apply requires positive integer target and expectedCurrent values");
     }
 
     private static Dictionary<string, object?> CaptureSettingsWindowAfterClose(
@@ -931,17 +984,122 @@ internal static class Program
         return snapshot;
     }
 
-    private static int InspectWindowsTextSizeSettings()
+    private static AutomationElement? FindSettingsTextSizeControl(
+        AutomationElement root,
+        string automationId,
+        ControlType controlType,
+        string name)
     {
+        var element = root.FindFirst(TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
+        if (element is null) return null;
+        var current = element.Current;
+        if (current.ControlType != controlType || !string.Equals(current.Name, name, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"Windows Settings control ID changed identity: expected={automationId}/{controlType.ProgrammaticName}/{name} " +
+                $"actual={current.AutomationId}/{current.ControlType.ProgrammaticName}/{current.Name}");
+        return element;
+    }
+
+    private static void ApplyWindowsTextSize(
+        AutomationElement root,
+        AutomationElement slider,
+        AutomationElement apply,
+        int target,
+        int expectedCurrent,
+        Dictionary<string, object?> response)
+    {
+        if (apply.Current.AutomationId != WindowsTextSizeApplyAutomationId)
+            throw new InvalidOperationException("Refusing to apply Text size through an unverified Settings control");
+        if (!slider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var sliderPattern))
+            throw new InvalidOperationException("Text size Slider no longer exposes RangeValuePattern");
+        var range = (RangeValuePattern)sliderPattern;
+        var before = range.Current;
+        response["rangeBeforeApply"] = new
+        {
+            value = before.Value, minimum = before.Minimum, maximum = before.Maximum,
+            smallChange = before.SmallChange, largeChange = before.LargeChange, isReadOnly = before.IsReadOnly,
+        };
+        if (before.IsReadOnly) throw new InvalidOperationException("Text size Slider RangeValuePattern is read-only");
+        if (Math.Abs(before.Value - expectedCurrent) > 0.01)
+            throw new InvalidOperationException(
+                $"Text size changed from expected {expectedCurrent}% to {before.Value.ToString(CultureInfo.InvariantCulture)}% before apply");
+        if (target < before.Minimum || target > before.Maximum)
+            throw new InvalidOperationException(
+                $"Text size target {target}% is outside the writable RangeValue bounds {before.Minimum}..{before.Maximum}");
+        if (!slider.Current.IsEnabled || slider.Current.IsOffscreen || !HasUsableBounds(slider.Current.BoundingRectangle))
+            throw new InvalidOperationException("Text size Slider is not enabled and visible");
+
+        response["setValueAttempted"] = true;
+        range.SetValue(target);
+        var setValueReadback = range.Current.Value;
+        response["setValueReadback"] = setValueReadback;
+        if (Math.Abs(setValueReadback - target) > 0.01)
+            throw new InvalidOperationException(
+                $"Text size Slider read back {setValueReadback.ToString(CultureInfo.InvariantCulture)}% after setting {target}%");
+
+        WaitFor(() => FindSettingsTextSizeControl(
+            root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply")?.Current.IsEnabled == true,
+            "Settings Apply did not enable after changing Text size", seconds: 5);
+        apply = FindSettingsTextSizeControl(
+            root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply")
+            ?? throw new InvalidOperationException("Exact Text size Apply button disappeared after changing the slider");
+        if (!apply.Current.IsEnabled || apply.Current.IsOffscreen || !HasUsableBounds(apply.Current.BoundingRectangle))
+            throw new InvalidOperationException("Text size Apply button is not enabled and visible after changing the slider");
+        if (!apply.TryGetCurrentPattern(InvokePattern.Pattern, out var invokePattern))
+            throw new InvalidOperationException("Text size Apply button does not expose InvokePattern");
+        response["applyInvokeAttempted"] = true;
+        ((InvokePattern)invokePattern).Invoke();
+        response["applyInvoked"] = true;
+
+        WaitFor(() =>
+        {
+            var currentSlider = FindSettingsTextSizeControl(
+                root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size");
+            var currentApply = FindSettingsTextSizeControl(
+                root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply");
+            return currentSlider is not null && currentApply is not null &&
+                currentSlider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var currentPattern) &&
+                Math.Abs(((RangeValuePattern)currentPattern).Current.Value - target) <= 0.01 &&
+                !currentApply.Current.IsEnabled;
+        }, "Text size Apply did not settle at the requested value", seconds: 10);
+
+        var finalSlider = FindSettingsTextSizeControl(
+            root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size")
+            ?? throw new InvalidOperationException("Text size Slider disappeared after Apply");
+        var finalApply = FindSettingsTextSizeControl(
+            root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply")
+            ?? throw new InvalidOperationException("Text size Apply button disappeared after Apply");
+        if (!finalSlider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var finalPattern))
+            throw new InvalidOperationException("Text size Slider lost RangeValuePattern after Apply");
+        response["valueAfterApply"] = ((RangeValuePattern)finalPattern).Current.Value;
+        response["applyEnabledAfterApply"] = finalApply.Current.IsEnabled;
+        if (Math.Abs(Convert.ToDouble(response["valueAfterApply"], CultureInfo.InvariantCulture) - target) > 0.01 ||
+            finalApply.Current.IsEnabled)
+            throw new InvalidOperationException("Text size setting did not apply at the requested value");
+    }
+
+    private static int OperateWindowsTextSizeSettings(JsonElement request)
+    {
+        var action = request.GetProperty("action").GetString()!;
+        var target = action == "apply" ? request.GetProperty("target").GetInt32() : (int?)null;
+        var expectedCurrent = action == "apply" ? request.GetProperty("expectedCurrent").GetInt32() : (int?)null;
         using var helper = Process.GetCurrentProcess();
         var sessionId = helper.SessionId;
         var response = new Dictionary<string, object?>
         {
             ["schema"] = "dobbyvpn.windows-text-size-settings/v1", ["operation"] = "settings-text-size",
-            ["action"] = "inspect", ["uri"] = WindowsTextSizeSettingsUri,
+            ["action"] = action, ["uri"] = WindowsTextSizeSettingsUri,
             ["helper"] = new { processId = helper.Id, sessionId, threadId = GetCurrentThreadId(), userName = Environment.UserName },
             ["ready"] = false, ["available"] = false, ["newSettingsWindowClosed"] = null,
         };
+        if (target is not null)
+        {
+            response["target"] = target.Value;
+            response["expectedCurrent"] = expectedCurrent!.Value;
+            response["setValueAttempted"] = false;
+            response["applyInvokeAttempted"] = false;
+        }
         Process? settings = null;
         Process? activation = null;
         var activationAttempted = false;
@@ -976,9 +1134,8 @@ internal static class Program
             if (!existedBefore) TracePhase($"settings-text-size-new-window-owned session={sessionId} pid={ownerPid} hwnd=0x{window.ToInt64():X}");
 
             var root = AutomationElement.FromHandle(window);
-            var slider = root.FindFirst(TreeScope.Descendants, new AndCondition(
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Slider),
-                new PropertyCondition(AutomationElement.NameProperty, "Text size", PropertyConditionFlags.IgnoreCase)));
+            var slider = FindSettingsTextSizeControl(
+                root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size");
             if (slider is null) throw new InvalidOperationException("Exact Text size Slider was not found in the Settings window");
             var current = slider.Current;
             object? range = null;
@@ -995,18 +1152,42 @@ internal static class Program
                 }
             }
             catch (Exception error) { rangeError = error.ToString(); }
-            var apply = root.FindFirst(TreeScope.Descendants, new AndCondition(
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
-                new PropertyCondition(AutomationElement.NameProperty, "Apply", PropertyConditionFlags.IgnoreCase)));
+            var apply = FindSettingsTextSizeControl(
+                root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply");
             var bounds = current.BoundingRectangle;
             response["slider"] = new { identity = DescribeElement(slider), enabled = current.IsEnabled,
                 offscreen = current.IsOffscreen, bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null, range, rangeError };
             response["apply"] = apply is null ? null : new { identity = DescribeElement(apply), enabled = apply.Current.IsEnabled,
                 offscreen = apply.Current.IsOffscreen, bounds = HasUsableBounds(apply.Current.BoundingRectangle) ? RectJson(apply.Current.BoundingRectangle) : null };
+            if (action == "apply")
+            {
+                if (range is null || apply is null)
+                    throw new InvalidOperationException("Text size apply requires RangeValue data and the exact Apply control");
+                ApplyWindowsTextSize(root, slider, apply, target!.Value, expectedCurrent!.Value, response);
+                slider = FindSettingsTextSizeControl(
+                    root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size")
+                    ?? throw new InvalidOperationException("Text size Slider disappeared after Apply");
+                current = slider.Current;
+                if (slider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var refreshedPattern))
+                {
+                    var refreshed = ((RangeValuePattern)refreshedPattern).Current;
+                    range = new { value = refreshed.Value, minimum = refreshed.Minimum, maximum = refreshed.Maximum,
+                        smallChange = refreshed.SmallChange, largeChange = refreshed.LargeChange, isReadOnly = refreshed.IsReadOnly };
+                }
+                apply = FindSettingsTextSizeControl(
+                    root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply");
+                bounds = current.BoundingRectangle;
+                response["slider"] = new { identity = DescribeElement(slider), enabled = current.IsEnabled,
+                    offscreen = current.IsOffscreen, bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null, range, rangeError };
+                response["apply"] = apply is null ? null : new { identity = DescribeElement(apply), enabled = apply.Current.IsEnabled,
+                    offscreen = apply.Current.IsOffscreen, bounds = HasUsableBounds(apply.Current.BoundingRectangle) ? RectJson(apply.Current.BoundingRectangle) : null };
+            }
             var ready = !current.IsOffscreen && HasUsableBounds(bounds) && range is not null && apply is not null;
             response["ready"] = ready;
             response["available"] = ready;
             if (!ready) response["reason"] = "Text size slider, RangeValue data, or Apply control was unavailable or not visible";
+            if (action == "apply" && response.GetValueOrDefault("applyInvoked") is not true)
+                throw new InvalidOperationException("Text size Apply did not complete its guarded mutation");
         }
         catch (Exception error)
         {
@@ -1274,7 +1455,7 @@ internal static class Program
             if (operation == "settings-text-size")
             {
                 ValidateSettingsTextSizeRequest(request);
-                return InspectWindowsTextSizeSettings();
+                return OperateWindowsTextSizeSettings(request);
             }
             var expected = Path.GetFullPath(Text("executable"));
             Process? found = null;
@@ -1478,7 +1659,26 @@ internal static class Program
                 return 0;
             }
             if (traceAutomationPoint)
-                return MeasureAutomationElementFromPoint(process, identity, window, request);
+            {
+                var pointQueryResult = 0;
+                ExceptionDispatchInfo? pointQueryError = null;
+                var pointQueryThread = new Thread(() =>
+                {
+                    try
+                    {
+                        pointQueryResult = MeasureAutomationElementFromPoint(process, identity, window, request);
+                    }
+                    catch (Exception error)
+                    {
+                        pointQueryError = ExceptionDispatchInfo.Capture(error);
+                    }
+                });
+                pointQueryThread.SetApartmentState(ApartmentState.MTA);
+                pointQueryThread.Start();
+                pointQueryThread.Join();
+                pointQueryError?.Throw();
+                return pointQueryResult;
+            }
             if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
             var root = AutomationElement.FromHandle(window);
             if (traceTree) TracePhase("tree-uia-root-complete");
@@ -2014,6 +2214,7 @@ internal static class Program
             ["identity"] = identity,
             ["diagnosticOnly"] = true,
             ["schema"] = "dobbyvpn.windows-uia-point/v1",
+            ["clientApartmentState"] = Thread.CurrentThread.GetApartmentState().ToString(),
         };
         object? comAutomationObject = null;
         IUIAutomationClientCom? comAutomation = null;

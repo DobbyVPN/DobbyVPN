@@ -102,12 +102,12 @@ class AndroidAutoRecoveryStopAdapterTests(unittest.TestCase):
             screenshot_root = root / "screenshots" / "android" / token
             screenshot_root.mkdir(parents=True)
             stop_label = "0012-disconnect-recovery-stop-state.png"
-            idle_label = "0020-disconnect-disconnected-state.png"
+            stopped_label = "0020-disconnect-stopped-state.png"
             (screenshot_root / stop_label).write_bytes(b"stop frame")
-            (screenshot_root / idle_label).write_bytes(b"idle frame")
+            (screenshot_root / stopped_label).write_bytes(b"stopped frame")
 
             facts = adapter._validated_auto_recovery_stop_facts(
-                recovery_facts(stop_label, idle_label),
+                recovery_facts(stop_label, stopped_label),
                 f"{token}.command.json",
             )
 
@@ -115,10 +115,39 @@ class AndroidAutoRecoveryStopAdapterTests(unittest.TestCase):
                 facts["screenshot_paths"],
                 {
                     "recovery_stop": str(screenshot_root / stop_label),
-                    "disconnected": str(screenshot_root / idle_label),
+                    "stopped": str(screenshot_root / stopped_label),
                 },
             )
             self.assertEqual(facts["recovery_generation"], 8)
+            self.assertEqual(facts["rendered_status"], "Failed")
+
+            invalid_failure = recovery_facts(stop_label, stopped_label)
+            invalid_failure["rendered_failure_message"] = "unrelated runtime failure"
+            with self.assertRaises(ScenarioExecutionError) as caught:
+                adapter._validated_auto_recovery_stop_facts(
+                    invalid_failure,
+                    f"{token}.command.json",
+                )
+            self.assertEqual(
+                caught.exception.reason_code,
+                "ANDROID_AUTO_RECOVERY_STOP_RENDERED_FAILURE_INVALID",
+            )
+
+            disconnected = recovery_facts(stop_label, stopped_label)
+            disconnected.update(
+                {
+                    "rendered_status": "Disconnected",
+                    "rendered_failure_code": "",
+                    "rendered_failure_message": "",
+                }
+            )
+            self.assertEqual(
+                adapter._validated_auto_recovery_stop_facts(
+                    disconnected,
+                    f"{token}.command.json",
+                )["rendered_status"],
+                "Disconnected",
+            )
 
     def test_run_uses_core_connection_steps_and_returns_independent_case_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -138,7 +167,7 @@ class AndroidAutoRecoveryStopAdapterTests(unittest.TestCase):
             adapter._process_cold_import_queued = False
             native_facts = recovery_facts(
                 "0012-disconnect-recovery-stop-state.png",
-                "0020-disconnect-disconnected-state.png",
+                "0020-disconnect-stopped-state.png",
             )
             standard_observation = core_connection_observation()
             captured: dict[str, object] = {}
@@ -209,7 +238,7 @@ def command_adapter(root: Path) -> AndroidAdapter:
     return adapter
 
 
-def recovery_facts(stop_label: str, idle_label: str) -> dict[str, object]:
+def recovery_facts(stop_label: str, stopped_label: str) -> dict[str, object]:
     return {
         "case_id": "android:auto-recovery-stop",
         "passed": True,
@@ -227,6 +256,11 @@ def recovery_facts(stop_label: str, idle_label: str) -> dict[str, object]:
         "competing_profile_action_count": 12,
         "competing_profile_actions_disabled": True,
         "profile_actions_verified_while_visible": True,
+        "competing_profile_actions_enabled_after_stop": True,
+        "primary_auto_connect_enabled": True,
+        "rendered_status": "Failed",
+        "rendered_failure_code": "RUNTIME_FAILED",
+        "rendered_failure_message": "connected health check failed: test recovery Stop health fault",
         "stop_clicked": True,
         "final_generation": 8,
         "final_idle": True,
@@ -238,8 +272,8 @@ def recovery_facts(stop_label: str, idle_label: str) -> dict[str, object]:
         "no_later_generation": True,
         "final_stable_sample_count": 10,
         "stop_screenshot_label": stop_label,
-        "idle_screenshot_label": idle_label,
-        "screenshot_labels": [stop_label, idle_label],
+        "stopped_screenshot_label": stopped_label,
+        "screenshot_labels": [stop_label, stopped_label],
     }
 
 

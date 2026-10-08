@@ -206,7 +206,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         self.assertIn('label($0, kAXRoleAttribute) == kAXButtonRole', click_operation)
         self.assertIn("try press(find(buttons, target))", click_operation)
 
-    def test_windows_text_size_settings_wrapper_is_unbound_and_inspect_only(self):
+    def test_windows_text_size_settings_wrapper_keeps_inspection_read_only_and_apply_guarded(self):
         controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
         controller.platform = "windows"
         response = {"ready": False, "available": False}
@@ -218,6 +218,24 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             action="inspect",
             uri=journey.smoke._WINDOWS_TEXT_SIZE_SETTINGS_URI,
         )
+
+        with patch.object(controller, "_call", return_value=response) as call:
+            self.assertIs(controller.apply_windows_text_size(150, 100), response)
+        call.assert_called_once_with(
+            "settings-text-size",
+            unbound=True,
+            action="apply",
+            uri=journey.smoke._WINDOWS_TEXT_SIZE_SETTINGS_URI,
+            target=150,
+            expectedCurrent=100,
+        )
+
+        with patch.object(controller, "_call") as call:
+            for target, current in ((0, 100), (150, 0), (150.0, 100), (150, True)):
+                with self.subTest(target=target, current=current):
+                    with self.assertRaises(ValueError):
+                        controller.apply_windows_text_size(target, current)
+            call.assert_not_called()
 
         controller.platform = "macos"
         with patch.object(controller, "_call") as call:
@@ -231,22 +249,25 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         product_resolution = source.index('var expected = Path.GetFullPath(Text("executable"));')
         validation = source.index("private static void ValidateSettingsTextSizeRequest")
         snapshot_start = source.index("private static Dictionary<string, object?> CaptureSettingsWindowAfterClose(")
-        inspection = source.index("private static int InspectWindowsTextSizeSettings")
+        inspection = source.index("private static int OperateWindowsTextSizeSettings")
         inspection_end = source.index("private static string DescribeElement", inspection)
 
         self.assertLess(dispatch, product_resolution)
         self.assertLess(validation, inspection)
-        self.assertIn('request.GetProperty("action").GetString() != "inspect"', source[validation:inspection])
+        self.assertIn('if (action == "inspect")', source[validation:inspection])
+        self.assertIn('if (action != "apply")', source[validation:inspection])
         self.assertIn('request.GetProperty("uri").GetString() != WindowsTextSizeSettingsUri', source[validation:inspection])
+        self.assertIn('request.TryGetProperty("target", out _) || request.TryGetProperty("expectedCurrent", out _)', source[validation:inspection])
 
         operation = source[inspection:inspection_end]
         self.assertIn('Process.Start(new ProcessStartInfo(WindowsTextSizeSettingsUri)', operation)
         ownership_phase = operation.index("settings-text-size-new-window-owned")
-        uia_query = operation.index("FindFirst(TreeScope.Descendants")
+        uia_query = operation.index("var slider = FindSettingsTextSizeControl(")
         self.assertLess(ownership_phase, uia_query)
-        self.assertIn('AutomationElement.NameProperty, "Text size"', operation)
+        self.assertIn("WindowsTextSizeSliderAutomationId", operation)
         self.assertIn("RangeValuePattern.Pattern", operation)
-        self.assertIn('AutomationElement.NameProperty, "Apply"', operation)
+        self.assertIn("WindowsTextSizeApplyAutomationId", operation)
+        self.assertIn('if (action == "apply")', operation)
         self.assertNotIn(".SetValue(", operation)
         self.assertNotIn(".Invoke()", operation)
         self.assertNotIn("Walk(", operation)
@@ -257,6 +278,24 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         self.assertIn("cleanup of a potentially new Settings window cannot be verified", operation)
         self.assertIn('response["error"] = primaryError', operation)
         self.assertIn('response["cleanupErrors"] = cleanupErrors', operation)
+
+        apply_start = source.index("private static void ApplyWindowsTextSize(")
+        apply_end = source.index("private static int OperateWindowsTextSizeSettings", apply_start)
+        apply_operation = source[apply_start:apply_end]
+        for assertion in (
+            "WindowsTextSizeApplyAutomationId",
+            "expectedCurrent",
+            "before.IsReadOnly",
+            "before.Value",
+            "before.Minimum",
+            "before.Maximum",
+            "range.SetValue(target)",
+            "((InvokePattern)invokePattern).Invoke()",
+            "WaitFor(",
+        ):
+            with self.subTest(assertion=assertion):
+                self.assertIn(assertion, apply_operation)
+        self.assertIn("!currentApply.Current.IsEnabled", apply_operation)
 
         close_start = operation.index("if (window != IntPtr.Zero && !windowsBefore.Contains(window))")
         close_cleanup = operation[close_start:operation.index(
@@ -320,7 +359,21 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                     journey._exercise_auto_recovery_stop(ui, base, marker, 1.0)
 
     @staticmethod
-    def profile_layout(scroll_position, visible_actions):
+    def rendered_profile_rows():
+        return [
+            {
+                "index": index,
+                "name": "Profile 1" if index == 1 else f"Layout profile {index}",
+                "protocol": "OUTLINE",
+                "action": "Connect",
+            }
+            for index in range(1, 25)
+        ]
+
+    @staticmethod
+    def profile_layout(scroll_position, visible_actions, row_indexes=None):
+        all_rows = NativeUICaseFixtureTests.rendered_profile_rows()
+        rows = all_rows if row_indexes is None else [all_rows[index - 1] for index in row_indexes]
         return {
             "ready": True,
             "window": {"x": 0, "y": 0, "width": 1000, "height": 800},
@@ -329,20 +382,252 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             "connection_action": {"x": 20, "y": 20, "width": 440, "height": 80},
             "logs": {"x": 500, "y": 10, "width": 480, "height": 760},
             "scroll_position": scroll_position,
+            "profile_rows": rows,
             "visible_profile_actions": visible_actions,
         }
 
+    def windows_text_size_fakes(
+        self,
+        *,
+        apply_enabled=False,
+        layout_fails=False,
+        external_change_before_restore=False,
+        apply_mode="normal",
+    ):
+        events = []
+        state = {"value": 100.0, "apply_enabled": apply_enabled, "inspections": 0}
+
+        def response(*, ready=True, apply_invoked=None, readback=None):
+            result = {
+                "ready": ready,
+                "available": ready,
+                "slider": {
+                    "enabled": True,
+                    "offscreen": False,
+                    "range": {
+                        "value": state["value"], "minimum": 100.0, "maximum": 225.0,
+                        "isReadOnly": False,
+                    },
+                },
+                "apply": {"enabled": state["apply_enabled"], "offscreen": False},
+            }
+            if apply_invoked is not None:
+                result["applyInvoked"] = apply_invoked
+            if readback is not None:
+                result["setValueReadback"] = readback
+            return result
+
+        class UI:
+            platform = "windows"
+
+            def bounded_by(self, _timeout):
+                return nullcontext()
+
+            def inspect_windows_text_size_settings(self):
+                state["inspections"] += 1
+                events.append("inspect")
+                if external_change_before_restore and state["inspections"] == 2:
+                    state["value"] = 125.0
+                    state["apply_enabled"] = False
+                return response()
+
+            def apply_windows_text_size(self, target, expected_current):
+                events.append(f"apply:{target}:expected:{expected_current}")
+                if abs(state["value"] - expected_current) > 0.01:
+                    return response(ready=False, apply_invoked=False)
+                if target == 150 and apply_mode == "partial-no-change":
+                    return response(ready=False, apply_invoked=False)
+                if target == 150 and apply_mode == "partial-set-value":
+                    state["value"] = 150.0
+                    state["apply_enabled"] = True
+                    return response(ready=False, apply_invoked=False, readback=150)
+                state["value"] = float(target)
+                state["apply_enabled"] = False
+                return response(apply_invoked=True, readback=target)
+
+            def close(self):
+                events.append("close")
+                return {"closed": True}
+
+            def close_for_cleanup(self):
+                events.append("close-for-cleanup")
+
+            def start(self):
+                events.append("start")
+                return {"started": True}
+
+            def capture(self, name):
+                return {"path": f"{name}.png"}
+
+            def snapshot(self):
+                return {"labels": ["Profile 1 action", "Profile 2 action", "Backend logs"]}
+
+            def profile_list_layout(self):
+                events.append("layout")
+                if layout_fails:
+                    raise journey.NativeUIJourneyError("150% profile layout failed")
+                return NativeUICaseFixtureTests.profile_layout(0, ["Profile 1 action"])
+
+            def scroll_profile_list(self, position):
+                scroll = 0 if position == "top" else 100 if position == "bottom" else float(position)
+                actions = ["Profile 1 action"] if position == "top" else (
+                    ["Profile 24 action"] if position == "bottom" else []
+                )
+                return NativeUICaseFixtureTests.profile_layout(scroll, actions)
+
+            def _call(self, operation):
+                if operation == "logs":
+                    return {"ready": True, "text": "INFO · fixture log"}
+                if operation == "log-position":
+                    return {"visible_first_record": "INFO · fixture log"}
+                raise AssertionError(f"unexpected operation: {operation}")
+
+        class Base:
+            def _snapshot(self, _timeout, _failure):
+                return {
+                    "configured": True,
+                    "profiles": [object()] * 24,
+                    "state": "CONNECTED",
+                    "generation": 7,
+                    "active_digest": "profile-digest",
+                    "active_mode": "AUTO_SELECT",
+                    "active_index": 0,
+                }
+
+        return UI(), Base(), state, events
+
+    def run_windows_text_size_journey(self, ui, base):
+        journey._exercise_windows_text_size_layout(
+            ui,
+            base,
+            3.0,
+            {
+                "state": "CONNECTED", "generation": 7,
+                "active_digest": "profile-digest", "active_mode": "AUTO_SELECT", "active_index": 0,
+            },
+            {},
+        )
+
+    def test_windows_text_size_does_not_commit_a_dirty_preexisting_apply(self):
+        ui, base, state, events = self.windows_text_size_fakes(apply_enabled=True)
+
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "Apply was already enabled"):
+            self.run_windows_text_size_journey(ui, base)
+
+        self.assertEqual(state["inspections"], 1)
+        self.assertEqual(state["value"], 100.0)
+        self.assertTrue(state["apply_enabled"])
+        self.assertEqual(events, ["inspect"])
+
+    def test_windows_text_size_restores_original_after_layout_failure(self):
+        ui, base, state, events = self.windows_text_size_fakes(layout_fails=True)
+
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "150% profile layout failed"):
+            self.run_windows_text_size_journey(ui, base)
+
+        self.assertEqual(state["value"], 100.0)
+        self.assertFalse(state["apply_enabled"])
+        self.assertEqual(
+            [event for event in events if event.startswith("apply:")],
+            ["apply:150:expected:100", "apply:100:expected:150"],
+        )
+        self.assertIn("close-for-cleanup", events)
+        self.assertEqual(events.count("start"), 2)
+
+    def test_windows_text_size_partial_setter_failure_restores_or_accepts_noop(self):
+        for mode, expected_apply_calls, expected_value in (
+            ("partial-no-change", ["apply:150:expected:100"], 100.0),
+            ("partial-set-value", ["apply:150:expected:100", "apply:100:expected:150"], 100.0),
+        ):
+            with self.subTest(mode=mode):
+                ui, base, state, events = self.windows_text_size_fakes(apply_mode=mode)
+                with self.assertRaises(journey.NativeUIJourneyError):
+                    self.run_windows_text_size_journey(ui, base)
+                self.assertEqual(state["value"], expected_value)
+                self.assertFalse(state["apply_enabled"])
+                self.assertEqual([event for event in events if event.startswith("apply:")], expected_apply_calls)
+
+    def test_windows_text_size_refuses_to_overwrite_a_changed_current_value(self):
+        ui, base, state, events = self.windows_text_size_fakes(external_change_before_restore=True)
+
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "could not restore its original setting") as caught:
+            self.run_windows_text_size_journey(ui, base)
+
+        self.assertEqual(state["value"], 125.0)
+        self.assertEqual([event for event in events if event.startswith("apply:")], ["apply:150:expected:100"])
+        self.assertTrue(any("refusing to overwrite it" in note for note in caught.exception.__notes__))
+
+    def test_desktop_profile_metadata_accumulates_realized_rows_in_source_order(self):
+        rows = self.rendered_profile_rows()
+        accumulated = {}
+        journey._accumulate_rendered_profile_rows(rows[:3], accumulated)
+        journey._accumulate_rendered_profile_rows(rows[2:6], accumulated)
+        journey._accumulate_rendered_profile_rows(rows[5:9], accumulated)
+        journey._accumulate_rendered_profile_rows(rows[8:12], accumulated)
+        journey._accumulate_rendered_profile_rows(rows[11:15], accumulated)
+        journey._accumulate_rendered_profile_rows(rows[14:18], accumulated)
+        journey._accumulate_rendered_profile_rows(rows[17:21], accumulated)
+        journey._accumulate_rendered_profile_rows(rows[20:], accumulated)
+        journey._assert_complete_rendered_profile_rows(accumulated)
+
+        missing = {}
+        journey._accumulate_rendered_profile_rows(rows[:3], missing)
+        journey._accumulate_rendered_profile_rows(rows[3:6], missing)
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "did not realize all 24"):
+            journey._assert_complete_rendered_profile_rows(missing)
+
+        reordered = list(rows[1:3]) + list(rows[:1])
+        wrong_name = [dict(rows[0]), dict(rows[1])]
+        wrong_name[0]["name"] = "Layout profile 1"
+        wrong_protocol = [dict(rows[7])]
+        wrong_protocol[0]["protocol"] = "XRAY"
+        wrong_action = [dict(rows[23])]
+        wrong_action[0]["action"] = "Stop"
+
+        for evidence, message in (
+            (reordered, "out of source order"),
+            (wrong_name, "had name="),
+            (wrong_protocol, "had protocol="),
+            (wrong_action, "had action="),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(journey.NativeUIJourneyError, message):
+                    journey._assert_rendered_profile_rows(evidence)
+
+        changed = {3: {"index": 3, "name": "Layout profile 3", "protocol": "OUTLINE", "action": "Stop"}}
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "changed metadata"):
+            journey._accumulate_rendered_profile_rows(rows[2:3], changed)
+        out_of_order_union = {}
+        journey._accumulate_rendered_profile_rows(rows[4:6], out_of_order_union)
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "after a later source row"):
+            journey._accumulate_rendered_profile_rows(rows[2:4], out_of_order_union)
+
     def test_long_profile_list_reaches_twenty_fourth_action_and_restores_top(self):
         events = []
+        visible_rows = {
+            "top": [1, 2, 3],
+            "10": [3, 4, 5],
+            "20": [5, 6, 7],
+            "30": [7, 8, 9],
+            "40": [9, 10, 11],
+            "50": [11, 12, 13],
+            "60": [13, 14, 15],
+            "70": [15, 16, 17],
+            "80": [17, 18, 19],
+            "90": [19, 20, 21],
+            "bottom": [22, 23, 24],
+        }
 
         class UI:
             platform = "macos"
 
             def scroll_profile_list(self, position):
                 events.append(f"scroll:{position}")
-                if position == "bottom":
-                    return NativeUICaseFixtureTests.profile_layout(100, ["Profile 24 action"])
-                return NativeUICaseFixtureTests.profile_layout(0, ["Profile 1 action", "Profile 2 action"])
+                scroll = 0 if position == "top" else 100 if position == "bottom" else float(position)
+                actions = ["Profile 1 action"] if position == "top" else (
+                    ["Profile 24 action"] if position == "bottom" else []
+                )
+                return NativeUICaseFixtureTests.profile_layout(scroll, actions, visible_rows[position])
 
             def _call(self, operation):
                 events.append(operation)
@@ -353,19 +638,43 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                 raise AssertionError(f"unexpected UI operation: {operation}")
 
         journey._exercise_long_profile_list_viewport(UI())
-        self.assertEqual(events, ["scroll:bottom", "logs", "log-position", "scroll:top"])
+        self.assertEqual(
+            events,
+            ["scroll:top", "scroll:10", "scroll:20", "scroll:30", "scroll:40", "scroll:50",
+             "scroll:60", "scroll:70", "scroll:80", "scroll:90", "scroll:bottom", "logs",
+             "log-position", "scroll:top"],
+        )
         self.assertFalse(any(event.startswith("click:") for event in events))
 
     def test_long_profile_list_restores_top_if_bottom_profile_is_not_reachable(self):
         events = []
+        visible_rows = {
+            "top": [1, 2, 3],
+            "10": [3, 4, 5],
+            "20": [5, 6, 7],
+            "30": [7, 8, 9],
+            "40": [9, 10, 11],
+            "50": [11, 12, 13],
+            "60": [13, 14, 15],
+            "70": [15, 16, 17],
+            "80": [17, 18, 19],
+            "90": [19, 20, 21],
+            "bottom": [22, 23, 24],
+        }
 
         class UI:
             platform = "windows"
 
             def scroll_profile_list(self, position):
                 events.append(f"scroll:{position}")
-                actions = ["Profile 1 action"] if position == "bottom" else ["Profile 1 action"]
-                return NativeUICaseFixtureTests.profile_layout(100 if position == "bottom" else 0, actions)
+                if position == "bottom":
+                    actions = ["Profile 1 action"]
+                elif position == "top":
+                    actions = ["Profile 1 action"]
+                else:
+                    actions = []
+                scroll = 0 if position == "top" else 100 if position == "bottom" else float(position)
+                return NativeUICaseFixtureTests.profile_layout(scroll, actions, visible_rows[position])
 
             def _call(self, operation):
                 events.append(operation)
@@ -373,16 +682,45 @@ class NativeUICaseFixtureTests(unittest.TestCase):
 
         with self.assertRaisesRegex(journey.NativeUIJourneyError, "Profile 24 action was not reachable"):
             journey._exercise_long_profile_list_viewport(UI())
-        self.assertEqual(events, ["scroll:bottom", "scroll:top"])
+        self.assertEqual(
+            events,
+            ["scroll:top", "scroll:10", "scroll:20", "scroll:30", "scroll:40", "scroll:50",
+             "scroll:60", "scroll:70", "scroll:80", "scroll:90", "scroll:bottom", "scroll:top"],
+        )
 
     def test_long_profile_list_preserves_failure_when_top_restoration_also_fails(self):
+        top_calls = 0
+        visible_rows = {
+            "top": [1, 2, 3],
+            "10": [3, 4, 5],
+            "20": [5, 6, 7],
+            "30": [7, 8, 9],
+            "40": [9, 10, 11],
+            "50": [11, 12, 13],
+            "60": [13, 14, 15],
+            "70": [15, 16, 17],
+            "80": [17, 18, 19],
+            "90": [19, 20, 21],
+            "bottom": [22, 23, 24],
+        }
+
         class UI:
             platform = "windows"
 
             def scroll_profile_list(self, position):
+                nonlocal top_calls
+                if position == "top":
+                    top_calls += 1
+                    if top_calls > 1:
+                        raise journey.NativeUIJourneyError("top restoration failed")
+                    return NativeUICaseFixtureTests.profile_layout(0, ["Profile 1 action"], visible_rows[position])
+                if position not in {"top", "bottom"}:
+                    return NativeUICaseFixtureTests.profile_layout(
+                        float(position), [], visible_rows[position]
+                    )
                 if position == "bottom":
-                    return NativeUICaseFixtureTests.profile_layout(100, ["Profile 1 action"])
-                raise journey.NativeUIJourneyError("top restoration failed")
+                    return NativeUICaseFixtureTests.profile_layout(100, ["Profile 1 action"], visible_rows[position])
+                raise AssertionError("unexpected scroll position")
 
             def _call(self, _operation):
                 raise AssertionError("logs should not be queried after a failed reachability assertion")

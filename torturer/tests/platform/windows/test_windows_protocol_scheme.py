@@ -480,7 +480,23 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             point_context = helper_source[context_start:context_end]
             self.assertIn("return InPerMonitorV2DpiContext(() =>", point_context)
             self.assertIn("WindowFromPoint(new NativePoint { X = pointX, Y = pointY })", point_context)
-            self.assertIn('if (traceAutomationPoint)\n                return MeasureAutomationElementFromPoint', helper_source)
+            main_start = helper_source.index("private static int Main(string[] args)")
+            point_dispatch_start = helper_source.index(
+                "if (traceAutomationPoint)\n            {", main_start
+            )
+            point_dispatch_end = helper_source.index("if (traceTree)", point_dispatch_start)
+            point_dispatch = helper_source[point_dispatch_start:point_dispatch_end]
+            self.assertIn("new Thread(() =>", point_dispatch)
+            self.assertIn("pointQueryThread.SetApartmentState(ApartmentState.MTA)", point_dispatch)
+            self.assertIn("pointQueryThread.Start()", point_dispatch)
+            self.assertIn("pointQueryThread.Join()", point_dispatch)
+            self.assertIn("pointQueryError = ExceptionDispatchInfo.Capture(error)", point_dispatch)
+            self.assertIn("pointQueryError?.Throw()", point_dispatch)
+            self.assertEqual(point_dispatch.count("MeasureAutomationElementFromPoint("), 1)
+            self.assertIn(
+                '["clientApartmentState"] = Thread.CurrentThread.GetApartmentState().ToString()',
+                point_method,
+            )
             self.assertIn('request.GetProperty("windowHandle")', helper_source)
             self.assertIn('self._call(\n                        "uia-point"', smoke_source)
             self.assertIn('clientApi="com"', smoke_source)
@@ -941,10 +957,17 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         self.assertIn("FullyInside(actionBounds, viewportBounds)", layout)
         self.assertIn('"visible_profile_actions"', layout)
         self.assertIn('"scroll_position"', layout)
+        self.assertIn('"profile_rows"', layout)
+        self.assertIn('"name"', layout)
+        self.assertIn('"protocol"', layout)
+        self.assertIn('"action"', layout)
         self.assertIn('RequireAutomationId(root, "Profile list viewport")', scroll)
         self.assertIn("viewport.TryGetCurrentPattern(ScrollPattern.Pattern", scroll)
-        self.assertIn('position is not ("top" or "bottom")', scroll)
+        self.assertIn("double.TryParse(position, NumberStyles.Float, CultureInfo.InvariantCulture", scroll)
+        self.assertIn("double.IsFinite(targetPosition)", scroll)
+        self.assertIn("targetPosition < 0 || targetPosition > 100", scroll)
         self.assertIn("SetScrollPercent(ScrollPattern.NoScroll, targetPosition)", scroll)
+        self.assertIn("Math.Abs(actualPosition - targetPosition) <= 1", scroll)
 
     def test_windows_paste_controller_retains_helper_invocation_time(self) -> None:
         controller = object.__new__(smoke.NativeUIController)

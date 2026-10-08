@@ -1333,7 +1333,12 @@ class NativeUIController:
 
     def scroll_profile_list(self, position: str) -> dict:
         if position not in {"top", "bottom"}:
-            raise ValueError("profile-list position must be top or bottom")
+            try:
+                percent = float(position)
+            except (TypeError, ValueError) as error:
+                raise ValueError("profile-list position must be top, bottom, or a finite percentage") from error
+            if not math.isfinite(percent) or not 0 <= percent <= 100:
+                raise ValueError("profile-list percentage must be between 0 and 100")
         result = self._call("scroll-profile-list", position=position)
         if result.get("ready") is not True:
             raise NativeUISmokeError(f"native helper did not scroll the profile list to {position}")
@@ -1352,6 +1357,21 @@ class NativeUIController:
             unbound=True,
             action="inspect",
             uri=_WINDOWS_TEXT_SIZE_SETTINGS_URI,
+        )
+
+    def apply_windows_text_size(self, target: int, expected_current: int) -> dict[str, object]:
+        """Apply a guarded Windows Text size value through the native Settings controls."""
+        if self.platform != "windows":
+            raise ValueError("Windows Text size Settings are only available on Windows")
+        if type(target) is not int or target <= 0 or type(expected_current) is not int or expected_current <= 0:
+            raise ValueError("Windows Text size apply requires positive integer values")
+        return self._call(
+            "settings-text-size",
+            unbound=True,
+            action="apply",
+            uri=_WINDOWS_TEXT_SIZE_SETTINGS_URI,
+            target=target,
+            expectedCurrent=expected_current,
         )
 
     def assert_primary_action_and_logs_visible(self) -> dict:
