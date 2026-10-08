@@ -1260,7 +1260,7 @@ public final class NativeUiHostedProfileTest {
                 },
                 {
                         "dobbyvpn://import?url=",
-                        "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL",
+                        "Paste an HTTPS subscription URL with a host",
                 },
                 {
                         "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fa"
