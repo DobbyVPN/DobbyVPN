@@ -828,21 +828,74 @@ internal static class Program
         var controls = RequireAutomationId(root, "Connection controls");
         var viewport = RequireAutomationId(controls, "Profile list viewport");
         _ = RequireAutomationId(controls, "VPN connection action");
-        NativeActionState before;
-        NativeActionState competingBefore;
+        NativeActionState before = default;
+        NativeActionState competingBefore = default;
+        Dictionary<string, object?>? lastBaselineSample = null;
+        string? latestBaselineException = null;
+        bool CanConnect(NativeActionState target, NativeActionState competing) =>
+            target.AutomationId == targetId && target.ControlType == ControlType.Button.ProgrammaticName &&
+            target.IsControlElement == true && target.Name == "Connect" && target.Enabled == true && target.Offscreen == false &&
+            competing.AutomationId == competingId && competing.ControlType == ControlType.Button.ProgrammaticName &&
+            competing.IsControlElement == true && competing.Name is ("Connect" or "Disconnect") &&
+            competing.Enabled == true && competing.Offscreen == false;
         try
         {
-            before = ReadActionState(viewport, targetId);
-            competingBefore = ReadActionState(viewport, competingId);
+            WaitFor(() =>
+            {
+                var sampledTarget = default(NativeActionState);
+                var sampledCompeting = default(NativeActionState);
+                try
+                {
+                    sampledTarget = ReadActionState(viewport, targetId);
+                    sampledCompeting = ReadActionState(viewport, competingId);
+                    var ready = CanConnect(sampledTarget, sampledCompeting);
+                    if (ready)
+                    {
+                        before = sampledTarget;
+                        competingBefore = sampledCompeting;
+                    }
+                    lastBaselineSample = new Dictionary<string, object?>
+                    {
+                        ["ready"] = ready,
+                        ["target"] = sampledTarget.ToDiagnostic(),
+                        ["competing"] = sampledCompeting.ToDiagnostic(),
+                    };
+                    Console.Error.WriteLine(
+                        $"native-ui-phase=profile-switch-baseline-sample {JsonSerializer.Serialize(lastBaselineSample)}");
+                    Console.Error.Flush();
+                    return ready;
+                }
+                catch (ElementNotAvailableException error)
+                {
+                    latestBaselineException = error.ToString();
+                    lastBaselineSample = new Dictionary<string, object?>
+                    {
+                        ["ready"] = false,
+                        ["target"] = sampledTarget.ToDiagnostic(),
+                        ["competing"] = sampledCompeting.ToDiagnostic(),
+                        ["exception"] = latestBaselineException,
+                    };
+                    Console.Error.WriteLine(
+                        $"native-ui-phase=profile-switch-baseline-element-unavailable {JsonSerializer.Serialize(lastBaselineSample)}");
+                    Console.Error.WriteLine(latestBaselineException);
+                    Console.Error.Flush();
+                    return false;
+                }
+            }, "Profile actions did not become visible and enabled before Connect", seconds: 15);
         }
-        catch (ElementNotAvailableException error)
+        catch (TimeoutException error)
         {
-            Console.Error.WriteLine("native-ui-phase=profile-switch-baseline-peer-retry");
-            Console.Error.WriteLine(error.ToString());
+            var failure = new Dictionary<string, object?>
+            {
+                ["last_sample"] = lastBaselineSample,
+                ["latest_element_not_available_exception"] = latestBaselineException,
+                ["wait_exception"] = error.ToString(),
+            };
+            Console.Error.WriteLine(
+                $"native-ui-phase=profile-switch-baseline-timeout {JsonSerializer.Serialize(failure)}");
             Console.Error.Flush();
-            Thread.Sleep(20);
-            before = ReadActionState(viewport, targetId);
-            competingBefore = ReadActionState(viewport, competingId);
+            throw new InvalidOperationException(
+                $"Profile actions did not become visible and enabled before Connect: {JsonSerializer.Serialize(failure)}", error);
         }
         bool CanStop(NativeActionState target, NativeActionState competing, NativeActionState connection)
         {
@@ -859,16 +912,6 @@ internal static class Program
                 competing.Enabled == false && competing.Offscreen == false && connectionIsObserved &&
                 (connectionName is not ("Connect" or "Auto connect") || connection.Enabled == false);
         }
-        if (before.AutomationId != targetId || competingBefore.AutomationId != competingId ||
-            before.ControlType != ControlType.Button.ProgrammaticName || before.IsControlElement != true || before.Name != "Connect" ||
-            before.Enabled != true || before.Offscreen != false ||
-            competingBefore.ControlType != ControlType.Button.ProgrammaticName || competingBefore.IsControlElement != true ||
-            competingBefore.Name is not ("Connect" or "Disconnect") ||
-            competingBefore.Enabled != true || competingBefore.Offscreen != false)
-            throw new InvalidOperationException(
-                $"Profile actions were not visible and enabled before Connect: target={JsonSerializer.Serialize(before.ToDiagnostic())}; " +
-                $"competing={JsonSerializer.Serialize(competingBefore.ToDiagnostic())}");
-
         if (before.Element is null || !before.Element.TryGetCurrentPattern(InvokePattern.Pattern, out var connectPattern))
             throw new InvalidOperationException($"Profile action has no native InvokePattern: {targetId}");
         var registration = protocolUri is null ? null : DescribeProtocolRegistration();
