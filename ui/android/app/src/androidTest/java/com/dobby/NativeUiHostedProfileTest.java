@@ -153,7 +153,7 @@ public final class NativeUiHostedProfileTest {
             "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_NOT_RESTORED",
             "ANDROID_TEST_RECOVERY_STOP_RENDERED_STATUS_INVALID",
             "ANDROID_TEST_RECOVERY_STOP_RENDERED_FAILURE_INVALID",
-            "ANDROID_TEST_RECOVERY_STOP_PRIMARY_ACTION_INVALID",
+            "ANDROID_TEST_RECOVERY_STOP_RENDER_TIMEOUT",
             "ANDROID_TEST_RECOVERY_STOP_SCREENSHOT_MISSING",
             "ANDROID_TEST_RECOVERY_STOP_TAP_FAILED",
             "ANDROID_TEST_RECOVERY_STOP_CLEANUP_TIMEOUT",
@@ -2608,9 +2608,7 @@ public final class NativeUiHostedProfileTest {
         JSONObject idle = awaitRecoveryStopCleanup(
                 recoveryGeneration, deadline);
         markProgress("disconnect", "stopped-state", "started");
-        JSONObject renderedStop = verifyStoppedRecoveryRendering(
-                idle, remainingTimeout(
-                        deadline, "ANDROID_TEST_RECOVERY_STOP_CLEANUP_TIMEOUT"));
+        JSONObject renderedStop = verifyStoppedRecoveryRendering(idle, deadline);
         markProgress("disconnect", "stopped-state", "completed");
         String stoppedScreenshot = latestScreenshotLabel();
         int restoredProfileActionCount = verifyRecoveryProfileActions(
@@ -2686,59 +2684,212 @@ public final class NativeUiHostedProfileTest {
                 .put("screenshot_labels", screenshotLabels);
     }
 
-    private JSONObject verifyStoppedRecoveryRendering(JSONObject stopped, long timeout)
+    private JSONObject verifyStoppedRecoveryRendering(JSONObject stopped, long deadline)
             throws Exception {
-        waitForUiControl("Auto connect", timeout);
-        UiObject2 mainAction = findUiObject(CONNECTION_ACTION_LABEL);
-        UiObject2 autoConnect = findUiObject("Auto connect");
-        while (mainAction != null && !mainAction.isClickable()) {
-            mainAction = mainAction.getParent();
-        }
-        Rect actionBounds = mainAction == null
-                ? new Rect() : mainAction.getVisibleBounds();
-        Rect autoConnectBounds = autoConnect == null
-                ? new Rect() : autoConnect.getVisibleBounds();
-        if (mainAction == null || !mainAction.isEnabled()
-                || actionBounds.isEmpty() || autoConnectBounds.isEmpty()
-                || !actionBounds.contains(autoConnectBounds)) {
-            throw new IllegalStateException(
-                    "ANDROID_TEST_RECOVERY_STOP_PRIMARY_ACTION_INVALID");
+        long generation = stopped.optLong("generation");
+        Exception backendReadFailure = null;
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject snapshot;
+            try {
+                snapshot = snapshotResult("");
+            } catch (Exception failure) {
+                backendReadFailure = failure;
+                SystemClock.sleep(POLL_MILLIS);
+                continue;
+            }
+            backendReadFailure = null;
+            if (snapshot.optLong("generation") > generation) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_GENERATION_ADVANCED");
+            }
+            if ("FAILED".equals(snapshot.optString("state"))) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_FINAL_STATE_INVALID");
+            }
+            JSONObject rendered = null;
+            try {
+                rendered = stoppedRecoveryRendering(snapshot, generation);
+            } catch (StaleObjectException replacedUi) {
+                // Retry the full terminal-state predicate against the new tree.
+            }
+            if (rendered != null && System.currentTimeMillis() < deadline) return rendered;
+            SystemClock.sleep(POLL_MILLIS);
         }
 
+        IllegalStateException failure = new IllegalStateException(
+                "ANDROID_TEST_RECOVERY_STOP_RENDER_TIMEOUT");
+        StringBuilder diagnostic = new StringBuilder()
+                .append("expected_generation=").append(generation).append('\n');
+        List<Throwable> diagnosticFailures = new ArrayList<>();
+        JSONObject diagnosticSnapshot = null;
+        try {
+            diagnosticSnapshot = snapshotResult("");
+            diagnostic.append("backend_snapshot=")
+                    .append(diagnosticSnapshot.toString()).append('\n');
+        } catch (Throwable collectionFailure) {
+            diagnostic.append("backend_snapshot=unavailable\n");
+            diagnosticFailures.add(collectionFailure);
+        }
+        if (backendReadFailure != null) diagnosticFailures.add(backendReadFailure);
+        try {
+            appendStoppedRecoveryRenderDiagnostics(
+                    diagnostic, diagnosticFailures, diagnosticSnapshot);
+        } catch (Throwable collectionFailure) {
+            diagnostic.append("rendered_ui_metadata=unavailable\n");
+            diagnosticFailures.add(collectionFailure);
+        }
+        try {
+            diagnostic.append("ui_hierarchy_xml_begin\n")
+                    .append(dumpUiHierarchy())
+                    .append("\nui_hierarchy_xml_end\n");
+        } catch (Throwable collectionFailure) {
+            diagnostic.append("ui_hierarchy_xml=unavailable\n");
+            diagnosticFailures.add(collectionFailure);
+        }
+        failure.addSuppressed(new IllegalStateException(
+                "ANDROID_TEST_RECOVERY_STOP_RENDER_DIAGNOSTICS\n" + diagnostic));
+        for (Throwable diagnosticFailure : diagnosticFailures) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_RENDER_DIAGNOSTIC_FAILED",
+                    diagnosticFailure));
+        }
+        throw failure;
+    }
+
+    private JSONObject stoppedRecoveryRendering(JSONObject snapshot, long generation)
+            throws Exception {
+        if (!isStoppedRecoverySnapshot(snapshot, generation)) return null;
         UiObject2 failed = findUiObject("Failed");
         UiObject2 disconnected = findUiObject("Disconnected");
-        if ((failed == null) == (disconnected == null)) {
-            throw new IllegalStateException(
-                    "ANDROID_TEST_RECOVERY_STOP_RENDERED_STATUS_INVALID");
-        }
+        if ((failed == null) == (disconnected == null)) return null;
 
-        JSONObject lastFailure = stopped.optJSONObject("last_failure");
+        JSONObject lastFailure = snapshot.optJSONObject("last_failure");
+        String code = lastFailure == null ? "" : lastFailure.optString("code", "");
+        String message = lastFailure == null ? "" : lastFailure.optString("message", "");
+        String status;
         if (failed != null) {
-            String code = lastFailure == null ? "" : lastFailure.optString("code", "");
-            String message = lastFailure == null
-                    ? "" : lastFailure.optString("message", "");
             if (!AUTO_RECOVERY_STOP_FAILURE_CODE.equals(code)
                     || !AUTO_RECOVERY_STOP_FAILURE_MESSAGE.equals(message)
-                    || findUiObject(message + " (" + code + ")") == null) {
-                throw new IllegalStateException(
-                        "ANDROID_TEST_RECOVERY_STOP_RENDERED_FAILURE_INVALID");
-            }
-            return new JSONObject()
-                    .put("status", "Failed")
-                    .put("failure_code", code)
-                    .put("failure_message", message);
+                    || findUiObject(message + " (" + code + ")") == null) return null;
+            status = "Failed";
+        } else {
+            if (!code.isEmpty() || !message.isEmpty()) return null;
+            status = "Disconnected";
         }
 
-        if (lastFailure != null
-                && (!lastFailure.optString("code", "").isEmpty()
-                        || !lastFailure.optString("message", "").isEmpty())) {
-            throw new IllegalStateException(
-                    "ANDROID_TEST_RECOVERY_STOP_RENDERED_FAILURE_INVALID");
-        }
+        UiObject2 autoConnect = findUiObject("Auto connect");
+        UiObject2 action = findUiObject(CONNECTION_ACTION_LABEL);
+        while (action != null && !action.isClickable()) action = action.getParent();
+        if (autoConnect == null || action == null || !action.isEnabled()) return null;
+        Rect actionBounds = action.getVisibleBounds();
+        Rect labelBounds = autoConnect.getVisibleBounds();
+        if (actionBounds.isEmpty() || labelBounds.isEmpty()
+                || !actionBounds.contains(labelBounds)) return null;
         return new JSONObject()
-                .put("status", "Disconnected")
-                .put("failure_code", "")
-                .put("failure_message", "");
+                .put("status", status)
+                .put("failure_code", code)
+                .put("failure_message", message);
+    }
+
+    private void appendStoppedRecoveryRenderDiagnostics(
+            StringBuilder diagnostic,
+            List<Throwable> diagnosticFailures,
+            JSONObject snapshot) {
+        List<String> visibleStatuses = new ArrayList<>();
+        for (String status : new String[]{
+                "Failed", "Disconnected", "Stopping", "Reconnecting",
+                "Connecting", "Connected", "Error"}) {
+            if (findUiObject(status) != null) visibleStatuses.add(status);
+        }
+        UiObject2 autoConnect = findUiObject("Auto connect");
+        UiObject2 actionLabel = findUiObject(CONNECTION_ACTION_LABEL);
+        JSONObject lastFailure = snapshot == null ? null : snapshot.optJSONObject("last_failure");
+        String code = lastFailure == null ? "" : lastFailure.optString("code", "");
+        String message = lastFailure == null ? "" : lastFailure.optString("message", "");
+        UiObject2 renderedFailure = code.isEmpty() && message.isEmpty()
+                ? null : findUiObject(message + " (" + code + ")");
+        UiObject2 action = actionLabel;
+        try {
+            while (action != null && !action.isClickable()) action = action.getParent();
+        } catch (Throwable readFailure) {
+            diagnosticFailures.add(readFailure);
+            action = null;
+        }
+        diagnostic.append("rendered_status=")
+                .append(visibleStatuses.size() == 1 ? visibleStatuses.get(0)
+                        : visibleStatuses.isEmpty() ? "none" : "ambiguous " + visibleStatuses)
+                .append('\n');
+        diagnostic.append("failure_code=").append(JSONObject.quote(code)).append('\n')
+                .append("failure_message=").append(JSONObject.quote(message)).append('\n')
+                .append("expected_injected_failure=")
+                .append(AUTO_RECOVERY_STOP_FAILURE_CODE.equals(code)
+                        && AUTO_RECOVERY_STOP_FAILURE_MESSAGE.equals(message)).append('\n');
+        appendRecoveryActionField(
+                diagnostic, "failed_status_visible",
+                () -> visibleStatuses.contains("Failed"),
+                diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "disconnected_status_visible",
+                () -> visibleStatuses.contains("Disconnected"),
+                diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "rendered_failure_text_visible", () -> renderedFailure != null,
+                diagnosticFailures);
+        appendStoppedRecoveryNodeFields(
+                diagnostic, "auto_connect_label", autoConnect, diagnosticFailures);
+        appendStoppedRecoveryNodeFields(
+                diagnostic, "action_description_node", actionLabel, diagnosticFailures);
+        final UiObject2 actionNode = action;
+        final UiObject2 autoConnectNode = autoConnect;
+        appendStoppedRecoveryNodeFields(
+                diagnostic, "clickable_action_ancestor", actionNode, diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "action_bounds_nonempty",
+                () -> actionNode != null && !actionNode.getVisibleBounds().isEmpty(),
+                diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "label_bounds_nonempty",
+                () -> autoConnectNode != null
+                        && !autoConnectNode.getVisibleBounds().isEmpty(),
+                diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "action_bounds_contain_label",
+                () -> actionNode != null && autoConnectNode != null
+                        && actionNode.getVisibleBounds()
+                                .contains(autoConnectNode.getVisibleBounds()),
+                diagnosticFailures);
+    }
+
+    private void appendStoppedRecoveryNodeFields(
+            StringBuilder diagnostic,
+            String prefix,
+            UiObject2 node,
+            List<Throwable> diagnosticFailures) {
+        appendRecoveryActionField(
+                diagnostic, prefix + "_present", () -> node != null, diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, prefix + "_bounds",
+                () -> node == null ? "null" : node.getVisibleBounds().toShortString(),
+                diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, prefix + "_text",
+                () -> node == null ? "null" : node.getText(), diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, prefix + "_description",
+                () -> node == null ? "null" : node.getContentDescription(),
+                diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, prefix + "_class",
+                () -> node == null ? "null" : node.getClassName(), diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, prefix + "_resource",
+                () -> node == null ? "null" : node.getResourceName(), diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, prefix + "_enabled",
+                () -> node != null && node.isEnabled(), diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, prefix + "_clickable",
+                () -> node != null && node.isClickable(), diagnosticFailures);
     }
 
     private RecoveryStopUiState awaitRenderedRecoveryStop(
