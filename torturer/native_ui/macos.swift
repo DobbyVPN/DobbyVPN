@@ -1212,7 +1212,7 @@ func run() throws -> [String: Any] {
                 ).utf8))
             }
             var reached = false
-            let maximumScrollEvents = 64
+            let maximumScrollEvents = 72
             var totalScrollEvents = 0
             for delta in [240, -240] {
                 var unchanged = 0
