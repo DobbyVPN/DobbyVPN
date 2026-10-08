@@ -11,6 +11,7 @@ from torturer_runner import subscription_fixture
 from torturer_runner.ui import journey
 
 WINDOWS_NATIVE_UI_HELPER = Path(__file__).resolve().parents[1] / "native_ui" / "windows" / "Program.cs"
+MACOS_NATIVE_UI_HELPER = Path(__file__).resolve().parents[1] / "native_ui" / "macos.swift"
 
 
 class NativeUICaseFixtureTests(unittest.TestCase):
@@ -161,10 +162,10 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             self.assertEqual(result["stopped_generation"], 8)
             self.assertEqual(base.stopped_snapshots, 31)
             self.assertEqual(events.count("inspect_cleanup"), 1)
-            self.assertIn("click:Stop", events)
+            self.assertIn("click:VPN connection action", events)
             self.assertEqual(events.count("connection-action-details"), 1)
-            self.assertLess(events.index("connection-action-details"), events.index("click:Stop"))
-            self.assertNotIn("click:VPN connection action", events)
+            self.assertLess(events.index("connection-action-details"), events.index("click:VPN connection action"))
+            self.assertNotIn("click:Stop", events)
 
     def test_auto_recovery_stop_keeps_windows_action_identifier(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -183,6 +184,27 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         with patch.object(controller, "_call", return_value=response) as call:
             self.assertIs(controller.connection_action_details(), response)
         call.assert_called_once_with("connection-action-details")
+
+    def test_macos_connection_action_requires_exact_enabled_native_press(self):
+        source = MACOS_NATIVE_UI_HELPER.read_text(encoding="utf-8")
+        press_start = source.index("func pressConnectionAction(")
+        press_end = source.index("\nfunc key(", press_start)
+        press_operation = source[press_start:press_end]
+        self.assertIn("try find(nodes, expectedIdentifier)", press_operation)
+        self.assertIn("actualIdentifier == expectedIdentifier", press_operation)
+        self.assertIn("kAXEnabledAttribute) as? Bool", press_operation)
+        self.assertIn("AXUIElementCopyActionNames(element, &rawActionNames)", press_operation)
+        self.assertIn("AXActionNames", press_operation)
+        self.assertIn("actionNames.contains(kAXPressAction as String)", press_operation)
+        self.assertIn("try press(element)", press_operation)
+
+        click_start = source.index('case "click":')
+        click_end = source.index('case "type":', click_start)
+        click_operation = source[click_start:click_end]
+        self.assertIn('if target == "VPN connection action"', click_operation)
+        self.assertIn("try pressConnectionAction(nodes, identifier: target)", click_operation)
+        self.assertIn('label($0, kAXRoleAttribute) == kAXButtonRole', click_operation)
+        self.assertIn("try press(find(buttons, target))", click_operation)
 
     def test_windows_text_size_settings_wrapper_is_unbound_and_inspect_only(self):
         controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)

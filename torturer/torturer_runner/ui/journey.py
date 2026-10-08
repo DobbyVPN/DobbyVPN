@@ -1991,7 +1991,7 @@ def _exercise_auto_recovery_stop(ui: Any, base: Any, marker: Path, timeout: floa
                 file=sys.stderr,
                 flush=True,
             )
-    ui._click("Stop" if ui.platform == "macos" else "VPN connection action")
+    ui._click("VPN connection action")
     deadline = time.monotonic() + timeout
     stopped: dict[str, object] = {}
     while time.monotonic() < deadline:

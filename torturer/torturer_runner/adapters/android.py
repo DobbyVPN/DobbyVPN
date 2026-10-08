@@ -1060,6 +1060,12 @@ class AndroidAdapter:
                     raise ScenarioExecutionError(
                         "ANDROID_AUTO_RECOVERY_STOP_FACTS_MISSING"
                     )
+            observation = AndroidProfileObservation.from_mapping(
+                value, expected_source_sha=self.source_sha
+            )
+            if observation.error_code is not None:
+                raise ScenarioExecutionError(observation.error_code)
+            if test_case is not None:
                 if native_case_facts is None:
                     raise ScenarioExecutionError(
                         "ANDROID_AUTO_RECOVERY_STOP_FACTS_UNAVAILABLE"
@@ -1070,17 +1076,12 @@ class AndroidAdapter:
                         command_file.name,
                     )
                 )
-            observation = AndroidProfileObservation.from_mapping(
-                value, expected_source_sha=self.source_sha
-            )
         except UnicodeDecodeError as error:
             raise ScenarioExecutionError("ANDROID_OBSERVATION_ENCODING_INVALID") from error
         except json.JSONDecodeError as error:
             raise ScenarioExecutionError("ANDROID_OBSERVATION_JSON_INVALID") from error
         except AndroidObservationError as error:
             raise ScenarioExecutionError(_observation_error_code(error)) from error
-        if observation.error_code is not None:
-            raise ScenarioExecutionError(observation.error_code)
         return observation
 
     def _validated_auto_recovery_stop_facts(

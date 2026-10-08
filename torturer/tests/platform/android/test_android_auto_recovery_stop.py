@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 import tempfile
 import time
@@ -9,12 +10,64 @@ from types import SimpleNamespace
 from unittest import mock
 
 from torturer_contract.android_observation import AndroidProfileObservation
+from torturer_contract.engine import ScenarioExecutionError
 from torturer_contract.results import ConnectionIdentity
 from torturer_contract.scenarios import select_scenarios
 from torturer_runner.adapters.android import AndroidAdapter
 
 
 class AndroidAutoRecoveryStopAdapterTests(unittest.TestCase):
+    def test_failure_observation_precedes_absent_success_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = command_adapter(root)
+            scenario = select_scenarios(
+                scenario_ids=["functional.core-connection"]
+            )[0]
+            value = asdict(core_connection_observation())
+            value.update(
+                {
+                    "test_case": "android:auto-recovery-stop",
+                    "error_code": "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_ENABLED",
+                    "ui_operation": "disconnect",
+                    "ui_phase": "recovery-arm",
+                    "ui_phase_state": "failed",
+                }
+            )
+            output = SimpleNamespace(
+                stdout=json.dumps(value).encode("utf-8"), stderr=b""
+            )
+            adapter._stage_private_file = mock.Mock()
+            adapter._run_instrumentation = mock.Mock(
+                return_value=SimpleNamespace(
+                    returncode=0, stdout=b"", stderr=b"", timed_out=False
+                )
+            )
+            adapter._adb = mock.Mock(return_value=output)
+            native_case_facts: dict[str, object] = {}
+
+            with (
+                mock.patch(
+                    "torturer_runner.adapters.android._instrumentation_succeeded",
+                    return_value=True,
+                ),
+                self.assertRaises(ScenarioExecutionError) as caught,
+            ):
+                adapter._execute_phase(
+                    scenario,
+                    scenario.steps,
+                    time.monotonic() + 60,
+                    [],
+                    test_case="android:auto-recovery-stop",
+                    native_case_facts=native_case_facts,
+                )
+
+            self.assertEqual(
+                caught.exception.reason_code,
+                "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_ENABLED",
+            )
+            self.assertEqual(native_case_facts, {})
+
     def test_tagged_case_command_suppresses_only_process_cold_import(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

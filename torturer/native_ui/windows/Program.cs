@@ -796,8 +796,9 @@ internal static class Program
                     if (actualPid == 0) response["newSettingsWindowClosed"] = true;
                     else
                     {
-                        using var owner = Process.GetProcessById(actualPid);
-                        if (actualPid != ownerPid || owner.ProcessName != "SystemSettings" || owner.SessionId != sessionId ||
+                        var actualProcessId = checked((int)actualPid);
+                        using var owner = Process.GetProcessById(actualProcessId);
+                        if (actualProcessId != ownerPid || owner.ProcessName != "SystemSettings" || owner.SessionId != sessionId ||
                             owner.StartTime.ToUniversalTime().Ticks != ownerStart)
                             throw new InvalidOperationException("Refusing to close a Settings window whose ownership changed");
                         if (!PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero))

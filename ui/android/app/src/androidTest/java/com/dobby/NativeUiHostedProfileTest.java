@@ -2760,8 +2760,7 @@ public final class NativeUiHostedProfileTest {
                 UiObject2 action = findUiObject(label);
                 if (action == null) continue;
                 if (action.isEnabled()) {
-                    throw new IllegalStateException(
-                            "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_ENABLED");
+                    throw recoveryProfileActionEnabled(profileIndex, label, action);
                 }
                 verified.add(profileIndex);
             }
@@ -2784,6 +2783,90 @@ public final class NativeUiHostedProfileTest {
                     "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_UNAVAILABLE");
         }
         return verified.size();
+    }
+
+    private IllegalStateException recoveryProfileActionEnabled(
+            int profileIndex, String label, UiObject2 action) {
+        IllegalStateException failure = new IllegalStateException(
+                "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_ENABLED");
+        StringBuilder diagnostic = new StringBuilder()
+                .append("profile_index=").append(profileIndex)
+                .append(" label=").append(JSONObject.quote(label))
+                .append(" enabled_observed=true\n");
+        List<Throwable> diagnosticFailures = new ArrayList<>();
+        appendRecoveryActionField(
+                diagnostic, "bounds", () -> action.getVisibleBounds().toShortString(),
+                diagnosticFailures);
+        appendRecoveryActionField(diagnostic, "text", action::getText, diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "description", action::getContentDescription,
+                diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "class", action::getClassName, diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "resource", action::getResourceName, diagnosticFailures);
+        appendRecoveryActionField(
+                diagnostic, "clickable", action::isClickable, diagnosticFailures);
+        try {
+            JSONObject snapshot = snapshotResult("");
+            JSONObject backend = new JSONObject()
+                    .put("session_id", snapshot.optString("session_id"))
+                    .put("sequence", snapshot.optLong("sequence", -1L))
+                    .put("generation", snapshot.optLong("generation", -1L))
+                    .put("state", snapshot.optString("state"))
+                    .put("recovering", snapshot.optBoolean("recovering"))
+                    .put("primary_action", snapshot.optString("primary_action"))
+                    .put("configured", snapshot.optBoolean("configured"))
+                    .put("can_switch", snapshot.optBoolean("can_switch"))
+                    .put("digest", snapshot.optString("digest"))
+                    .put("active_digest", snapshot.optString("active_digest"))
+                    .put("active_mode", snapshot.optString("active_mode"))
+                    .put("active_index", snapshot.optInt("active_index", -1))
+                    .put("pending_target", snapshot.opt("pending_target") == null
+                            ? JSONObject.NULL : snapshot.opt("pending_target"))
+                    .put("active_profile", snapshot.opt("active_profile") == null
+                            ? JSONObject.NULL : snapshot.opt("active_profile"))
+                    .put("profiles", snapshot.optJSONArray("profiles"));
+            diagnostic.append("backend_snapshot=").append(backend).append('\n');
+        } catch (Throwable diagnosticFailure) {
+            diagnostic.append("backend_snapshot=unavailable\n");
+            diagnosticFailures.add(diagnosticFailure);
+        }
+        try {
+            diagnostic.append("ui_hierarchy_xml_begin\n")
+                    .append(dumpUiHierarchy())
+                    .append("\nui_hierarchy_xml_end\n");
+        } catch (Throwable diagnosticFailure) {
+            diagnostic.append("ui_hierarchy_xml=unavailable\n");
+            diagnosticFailures.add(diagnosticFailure);
+        }
+        failure.addSuppressed(new IllegalStateException(
+                "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_DIAGNOSTICS\n" + diagnostic));
+        for (Throwable diagnosticFailure : diagnosticFailures) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_DIAGNOSTIC_FAILED",
+                    diagnosticFailure));
+        }
+        return failure;
+    }
+
+    private void appendRecoveryActionField(
+            StringBuilder diagnostic,
+            String name,
+            RecoveryDiagnosticValue value,
+            List<Throwable> diagnosticFailures) {
+        try {
+            diagnostic.append(name).append('=')
+                    .append(JSONObject.quote(String.valueOf(value.read())))
+                    .append('\n');
+        } catch (Throwable diagnosticFailure) {
+            diagnostic.append(name).append("=unavailable\n");
+            diagnosticFailures.add(diagnosticFailure);
+        }
+    }
+
+    private interface RecoveryDiagnosticValue {
+        Object read() throws Throwable;
     }
 
     private void returnToRecoveryStop(long recoveryGeneration, long deadline)

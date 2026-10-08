@@ -539,6 +539,27 @@ func press(_ element: AXUIElement) throws {
     try require(code == .success, "Native AX press failed: \(code.rawValue)")
 }
 
+func pressConnectionAction(_ nodes: [AXUIElement], identifier expectedIdentifier: String) throws {
+    let element = try find(nodes, expectedIdentifier)
+    let actualIdentifier = try identifier(element)
+    try require(actualIdentifier == expectedIdentifier,
+                "Native connection action did not expose the expected identifier: \(expectedIdentifier)")
+    guard let enabled = try attribute(element, kAXEnabledAttribute) as? Bool else {
+        throw HelperError("Could not confirm native connection action is enabled: \(expectedIdentifier)")
+    }
+    try require(enabled, "Native connection action is disabled: \(expectedIdentifier)")
+
+    var rawActionNames: CFArray?
+    let status = AXUIElementCopyActionNames(element, &rawActionNames)
+    guard status == .success else {
+        throw AccessibilityReadError(attribute: "AXActionNames", code: status)
+    }
+    let actionNames = rawActionNames as? [String] ?? []
+    try require(actionNames.contains(kAXPressAction as String),
+                "Native connection action does not advertise AXPress: \(expectedIdentifier); actions=\(actionNames)")
+    try press(element)
+}
+
 func key(_ code: CGKeyCode, command: Bool = true) throws {
     guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
           let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else {
@@ -1148,6 +1169,10 @@ func run() throws -> [String: Any] {
     case "click":
         guard let target = request["target"] as? String else { throw HelperError("Missing control name") }
         try activate()
+        if target == "VPN connection action" {
+            try pressConnectionAction(nodes, identifier: target)
+            break
+        }
         // SwiftUI toolbar containers can inherit the button's label and identifier.
         let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
         try press(find(buttons, target))
