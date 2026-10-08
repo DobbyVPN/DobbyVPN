@@ -1120,7 +1120,7 @@ public final class NativeUiHostedProfileTest {
         expectedRenderedSource = subscriptionURL;
         String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
         String output = uiDevice().executeShellCommand(
-                "am start -W -a android.intent.action.VIEW -d '" + link + "' " + context.getPackageName());
+                "am start -W -a android.intent.action.VIEW -d " + link + " " + context.getPackageName());
         if (!output.contains("Status: ok")) {
             throw new IllegalStateException("ANDROID_COLD_IMPORT_LAUNCH_FAILED");
         }
@@ -1198,8 +1198,8 @@ public final class NativeUiHostedProfileTest {
                     throw new AssertionError("Accepted URL did not clear the preceding deep-link error");
                 }
             }
-            String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d '"
-                    + link + "' " + context.getPackageName());
+            String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d "
+                    + link + " " + context.getPackageName());
             if (!output.contains("Status: ok")) {
                 throw new AssertionError("ANDROID_INVALID_IMPORT_LAUNCH_FAILED");
             }
@@ -1750,8 +1750,8 @@ public final class NativeUiHostedProfileTest {
 
     private void deliverWarmImport(String subscriptionURL) throws Exception {
         String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
-        String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d '"
-                + link + "' " + context.getPackageName());
+        String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d "
+                + link + " " + context.getPackageName());
         if (!output.contains("Status: ok")) throw new AssertionError("ANDROID_IMPORT_ACTIVATION_FAILED");
     }
 
@@ -2130,7 +2130,7 @@ public final class NativeUiHostedProfileTest {
     }
 
     private String launchBareLink() throws Exception {
-        return uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d 'dobbyvpn://' "
+        return uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d dobbyvpn:// "
                 + context.getPackageName());
     }
 
