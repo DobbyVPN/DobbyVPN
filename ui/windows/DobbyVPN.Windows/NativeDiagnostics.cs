@@ -35,29 +35,39 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
             if (_lastErrors.GetValueOrDefault(category) == message) return;
             _lastErrors[category] = message;
             if (string.IsNullOrEmpty(message)) return;
-            try
+            Write("ERROR", category, message, null);
+        }
+    }
+
+    public void RecordInfo(string category, string message, object fields)
+    {
+        lock (_gate) Write("INFO", category, message, fields);
+    }
+
+    private void Write(string level, string category, string message, object? fields)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(uiPath)!);
+            var line = JsonSerializer.Serialize(new
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(uiPath)!);
-                var line = JsonSerializer.Serialize(new
-                {
-                    schema = "dobby.log/v1", timestamp = DateTimeOffset.UtcNow,
-                    source = "windows-ui", level = "ERROR", @event = category, message,
-                    process_id = Environment.ProcessId, run_id = _run, process_sequence = ++_sequence,
-                    build = new {
-                        version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(),
-                        commit = Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>()
-                            .FirstOrDefault(item => item.Key == "DobbySourceCommit")?.Value,
-                        configuration = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration,
-                        platform = Environment.OSVersion.ToString(), architecture = RuntimeInformation.ProcessArchitecture.ToString()
-                    }
-                });
-                NativeLogFiles.Append(uiPath, Encoding.UTF8.GetBytes(line + "\n"));
-            }
-            catch (Exception error)
-            {
-                WriteFailure = $"UI diagnostic write failed: {error}\nOriginal diagnostic: {message}";
-                System.Diagnostics.Trace.TraceError(WriteFailure);
-            }
+                schema = "dobby.log/v1", timestamp = DateTimeOffset.UtcNow,
+                source = "windows-ui", level, @event = category, message, fields,
+                process_id = Environment.ProcessId, run_id = _run, process_sequence = ++_sequence,
+                build = new {
+                    version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(),
+                    commit = Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>()
+                        .FirstOrDefault(item => item.Key == "DobbySourceCommit")?.Value,
+                    configuration = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration,
+                    platform = Environment.OSVersion.ToString(), architecture = RuntimeInformation.ProcessArchitecture.ToString()
+                }
+            });
+            NativeLogFiles.Append(uiPath, Encoding.UTF8.GetBytes(line + "\n"));
+        }
+        catch (Exception error)
+        {
+            WriteFailure = $"UI diagnostic write failed: {error}\nOriginal diagnostic: {message}";
+            System.Diagnostics.Trace.TraceError(WriteFailure);
         }
     }
 

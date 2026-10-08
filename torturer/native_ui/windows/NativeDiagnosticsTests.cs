@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using DobbyVPN.Windows;
 
@@ -17,6 +18,40 @@ internal static class NativeDiagnosticsTests
             var backend = Path.Combine(directory, "backend.jsonl");
             var ui = Path.Combine(directory, "ui.jsonl");
             var destination = Path.Combine(directory, "export.gz");
+            var activationUi = Path.Combine(directory, "activation-ui.jsonl");
+            var activationDiagnostics = new NativeDiagnostics(backend, activationUi);
+            activationDiagnostics.Record("same failure", "ui.failure");
+            activationDiagnostics.Record("same failure", "ui.failure");
+            var activationFields = new
+            {
+                kind = "Protocol",
+                runtimeDataType = "ProtocolActivatedEventArgs",
+                protocolUri = "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fsubscription",
+            };
+            activationDiagnostics.RecordInfo("ui.failure", "same failure", activationFields);
+            activationDiagnostics.RecordInfo("ui.failure", "same failure", activationFields);
+            activationDiagnostics.Record("same failure", "ui.failure");
+            activationDiagnostics.Record("", "ui.failure");
+            activationDiagnostics.Record("same failure", "ui.failure");
+            var activationLines = File.ReadAllLines(activationUi);
+            Require(activationLines.Length == 4, "INFO activation records were deduplicated or ERROR reset behavior changed");
+            using (var errorRecord = JsonDocument.Parse(activationLines[0]))
+            using (var firstInfo = JsonDocument.Parse(activationLines[1]))
+            using (var secondInfo = JsonDocument.Parse(activationLines[2]))
+            using (var resetError = JsonDocument.Parse(activationLines[3]))
+            {
+                Require(errorRecord.RootElement.GetProperty("level").GetString() == "ERROR" &&
+                    firstInfo.RootElement.GetProperty("level").GetString() == "INFO" &&
+                    firstInfo.RootElement.GetProperty("process_sequence").GetInt64() == 2 &&
+                    secondInfo.RootElement.GetProperty("process_sequence").GetInt64() == 3,
+                    "INFO records changed error severity or did not share the process sequence");
+                Require(firstInfo.RootElement.GetProperty("fields").GetProperty("protocolUri").GetString() ==
+                    secondInfo.RootElement.GetProperty("fields").GetProperty("protocolUri").GetString(),
+                    "repeated activation payload fields were not retained");
+                Require(resetError.RootElement.GetProperty("level").GetString() == "ERROR" &&
+                    resetError.RootElement.GetProperty("process_sequence").GetInt64() == 4,
+                    "ERROR deduplication did not preserve its empty-message reset behavior");
+            }
             var block = Enumerable.Range(0, 65536).Select(i => (byte)i).ToArray();
             await using (var source = File.Create(backend))
                 for (var index = 0; index < 1024; index++) await source.WriteAsync(block);

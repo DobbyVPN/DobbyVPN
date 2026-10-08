@@ -1347,7 +1347,24 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
                     break
                 time.sleep(0.025)
             else:
-                raise NativeUIJourneyError("desktop import did not begin a held subscription request during switching")
+                failure = NativeUIJourneyError(
+                    "desktop import did not begin a held subscription request during switching"
+                )
+                failure.add_note(f"held_import_fixture_stats={json.dumps(current_stats, sort_keys=True)}")
+                observations = (
+                    ("held_import_ui_snapshot", ui.snapshot),
+                    ("held_import_backend_snapshot", lambda: base._snapshot(
+                        min(30, timeout), "NATIVE_PENDING_IMPORT_DIAGNOSTIC_FAILED"
+                    )),
+                )
+                for label, observe in observations:
+                    try:
+                        value = observe()
+                    except Exception as observation_error:
+                        add_exception_notes(failure, label, observation_error)
+                    else:
+                        failure.add_note(f"{label}={json.dumps(value, sort_keys=True, separators=(',', ':'))}")
+                raise failure
 
             loading = base._snapshot(min(30, timeout), "NATIVE_PENDING_IMPORT_STATUS_FAILED")
             pending_target = loading.get("pending_target")

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import base64
+from contextlib import redirect_stderr
+from datetime import datetime
 import importlib.util
+from io import StringIO
 import json
 import os
 import subprocess
@@ -750,6 +753,26 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 profile.read_text(encoding="utf-8"),
                 "https://example.invalid/subscription",
             )
+
+    def test_windows_shell_dispatch_retains_exact_uri_and_utc_boundaries(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller.platform = "windows"
+        link = "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fsubscription%3Fx%3D1"
+        retained = StringIO()
+
+        with mock.patch("os.startfile", create=True) as startfile, redirect_stderr(retained):
+            controller._open_link(link)
+
+        startfile.assert_called_once_with(link)
+        events = [json.loads(line) for line in retained.getvalue().splitlines()]
+        self.assertEqual(
+            [event["event"] for event in events],
+            ["windows.shell.dispatch.start", "windows.shell.dispatch.return"],
+        )
+        self.assertEqual([event["uri"] for event in events], [link, link])
+        timestamps = [datetime.fromisoformat(event["timestamp"]) for event in events]
+        self.assertTrue(all(timestamp.tzinfo is not None for timestamp in timestamps))
+        self.assertLessEqual(timestamps[0], timestamps[1])
 
     def test_pending_import_dispatch_returns_without_waiting_for_profile_load(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

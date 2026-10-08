@@ -793,7 +793,21 @@ class NativeUIController:
 
     def _open_link(self, link: str) -> None:
         if self.platform == "windows":
-            os.startfile(link)  # type: ignore[attr-defined]
+            def record_dispatch(event_name: str, **fields: object) -> None:
+                print(json.dumps({
+                    "event": event_name,
+                    "uri": link,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    **fields,
+                }), file=sys.stderr, flush=True)
+
+            record_dispatch("windows.shell.dispatch.start")
+            try:
+                os.startfile(link)  # type: ignore[attr-defined]
+            except Exception as error:
+                record_dispatch("windows.shell.dispatch.return", exception=repr(error))
+                raise
+            record_dispatch("windows.shell.dispatch.return")
             return
         command = ["open"]
         if self.platform == "macos":

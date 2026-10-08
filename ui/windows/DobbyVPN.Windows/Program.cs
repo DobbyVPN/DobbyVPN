@@ -19,15 +19,28 @@ internal static class Program
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
         var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
+        LogActivation("activation.startup", "Captured Windows app startup activation", activation, args);
         var instance = AppInstance.FindOrRegisterForKey("DobbyVPN");
         if (!instance.IsCurrent)
         {
-            Task.Run(async () => await instance.RedirectActivationToAsync(activation)).GetAwaiter().GetResult();
+            LogActivation("activation.redirect-start", "Redirecting activation to the running app", activation, args);
+            try
+            {
+                Task.Run(async () => await instance.RedirectActivationToAsync(activation)).GetAwaiter().GetResult();
+                LogActivation("activation.redirect-complete", "Startup activation redirect completed", activation, args, true);
+            }
+            catch (Exception error)
+            {
+                LogActivation("activation.redirect-failed", "Startup activation redirect failed", activation, args,
+                    false, error: error.ToString());
+                throw;
+            }
             return;
         }
         Pending.Enqueue(activation);
         instance.Activated += (_, next) =>
         {
+            LogActivation("activation.redirect-received", "Received activation in the running app", next);
             lock (Pending)
             {
                 Pending.Enqueue(next);
@@ -55,12 +68,48 @@ internal static class Program
             {
                 _window.Activate();
                 if (activation.Kind == ExtendedActivationKind.Protocol && activation.Data is IProtocolActivatedEventArgs protocol)
+                {
+                    LogActivation("activation.drain-protocol", "Dispatching protocol activation", activation, route: "protocol");
                     _window.ImportLink(protocol.Uri.AbsoluteUri);
+                }
                 else if (activation.Data is ILaunchActivatedEventArgs launch)
-                    foreach (var value in Arguments(launch.Arguments))
+                {
+                    var arguments = Arguments(launch.Arguments).ToArray();
+                    LogActivation("activation.drain-launch", "Processing launch activation arguments", activation,
+                        arguments, route: "launch-arguments");
+                    foreach (var value in arguments)
                         if (value.StartsWith("dobbyvpn:", StringComparison.OrdinalIgnoreCase)) _window.ImportLink(value);
+                }
+                else
+                {
+                    LogActivation("activation.drain-unhandled", "Activation had no supported URI payload", activation,
+                        route: "unhandled");
+                }
             }
         }
+    }
+
+    private static void LogActivation(
+        string category,
+        string message,
+        AppActivationArguments activation,
+        string[]? argv = null,
+        bool? redirectCompleted = null,
+        string? route = null,
+        string? error = null)
+    {
+        var data = activation.Data;
+        NativeDiagnostics.Current.RecordInfo(category, message, new
+        {
+            kind = activation.Kind.ToString(),
+            runtimeDataType = data?.GetType().FullName,
+            protocolUri = (data as IProtocolActivatedEventArgs)?.Uri.AbsoluteUri,
+            launchArguments = (data as ILaunchActivatedEventArgs)?.Arguments,
+            argv,
+            redirectCompleted,
+            route,
+            error,
+        });
     }
 
     private static IEnumerable<string> Arguments(string commandLine)

@@ -511,6 +511,10 @@ public sealed partial class MainWindow : Window
     }
     public void ImportLink(string value)
     {
+        _diagnostics.RecordInfo(
+            "activation.import-link",
+            "Received a URI for the main window",
+            new { uri = value });
         Activate();
         try
         {
@@ -540,6 +544,10 @@ public sealed partial class MainWindow : Window
         try
         {
             var current = await ReadSnapshotAsync();
+            _diagnostics.RecordInfo(
+                "subscription.configure-submit",
+                "Submitting a subscription URL to the Go backend",
+                new { source, session_id = current.SessionId, expected_sequence = current.Sequence });
             var configured = await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source });
             if (revision == _loadRevision) { _acceptedSequence = configured.GetProperty("sequence").GetInt64(); MarkSourceAccepted(source); LoadStatus.Text = ""; }
         }
