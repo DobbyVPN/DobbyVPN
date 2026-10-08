@@ -366,6 +366,10 @@ class NativeUiInstrumentedTest {
             instrumentation.runOnMainSync { MainActivity.current?.recreate() }
             device.waitForIdle()
             waitForOneOf(arrayOf("Disconnected", "Error"), 10_000)
+            val appliedFontScale = currentMainActivity()?.resources?.configuration?.fontScale
+            check(appliedFontScale != null && appliedFontScale >= 1.5f) {
+                "ANDROID_LARGE_FONT_SCALE_NOT_APPLIED font_scale=$appliedFontScale"
+            }
             val connectionAction = requireObject(connectionActionLabel)
             val landscapeWidth = device.displayWidth
             val landscapeHeight = device.displayHeight
@@ -374,6 +378,7 @@ class NativeUiInstrumentedTest {
                 "ANDROID_LANDSCAPE_LAYOUT_NOT_USABLE"
             }
             requireObject("Connection logs")
+            scrollControlsToConnectionAction()
             assertLogPaneUsable("ANDROID_LOGS_NOT_VISIBLE_WITH_LARGE_TEXT")
             captureScreenshot("landscape-large-font")
 
@@ -1320,12 +1325,45 @@ class NativeUiInstrumentedTest {
         action: UiObject2?,
         button: UiObject2?,
     ): Boolean {
-        val statusVisible = status?.let { runCatching { !it.visibleBounds.isEmpty }.getOrDefault(false) } == true
-        val actionVisible = action?.let { runCatching { !it.visibleBounds.isEmpty }.getOrDefault(false) } == true
-        val buttonReachable = button?.let {
-            runCatching { it.isClickable && !it.visibleBounds.isEmpty }.getOrDefault(false)
+        fun visibleBounds(node: UiObject2?): Rect? =
+            node?.let { runCatching { it.visibleBounds }.getOrNull() }
+
+        val viewportBounds = visibleBounds(currentControlsScrollViewport())
+        val statusBounds = visibleBounds(status)
+        val actionBounds = visibleBounds(action)
+        val buttonBounds = visibleBounds(button)
+        val autoLabelBounds = visibleBounds(waitForObject("Auto connect", 100))
+        val metrics = currentMainActivity()?.resources?.displayMetrics
+        // Material3 Button uses labelLarge (14sp text, 20sp line height); pair
+        // the visible scaled text line with Android's minimum 48dp touch target.
+        val minimumTargetPx = metrics?.let {
+            kotlin.math.ceil(48.0 * it.density).toInt()
+        } ?: Int.MAX_VALUE
+        val minimumLabelPx = metrics?.let {
+            kotlin.math.ceil(20.0 * it.scaledDensity).toInt()
+        } ?: Int.MAX_VALUE
+
+        val statusVisible = statusBounds != null && !statusBounds.isEmpty &&
+            viewportBounds?.contains(statusBounds) == true
+        val actionVisible = actionBounds != null && !actionBounds.isEmpty &&
+            viewportBounds?.contains(actionBounds) == true
+        val labelReadable = autoLabelBounds?.let {
+            !it.isEmpty && it.height() >= minimumLabelPx
         } == true
-        return statusVisible && actionVisible && buttonReachable
+        val buttonReachable = buttonBounds?.let { bounds ->
+            button?.let { clickable ->
+                runCatching {
+                    clickable.isClickable && !bounds.isEmpty &&
+                        bounds.width() >= minimumTargetPx && bounds.height() >= minimumTargetPx
+                }.getOrDefault(false)
+            }
+        } == true
+        val buttonInsideViewport = viewportBounds != null && buttonBounds != null &&
+            viewportBounds.contains(buttonBounds)
+        val labelInsideButton = buttonBounds != null && autoLabelBounds != null &&
+            buttonBounds.contains(autoLabelBounds)
+        return statusVisible && actionVisible && labelReadable && buttonReachable &&
+            buttonInsideViewport && labelInsideButton
     }
 
     private fun failSmallScreenReachability(
@@ -1358,11 +1396,23 @@ class NativeUiInstrumentedTest {
             " hierarchy_error=${it.javaClass.simpleName}:${it.message}"
         }.orEmpty()
         val statusCandidates = arrayOf("Disconnected", "Error").joinToString(";") { debugNodeBounds(it) }
+        val activity = currentMainActivity()
+        val metrics = activity?.resources?.displayMetrics
+        val fontScale = activity?.resources?.configuration?.fontScale
+        val minimumTargetPx = metrics?.let {
+            kotlin.math.ceil(48.0 * it.density).toInt()
+        }
+        val minimumLabelPx = metrics?.let {
+            kotlin.math.ceil(20.0 * it.scaledDensity).toInt()
+        }
         throw AssertionError(
             "$reason viewport=${describe(viewport)} status=${describe(status)} " +
                 "action=${describe(action)} clickable_action=${describe(clickableAction)} " +
                 "$scrollDetails status_candidates=[$statusCandidates] " +
                 "action_candidates=[${debugNodeBounds(connectionActionLabel)}] " +
+                "auto_connect_candidates=[${debugNodeBounds("Auto connect")}] " +
+                "minimum_visible_target=${minimumTargetPx}px minimum_visible_label_line=${minimumLabelPx}px " +
+                "density=${metrics?.density} scaled_density=${metrics?.scaledDensity} font_scale=$fontScale " +
                 "viewport_candidates=[${debugNodeBounds(MainActivity.CONNECTION_CONTROLS_DESCRIPTION)}]" +
                 "$screenshotDiagnostic$hierarchyDiagnostic\n" +
                 "UI hierarchy:\n${hierarchy.toString("UTF-8")}"
