@@ -1916,8 +1916,11 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     ):
         raise NativeUIJourneyError("restoring the original inventory changed the disconnected session")
 
-    ui._click("VPN connection action")
-    active_again = selected(restored_absent, None)
+    auto_connection = ui.connect_with_auto_stop()
+    stop_observed = auto_connection.get("auto_stop_observed") is True
+    if not stop_observed:
+        raise NativeUIJourneyError("Auto selection returned without proving its rendered Stop action")
+    active_again = selected(restored_absent, None, stop_observed=stop_observed)
     # The CLI can report CONNECTED before the frontend's snapshot poll renders
     # it; establish the visible Disconnect precondition before holding Configure.
     connected_view = ui.wait_status("Connected")
@@ -1968,8 +1971,11 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
 
     # A real native Paste containing HTTP text must show validation, perform no
     # subscription GET and leave the active generation untouched.
-    ui._click("VPN connection action")
-    pasted_connection = selected(disconnected_during_load, None)
+    auto_connection = ui.connect_with_auto_stop()
+    stop_observed = auto_connection.get("auto_stop_observed") is True
+    if not stop_observed:
+        raise NativeUIJourneyError("Auto selection returned without proving its rendered Stop action")
+    pasted_connection = selected(disconnected_during_load, None, stop_observed=stop_observed)
     valid_source = ui.profile.read_text(encoding="utf-8").strip()
     before_http_paste = base._snapshot(min(timeout, 30), "NATIVE_HTTP_PASTE_STATUS_FAILED")
     http_paste_gets = stats()["subscription_gets"]
