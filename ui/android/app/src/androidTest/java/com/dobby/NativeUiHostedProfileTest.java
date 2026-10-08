@@ -46,6 +46,7 @@ import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject2;
 
 import com.dobby.nativebridge.NativeGoSession;
+import com.dobby.nativebridge.NativeRecoveryStopTestSeam;
 import com.dobby.nativebridge.DobbyVpnService;
 import com.dobby.nativebridge.NativeVpnBridge;
 import com.dobby.ui.MainActivity;
@@ -73,6 +74,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -101,6 +103,7 @@ public final class NativeUiHostedProfileTest {
     private static final String CONNECTION_ACTION_LABEL = "VPN connection action";
     private static final String START_MODE_PROFILE_INDEX = "PROFILE_INDEX";
     private static final String CONSENT_GRANT_SELECTION_OPERATION = "consent_grant_selection";
+    private static final String AUTO_RECOVERY_STOP_TEST_CASE = "android:auto-recovery-stop";
     private static final Class<AndroidNetworkProbeMain> NETWORK_PROBE_CLASS =
             AndroidNetworkProbeMain.class;
     private static final long POLL_MILLIS = 100L;
@@ -119,6 +122,26 @@ public final class NativeUiHostedProfileTest {
             "ANDROID_CONNECT_BEFORE_CONFIGURE",
             "ANDROID_TUNNEL_NOT_PRESENT",
             "ANDROID_DISCONNECT_WITHOUT_GENERATION",
+            "ANDROID_NATIVE_CASE_UNSUPPORTED",
+            "ANDROID_TEST_RECOVERY_STOP_CASE_INVALID",
+            "ANDROID_TEST_RECOVERY_STOP_REQUIRES_GUI_AUTO",
+            "ANDROID_TEST_RECOVERY_STOP_JNI_UNAVAILABLE",
+            "ANDROID_TEST_RECOVERY_STOP_ENABLE_FAILED",
+            "ANDROID_TEST_RECOVERY_STOP_ARM_FAILED",
+            "ANDROID_TEST_RECOVERY_STOP_CONSENT_NOT_FRESH",
+            "ANDROID_TEST_RECOVERY_STOP_INITIAL_STATE_INVALID",
+            "ANDROID_TEST_RECOVERY_STOP_PROFILE_INVENTORY_INVALID",
+            "ANDROID_TEST_RECOVERY_STOP_ARM_PRECONDITION_FAILED",
+            "ANDROID_TEST_RECOVERY_STOP_RECOVERY_TIMEOUT",
+            "ANDROID_TEST_RECOVERY_STOP_RECOVERY_INVALID",
+            "ANDROID_TEST_RECOVERY_STOP_UI_INVALID",
+            "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_ENABLED",
+            "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_UNAVAILABLE",
+            "ANDROID_TEST_RECOVERY_STOP_SCREENSHOT_MISSING",
+            "ANDROID_TEST_RECOVERY_STOP_TAP_FAILED",
+            "ANDROID_TEST_RECOVERY_STOP_CLEANUP_TIMEOUT",
+            "ANDROID_TEST_RECOVERY_STOP_FINAL_STATE_INVALID",
+            "ANDROID_TEST_RECOVERY_STOP_GENERATION_ADVANCED",
             "ANDROID_RECONNECT_TUNNEL_NOT_PRESENT",
             "ANDROID_OPERATION_UNSUPPORTED",
             "ANDROID_HOSTED_DRIVER_FAILED",
@@ -318,6 +341,8 @@ public final class NativeUiHostedProfileTest {
         markProgress("command", "start", "started");
         boolean guiAuto = GUI_AUTO_MODE.equals(command.optString(
                 "ui_mode", command.optString("coverage_lane", "")));
+        String testCase = command.optString("test_case", "");
+        boolean autoRecoveryStopCase = AUTO_RECOVERY_STOP_TEST_CASE.equals(testCase);
         launchSubscriptionURL = guiAuto ? command.getString("subscription_url") : "";
         subscriptionControlURL = guiAuto ? command.getString("subscription_control_url") : "";
         subscriptionControlKey = guiAuto ? command.getString("subscription_control_key") : "";
@@ -335,8 +360,16 @@ public final class NativeUiHostedProfileTest {
         boolean configured = false;
         boolean connected = false;
         boolean disconnectClean = false;
+        long autoRecoveryInitialGeneration = 0L;
 
         try {
+            if (!testCase.isEmpty() && !autoRecoveryStopCase) {
+                throw new IllegalArgumentException("ANDROID_TEST_RECOVERY_STOP_CASE_INVALID");
+            }
+            if (autoRecoveryStopCase && !guiAuto) {
+                throw new IllegalArgumentException("ANDROID_TEST_RECOVERY_STOP_REQUIRES_GUI_AUTO");
+            }
+            if (autoRecoveryStopCase) observation.put("test_case", testCase);
             if (!guiAuto) {
                 NativeGoSession.attach(context);
                 JSONObject initial = snapshotResult("");
@@ -353,7 +386,10 @@ public final class NativeUiHostedProfileTest {
                 switch (name) {
                     case "configure": {
                         if (guiAuto) {
-                            configureThroughRenderedUI(command.getString("subscription_url"), operationTimeout(operation));
+                            configureThroughRenderedUI(
+                                    command.getString("subscription_url"),
+                                    operationTimeout(operation),
+                                    autoRecoveryStopCase);
                             // The one-step configure scenario must prove that
                             // the rendered profile was accepted by Go.  A
                             // later connect/reconnect owns that visible start
@@ -410,8 +446,31 @@ public final class NativeUiHostedProfileTest {
                         if (!configured) throw new IllegalStateException("ANDROID_CONNECT_BEFORE_CONFIGURE");
                         if (guiAuto) {
                             boolean consentHandled = connectThroughRenderedUI(
-                                    operationTimeout(operation));
+                                    operationTimeout(operation),
+                                    "connect",
+                                    autoRecoveryStopCase);
                             assertRenderedSourceRetained(2_000L);
+                            if (autoRecoveryStopCase) {
+                                if (!consentHandled) {
+                                    throw new IllegalStateException(
+                                            "ANDROID_TEST_RECOVERY_STOP_CONSENT_NOT_FRESH");
+                                }
+                                JSONObject initial = snapshotResult("");
+                                JSONArray profiles = initial.optJSONArray("profiles");
+                                if (!"CONNECTED".equals(initial.optString("state"))
+                                        || initial.optBoolean("recovering")
+                                        || !"AUTO_SELECT".equals(
+                                                initial.optString("active_mode"))
+                                        || initial.optLong("generation") <= 0) {
+                                    throw new IllegalStateException(
+                                            "ANDROID_TEST_RECOVERY_STOP_INITIAL_STATE_INVALID");
+                                }
+                                if (profiles == null || profiles.length() < 2) {
+                                    throw new IllegalStateException(
+                                            "ANDROID_TEST_RECOVERY_STOP_PROFILE_INVENTORY_INVALID");
+                                }
+                                autoRecoveryInitialGeneration = initial.getLong("generation");
+                            }
                             connected = true;
                             observation.put("connected", true);
                             observation.put("gui_auto_verified", true);
@@ -486,12 +545,23 @@ public final class NativeUiHostedProfileTest {
                         break;
                     case "disconnect": {
                         if (guiAuto) {
-                            disconnectThroughRenderedUI(operationTimeout(operation));
-                            boolean vpnRemoved = awaitVpnNetwork(
-                                    false, operationTimeout(operation)) == null;
-                            disconnectClean = vpnRemoved;
+                            if (autoRecoveryStopCase) {
+                                JSONObject nativeCaseFacts = runAutoRecoveryStop(
+                                        operationTimeout(operation),
+                                        autoRecoveryInitialGeneration,
+                                        observation);
+                                observation.put("native_case_facts", nativeCaseFacts);
+                                disconnectClean = nativeCaseFacts.getBoolean("final_idle")
+                                        && nativeCaseFacts.getBoolean("vpn_network_absent");
+                            } else {
+                                disconnectThroughRenderedUI(operationTimeout(operation));
+                                boolean vpnRemoved = awaitVpnNetwork(
+                                        false, operationTimeout(operation)) == null;
+                                disconnectClean = vpnRemoved;
+                            }
                             connected = false;
                             observation.put("disconnect_clean", disconnectClean);
+                            observation.put("final_disconnect_clean", disconnectClean);
                             observation.put("gui_auto_verified", true);
                         } else {
                             if (generation <= 0) throw new IllegalStateException("ANDROID_DISCONNECT_WITHOUT_GENERATION");
@@ -723,6 +793,12 @@ public final class NativeUiHostedProfileTest {
      * still calls the production Go binding.
      */
     private void configureThroughRenderedUI(String subscriptionURL, long timeout) throws Exception {
+        configureThroughRenderedUI(subscriptionURL, timeout, false);
+    }
+
+    private void configureThroughRenderedUI(
+            String subscriptionURL, long timeout, boolean skipColdSavedSourceRestore)
+            throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         markProgress("configure", "surface", "started");
         if (processColdImportPending) {
@@ -733,7 +809,7 @@ public final class NativeUiHostedProfileTest {
         // Keep the restore GET distinct so it cannot satisfy the separate
         // successful cold deep-link import assertion below.
         String restoredURL = urlWithQuery(subscriptionURL, "android-saved-source", "1");
-        if (!coldImportAttempted) {
+        if (!skipColdSavedSourceRestore && !coldImportAttempted) {
             launchActivityColdSavedSourceRestore(restoredURL,
                     remainingTimeout(deadline, "ANDROID_UI_CONFIGURE_TIMEOUT"));
         }
@@ -1179,6 +1255,11 @@ public final class NativeUiHostedProfileTest {
     }
 
     private boolean connectThroughRenderedUI(long timeout, String operation) throws Exception {
+        return connectThroughRenderedUI(timeout, operation, false);
+    }
+
+    private boolean connectThroughRenderedUI(
+            long timeout, String operation, boolean enableRecoveryStopSeam) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
         markProgress(operation, "surface", "started");
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
@@ -1197,7 +1278,12 @@ public final class NativeUiHostedProfileTest {
                 remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
         markProgress(operation, "physical-network", "completed");
         boolean consentNeeded = VpnService.prepare(context) != null;
+        if (enableRecoveryStopSeam && !consentNeeded) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_CONSENT_NOT_FRESH");
+        }
         markProgress(operation, "connect-control", "started");
+        if (enableRecoveryStopSeam) enableTestRecoveryStopSeam();
         tapUiControl(
                 CONNECTION_ACTION_LABEL,
                 remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"));
@@ -2380,6 +2466,334 @@ public final class NativeUiHostedProfileTest {
         markProgress("disconnect", "disconnected-state", "completed");
     }
 
+    private JSONObject runAutoRecoveryStop(
+            long timeout, long initialGeneration, JSONObject observation) throws Exception {
+        long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
+        if (initialGeneration <= 0
+                || !observation.optBoolean("connected")
+                || !observation.optBoolean("tunnel_interface")
+                || !observation.optBoolean("routing_verified")
+                || !observation.optBoolean("stability_verified")
+                || observation.optDouble("latency_ms") <= 0.0
+                || observation.optDouble("download_mbps") <= 0.0
+                || observation.optDouble("upload_mbps") <= 0.0
+                || !observation.optBoolean("vpn_consent_handled")) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_ARM_PRECONDITION_FAILED");
+        }
+        JSONObject beforeArm = snapshotResult("");
+        if (beforeArm.getLong("generation") != initialGeneration
+                || !"CONNECTED".equals(beforeArm.optString("state"))
+                || beforeArm.optBoolean("recovering")
+                || !"AUTO_SELECT".equals(beforeArm.optString("active_mode"))) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_ARM_PRECONDITION_FAILED");
+        }
+
+        markProgress("disconnect", "recovery-arm", "started");
+        armTestRecoveryStopSeam();
+        markProgress("disconnect", "recovery-arm", "completed");
+        RecoveryStopUiState recoveryState = awaitRenderedRecoveryStop(
+                initialGeneration, deadline);
+        JSONObject recovery = recoveryState.snapshot;
+        long recoveryGeneration = recovery.getLong("generation");
+        int profileActionCount = recoveryState.profileActionCount;
+
+        markProgress("disconnect", "recovery-stop-state", "observed");
+        String stopScreenshot = latestScreenshotLabel();
+        UiObject2 mainAction = findUiObject(CONNECTION_ACTION_LABEL);
+        if (mainAction == null || !mainAction.isEnabled()) {
+            throw new IllegalStateException("ANDROID_TEST_RECOVERY_STOP_UI_INVALID");
+        }
+        markProgress("disconnect", "recovery-stop-tap", "started");
+        try {
+            tapUiControl(
+                    CONNECTION_ACTION_LABEL,
+                    remainingTimeout(
+                            deadline, "ANDROID_TEST_RECOVERY_STOP_TAP_FAILED"));
+        } catch (Throwable failure) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_TAP_FAILED", failure);
+        }
+        markProgress("disconnect", "recovery-stop-tap", "completed");
+
+        JSONObject idle = awaitRecoveryStopCleanup(
+                recoveryGeneration, deadline);
+        waitForUiState(
+                "Disconnected",
+                remainingTimeout(
+                        deadline, "ANDROID_TEST_RECOVERY_STOP_CLEANUP_TIMEOUT"));
+        markProgress("disconnect", "disconnected-state", "started");
+        for (int sample = 0; sample < UI_STABILITY_SAMPLES; sample++) {
+            idle = snapshotResult("");
+            if (!isStoppedRecoverySnapshot(idle, recoveryGeneration)) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_GENERATION_ADVANCED");
+            }
+            if (awaitVpnNetwork(
+                            false,
+                            Math.min(
+                                    NETWORK_RECOVERY_TIMEOUT_MILLIS,
+                                    remainingTimeout(
+                                            deadline,
+                                            "ANDROID_TEST_RECOVERY_STOP_CLEANUP_TIMEOUT")))
+                    != null) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_FINAL_STATE_INVALID");
+            }
+            if (sample + 1 < UI_STABILITY_SAMPLES) {
+                SystemClock.sleep(POLL_MILLIS);
+            }
+        }
+        markProgress("disconnect", "disconnected-state", "completed");
+        String idleScreenshot = latestScreenshotLabel();
+        if (stopScreenshot.isEmpty() || idleScreenshot.isEmpty()) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_SCREENSHOT_MISSING");
+        }
+
+        JSONArray screenshotLabels = new JSONArray();
+        for (int i = 0; i < screenshotHistory.length(); i++) {
+            screenshotLabels.put(screenshotHistory.getJSONObject(i).getString("label"));
+        }
+        return new JSONObject()
+                .put("case_id", AUTO_RECOVERY_STOP_TEST_CASE)
+                .put("passed", true)
+                .put("seam_enabled", true)
+                .put("seam_armed", true)
+                .put("arm_after_tunnel_route_and_traffic", true)
+                .put("initial_generation", initialGeneration)
+                .put("recovery_generation", recoveryGeneration)
+                .put("recovery_observed", true)
+                .put("recovery_hold_sample_count", UI_STABILITY_SAMPLES)
+                .put("recovery_poll_interval_ms", POLL_MILLIS)
+                .put("recovery_ui_reconnecting", true)
+                .put("main_stop_visible", true)
+                .put("main_stop_enabled", true)
+                .put("competing_profile_action_count", profileActionCount)
+                .put("competing_profile_actions_disabled", true)
+                .put("profile_actions_verified_while_visible", true)
+                .put("stop_clicked", true)
+                .put("final_generation", idle.getLong("generation"))
+                .put("final_idle", "IDLE".equals(idle.optString("state")))
+                .put("cleanup_complete", idle.optBoolean("cleanup_complete"))
+                .put("recovering_cleared", !idle.optBoolean("recovering"))
+                .put("pending_cleared", idle.optJSONObject("pending_target") == null)
+                .put("active_profile_cleared", idle.optJSONObject("active_profile") == null)
+                .put("vpn_network_absent", true)
+                .put("no_later_generation", true)
+                .put("final_stable_sample_count", UI_STABILITY_SAMPLES)
+                .put("stop_screenshot_label", stopScreenshot)
+                .put("idle_screenshot_label", idleScreenshot)
+                .put("screenshot_labels", screenshotLabels);
+    }
+
+    private RecoveryStopUiState awaitRenderedRecoveryStop(
+            long initialGeneration, long deadline) throws Exception {
+        long recoveryGeneration = 0L;
+        int stableSamples = 0;
+        int profileActionCount = 0;
+        boolean profileActionsVerified = false;
+        JSONObject last = snapshotResult("");
+        while (System.currentTimeMillis() < deadline) {
+            last = snapshotResult("");
+            String state = last.optString("state");
+            long generation = last.optLong("generation");
+            if ("FAILED".equals(state)) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_RECOVERY_INVALID");
+            }
+            if (generation > initialGeneration && last.optBoolean("recovering")) {
+                if (recoveryGeneration == 0L) {
+                    recoveryGeneration = generation;
+                } else if (generation != recoveryGeneration) {
+                    throw new IllegalStateException(
+                            "ANDROID_TEST_RECOVERY_STOP_GENERATION_ADVANCED");
+                }
+                if (!profileActionsVerified && recoveryMainStopVisible(last)) {
+                    profileActionCount = verifyRecoveryProfileActionsDisabled(
+                            last.getJSONArray("profiles"), deadline);
+                    profileActionsVerified = true;
+                    returnToRecoveryStop(recoveryGeneration, deadline);
+                    last = snapshotResult("");
+                }
+                if (profileActionsVerified && recoveryMainStopVisible(last)) {
+                    stableSamples++;
+                    if (stableSamples == UI_STABILITY_SAMPLES) {
+                        return new RecoveryStopUiState(last, profileActionCount);
+                    }
+                } else {
+                    stableSamples = 0;
+                }
+            } else if (generation > initialGeneration && recoveryGeneration > 0L) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_RECOVERY_INVALID");
+            }
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException(
+                recoveryGeneration == 0L
+                        ? "ANDROID_TEST_RECOVERY_STOP_RECOVERY_TIMEOUT"
+                        : "ANDROID_TEST_RECOVERY_STOP_UI_INVALID");
+    }
+
+    private boolean recoveryMainStopVisible(JSONObject snapshot) throws Exception {
+        if (!snapshot.optBoolean("recovering")
+                || !"STOP".equals(snapshot.optString("primary_action"))) return false;
+        UiObject2 reconnecting = findUiObject("Reconnecting");
+        UiObject2 mainAction = findUiObject(CONNECTION_ACTION_LABEL);
+        UiObject2 stopText = findUiObject("Stop");
+        if (reconnecting == null || mainAction == null || stopText == null
+                || !mainAction.isEnabled() || !stopText.isEnabled()) return false;
+        Rect mainBounds = mainAction.getVisibleBounds();
+        Rect stopBounds = stopText.getVisibleBounds();
+        if (mainBounds.isEmpty() || stopBounds.isEmpty()
+                || !Rect.intersects(mainBounds, stopBounds)) return false;
+        return true;
+    }
+
+    private int verifyRecoveryProfileActionsDisabled(
+            JSONArray profiles, long deadline) throws Exception {
+        if (profiles == null || profiles.length() < 2) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_PROFILE_INVENTORY_INVALID");
+        }
+        Set<Integer> expected = new HashSet<>();
+        for (int index = 0; index < profiles.length(); index++) {
+            expected.add(profiles.getJSONObject(index).getInt("index"));
+        }
+        if (expected.size() != profiles.length()) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_PROFILE_INVENTORY_INVALID");
+        }
+        Set<Integer> verified = new HashSet<>();
+        UiDevice device = uiDevice();
+        int width = device.getDisplayWidth();
+        int height = device.getDisplayHeight();
+        int maximumSwipes = profiles.length() * 4 + 6;
+        int swipes = 0;
+        while (verified.size() < expected.size()
+                && System.currentTimeMillis() < deadline
+                && swipes <= maximumSwipes) {
+            for (int profileIndex : expected) {
+                if (verified.contains(profileIndex)) continue;
+                String label = "Profile " + (profileIndex + 1) + " action";
+                UiObject2 action = findUiObject(label);
+                if (action == null) continue;
+                if (action.isEnabled()) {
+                    throw new IllegalStateException(
+                            "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_ENABLED");
+                }
+                verified.add(profileIndex);
+            }
+            if (verified.size() == expected.size()) break;
+            if (swipes == maximumSwipes
+                    || System.currentTimeMillis() >= deadline) break;
+            int startY = Math.max(1, (int) (height * 0.42f));
+            int endY = Math.max(1, (int) (height * 0.34f));
+            if (width <= 0 || height <= 0 || startY <= endY
+                    || !device.swipe(width / 2, startY, width / 2, endY, 8)) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_UNAVAILABLE");
+            }
+            swipes++;
+            waitForIdleBounded(device, deadline);
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        if (verified.size() != expected.size()) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_UNAVAILABLE");
+        }
+        return verified.size();
+    }
+
+    private void returnToRecoveryStop(long recoveryGeneration, long deadline)
+            throws Exception {
+        UiDevice device = uiDevice();
+        int width = device.getDisplayWidth();
+        int height = device.getDisplayHeight();
+        int startY = Math.max(1, (int) (height * 0.34f));
+        int endY = Math.max(1, (int) (height * 0.42f));
+        int maximumSwipes = 12;
+        for (int swipes = 0; swipes <= maximumSwipes; swipes++) {
+            JSONObject snapshot = snapshotResult("");
+            if (snapshot.optLong("generation") != recoveryGeneration
+                    || !snapshot.optBoolean("recovering")) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_RECOVERY_INVALID");
+            }
+            if (recoveryMainStopVisible(snapshot)) return;
+            if (swipes == maximumSwipes
+                    || System.currentTimeMillis() >= deadline
+                    || width <= 0 || height <= 0
+                    || !device.swipe(width / 2, startY, width / 2, endY, 8)) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_UI_INVALID");
+            }
+            waitForIdleBounded(device, deadline);
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException("ANDROID_TEST_RECOVERY_STOP_UI_INVALID");
+    }
+
+    private JSONObject awaitRecoveryStopCleanup(
+            long recoveryGeneration, long deadline) throws Exception {
+        while (System.currentTimeMillis() < deadline) {
+            JSONObject snapshot = snapshotResult("");
+            if ("FAILED".equals(snapshot.optString("state"))) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_FINAL_STATE_INVALID");
+            }
+            if (snapshot.optLong("generation") > recoveryGeneration) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_GENERATION_ADVANCED");
+            }
+            if (isStoppedRecoverySnapshot(snapshot, recoveryGeneration)) return snapshot;
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException(
+                "ANDROID_TEST_RECOVERY_STOP_CLEANUP_TIMEOUT");
+    }
+
+    private boolean isStoppedRecoverySnapshot(JSONObject snapshot, long generation) {
+        return "IDLE".equals(snapshot.optString("state"))
+                && snapshot.optLong("generation") == generation
+                && snapshot.optBoolean("cleanup_complete")
+                && !snapshot.optBoolean("recovering")
+                && snapshot.optJSONObject("pending_target") == null
+                && snapshot.optJSONObject("active_profile") == null;
+    }
+
+    private void enableTestRecoveryStopSeam() {
+        try {
+            if (!NativeRecoveryStopTestSeam.enable()) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_ENABLE_FAILED");
+            }
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError failure) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_JNI_UNAVAILABLE", failure);
+        }
+    }
+
+    private void armTestRecoveryStopSeam() {
+        try {
+            if (!NativeRecoveryStopTestSeam.arm()) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_ARM_FAILED");
+            }
+        } catch (UnsatisfiedLinkError | NoClassDefFoundError failure) {
+            throw new IllegalStateException(
+                    "ANDROID_TEST_RECOVERY_STOP_JNI_UNAVAILABLE", failure);
+        }
+    }
+
+    private String latestScreenshotLabel() throws Exception {
+        if (screenshotHistory.length() == 0) return "";
+        return screenshotHistory.getJSONObject(screenshotHistory.length() - 1)
+                .getString("label");
+    }
+
     private void ensureRenderedDisconnected(long timeout) throws Exception {
         JSONObject current = snapshotResult("");
         if (!"IDLE".equals(current.optString("state"))) {
@@ -2633,6 +3047,16 @@ public final class NativeUiHostedProfileTest {
             } else if ("text".equals(selectorKind)) {
                 textCandidates += count;
             }
+        }
+    }
+
+    private static final class RecoveryStopUiState {
+        final JSONObject snapshot;
+        final int profileActionCount;
+
+        RecoveryStopUiState(JSONObject snapshot, int profileActionCount) {
+            this.snapshot = snapshot;
+            this.profileActionCount = profileActionCount;
         }
     }
 

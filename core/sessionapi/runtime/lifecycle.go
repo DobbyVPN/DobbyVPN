@@ -215,7 +215,8 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		return nil, cause
 	}
 	lease.setOnDone(r.releaseActive)
-	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, r.options.HealthInterval, r.options.HealthFailureThreshold)
+	healthInterval, healthFailureThreshold := testHealthMonitorTiming(r.options.HealthInterval, r.options.HealthFailureThreshold)
+	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, healthInterval, healthFailureThreshold)
 	return lease, nil
 }
 

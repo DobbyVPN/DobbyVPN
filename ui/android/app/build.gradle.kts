@@ -88,6 +88,14 @@ val releaseVersionCode: Int = nonBlankGradleProperty("android.injected.version.c
     .orElse(nonBlankGradleProperty("versionCode")).map(String::toInt).get()
     ?: error("versionCode is required for the Android manifest")
 val sourceCommit = providers.gradleProperty("projectRepositoryCommit").getOrElse("N/A")
+val requestedLocalBuild = providers.environmentVariable("DOBBYVPN_BUILD_LOCAL").orElse("0").get()
+val requestedTestSeams = providers.environmentVariable("DOBBYVPN_BUILD_TEST_SEAMS").orElse("0").get()
+check(requestedLocalBuild in setOf("0", "1")) { "DOBBYVPN_BUILD_LOCAL must be 0 or 1" }
+check(requestedTestSeams in setOf("0", "1")) { "DOBBYVPN_BUILD_TEST_SEAMS must be 0 or 1" }
+val testSeamsBuild = requestedTestSeams == "1"
+check(!testSeamsBuild || requestedLocalBuild == "1") {
+    "the Android test-seams tag is allowed only for an explicit local build"
+}
 val copyLicenseAssets by tasks.registering(Copy::class) {
     from(repoRoot) {
         include("LICENSE", "THIRD_PARTY_NOTICES", "LICENSES/**")
@@ -210,6 +218,7 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
         tasks.register<Exec>("buildGoBackend_${variant}_${androidAbi.replace('-', '_')}") {
             dependsOn(validateGoToolchain, downloadGoModules)
             inputs.files(backendInputs)
+            inputs.property("testSeamsBuild", testSeamsBuild)
             outputs.file(layout.buildDirectory.file("generated/go-libs/$variant/$androidAbi/libdobby_vpn.so"))
             doFirst {
                 check(ndkHome.get().isNotBlank()) {
@@ -245,18 +254,24 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
                 val goTemp = reproducibleBuildRoot.resolve("tmp")
                 goCache.mkdirs()
                 goTemp.mkdirs()
-                commandLine(
-                    goBinary.get(), "build", "-buildmode=c-shared", "-tags=android,accessibility,static",
-                    "-trimpath",
-                    *if (variant == "debug") arrayOf("-gcflags=all=-N -l") else emptyArray<String>(),
-                    // The bridge arrives as a static archive, so Go does not
-                    // infer a C++ external linker from source files. Select the
-                    // NDK C++ driver explicitly so -static-libstdc++ takes effect.
-                    // Xray's anet dependency updates Go's IPv6 interface cache on
-                    // Android and requires this linker option on Go 1.23+.
+                val goBuild = mutableListOf(goBinary.get(), "build", "-buildmode=c-shared")
+                if (!testSeamsBuild) {
+                    goBuild.add("-tags=android,accessibility,static")
+                }
+                goBuild.add("-trimpath")
+                if (variant == "debug") {
+                    goBuild.add("-gcflags=all=-N -l")
+                }
+                // The bridge arrives as a static archive, so Go does not infer
+                // a C++ external linker from source files. Select the NDK C++
+                // driver explicitly so -static-libstdc++ takes effect. Xray's
+                // anet dependency updates Go's IPv6 interface cache on Android
+                // and requires this linker option on Go 1.23+.
+                goBuild.add(
                     "-ldflags=-buildid= -X core/buildinfo.Version=$releaseVersionName -X core/buildinfo.Commit=$sourceCommit -X core/buildinfo.Configuration=${if (variant == "debug") "Debug" else "Release"} ${if (variant == "release") "-s -w" else ""} -checklinkname=0 -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
-                    "-o", output.absolutePath, "./cmd/dobbyandroid"
                 )
+                goBuild.addAll(listOf("-o", output.absolutePath, "./cmd/dobbyandroid"))
+                commandLine(*goBuild.toTypedArray())
                 workingDir(goModule)
                 environment("GOOS", "android")
                 environment("GOARCH", goArch)
@@ -265,7 +280,14 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
                 environment("GO111MODULE", "on")
                 environment("GOENV", "off")
                 environment("GOTOOLCHAIN", "local")
-                environment("GOFLAGS", "-trimpath -buildvcs=false")
+                environment(
+                    "GOFLAGS",
+                    if (testSeamsBuild) {
+                        "-trimpath -buildvcs=false -tags=android,accessibility,static,dobbyvpn_test_seams"
+                    } else {
+                        "-trimpath -buildvcs=false"
+                    },
+                )
                 environment("GOCACHE", goCache.absolutePath)
                 environment("GOTMPDIR", goTemp.absolutePath)
                 // Gradle inherits the caller's environment. Clear every

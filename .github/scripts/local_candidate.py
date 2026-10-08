@@ -253,7 +253,10 @@ def _build_android(
     *,
     source_sha: str | None,
     source_tree: str | None,
+    test_seams: bool = False,
 ) -> Path:
+    if test_seams and (source_sha is not None or source_tree is not None):
+        raise CandidateError("Android test-seams builds cannot use archived source identities")
     helper = _android_helper(source_root)
     build_check = source_root / ".github" / "scripts" / "android" / "android_build_check.sh"
     output = candidate_root / "dobbyvpn-release-unsigned.apk"
@@ -277,7 +280,13 @@ def _build_android(
             "--output", str(output),
             "--test-companion-output", str(companion_output),
         ]
-        label = "Android candidate build and native ABI check"
+        if test_seams:
+            command.append("--test-seams")
+        label = (
+            "Android test-seams candidate build and native ABI check"
+            if test_seams
+            else "Android candidate build and native ABI check"
+        )
     else:
         if source_sha is None or source_tree is None:
             raise CandidateError("complete Android build requires both source SHA and source tree")
@@ -420,6 +429,7 @@ def prepare_candidate(
     skip_deps: bool = False,
     source_sha: str | None = None,
     source_tree: str | None = None,
+    test_seams: bool = False,
 ) -> CandidatePaths:
     request_root = _existing_directory(request_root, "request root")
     source_root = _existing_directory(source_root, "source root")
@@ -429,6 +439,10 @@ def prepare_candidate(
         raise CandidateError("source root must be below request root")
     if platform not in PLATFORMS:
         raise CandidateError(f"unsupported platform: {platform}")
+    if test_seams and platform != "android":
+        raise CandidateError("test-seams candidate mode is supported only for Android")
+    if test_seams and (source_sha is not None or source_tree is not None):
+        raise CandidateError("test-seams candidate mode cannot use archived source identities")
     if (source_sha is None) != (source_tree is None):
         raise CandidateError("Android archived-source build requires both source SHA and source tree")
     if source_sha is not None:
@@ -477,6 +491,7 @@ def prepare_candidate(
             architecture,
             source_sha=source_sha,
             source_tree=source_tree,
+            test_seams=test_seams,
         )
         test_companion_path = candidate_root / "dobbyvpn-test-companion.apk"
         service_path = None

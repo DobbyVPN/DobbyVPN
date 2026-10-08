@@ -16,6 +16,7 @@ WINDOWS_CONFIGURE_TREE_NO_UIA_CASE = "configure-tree-no-uia"
 ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE = "logs-clear-process-restart"
 ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE = "small-screen-log-viewport"
 MACOS_CONFIGURE_STARTUP_CASE = "configure-startup"
+AUTO_RECOVERY_STOP_CASE = "auto-recovery-stop"
 
 NATIVE_CASE_SUITES = {
     ("android", ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE): "mini",
@@ -26,6 +27,9 @@ NATIVE_CASE_SUITES = {
     ("macos", MACOS_CONFIGURE_STARTUP_CASE): "full",
     ("windows", WINDOWS_CONFIGURE_TREE_CASE): "full",
     ("windows", WINDOWS_CONFIGURE_TREE_NO_UIA_CASE): "full",
+    ("android", AUTO_RECOVERY_STOP_CASE): "mini",
+    ("windows", AUTO_RECOVERY_STOP_CASE): "full",
+    ("macos", AUTO_RECOVERY_STOP_CASE): "full",
 }
 
 

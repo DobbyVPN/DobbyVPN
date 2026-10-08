@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml;
@@ -19,6 +20,42 @@ public sealed partial class MainWindow : Window
 {
     private const string PipeName = "DobbyVPN.Control";
     private const string ContentRootPeersPathVariable = "DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH";
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool ClientToScreen(IntPtr window, ref ScreenPoint point);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScreenPoint { public int X; public int Y; }
+
+    private static ScreenPoint GetPhysicalClientOrigin(IntPtr window)
+    {
+        var previousContext = SetThreadDpiAwarenessContext(new IntPtr(-4)); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        if (previousContext == IntPtr.Zero)
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(), "Could not enter the physical-pixel DPI context");
+
+        var point = new ScreenPoint();
+        Exception? failure = null;
+        try
+        {
+            if (!ClientToScreen(window, ref point))
+                failure = new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not map the HWND client origin to screen coordinates");
+        }
+        catch (Exception error)
+        {
+            failure = error;
+        }
+
+        if (SetThreadDpiAwarenessContext(previousContext) == IntPtr.Zero)
+        {
+            var restoreFailure = new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(), "Could not restore the UI thread DPI context");
+            failure = failure is null ? restoreFailure : new AggregateException(failure, restoreFailure);
+        }
+        if (failure is not null) throw failure;
+        return point;
+    }
     private readonly PeriodicTimer _pollTimer = new(TimeSpan.FromMilliseconds(750));
     private readonly CancellationTokenSource _shutdown = new();
     private Snapshot? _snapshot;
@@ -118,6 +155,39 @@ public sealed partial class MainWindow : Window
                 ?? throw new InvalidOperationException("SourceEditor has no automation peer");
             var editorBounds = SourceEditor.TransformToVisual(Root).TransformBounds(
                 new global::Windows.Foundation.Rect(0, 0, SourceEditor.ActualWidth, SourceEditor.ActualHeight));
+            object? screenGeometry = null;
+            string? screenGeometryError = null;
+            try
+            {
+                var screenBounds = SourceEditor.TransformToVisual(null).TransformBounds(
+                    new global::Windows.Foundation.Rect(0, 0, SourceEditor.ActualWidth, SourceEditor.ActualHeight));
+                var xamlRoot = SourceEditor.XamlRoot
+                    ?? throw new InvalidOperationException("SourceEditor has no XamlRoot for screen geometry");
+                var rasterizationScale = xamlRoot.RasterizationScale;
+                var windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                var clientOrigin = GetPhysicalClientOrigin(windowHandle);
+                var left = clientOrigin.X + screenBounds.X * rasterizationScale;
+                var top = clientOrigin.Y + screenBounds.Y * rasterizationScale;
+                var width = screenBounds.Width * rasterizationScale;
+                var height = screenBounds.Height * rasterizationScale;
+                screenGeometry = new
+                {
+                    coordinateSpace = "physical-screen-pixels",
+                    clientOriginDpiContext = "per-monitor-v2",
+                    clientOrigin = new { x = clientOrigin.X, y = clientOrigin.Y },
+                    rasterizationScale,
+                    left,
+                    top,
+                    width,
+                    height,
+                    centerX = checked((int)Math.Round(left + width / 2, MidpointRounding.AwayFromZero)),
+                    centerY = checked((int)Math.Round(top + height / 2, MidpointRounding.AwayFromZero)),
+                };
+            }
+            catch (Exception error)
+            {
+                screenGeometryError = error.ToString();
+            }
             diagnostic = new
             {
                 schema = "dobbyvpn.windows-content-root-peers/v2",
@@ -147,6 +217,8 @@ public sealed partial class MainWindow : Window
                         width = editorBounds.Width,
                         height = editorBounds.Height,
                     },
+                    screenGeometry,
+                    screenGeometryError,
                 },
             };
         }

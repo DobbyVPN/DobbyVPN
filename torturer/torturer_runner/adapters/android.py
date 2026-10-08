@@ -38,6 +38,7 @@ from torturer_contract.android_observation import (
     AndroidObservationError,
     AndroidProfileObservation,
 )
+from torturer_contract.assertions import evaluate_assertions
 from torturer_contract.capabilities import Capability
 from torturer_contract.engine import ScenarioExecutionError
 from torturer_contract.results import ConnectionIdentity
@@ -105,6 +106,9 @@ _MAX_CLEANUP_RESERVE_SECONDS = 30.0
 _CLEANUP_COMMAND_MAX_SECONDS = 15.0
 _ROUTING_CLEANUP_SECONDS = 5.0
 _CONSENT_N11_MAX_SECONDS = 300.0
+_AUTO_RECOVERY_STOP_MAX_SECONDS = 280.0
+_AUTO_RECOVERY_STOP_DISCONNECT_SECONDS = 45
+_AUTO_RECOVERY_STOP_CASE = "android:auto-recovery-stop"
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -129,6 +133,12 @@ _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
 _ANDROID_SCREENSHOT_PATH = re.compile(
     r"^/data/user/0/com\.dobby\.vpn/cache/"
     r"dobbyvpn-rendered-screenshots/([A-Za-z0-9_-]+\.png)$"
+)
+_ANDROID_RECOVERY_STOP_SCREENSHOT = re.compile(
+    r"^[0-9]{4}-disconnect-recovery-stop-state\.png$"
+)
+_ANDROID_RECOVERY_IDLE_SCREENSHOT = re.compile(
+    r"^[0-9]{4}-disconnect-disconnected-state\.png$"
 )
 _ANDROID_REQUIRED_RENDERED_STAGES = frozenset({"surface"})
 
@@ -478,6 +488,152 @@ class AndroidAdapter:
             raise ScenarioExecutionError("ANDROID_CONSENT_N11_OBSERVATION_MISSING")
         return {"passed": True, **dict(selection)}
 
+    def run_auto_recovery_stop(
+        self, *, deadline: float | None = None
+    ) -> dict[str, object]:
+        """Run rendered Auto recovery and stop through the shared core journey.
+
+        The native stop assertions are carried separately from the stable
+        Android observation schema. The normal core-connection assertion IDs
+        and adapter measurements still come directly from their shared
+        scenario definition.
+        """
+
+        if self.ui_mode != "gui-auto":
+            raise ScenarioExecutionError("ANDROID_AUTO_RECOVERY_STOP_REQUIRES_GUI_AUTO")
+        if self.app_apk is None or self.test_companion_apk is None:
+            raise ScenarioExecutionError("ANDROID_CONSENT_APK_PATHS_REQUIRED")
+
+        core_scenario = select_scenarios(
+            scenario_ids=["functional.core-connection"]
+        )[0]
+        steps = tuple(
+            ScenarioStep(
+                id=step.id,
+                operation=step.operation,
+                timeout_seconds=(
+                    _AUTO_RECOVERY_STOP_DISCONNECT_SECONDS
+                    if step.operation == "disconnect"
+                    else step.timeout_seconds
+                ),
+            )
+            for step in core_scenario.steps
+        )
+        scenario = ScenarioDefinition(
+            id=core_scenario.id,
+            steps=steps,
+            assertion_ids=core_scenario.assertion_ids,
+            max_duration_seconds=int(_AUTO_RECOVERY_STOP_MAX_SECONDS),
+        )
+        started = time.monotonic()
+        run_deadline = started + _AUTO_RECOVERY_STOP_MAX_SECONDS
+        if deadline is not None:
+            run_deadline = min(run_deadline, deadline)
+        cleanup_reserve = min(
+            _MAX_CLEANUP_RESERVE_SECONDS,
+            max(
+                _MIN_CLEANUP_RESERVE_SECONDS,
+                _AUTO_RECOVERY_STOP_MAX_SECONDS * _CLEANUP_RESERVE_FRACTION,
+            ),
+        )
+        work_deadline = run_deadline - cleanup_reserve
+        if work_deadline <= started + 30.0:
+            raise ScenarioExecutionError(
+                "HOSTED_LANE_DEADLINE_EXCEEDED_BEFORE_ANDROID_AUTO_RECOVERY_STOP"
+            )
+
+        connection = ConnectionIdentity(index=0, protocol="AUTO")
+        self._connections = (connection,)
+        self._selected_connection = connection
+        self._progress_scenario_id = _AUTO_RECOVERY_STOP_CASE
+        device_files: list[str] = []
+        primary_error: BaseException | None = None
+        observation: AndroidProfileObservation | None = None
+        native_case_facts: dict[str, object] = {}
+        try:
+            self._install_fresh_apk_pair(work_deadline)
+            observation = self._execute_phase(
+                scenario,
+                steps,
+                work_deadline,
+                device_files,
+                test_case=_AUTO_RECOVERY_STOP_CASE,
+                native_case_facts=native_case_facts,
+            )
+            self._validate_observation_identity(observation)
+            self._validate_gui_observation(scenario, observation, steps=steps)
+            observations = self._observations(observation)
+            assertions = evaluate_assertions(
+                core_scenario.assertion_ids, observations
+            )
+            failed_assertions = [item.id for item in assertions if not item.passed]
+            if failed_assertions:
+                failure = ScenarioExecutionError(
+                    "ANDROID_AUTO_RECOVERY_STOP_CORE_ASSERTIONS_FAILED"
+                )
+                failure.add_note("failed_assertions=" + ",".join(failed_assertions))
+                raise failure
+            self._last_observation = observation
+            return {
+                "case_id": _AUTO_RECOVERY_STOP_CASE,
+                "scenario_id": core_scenario.id,
+                "passed": True,
+                "assertions": [item.to_dict() for item in assertions],
+                "observations": observations,
+                "native_case_facts": native_case_facts,
+            }
+        except BaseException as error:
+            primary_error = error
+            self._collect_functional_failure_diagnostics(
+                error,
+                _AUTO_RECOVERY_STOP_CASE,
+                run_deadline,
+            )
+            raise
+        finally:
+            cleanup_error = self._cleanup_device(
+                tuple(device_files), run_deadline
+            )
+            scratch_error = self._cleanup_local_scratch()
+            fixture_error: BaseException | None = None
+            if self._subscription_fixture is not None:
+                try:
+                    self._subscription_fixture.close()
+                except BaseException as error:
+                    fixture_error = error
+                finally:
+                    self._subscription_fixture = None
+            self._active_controls = ()
+            self._progress_scenario_id = None
+            self._selected_connection = None
+            self._connections = ()
+            cleanup_failures = tuple(
+                error
+                for error in (cleanup_error, scratch_error, fixture_error)
+                if error is not None
+            )
+            if primary_error is not None:
+                for index, error in enumerate(cleanup_failures):
+                    add_exception_notes(
+                        primary_error,
+                        f"android_auto_recovery_stop_cleanup_{index + 1}",
+                        error,
+                    )
+            elif cleanup_failures:
+                cleanup_failure = cleanup_failures[0]
+                for index, error in enumerate(cleanup_failures[1:], start=2):
+                    add_exception_notes(
+                        cleanup_failure,
+                        f"android_auto_recovery_stop_cleanup_{index}",
+                        error,
+                    )
+                self._collect_functional_failure_diagnostics(
+                    cleanup_failure,
+                    _AUTO_RECOVERY_STOP_CASE,
+                    run_deadline,
+                )
+                raise cleanup_failure
+
     def _install_fresh_apk_pair(self, deadline: float) -> None:
         """Reset VPN consent by reinstalling this run's exact APK pair."""
 
@@ -771,11 +927,14 @@ class AndroidAdapter:
         device_files: list[str],
         *,
         preserve_active: bool = False,
+        test_case: str | None = None,
+        native_case_facts: dict[str, object] | None = None,
     ) -> AndroidProfileObservation:
         command_file, profile_name, output_name = self._write_command(
             scenario,
             steps=steps,
             preserve_active=preserve_active,
+            test_case=test_case,
         )
         progress_name = self._progress_name(command_file)
         device_files.extend(
@@ -852,6 +1011,23 @@ class AndroidAdapter:
         )
         try:
             value = json.loads(output.stdout.decode("utf-8"))
+            if test_case is not None:
+                if test_case != _AUTO_RECOVERY_STOP_CASE:
+                    raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
+                if not isinstance(value, Mapping) or value.get("test_case") != test_case:
+                    raise ScenarioExecutionError(
+                        "ANDROID_AUTO_RECOVERY_STOP_FACTS_MISSING"
+                    )
+                if native_case_facts is None:
+                    raise ScenarioExecutionError(
+                        "ANDROID_AUTO_RECOVERY_STOP_FACTS_UNAVAILABLE"
+                    )
+                native_case_facts.update(
+                    self._validated_auto_recovery_stop_facts(
+                        value.get("native_case_facts"),
+                        command_file.name,
+                    )
+                )
             observation = AndroidProfileObservation.from_mapping(
                 value, expected_source_sha=self.source_sha
             )
@@ -864,6 +1040,100 @@ class AndroidAdapter:
         if observation.error_code is not None:
             raise ScenarioExecutionError(observation.error_code)
         return observation
+
+    def _validated_auto_recovery_stop_facts(
+        self,
+        value: object,
+        command_name: str,
+    ) -> dict[str, object]:
+        """Validate private seam assertions and retain their rendered frames."""
+
+        if not isinstance(value, Mapping) or value.get("case_id") != _AUTO_RECOVERY_STOP_CASE:
+            raise ScenarioExecutionError("ANDROID_AUTO_RECOVERY_STOP_FACTS_INVALID")
+        for name in (
+            "passed",
+            "seam_enabled",
+            "seam_armed",
+            "arm_after_tunnel_route_and_traffic",
+            "recovery_observed",
+            "recovery_ui_reconnecting",
+            "main_stop_visible",
+            "main_stop_enabled",
+            "competing_profile_actions_disabled",
+            "profile_actions_verified_while_visible",
+            "stop_clicked",
+            "final_idle",
+            "cleanup_complete",
+            "recovering_cleared",
+            "pending_cleared",
+            "active_profile_cleared",
+            "vpn_network_absent",
+            "no_later_generation",
+        ):
+            if value.get(name) is not True:
+                raise ScenarioExecutionError(
+                    f"ANDROID_AUTO_RECOVERY_STOP_FACT_{name.upper()}_INVALID"
+                )
+        for name in (
+            "initial_generation",
+            "recovery_generation",
+            "final_generation",
+            "recovery_hold_sample_count",
+            "recovery_poll_interval_ms",
+            "competing_profile_action_count",
+            "final_stable_sample_count",
+        ):
+            item = value.get(name)
+            if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
+                raise ScenarioExecutionError(
+                    f"ANDROID_AUTO_RECOVERY_STOP_FACT_{name.upper()}_INVALID"
+                )
+        if not (
+            value["recovery_generation"] > value["initial_generation"]
+            and value["final_generation"] == value["recovery_generation"]
+            and value["recovery_hold_sample_count"] >= 10
+            and value["recovery_poll_interval_ms"] == 100
+            and value["competing_profile_action_count"] >= 2
+            and value["final_stable_sample_count"] >= 10
+        ):
+            raise ScenarioExecutionError(
+                "ANDROID_AUTO_RECOVERY_STOP_FACTS_INVALID"
+            )
+        stop_label = value.get("stop_screenshot_label")
+        idle_label = value.get("idle_screenshot_label")
+        labels = value.get("screenshot_labels")
+        if (
+            not isinstance(stop_label, str)
+            or _ANDROID_RECOVERY_STOP_SCREENSHOT.fullmatch(stop_label) is None
+            or not isinstance(idle_label, str)
+            or _ANDROID_RECOVERY_IDLE_SCREENSHOT.fullmatch(idle_label) is None
+            or not isinstance(labels, list)
+            or stop_label not in labels
+            or idle_label not in labels
+        ):
+            raise ScenarioExecutionError(
+                "ANDROID_AUTO_RECOVERY_STOP_SCREENSHOTS_INVALID"
+            )
+        raw_directory = getattr(self.runner, "raw_directory", None)
+        if not isinstance(raw_directory, Path):
+            raise ScenarioExecutionError("ANDROID_SCRATCH_UNAVAILABLE")
+        command_id = Path(command_name).name.removesuffix(".command.json")
+        screenshot_root = (
+            raw_directory / "screenshots" / "android" / command_id
+        )
+        screenshot_paths = {
+            "recovery_stop": screenshot_root / stop_label,
+            "disconnected": screenshot_root / idle_label,
+        }
+        if any(not path.is_file() for path in screenshot_paths.values()):
+            raise AndroidScreenshotCollectionError(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: auto-recovery Stop frames were not retained"
+            )
+        facts = dict(value)
+        facts["screenshot_paths"] = {
+            name: str(path) for name, path in screenshot_paths.items()
+        }
+        return facts
 
     @staticmethod
     def _observations(
@@ -2305,7 +2575,12 @@ class AndroidAdapter:
         *,
         steps: tuple[ScenarioStep, ...] | None = None,
         preserve_active: bool = False,
+        test_case: str | None = None,
     ) -> tuple[Path, str, str]:
+        if test_case is not None and (
+            test_case != _AUTO_RECOVERY_STOP_CASE or self.ui_mode != "gui-auto"
+        ):
+            raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
         self._active_controls = ()
         raw_directory = getattr(self.runner, "raw_directory", None)
         if not isinstance(raw_directory, Path):
@@ -2369,8 +2644,11 @@ class AndroidAdapter:
             },
             "operations": operations,
         }
+        if test_case is not None:
+            command["test_case"] = test_case
         process_cold_import = (
             self.ui_mode == "gui-auto"
+            and test_case is None
             and not self._process_cold_import_queued
             and any(operation.get("operation") == "configure" for operation in operations)
         )

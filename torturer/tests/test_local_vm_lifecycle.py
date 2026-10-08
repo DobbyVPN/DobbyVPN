@@ -12,6 +12,37 @@ from torturer_runner import diagnostics, local_vm
 
 
 class LocalVMLifecycleTests(unittest.TestCase):
+    def test_recovery_seams_cannot_replace_qualification_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for mode in ("installed-package", "release-package"):
+                with self.subTest(mode=mode), mock.patch.object(local_vm, "_run_logged") as build:
+                    with self.assertRaisesRegex(local_vm.LocalVMError, "cannot replace"):
+                        local_vm._prepare_recovery_stop_service(
+                            root, "windows", {"mode": mode}, root / "logs", 30, "amd64", True,
+                        )
+                    build.assert_not_called()
+
+    def test_tagged_candidate_is_restricted_to_explicit_recovery_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "source").mkdir()
+            (root / "profile").write_text("synthetic profile")
+            for tagged, selection in ((True, None), (False, "auto-recovery-stop")):
+                with self.subTest(tagged=tagged, selection=selection):
+                    local_vm._write_json(root / "platform.json", {
+                        "status": "candidate-prepared", "platform": "windows", "suite": "full",
+                        "candidate": {"mode": "local-build", "test_seams": tagged},
+                    })
+                    command = ["run", "--platform", "windows", "--suite", "full",
+                               "--run-dir", str(root), "--timeout", "30"]
+                    if selection:
+                        command.extend(("--native-case", selection))
+                    with mock.patch.object(local_vm, "_start_windows") as launch:
+                        with self.assertRaisesRegex(local_vm.LocalVMError, "restricted"):
+                            local_vm.run(local_vm.build_parser().parse_args(command))
+                        launch.assert_not_called()
+
     def test_exact_release_preparation_validates_staged_source_before_install(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

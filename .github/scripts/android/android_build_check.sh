@@ -7,6 +7,7 @@ source_sha=''
 output=''
 test_companion_output=''
 source_repository='DobbyVPN/DobbyVPN'
+test_seams=0
 
 while (($#)); do
   case "$1" in
@@ -14,6 +15,7 @@ while (($#)); do
     --source-sha) source_sha=${2:?missing --source-sha value}; shift 2 ;;
     --output) output=${2:?missing --output value}; shift 2 ;;
     --test-companion-output) test_companion_output=${2:?missing --test-companion-output value}; shift 2 ;;
+    --test-seams) test_seams=1; shift ;;
     --source-repository) source_repository=${2:?missing --source-repository value}; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -33,6 +35,10 @@ source_root=$(cd -- "$source_root" && pwd -P)
   echo '--source-sha must be a full lowercase Git commit identity' >&2
   exit 2
 }
+if [[ "$test_seams" == 1 && -n "$source_sha" ]]; then
+  echo '--test-seams cannot be combined with a source identity or provenance build' >&2
+  exit 2
+fi
 
 go_bin=${GO_BIN:-$(command -v go || true)}
 [[ -n "$go_bin" && -x "$go_bin" ]] || { echo 'Go executable is required' >&2; exit 2; }
@@ -55,6 +61,9 @@ driver_args=(
   --test-companion-output "$test_companion_output"
   --local
 )
+if [[ "$test_seams" == 1 ]]; then
+  driver_args+=(--test-seams)
+fi
 if [[ -n "$source_sha" ]]; then
   driver_args+=(--source-sha "$source_sha" --source-repository "$source_repository")
 fi

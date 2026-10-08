@@ -23,6 +23,7 @@ from typing import Any
 
 from torturer_contract.scenarios import ScenarioStep
 from torturer_runner.native_cases import (
+    AUTO_RECOVERY_STOP_CASE,
     MACOS_CONFIGURE_STARTUP_CASE,
     NATIVE_CASE_SUITES,
     WINDOWS_CONFIGURE_TREE_CASE,
@@ -1574,6 +1575,89 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
     return {"platform": args.platform, "checks": checks, "complete": True}
 
 
+def _exercise_auto_recovery_stop(ui: Any, base: Any, marker: Path, timeout: float) -> dict[str, object]:
+    """Arm the tagged fault only after a rendered Auto connection carries traffic."""
+    if marker.exists():
+        raise NativeUIJourneyError("recovery Stop marker exists before real traffic verification")
+    configured = ui.configure()
+    if configured.get("input_verified") is not True:
+        raise NativeUIJourneyError("recovery Stop case did not load through native Paste")
+    base.prepare_native_connect(timeout)
+    ui.connect()
+    active = base._snapshot(min(timeout, 30), "NATIVE_RECOVERY_INITIAL_SNAPSHOT_FAILED")
+    if active.get("state") != "CONNECTED" or active.get("active_mode") != "AUTO_SELECT":
+        raise NativeUIJourneyError("recovery Stop case did not establish native Auto")
+    checks: dict[str, object] = {}
+    _record_native_observations(base, checks, timeout)
+    if any(checks.get(name) is not True for name in (
+        "tunnel_interface", "routing_verified", "stability_verified", "throughput_positive",
+    )):
+        raise NativeUIJourneyError("recovery fault cannot arm without verified real route and traffic")
+    ui.capture("auto-recovery-connected")
+    marker.write_text("armed after real route and traffic\n", encoding="utf-8")
+    deadline = time.monotonic() + timeout
+    recovering: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        recovering = base._snapshot(min(30.0, max(0.1, deadline - time.monotonic())), "NATIVE_RECOVERY_SNAPSHOT_FAILED")
+        if recovering.get("recovering") is True and recovering.get("generation", 0) > active["generation"]:
+            break
+        if recovering.get("state") == "FAILED":
+            raise NativeUIJourneyError("Auto failed before recovery Stop could be exercised")
+        time.sleep(0.1)
+    else:
+        raise NativeUIJourneyError("tagged health fault did not enter a subsequent recovery generation")
+
+    def stop_is_rendered() -> bool:
+        view = ui.snapshot()
+        enabled = set(view.get("enabled_controls", []))
+        if "Stop" not in view.get("labels", []) or "Stop" not in enabled:
+            return False
+        competing = [name for name in enabled if name.startswith("Profile ") and name.endswith(" action")]
+        if competing:
+            raise NativeUIJourneyError("recovery Stop exposed competing profile Connect actions: " + ", ".join(competing))
+        return True
+
+    ui._wait(stop_is_rendered, "Auto recovery did not render an enabled Stop control")
+    ui.capture("auto-recovery-stop")
+    ui._click("VPN connection action")
+    deadline = time.monotonic() + timeout
+    stopped: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        stopped = base._snapshot(min(30.0, max(0.1, deadline - time.monotonic())), "NATIVE_RECOVERY_STOP_SNAPSHOT_FAILED")
+        if (stopped.get("state") in {"IDLE", "CONFIGURED"}
+                and stopped.get("cleanup_complete") is True
+                and stopped.get("recovering") is False
+                and stopped.get("pending_target") is None
+                and stopped.get("active_profile") is None):
+            break
+        time.sleep(0.1)
+    else:
+        raise NativeUIJourneyError("rendered Stop did not cancel recovery and finish cleanup")
+    ui.wait_status("Disconnected")
+    cleaned = _base_execute(base, "recovery-stop-cleanup", "inspect_cleanup", timeout)
+    if cleaned.get("cleanup_verified") is not True:
+        raise NativeUIJourneyError("recovery Stop left tunnel or routing resources")
+    stable_deadline = time.monotonic() + 3.0
+    while time.monotonic() < stable_deadline:
+        current = base._snapshot(min(timeout, 30), "NATIVE_RECOVERY_STOP_STABLE_SNAPSHOT_FAILED")
+        if (current.get("generation") != stopped.get("generation")
+                or current.get("recovering") is not False
+                or current.get("pending_target") is not None
+                or current.get("active_profile") is not None
+                or current.get("state") not in {"IDLE", "CONFIGURED"}
+                or current.get("cleanup_complete") is not True):
+            raise NativeUIJourneyError("a connection generation resumed after rendered recovery Stop")
+        time.sleep(0.1)
+    ui.capture("auto-recovery-stopped")
+    return {
+        **checks, "initial_mode": "AUTO_SELECT", "initial_generation": active["generation"],
+        "recovery_generation": recovering["generation"], "stopped_generation": stopped["generation"],
+        "rendered_stop": True, "competing_connect_disabled": True,
+        "cleanup_verified": True, "pending_cleared": True, "no_later_generation": True,
+        "build_local_test_seams": True,
+    }
+
+
 def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
     """Run only selected diagnostic UI cases within the interactive app setup."""
     try:
@@ -1584,6 +1668,7 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
         (WINDOWS_CONFIGURE_TREE_CASE,),
         (WINDOWS_CONFIGURE_TREE_NO_UIA_CASE,),
         (MACOS_CONFIGURE_STARTUP_CASE,),
+        (AUTO_RECOVERY_STOP_CASE,),
     }:
         raise NativeUIJourneyError("unsupported desktop native case selection")
 
@@ -1596,7 +1681,7 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
     primary: BaseException | None = None
     try:
         profile = args.profile
-        if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
+        if selected in {(MACOS_CONFIGURE_STARTUP_CASE,), (AUTO_RECOVERY_STOP_CASE,)}:
             from torturer_runner.subscription_fixture import SubscriptionFixture
 
             subscription = SubscriptionFixture(
@@ -1641,17 +1726,20 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
                 startup = ui.start(windows_no_uia_hold_seconds=20)
             else:
                 startup = ui.start(
-                    windows_content_root_diagnostics=args.platform == "windows",
+                    windows_content_root_diagnostics=selected == (WINDOWS_CONFIGURE_TREE_CASE,),
                 )
         content_root_probe: dict[str, object] | None = None
         post_probe_process: dict[str, object] | None = None
+        external_point_probe: dict[str, object] | None = None
         if selected == (WINDOWS_CONFIGURE_TREE_CASE,):
             diagnostics = ui.windows_content_root_diagnostics
             if diagnostics is None:
                 raise NativeUIJourneyError(
                     "Windows configure-tree did not retain its XAML content-root diagnostics"
                 )
-            if "xaml_content_root_exception" in diagnostics or "post_probe_process_exception" in diagnostics:
+            if any(key in diagnostics for key in (
+                "xaml_content_root_exception", "external_uia_point_exception", "post_probe_process_exception",
+            )):
                 details = json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
                 raise NativeUIJourneyError(
                     "Windows XAML content-root diagnostic raised or lost its post-probe process check: "
@@ -1670,7 +1758,24 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
                 raise NativeUIJourneyError(
                     "Windows content-root inspection left the app process unavailable: " + details
                 )
-        if selected == (MACOS_CONFIGURE_STARTUP_CASE,):
+            external_point_probe = diagnostics.get("external_uia_point")
+            if (not isinstance(external_point_probe, dict)
+                    or external_point_probe.get("schema") != "dobbyvpn.windows-uia-point/v1"
+                    or external_point_probe.get("fromPointCompleted") is not True
+                    or external_point_probe.get("ready") is not True
+                    or external_point_probe.get("matchesExpected", {}).get("all") is not True
+                    or external_point_probe.get("processAliveAfterQuery") is not True):
+                raise NativeUIJourneyError(
+                    "Windows point query did not find the verified native SourceEditor: "
+                    + json.dumps(diagnostics, sort_keys=True, separators=(",", ":"))
+                )
+        if selected == (AUTO_RECOVERY_STOP_CASE,):
+            if base is None:
+                raise NativeUIJourneyError("Auto recovery case has no independent platform adapter")
+            case_result = _exercise_auto_recovery_stop(
+                ui, base, args.raw_log_dir / "recovery-stop.arm", min(args.timeout, _REQUEST_TIMEOUT),
+            )
+        elif selected == (MACOS_CONFIGURE_STARTUP_CASE,):
             configured = ui.configure()
             if configured.get("input_verified") is not True:
                 raise NativeUIJourneyError("macOS rendered Configure did not verify pasted input")
@@ -1849,8 +1954,10 @@ def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
             case_result = {
                 "configure_tree": {
                     "diagnostic_only": True,
-                    "rendered_controls_queried": False,
+                    "rendered_controls_queried": True,
+                    "connection_actions_exercised": False,
                     "xaml_content_root_peers": content_root_probe,
+                    "external_uia_point": external_point_probe,
                     "post_probe_process": post_probe_process,
                 }
             }

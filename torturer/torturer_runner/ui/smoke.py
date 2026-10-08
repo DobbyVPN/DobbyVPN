@@ -1,6 +1,7 @@
 """Drive the packaged frontend through the test-only native accessibility helper."""
 from __future__ import annotations
 
+import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -308,7 +309,7 @@ class NativeUIController:
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
         operation_limit = 30.0 if self.platform == "windows" and operation in {
-            "tree", "resize-window", "windows-baseline",
+            "tree", "resize-window", "windows-baseline", "uia-point",
         } else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}
@@ -522,9 +523,41 @@ class NativeUIController:
                             "Windows UI did not write its XAML content-root peer diagnostic"
                         )
                     time.sleep(0.1)
-                diagnostics["xaml_content_root_peers"] = json.loads(
+                xaml_probe = json.loads(
                     path.read_text(encoding="utf-8")
                 )
+                diagnostics["xaml_content_root_peers"] = xaml_probe
+                try:
+                    editor = xaml_probe["editor"]
+                    screen_geometry = editor["screenGeometry"]
+                    if screen_geometry["coordinateSpace"] != "physical-screen-pixels":
+                        raise NativeUISmokeError(
+                            "SourceEditor screen geometry is not in physical screen pixels"
+                        )
+                    diagnostics["external_uia_point"] = self._call(
+                        "uia-point",
+                        windowHandle=baseline["windowHandle"],
+                        x=screen_geometry["centerX"],
+                        y=screen_geometry["centerY"],
+                        clientOriginX=screen_geometry["clientOrigin"]["x"],
+                        clientOriginY=screen_geometry["clientOrigin"]["y"],
+                        expectedAutomationId=editor["automationId"],
+                        expectedName=editor["name"],
+                        expectedControlType=editor["controlType"],
+                        expectedProcessId=baseline["pid"],
+                    )
+                except Exception as error:
+                    diagnostics["external_uia_point_exception"] = "".join(
+                        traceback.format_exception(error)
+                    )
+                    if isinstance(error, subprocess.CalledProcessError):
+                        for stream_name in ("stdout", "stderr"):
+                            payload = getattr(error, stream_name)
+                            if isinstance(payload, str):
+                                payload = payload.encode("utf-8")
+                            diagnostics[f"external_uia_point_{stream_name}_base64"] = (
+                                None if payload is None else base64.b64encode(payload).decode("ascii")
+                            )
             except Exception as error:
                 diagnostics["xaml_content_root_exception"] = "".join(
                     traceback.format_exception(error)

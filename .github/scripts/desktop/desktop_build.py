@@ -972,6 +972,7 @@ def build_service(
     debug: bool = False,
     output_path: Path | None = None,
     runtime_dir: Path | None = None,
+    recovery_stop_marker: Path | None = None,
 ) -> Path:
     target_arch = arch or default_service_arch(target_platform)
     go = go_executable or prepare_toolchain(target_platform, skip_deps)
@@ -1021,6 +1022,11 @@ def build_service(
                 f" -linkmode=external -extldflags "
                 f"'-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION} -lc++'"
             )
+        if recovery_stop_marker is not None:
+            if "dobbyvpn_test_seams" not in build_tags:
+                fail("a recovery Stop marker requires the test-seams build tag")
+            assignment = f"core/sessionapi/runtime.TestRecoveryStopMarker={recovery_stop_marker}"
+            ldflags += f" -X {_quote_go_ldflags_token(assignment)}"
         if target_platform == "linux":
             bridge_search_path = f"-L{GO_MODULE_DIR}"
             runtime_search_path = f"-L{linux_libcxx_runtime}"
@@ -1079,6 +1085,17 @@ def go_build_identity(debug: bool) -> str:
     configuration = "Debug" if debug else "Release"
     return (f"-buildid= -X core/buildinfo.Version={read_version()}"
             f" -X core/buildinfo.Commit={commit} -X core/buildinfo.Configuration={configuration}")
+
+
+def _quote_go_ldflags_token(value: str) -> str:
+    """Quote one token for Go's quoted.Split parser used by -ldflags."""
+    if not any(character.isspace() for character in value):
+        return value
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    fail("Go linker values cannot contain both quote types when they include whitespace")
 
 
 def read_version() -> str:
@@ -1267,21 +1284,48 @@ def build_app(args: argparse.Namespace) -> None:
 
 
 def build_test_seams_service(args: argparse.Namespace) -> None:
-    """Build a private Linux hardening service without changing release inputs."""
-    if args.platform != "linux":
-        fail("The build-local health seam is supported only for Linux hardening")
+    """Build a private test-seams service for a local runtime scenario."""
+    platform = normalize_platform(args.platform)
+    if platform not in {"linux", "windows", "macos"}:
+        fail("The test-seams service is supported only for Linux, Windows, and macOS")
     output = Path(args.output)
-    runtime_dir = Path(args.runtime_dir)
+    if not output.is_absolute():
+        fail("test-seams service output must be an absolute path")
+    marker = (
+        _absent_absolute_path(args.recovery_stop_marker, "recovery Stop marker")
+        if args.recovery_stop_marker
+        else None
+    )
+    if marker is not None and not marker.parent.is_dir():
+        fail(f"recovery Stop marker parent must already exist: {marker.parent}")
+    if marker is not None and marker == output:
+        fail("service output and recovery Stop marker must be different paths")
+    runtime_dir = Path(args.runtime_dir) if args.runtime_dir else None
+    if platform == "linux" and runtime_dir is None:
+        fail("--runtime-dir is required for a Linux test-seams service")
+    if platform != "linux" and runtime_dir is not None:
+        fail("--runtime-dir is supported only for Linux test-seams services")
+    arch = None if args.arch == "native" else args.arch
     build_service(
-        "linux",
-        args.arch or "amd64",
+        platform,
+        arch,
         args.skip_deps,
         False,
         args.go_mod_tidy,
         build_tags=("dobbyvpn_test_seams",),
         output_path=output,
         runtime_dir=runtime_dir,
+        recovery_stop_marker=marker,
     )
+
+
+def _absent_absolute_path(raw: str, label: str) -> Path:
+    path = Path(raw)
+    if not path.is_absolute():
+        fail(f"{label} must be an absolute path")
+    if path.exists() or path.is_symlink():
+        fail(f"{label} must not already exist: {path}")
+    return path
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
@@ -1335,13 +1379,17 @@ def parse_args() -> argparse.Namespace:
 
     test_seams = subparsers.add_parser(
         "test-seams-service",
-        help="Build the private Linux hardening service with explicit test seams.",
+        help="Build a private local service with explicit runtime test seams.",
     )
     test_seams.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
-    test_seams.add_argument("--platform", default="linux")
-    test_seams.add_argument("--arch", default="amd64")
-    test_seams.add_argument("--output", required=True, help="Absent absolute service output path.")
-    test_seams.add_argument("--runtime-dir", required=True, help="Installed Linux runtime library directory.")
+    test_seams.add_argument("--platform", default="linux", choices=("linux", "windows", "macos"))
+    test_seams.add_argument("--arch", help="Target service architecture or native host architecture.")
+    test_seams.add_argument("--output", required=True, help="Absolute service output path to replace or create.")
+    test_seams.add_argument("--runtime-dir", help="Installed Linux runtime library directory.")
+    test_seams.add_argument(
+        "--recovery-stop-marker",
+        help="Absent absolute marker path compiled into the tagged service for a Stop scenario.",
+    )
     test_seams.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
 
     return parser.parse_args()

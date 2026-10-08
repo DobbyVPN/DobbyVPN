@@ -15,6 +15,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
+import traceback
 from typing import Any
 
 from .android_diagnostics import OPTIONAL_MISSING, retained_log_sources
@@ -25,6 +27,7 @@ from .android_instrumentation import (
 from .native_cases import (
     ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,
     ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
+    AUTO_RECOVERY_STOP_CASE,
     validate_native_cases,
 )
 from .screenshot_artifacts import (
@@ -174,6 +177,9 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
         "app_package": APP_PACKAGE,
         "companion_package": COMPANION_PACKAGE,
         "installed_packages": [],
+        "app_apk": str(app),
+        "test_companion_apk": str(companion),
+        "source_sha": descriptor.get("source_sha"),
     }
     # This must precede even get-state/root: cleanup can recover a setup that
     # fails after an APK install but before start() returns.
@@ -200,10 +206,51 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     return runtime
 
 
+def _run_auto_recovery_stop(
+    run_dir: Path, runtime: dict[str, Any], logs: Path, timeout: float,
+) -> subprocess.CompletedProcess[bytes]:
+    from .adapters.cli import SubprocessRunner
+    from .adapters.factory import adapter_for_platform
+    import json
+
+    adapter = adapter_for_platform(
+        "android", profile=run_dir / "profile", runner=SubprocessRunner(logs),
+        adb=Path(runtime["adb"]), source_sha=runtime.get("source_sha"),
+        android_ui_mode="gui-auto", app_apk=Path(runtime["app_apk"]),
+        test_companion_apk=Path(runtime["test_companion_apk"]),
+    )
+    primary: BaseException | None = None
+    try:
+        result = adapter.run_auto_recovery_stop(deadline=time.monotonic() + min(timeout, 420))
+        if result.get("passed") is not True:
+            raise _error("Android rendered recovery Stop did not pass")
+        output = (json.dumps(result, indent=2) + "\n").encode("utf-8")
+        (logs / "android-auto-recovery-stop.json").write_bytes(output)
+        sys.stdout.buffer.write(output)
+        sys.stdout.buffer.flush()
+        return subprocess.CompletedProcess([AUTO_RECOVERY_STOP_CASE], 0, output, b"")
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        cleanup_errors: list[BaseException] = []
+        for cleanup in (adapter.reset, adapter.finalize):
+            try:
+                cleanup(timeout_seconds=min(timeout, 30))
+            except BaseException as error:
+                cleanup_errors.append(error)
+        if cleanup_errors:
+            if primary is not None:
+                for error in cleanup_errors:
+                    primary.add_note("Android recovery case cleanup: " + "".join(traceback.format_exception(error)))
+            else:
+                raise BaseExceptionGroup("Android recovery case cleanup failed", cleanup_errors)
+
+
 def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
            timeout: float,
            native_cases: list[str] | None = None) -> subprocess.CompletedProcess[bytes]:
-    """Drive the installed release UI through Android's real input path."""
+    """Drive the installed native UI through Android's real input path."""
     try:
         selected_cases = validate_native_cases("android", "mini", native_cases)
     except ValueError as error:
@@ -211,6 +258,7 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     if selected_cases and selected_cases not in {
         (ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,),
         (ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,),
+        (AUTO_RECOVERY_STOP_CASE,),
     }:
         raise _error("unsupported Android native case selection")
     adb_value = runtime.get("adb")
@@ -222,6 +270,8 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     environment = os.environ.copy()
     if not environment.get("ADB_SERVER_SOCKET"):
         raise _error("Android ADB server socket is not configured")
+    if selected_cases == (AUTO_RECOVERY_STOP_CASE,):
+        return _run_auto_recovery_stop(run_dir, runtime, logs, timeout)
     # Android instrumentation normally executes the runner in the target
     # application's process.  Do this cold-start cleanup from the controller,
     # before the runner exists; issuing am force-stop from NativeUiInstrumentedTest

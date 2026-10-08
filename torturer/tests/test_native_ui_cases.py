@@ -12,6 +12,192 @@ from torturer_runner.ui import journey
 
 
 class NativeUICaseFixtureTests(unittest.TestCase):
+    class FakeClock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    def recovery_fakes(self, marker, *, traffic_ok=True, competing_connect=False,
+                       later_generation=False):
+        events = []
+        clock = self.FakeClock()
+
+        class UI:
+            def __init__(self):
+                self.base = None
+
+            def configure(self):
+                events.append("configure")
+                return {"input_verified": True}
+
+            def connect(self):
+                events.append("connect")
+
+            def capture(self, name):
+                events.append(f"capture:{name}")
+
+            def snapshot(self):
+                events.append("ui-snapshot")
+                enabled = ["Stop"]
+                if competing_connect:
+                    enabled.append("Profile 1 action")
+                return {"labels": ["Stop"], "enabled_controls": enabled}
+
+            def _wait(self, predicate, message):
+                if not predicate():
+                    raise AssertionError(message)
+
+            def _click(self, name):
+                events.append(f"click:{name}")
+                self.base.stop_requested = True
+
+            def wait_status(self, expected):
+                events.append(f"status:{expected}")
+                return {"status": expected}
+
+        class Base:
+            def __init__(self):
+                self.snapshot_count = 0
+                self.stop_requested = False
+                self.stopped_snapshots = 0
+                self.stop_generation = 8
+                self.cleanup_verified = True
+
+            def prepare_native_connect(self, _timeout):
+                events.append("prepare-connect")
+
+            def _snapshot(self, _timeout, _failure):
+                self.snapshot_count += 1
+                if self.snapshot_count == 1:
+                    events.append("snapshot-connected")
+                    return {
+                        "state": "CONNECTED", "active_mode": "AUTO_SELECT",
+                        "generation": 7,
+                    }
+                if not self.stop_requested:
+                    events.append("snapshot-recovering")
+                    return {
+                        "state": "CONNECTED", "recovering": True,
+                        "generation": 8,
+                    }
+                self.stopped_snapshots += 1
+                events.append("snapshot-stopped")
+                generation = self.stop_generation
+                if later_generation and self.stopped_snapshots >= 3:
+                    generation += 1
+                return {
+                    "state": "IDLE", "recovering": False,
+                    "generation": generation, "cleanup_complete": True,
+                    "pending_target": None, "active_profile": None,
+                }
+
+            def execute(self, step):
+                events.append(step.operation)
+                if step.operation == "observe_tunnel":
+                    return {"tunnel_interface": True}
+                if step.operation == "observe_routing_identity":
+                    return {"routing_verified": True}
+                if step.operation == "measure_stability":
+                    return {"stability_verified": True}
+                if step.operation == "measure_throughput":
+                    return {
+                        "latency_ms": 1 if traffic_ok else 0,
+                        "download_mbps": 2 if traffic_ok else 0,
+                        "upload_mbps": 3 if traffic_ok else 0,
+                    }
+                if step.operation == "inspect_cleanup":
+                    return {"cleanup_verified": self.cleanup_verified}
+                raise AssertionError(f"unexpected base operation: {step.operation}")
+
+        ui = UI()
+        base = Base()
+        ui.base = base
+        return ui, base, events, clock
+
+    def test_auto_recovery_stop_arms_after_route_and_traffic_then_stays_idle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "recovery-stop.arm"
+            ui, base, events, clock = self.recovery_fakes(marker)
+            original_write_text = Path.write_text
+
+            def record_marker_write(path, data, *args, **kwargs):
+                if path == marker:
+                    events.append("marker")
+                return original_write_text(path, data, *args, **kwargs)
+
+            with (
+                patch.object(journey, "time", clock),
+                patch.object(Path, "write_text", new=record_marker_write),
+            ):
+                result = journey._exercise_auto_recovery_stop(ui, base, marker, 1.0)
+
+            marker_index = events.index("marker")
+            for operation in (
+                "observe_tunnel", "observe_routing_identity", "measure_stability",
+                "measure_throughput",
+            ):
+                self.assertLess(events.index(operation), marker_index)
+            self.assertLess(marker_index, events.index("snapshot-recovering"))
+            self.assertEqual(marker.read_text(encoding="utf-8"), "armed after real route and traffic\n")
+            self.assertTrue(result["rendered_stop"])
+            self.assertTrue(result["competing_connect_disabled"])
+            self.assertTrue(result["cleanup_verified"])
+            self.assertTrue(result["pending_cleared"])
+            self.assertTrue(result["no_later_generation"])
+            self.assertEqual(result["initial_generation"], 7)
+            self.assertEqual(result["recovery_generation"], 8)
+            self.assertEqual(result["stopped_generation"], 8)
+            self.assertEqual(base.stopped_snapshots, 31)
+            self.assertEqual(events.count("inspect_cleanup"), 1)
+            self.assertIn("click:VPN connection action", events)
+
+    def test_auto_recovery_stop_does_not_arm_when_throughput_is_not_positive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "recovery-stop.arm"
+            ui, base, events, clock = self.recovery_fakes(marker, traffic_ok=False)
+            with patch.object(journey, "time", clock):
+                with self.assertRaisesRegex(
+                    journey.NativeUIJourneyError,
+                    "cannot arm without verified real route and traffic",
+                ):
+                    journey._exercise_auto_recovery_stop(ui, base, marker, 1.0)
+
+            self.assertFalse(marker.exists())
+            self.assertNotIn("snapshot-recovering", events)
+            self.assertNotIn("click:VPN connection action", events)
+            self.assertNotIn("inspect_cleanup", events)
+
+    def test_auto_recovery_stop_rejects_competing_profile_connect(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "recovery-stop.arm"
+            ui, base, events, clock = self.recovery_fakes(marker, competing_connect=True)
+            with patch.object(journey, "time", clock):
+                with self.assertRaisesRegex(
+                    journey.NativeUIJourneyError,
+                    "exposed competing profile Connect actions",
+                ):
+                    journey._exercise_auto_recovery_stop(ui, base, marker, 1.0)
+
+            self.assertTrue(marker.exists())
+            self.assertNotIn("click:VPN connection action", events)
+            self.assertNotIn("inspect_cleanup", events)
+
+    def test_auto_recovery_stop_rejects_a_later_connection_generation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / "recovery-stop.arm"
+            ui, base, _events, clock = self.recovery_fakes(marker, later_generation=True)
+            with patch.object(journey, "time", clock):
+                with self.assertRaisesRegex(
+                    journey.NativeUIJourneyError,
+                    "connection generation resumed after rendered recovery Stop",
+                ):
+                    journey._exercise_auto_recovery_stop(ui, base, marker, 1.0)
+
     def test_macos_configure_case_uses_disposable_https_fixture(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -15,7 +15,9 @@ reproducibility=''
 dependency_manifest=''
 source_repository='DobbyVPN/DobbyVPN'
 local_build=0
+test_seams=0
 trusted_archive_source=0
+release_provenance_requested=0
 gradle_archive=''
 gradle_root=''
 go_binary=''
@@ -29,17 +31,18 @@ while (($#)); do
     --source-sha) source_sha=${2:?missing --source-sha value}; shift 2 ;;
     --source-tree) source_tree=${2:?missing --source-tree value}; shift 2 ;;
     --output) output=${2:?missing --output value}; shift 2 ;;
-    --manifest) manifest=${2:?missing --manifest value}; shift 2 ;;
-    --first-output) first_output=${2:?missing --first-output value}; shift 2 ;;
+    --manifest) manifest=${2:?missing --manifest value}; release_provenance_requested=1; shift 2 ;;
+    --first-output) first_output=${2:?missing --first-output value}; release_provenance_requested=1; shift 2 ;;
     --test-companion-output) test_companion_output=${2:?missing --test-companion-output value}; shift 2 ;;
-    --reproducibility) reproducibility=${2:?missing --reproducibility value}; shift 2 ;;
-    --dependency-manifest) dependency_manifest=${2:?missing --dependency-manifest value}; shift 2 ;;
+    --reproducibility) reproducibility=${2:?missing --reproducibility value}; release_provenance_requested=1; shift 2 ;;
+    --dependency-manifest) dependency_manifest=${2:?missing --dependency-manifest value}; release_provenance_requested=1; shift 2 ;;
     --gradle-archive) gradle_archive=$2; shift 2 ;;
     --gradle-root) gradle_root=$2; shift 2 ;;
     --go-binary) go_binary=$2; shift 2 ;;
     --local) local_build=1; shift ;;
+    --test-seams) test_seams=1; shift ;;
     --trusted-archive-source) trusted_archive_source=1; shift ;;
-    --source-repository) source_repository=$2; shift 2 ;;
+    --source-repository) source_repository=$2; release_provenance_requested=1; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -55,6 +58,10 @@ source_root=$(cd -- "$source_root" && pwd -P)
   echo 'source tree must be a full lowercase Git tree identity' >&2
   exit 2
 }
+if [[ "$test_seams" == 1 && ( "$local_build" != 1 || -n "$source_sha" || -n "$source_tree" || "$trusted_archive_source" == 1 || "$release_provenance_requested" == 1 ) ]]; then
+  echo '--test-seams requires --local and cannot use source identities, archived/trusted source, or Release provenance outputs' >&2
+  exit 2
+fi
 if [[ "$local_build" == 1 && ( -n "$source_tree" || "$trusted_archive_source" == 1 ) ]]; then
   echo '--local cannot be combined with an archived source tree' >&2
   exit 2
@@ -195,6 +202,10 @@ go_path=${GOPATH:-}
 }
 unset GOROOT
 export GOPATH="$go_path" GOFLAGS='-trimpath -buildvcs=false' GOTOOLCHAIN='local'
+# Gradle owns the Go backend Exec tasks and overrides their environment. Pass
+# this explicit mode from the driver so only --local --test-seams adds the Go
+# build tag; inherited values cannot opt Release builds into test code.
+export DOBBYVPN_BUILD_LOCAL="$local_build" DOBBYVPN_BUILD_TEST_SEAMS="$test_seams"
 expected_go_version="go$(tr -d '[:space:]' < "$source_root/.go-version")"
 go_version=$("$go_bin" env GOVERSION | tee_stderr)
 [[ "$go_version" == "$expected_go_version" ]] || { echo 'Go version does not match .go-version' >&2; exit 2; }

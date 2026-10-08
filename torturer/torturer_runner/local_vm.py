@@ -41,6 +41,7 @@ from .diagnostics import collect_installed_backend_logs, output_text
 from .ios_simulator import ui_test_selection
 from .native_cases import (
     ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
+    AUTO_RECOVERY_STOP_CASE,
     IOS_RENDERER_SEVERITY_CASE,
     IOS_SUBSCRIPTION_FIXTURE_CASE,
     NATIVE_CASE_SUITES,
@@ -215,9 +216,9 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--timeout", type=_positive_timeout, required=True)
         if action in {"prepare", "run"}:
             command.add_argument("--suite", choices=SUITES, default="mini")
+            command.add_argument("--native-case", action="append", dest="native_cases")
         if action == "run":
             command.add_argument("--scenario", action="append", dest="scenarios")
-            command.add_argument("--native-case", action="append", dest="native_cases")
         if action == "prepare":
             command.add_argument("--architecture")
             command.add_argument("--skip-deps", action="store_true")
@@ -889,6 +890,7 @@ def _prepare_candidate(
     skip_deps: bool,
     source_sha: str | None = None,
     source_tree: str | None = None,
+    test_seams: bool = False,
 ) -> dict[str, str]:
     """Call the candidate builder directly and render paths into platform state."""
     source = run_dir / "source"
@@ -907,11 +909,42 @@ def _prepare_candidate(
             skip_deps=skip_deps,
             source_sha=source_sha,
             source_tree=source_tree,
+            test_seams=test_seams,
         )
     finally:
         if inserted:
             sys.path.remove(scripts)
     return candidate.to_dict()
+
+
+def _prepare_recovery_stop_service(
+    run_dir: Path, platform: str, candidate: dict[str, Any], logs: Path,
+    timeout: float, architecture: str | None, skip_deps: bool,
+) -> None:
+    """Replace only a disposable standalone backend with the explicitly tagged build."""
+    if _candidate_mode(candidate) != "local-build":
+        raise LocalVMError("recovery Stop test seams cannot replace installed or Release packages")
+    service = _candidate_path(candidate, "service")
+    if service is None:
+        raise LocalVMError("recovery Stop requires the standalone candidate backend")
+    logs.mkdir(parents=True, exist_ok=True)
+    marker = logs / "recovery-stop.arm"
+    if marker.exists():
+        raise LocalVMError("recovery Stop marker must be absent during preparation")
+    arch = architecture or (
+        "amd64" if platform == "windows" or host_platform.machine().lower() in {"x86_64", "amd64"}
+        else "arm64"
+    )
+    command = [
+        sys.executable, str(run_dir / "source/.github/scripts/desktop/desktop_build.py"),
+        "test-seams-service", "--platform", platform, "--arch", arch,
+        "--output", str(service), "--recovery-stop-marker", str(marker),
+    ]
+    if skip_deps:
+        command.append("--skip-deps")
+    _run_logged(command, cwd=run_dir / "source", logs=logs,
+                label="recovery-stop-service-build", timeout=timeout)
+    candidate["test_seams"] = True
 
 
 def _candidate_mode(descriptor: dict[str, Any]) -> str:
@@ -1828,7 +1861,10 @@ def prepare(args: argparse.Namespace) -> int:
         raise LocalVMError("complete Android build requires both source commit and source tree")
     # Focused scenarios belong to the execution request.  Preparation only
     # validates the platform and suite selected for the eventual run.
-    _validate_suite(args.platform, args.suite, None)
+    _validate_suite(args.platform, args.suite, None, getattr(args, "native_cases", None))
+    recovery_stop = getattr(args, "native_cases", None) == [AUTO_RECOVERY_STOP_CASE]
+    if recovery_stop and (args.release_manifest is not None or args.source_sha is not None):
+        raise LocalVMError("recovery Stop uses build-local seams, not qualification packages")
     if args.release_manifest is not None and (
         args.suite != "full" or args.platform not in {"windows", "macos"}
     ):
@@ -1907,10 +1943,18 @@ def prepare(args: argparse.Namespace) -> int:
                     skip_deps=args.skip_deps,
                     source_sha=getattr(args, "source_sha", None),
                     source_tree=args.source_tree,
+                    test_seams=recovery_stop and args.platform == "android",
                 ),
                 platform=args.platform,
             )
 
+        if recovery_stop:
+            if args.platform in {"windows", "macos"}:
+                _prepare_recovery_stop_service(
+                    run_dir, args.platform, candidate, logs, args.timeout,
+                    args.architecture, args.skip_deps,
+                )
+            candidate["test_seams"] = True
         if args.platform == "android" and args.source_sha is not None:
             candidate["source_sha"] = args.source_sha
         state["candidate"] = candidate
@@ -1999,6 +2043,8 @@ def run(args: argparse.Namespace) -> int:
     logs = run_dir / "logs"
     (run_dir / "output").mkdir(parents=True, exist_ok=True)
     native_cases = tuple(args.native_cases) if args.native_cases is not None else None
+    if bool(descriptor.get("test_seams")) != (native_cases == (AUTO_RECOVERY_STOP_CASE,)):
+        raise LocalVMError("tagged recovery builds are restricted to their explicit native case")
     state["coverage"] = {
         "platform": args.platform,
         "suite": args.suite,
@@ -2021,7 +2067,14 @@ def run(args: argparse.Namespace) -> int:
     elif args.platform == "android":
         state["coverage"].update(
             instrumentation_filters=(
-                ["com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable"]
+                [{
+                    ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE:
+                        "com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable",
+                    "logs-clear-process-restart":
+                        "com.dobby.NativeUiInstrumentedTest#clearBoundaryBeforeProcessRestart",
+                    AUTO_RECOVERY_STOP_CASE:
+                        "com.dobby.NativeUiHostedProfileTest#runHostedCommand",
+                }[native_cases[0]]]
                 if native_cases is not None else [
                     "com.dobby.NativeUiInstrumentedTest",
                     "com.dobby.NativeDiagnosticRetentionTest",

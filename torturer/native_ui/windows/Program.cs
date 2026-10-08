@@ -19,6 +19,7 @@ using Forms = System.Windows.Forms;
 internal static class Program
 {
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
@@ -29,6 +30,7 @@ internal static class Program
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW")]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
@@ -43,6 +45,40 @@ internal static class Program
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
 
+    private static NativePoint GetPhysicalClientOrigin(IntPtr window)
+    {
+        var previousContext = SetThreadDpiAwarenessContext(new IntPtr(-4)); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        if (previousContext == IntPtr.Zero)
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(), "Could not enter the physical-pixel DPI context");
+
+        var point = new NativePoint();
+        Exception? failure = null;
+        try
+        {
+            if (!ClientToScreen(window, ref point))
+                failure = new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not map the HWND client origin to screen coordinates");
+        }
+        catch (Exception error)
+        {
+            failure = error;
+        }
+
+        try
+        {
+            if (SetThreadDpiAwarenessContext(previousContext) == IntPtr.Zero)
+                throw new System.ComponentModel.Win32Exception(
+                    Marshal.GetLastWin32Error(), "Could not restore the native UI thread DPI context");
+        }
+        catch (Exception restoreFailure)
+        {
+            failure = failure is null ? restoreFailure : new AggregateException(failure, restoreFailure);
+        }
+        if (failure is not null) throw failure;
+        return point;
+    }
+
     private static void TracePhase(string name)
     {
         Console.Error.WriteLine($"native-ui-phase={name}");
@@ -54,6 +90,12 @@ internal static class Program
 
     private static string ElapsedMilliseconds(long started) =>
         Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString("F3", CultureInfo.InvariantCulture);
+
+    private static IntPtr ParseWindowHandle(string value)
+    {
+        var digits = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
+        return new IntPtr(unchecked((long)ulong.Parse(digits, NumberStyles.HexNumber, CultureInfo.InvariantCulture)));
+    }
 
     private static string NormalizeLineEndings(string value) =>
         value.Replace("\r\n", "\n").Replace('\r', '\n');
@@ -372,6 +414,7 @@ internal static class Program
             }
             var traceTree = operation == "tree";
             var traceWin32Baseline = operation == "windows-baseline";
+            var traceAutomationPoint = operation == "uia-point";
             var traceWindow = traceTree || traceWin32Baseline;
             var activateAndDiscoverWindow = traceWindow || operation == "resize-window";
             var baselineStarted = traceWin32Baseline ? Stopwatch.GetTimestamp() : 0;
@@ -429,14 +472,25 @@ internal static class Program
             else
             {
                 process.Refresh();
-                window = process.MainWindowHandle;
+                if (traceAutomationPoint)
+                {
+                    window = ParseWindowHandle(request.GetProperty("windowHandle").GetString()
+                        ?? throw new InvalidOperationException("UIA point query requires the baseline window handle"));
+                    GetWindowThreadProcessId(window, out var requestedOwnerPid);
+                    if (window == IntPtr.Zero || requestedOwnerPid != process.Id)
+                        throw new InvalidOperationException("UIA point query window does not belong to the verified UI process");
+                }
+                else
+                {
+                    window = process.MainWindowHandle;
+                }
             }
             if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
             if (traceWin32Baseline)
                 TracePhase($"configure-tree-win32-baseline-window-discovery-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
             var visible = window != IntPtr.Zero && IsWindowVisible(window);
             var minimized = window != IntPtr.Zero && IsIconic(window);
-            if (!visible || minimized)
+            if ((!visible || minimized) && !traceAutomationPoint)
             {
                 uint windowOwnerPid = 0;
                 if (window != IntPtr.Zero) GetWindowThreadProcessId(window, out windowOwnerPid);
@@ -492,6 +546,8 @@ internal static class Program
                 TracePhase($"configure-tree-win32-baseline-complete utc={UtcTimestamp()} elapsed_ms={ElapsedMilliseconds(baselineStarted)} hwnd=0x{window.ToInt64():X}");
                 return 0;
             }
+            if (traceAutomationPoint)
+                return MeasureAutomationElementFromPoint(process, identity, window, request);
             if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
             var root = AutomationElement.FromHandle(window);
             if (traceTree) TracePhase("tree-uia-root-complete");
@@ -968,6 +1024,198 @@ internal static class Program
             }
             trace?.Invoke($"children-complete node={count} depth={depth} child_count={siblingIndex} path={path}");
         }
+    }
+
+    private static int MeasureAutomationElementFromPoint(
+        Process process,
+        string identity,
+        IntPtr window,
+        JsonElement request)
+    {
+        var response = new Dictionary<string, object?>
+        {
+            ["completed"] = false,
+            ["ready"] = false,
+            ["pid"] = process.Id,
+            ["identity"] = identity,
+            ["diagnosticOnly"] = true,
+            ["schema"] = "dobbyvpn.windows-uia-point/v1",
+            ["maximumAncestors"] = 8,
+        };
+        var operationStarted = Stopwatch.GetTimestamp();
+        try
+        {
+            var requestedX = request.GetProperty("x").GetInt32();
+            var requestedY = request.GetProperty("y").GetInt32();
+            var expectedClientX = request.GetProperty("clientOriginX").GetInt32();
+            var expectedClientY = request.GetProperty("clientOriginY").GetInt32();
+            response["requestedPoint"] = new { x = requestedX, y = requestedY };
+
+            var activationStarted = Stopwatch.GetTimestamp();
+            try
+            {
+                var restoreQueued = ShowWindowAsync(window, 9); // SW_RESTORE
+                var foregroundRequested = SetForegroundWindow(window);
+                WaitFor(() => IsWindowVisible(window) && !IsIconic(window),
+                    "UI window did not restore before the UIA point query", seconds: 3);
+                var focusWait = Stopwatch.StartNew();
+                while (GetForegroundWindow() != window && focusWait.Elapsed.TotalSeconds < 3)
+                    Thread.Sleep(25);
+                response["windowActivation"] = new
+                {
+                    restoreQueued,
+                    foregroundRequested,
+                    foregroundConfirmed = GetForegroundWindow() == window,
+                    visible = IsWindowVisible(window),
+                    minimized = IsIconic(window),
+                };
+            }
+            catch (Exception error)
+            {
+                response["windowActivationException"] = error.ToString();
+            }
+            response["windowActivationDurationMs"] = Stopwatch.GetElapsedTime(activationStarted).TotalMilliseconds;
+
+            var pointX = requestedX;
+            var pointY = requestedY;
+            NativePoint currentClientOrigin;
+            try
+            {
+                currentClientOrigin = GetPhysicalClientOrigin(window);
+                pointX = checked(requestedX + currentClientOrigin.X - expectedClientX);
+                pointY = checked(requestedY + currentClientOrigin.Y - expectedClientY);
+                response["currentClientOrigin"] = new { x = currentClientOrigin.X, y = currentClientOrigin.Y };
+            }
+            catch (Exception error)
+            {
+                response["clientOriginException"] = error.ToString();
+            }
+            response["point"] = new
+            {
+                x = pointX,
+                y = pointY,
+                coordinateSpace = "physical-screen-pixels",
+                adjustedForWindowMove = pointX != requestedX || pointY != requestedY,
+            };
+
+            AutomationElement? target = null;
+            var fromPointStarted = Stopwatch.GetTimestamp();
+            response["fromPointAttempted"] = true;
+            try
+            {
+                target = AutomationElement.FromPoint(new System.Windows.Point(pointX, pointY));
+                response["fromPointCompleted"] = true;
+                response["targetFound"] = target is not null;
+            }
+            catch (Exception error)
+            {
+                response["fromPointException"] = error.ToString();
+            }
+            response["fromPointDurationMs"] = Stopwatch.GetElapsedTime(fromPointStarted).TotalMilliseconds;
+
+            if (target is not null)
+            {
+                var propertiesStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    var current = target.Current;
+                    var controlTypeProgrammaticName = current.ControlType.ProgrammaticName;
+                    var controlType = controlTypeProgrammaticName.StartsWith("ControlType.", StringComparison.Ordinal)
+                        ? controlTypeProgrammaticName["ControlType.".Length..]
+                        : controlTypeProgrammaticName;
+                    var automationId = current.AutomationId;
+                    var name = current.Name;
+                    var processId = current.ProcessId;
+                    var expectedAutomationId = request.GetProperty("expectedAutomationId").GetString();
+                    var expectedName = request.GetProperty("expectedName").GetString();
+                    var expectedControlType = request.GetProperty("expectedControlType").GetString();
+                    var expectedProcessId = request.GetProperty("expectedProcessId").GetInt32();
+                    var matchesExpected = new
+                    {
+                        automationId = automationId == expectedAutomationId,
+                        name = name == expectedName,
+                        controlType = controlType == expectedControlType,
+                        processId = processId == expectedProcessId,
+                        all = automationId == expectedAutomationId && name == expectedName &&
+                              controlType == expectedControlType && processId == expectedProcessId,
+                    };
+                    response["target"] = new
+                    {
+                        automationId,
+                        name,
+                        controlType,
+                        controlTypeProgrammaticName,
+                        processId,
+                        isControlElement = current.IsControlElement,
+                        isContentElement = current.IsContentElement,
+                        isOffscreen = current.IsOffscreen,
+                    };
+                    response["expected"] = new
+                    {
+                        automationId = expectedAutomationId,
+                        name = expectedName,
+                        controlType = expectedControlType,
+                        processId = expectedProcessId,
+                    };
+                    response["matchesExpected"] = matchesExpected;
+
+                    var ancestors = new List<object>();
+                    var ancestorStarted = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        var walker = TreeWalker.ControlViewWalker;
+                        var ancestor = walker.GetParent(target);
+                        for (var depth = 1; ancestor is not null && depth <= 8; depth++)
+                        {
+                            var properties = ancestor.Current;
+                            ancestors.Add(new
+                            {
+                                depth,
+                                automationId = properties.AutomationId,
+                                name = properties.Name,
+                                controlType = properties.ControlType.ProgrammaticName,
+                                processId = properties.ProcessId,
+                            });
+                            ancestor = depth == 8 ? null : walker.GetParent(ancestor);
+                        }
+                    }
+                    catch (Exception error)
+                    {
+                        response["ancestorException"] = error.ToString();
+                    }
+                    response["ancestors"] = ancestors;
+                    response["ancestorDurationMs"] = Stopwatch.GetElapsedTime(ancestorStarted).TotalMilliseconds;
+                    response["targetMetadataCompleted"] = true;
+                }
+                catch (Exception error)
+                {
+                    response["targetMetadataException"] = error.ToString();
+                }
+                response["targetMetadataDurationMs"] = Stopwatch.GetElapsedTime(propertiesStarted).TotalMilliseconds;
+            }
+        }
+        catch (Exception error)
+        {
+            response["measurementException"] = error.ToString();
+        }
+        finally
+        {
+            response["durationMs"] = Stopwatch.GetElapsedTime(operationStarted).TotalMilliseconds;
+            try
+            {
+                process.Refresh();
+                response["processAliveAfterQuery"] = !process.HasExited;
+            }
+            catch (Exception error)
+            {
+                response["processLivenessException"] = error.ToString();
+            }
+        }
+
+        response["completed"] = response.ContainsKey("fromPointDurationMs");
+        response["ready"] = response.ContainsKey("targetMetadataCompleted");
+        Console.WriteLine(JsonSerializer.Serialize(response));
+        return 0;
     }
 
     private static void Capture(IntPtr window, int expectedPid, string path)

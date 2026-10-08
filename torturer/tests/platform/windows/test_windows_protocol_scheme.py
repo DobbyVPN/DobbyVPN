@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -62,6 +63,19 @@ def _windows_content_root_probe() -> dict[str, object]:
             "isVisible": True,
             "isEnabled": True,
             "geometry": {"x": 24.0, "y": 84.0, "width": 380.0, "height": 40.0},
+            "screenGeometry": {
+                "coordinateSpace": "physical-screen-pixels",
+                "clientOriginDpiContext": "per-monitor-v2",
+                "clientOrigin": {"x": 100, "y": 200},
+                "rasterizationScale": 1.5,
+                "left": 136.0,
+                "top": 326.0,
+                "width": 570.0,
+                "height": 60.0,
+                "centerX": 421,
+                "centerY": 356,
+            },
+            "screenGeometryError": None,
         },
     }
 
@@ -210,9 +224,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             def call(operation: str, **_fields: object) -> dict[str, object]:
                 operations.append(operation)
                 if operation == "windows-baseline":
-                    return {"ready": True, "pid": 42}
+                    return {"ready": True, "pid": 42, "windowHandle": "0x100"}
                 controller.pid = 42
                 controller.identity = "candidate-ui-instance"
+                if operation == "uia-point":
+                    return {"ready": True, "targetMetadataCompleted": True}
                 return {"alive": True, "pid": 42, "identity": controller.identity}
 
             controller._call = call
@@ -232,13 +248,57 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             self.assertEqual(
                 operations,
-                ["probe", "windows-baseline", "probe"],
+                ["probe", "windows-baseline", "uia-point", "probe"],
             )
             self.assertEqual(result, controller.windows_content_root_diagnostics)
             self.assertEqual(result["xaml_content_root_peers"], root_peer_result)
             self.assertEqual(result["post_probe_process"]["alive"], True)
             controller.snapshot.assert_not_called()
             controller.capture.assert_not_called()
+
+    def test_windows_content_root_point_failure_keeps_full_exception_and_post_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = object.__new__(smoke.NativeUIController)
+            controller.logs = Path(directory)
+            controller._timeout = 5.0
+            controller._deadline = None
+            controller.process = None
+            point_stdout = b"NativeUI stdout: \xff"
+            point_stderr = b"FromPoint provider failure\r\n"
+            (controller.logs / "windows-content-root-peers.json").write_text(
+                json.dumps(_windows_content_root_probe()), encoding="utf-8"
+            )
+            controller._call = mock.Mock(side_effect=(
+                {"ready": True, "pid": 42, "windowHandle": "0x100"},
+                subprocess.CalledProcessError(
+                    17,
+                    "FromPoint COM call",
+                    output=point_stdout,
+                    stderr=point_stderr,
+                ),
+                {"alive": True, "pid": 42},
+            ))
+
+            result = controller._run_windows_content_root_diagnostics()
+
+            self.assertEqual(
+                [call.args[0] for call in controller._call.call_args_list],
+                ["windows-baseline", "uia-point", "probe"],
+            )
+            self.assertIn(
+                "FromPoint COM call",
+                result["external_uia_point_exception"],
+            )
+            self.assertIn("Traceback", result["external_uia_point_exception"])
+            self.assertEqual(
+                result["external_uia_point_stdout_base64"],
+                base64.b64encode(point_stdout).decode("ascii"),
+            )
+            self.assertEqual(
+                result["external_uia_point_stderr_base64"],
+                base64.b64encode(point_stderr).decode("ascii"),
+            )
+            self.assertEqual(result["post_probe_process"]["alive"], True)
 
     def test_windows_local_dumps_restores_existing_values_and_removes_new_keys(self) -> None:
         registry = _FakeRegistry()
@@ -297,6 +357,12 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertIn("controlType = editorPeer.GetAutomationControlType().ToString()", app_source)
             self.assertIn("windowContentIsRoot = ReferenceEquals(content, Root)", app_source)
             self.assertIn("geometry = new", app_source)
+            self.assertIn("SourceEditor.TransformToVisual(null)", app_source)
+            self.assertIn("SourceEditor.XamlRoot", app_source)
+            self.assertIn("xamlRoot.RasterizationScale", app_source)
+            self.assertIn("GetPhysicalClientOrigin(windowHandle)", app_source)
+            self.assertIn("SetThreadDpiAwarenessContext(new IntPtr(-4))", app_source)
+            self.assertIn("ClientToScreen(window, ref point)", app_source)
             self.assertNotIn("GetChildren()", app_source)
             self.assertNotIn("immediateChildren", app_source)
             self.assertIn('app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"]', smoke_source)
@@ -306,6 +372,17 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertIn("return Walk(root, trace).FirstOrDefault(element =>", helper_source)
             self.assertIn("walker.GetFirstChild(element)", helper_source)
             self.assertIn("walker.GetNextSibling(child)", helper_source)
+            point_start = helper_source.index("private static int MeasureAutomationElementFromPoint(")
+            point_end = helper_source.index("private static void Capture(", point_start)
+            point_method = helper_source[point_start:point_end]
+            self.assertEqual(point_method.count("AutomationElement.FromPoint("), 1)
+            self.assertIn("walker.GetParent(", point_method)
+            self.assertIn("maximumAncestors\"] = 8", point_method)
+            self.assertNotIn("GetFirstChild", point_method)
+            self.assertNotIn("GetNextSibling", point_method)
+            self.assertIn('if (traceAutomationPoint)\n                return MeasureAutomationElementFromPoint', helper_source)
+            self.assertIn('request.GetProperty("windowHandle")', helper_source)
+            self.assertIn('self._call(\n                        "uia-point"', smoke_source)
 
             controller = object.__new__(smoke.NativeUIController)
             controller.logs = Path(directory)
@@ -317,7 +394,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                 json.dumps(root_peer_result), encoding="utf-8"
             )
             controller._call = mock.Mock(side_effect=(
-                {"ready": True, "pid": 42},
+                {"ready": True, "pid": 42, "windowHandle": "0x100"},
+                {"ready": True, "completed": True, "targetMetadataCompleted": True},
                 {"alive": True, "pid": 42},
             ))
 
@@ -325,9 +403,26 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             self.assertEqual(
                 [call.args[0] for call in controller._call.call_args_list],
-                ["windows-baseline", "probe"],
+                ["windows-baseline", "uia-point", "probe"],
+            )
+            point_request = controller._call.call_args_list[1]
+            self.assertEqual(
+                point_request.kwargs,
+                {
+                    "windowHandle": "0x100",
+                    "x": 421,
+                    "y": 356,
+                    "clientOriginX": 100,
+                    "clientOriginY": 200,
+                    "expectedAutomationId": "Connection configuration",
+                    "expectedName": "Subscription URL",
+                    "expectedControlType": "Edit",
+                    "expectedProcessId": 42,
+                },
             )
             self.assertEqual(result["xaml_content_root_peers"], root_peer_result)
+            self.assertEqual(result["external_uia_point"]["completed"], True)
+            self.assertEqual(result["external_uia_point"]["targetMetadataCompleted"], True)
             retained = json.loads(
                 (controller.logs / "windows-content-root-diagnostics.json").read_text(encoding="utf-8")
             )
@@ -875,6 +970,15 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                         "xaml_content_root_peers": {
                             **_windows_content_root_probe(),
                         },
+                        "external_uia_point": {
+                            "schema": "dobbyvpn.windows-uia-point/v1",
+                            "completed": True,
+                            "ready": True,
+                            "fromPointCompleted": True,
+                            "targetFound": True,
+                            "matchesExpected": {"all": True},
+                            "processAliveAfterQuery": True,
+                        },
                         "post_probe_process": {"alive": True},
                     }
                     return self.windows_content_root_diagnostics
@@ -959,7 +1063,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         self.assertEqual(
             windows["checks"][WINDOWS_CONFIGURE_TREE_CASE]["configure_tree"]
             ["rendered_controls_queried"],
-            False,
+            True,
         )
         self.assertEqual(windows_controller.operations, [
             "enable-wer",
