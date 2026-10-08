@@ -110,6 +110,32 @@ internal static class NativeDiagnosticsTests
             NativeLogFiles.Append(native, Encoding.UTF8.GetBytes("first\n"));
             Require(new FileInfo(native + ".previous").Length == NativeLogFiles.Threshold, "migration split a record");
             Require(File.ReadAllText(native) == "legacy-tail\nfirst\n", "migration lost the retained tail");
+            var clearBoundary = Path.Combine(directory, "clear-boundary.jsonl");
+            var clearUi = Path.Combine(directory, "clear-boundary-ui.jsonl");
+            var completeRows = Encoding.UTF8.GetBytes("{\"message\":\"pre-clear first\"}\n{\"message\":\"pre-clear second\"}\n");
+            var crossingRow = Encoding.UTF8.GetBytes("{\"message\":\"pre-clear final crossing\"}\n");
+            var sparseLength = NativeLogFiles.Threshold - completeRows.Length - crossingRow.Length / 2;
+            using (var sparse = File.Create(clearBoundary))
+            {
+                sparse.SetLength(sparseLength);
+                sparse.Position = sparseLength;
+                sparse.Write(completeRows);
+                sparse.Write(crossingRow);
+            }
+            var clearFileLength = new FileInfo(clearBoundary).Length;
+            var clearDiagnostics = new NativeDiagnostics(clearBoundary, clearUi);
+            await clearDiagnostics.ClearViewAsync();
+            NativeLogFiles.Append(clearBoundary, Encoding.UTF8.GetBytes("{\"message\":\"after clear restart\"}\n"));
+            Require(new FileInfo(clearBoundary + ".previous").Length == clearFileLength,
+                "startup migration rewrote the final threshold-crossing record");
+            var restartedDiagnostics = new NativeDiagnostics(clearBoundary, clearUi);
+            var afterClearEntries = await restartedDiagnostics.EntriesAsync();
+            Require(afterClearEntries.Error == "" &&
+                afterClearEntries.Entries.Select(entry => entry.Message).SequenceEqual(new[] { "after clear restart" }),
+                "startup migration exposed pre-Clear rows or hid the post-Clear row");
+            await restartedDiagnostics.SaveAsync(destination, "Clear retention\n");
+            Require(await ExportContainsAsync(destination, "pre-clear final crossing"),
+                "Clear or startup migration removed old rows from export");
             await using (var held = new FileStream(native, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
             {
                 foreach (var record in new[] {"second\n", "third\n"})
@@ -211,5 +237,23 @@ internal static class NativeDiagnosticsTests
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
+    }
+
+    private static async Task<bool> ExportContainsAsync(string path, string value)
+    {
+        var needle = Encoding.UTF8.GetBytes(value);
+        var buffer = new byte[65536 + needle.Length - 1];
+        await using var source = File.OpenRead(path);
+        await using var gzip = new GZipStream(source, CompressionMode.Decompress);
+        var carry = 0;
+        while (true)
+        {
+            var count = await gzip.ReadAsync(buffer.AsMemory(carry, 65536));
+            if (count == 0) return false;
+            var length = carry + count;
+            if (buffer.AsSpan(0, length).IndexOf(needle) >= 0) return true;
+            carry = Math.Min(needle.Length - 1, length);
+            buffer.AsSpan(length - carry, carry).CopyTo(buffer);
+        }
     }
 }

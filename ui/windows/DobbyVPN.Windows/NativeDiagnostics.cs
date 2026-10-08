@@ -354,7 +354,20 @@ internal static class NativeLogFiles
     private static void Migrate(string path)
     {
         var paths = new[] {path + ".previous", path};
-        if (!paths.Any(name => File.Exists(name) && new FileInfo(name).Length > Threshold)) return;
+        var oversized = false;
+        foreach (var name in paths)
+        {
+            if (!File.Exists(name)) continue;
+            using var input = new FileStream(name, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete, 65536);
+            var size = input.Length;
+            if (size > Threshold && HasRecordAfterLimit(input, size))
+            {
+                oversized = true;
+                break;
+            }
+        }
+        if (!oversized) return;
         var stage = path + ".migration-" + Guid.NewGuid().ToString("N");
         FileStream? output = null;
         Exception? original = null;
@@ -403,5 +416,20 @@ internal static class NativeLogFiles
                 throw new AggregateException(failures);
             }
         }
+    }
+
+    private static bool HasRecordAfterLimit(FileStream input, long size)
+    {
+        input.Position = Threshold - 1;
+        var remaining = size - Threshold;
+        var buffer = new byte[65536];
+        while (remaining > 0)
+        {
+            var count = input.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+            if (count == 0) return false;
+            if (Array.IndexOf(buffer, (byte)'\n', 0, count) >= 0) return true;
+            remaining -= count;
+        }
+        return false;
     }
 }
