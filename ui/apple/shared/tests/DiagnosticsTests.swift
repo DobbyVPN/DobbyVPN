@@ -271,6 +271,32 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(String(decoding: try readGzip(destination), as: UTF8.self), exported)
     }
 
+    func testClearBoundarySurvivesFirstAppendAfterWholeRecordOverflow() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("native.jsonl")
+        let boundary = directory.appendingPathComponent("view.json")
+        let first = #"{"timestamp":"2026-10-08T10:00:00Z","level":"INFO","message":"before clear one"}"#
+        let final = #"{"timestamp":"2026-10-08T10:00:01Z","level":"INFO","message":"before clear two"}"#
+        let retained = Data((first + "\n" + final + "\n").utf8)
+        let prefixLength = DiagnosticFiles.threshold - UInt64(retained.count) + 1
+        XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: nil))
+        let seed = try FileHandle(forWritingTo: file)
+        try seed.truncate(atOffset: prefixLength)
+        try seed.seek(toOffset: prefixLength - 1)
+        try seed.write(contentsOf: Data([0x0A])) // Sparse prefix ends before the retained JSON records.
+        try seed.write(contentsOf: retained) // The last complete record crosses the threshold at EOF.
+        try seed.close()
+
+        try DiagnosticFiles.clearView(paths: [file], boundary: boundary)
+        try DiagnosticFiles.append("after clear", event: "test", level: "INFO", source: "test", to: file)
+
+        let view = DiagnosticFiles.entries(paths: [file], boundary: boundary)
+        XCTAssertTrue(view.error.isEmpty, view.error)
+        XCTAssertEqual(view.entries.map(\.message), ["after clear"])
+    }
+
     @MainActor
     func testUIErrorsSurviveModelReplacementAndExportCompletely() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

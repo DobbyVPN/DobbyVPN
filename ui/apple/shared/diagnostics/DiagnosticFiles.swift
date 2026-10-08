@@ -89,6 +89,21 @@ public enum DiagnosticFiles {
         catch let error as POSIXError where error.code == .ENOENT { return 0 }
     }
 
+    private static func hasRecordAfterThreshold(_ path: URL, size: UInt64) throws -> Bool {
+        guard size > threshold else { return false }
+        return try withFile(open(path, flags: O_RDONLY)) { file in
+            try file.seek(toOffset: threshold - 1)
+            var remaining = size - threshold // Exclude the final byte: a newline at EOF completes the crossing record.
+            while remaining > 0 {
+                let data = try file.read(upToCount: Int(min(remaining, 65_536))) ?? Data()
+                guard !data.isEmpty else { return false }
+                if data.contains(0x0A) { return true }
+                remaining -= UInt64(data.count)
+            }
+            return false
+        }
+    }
+
     private static func remove(_ path: URL) throws {
         if unlink(path.path) != 0 && errno != ENOENT { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
     }
@@ -101,7 +116,15 @@ public enum DiagnosticFiles {
 
     private static func migrate(_ path: URL) throws {
         let paths = [previous(path), path]
-        guard try paths.contains(where: { try size($0) > threshold }) else { return }
+        var needsMigration = false
+        for source in paths {
+            let sourceSize = try size(source)
+            if sourceSize > threshold, try hasRecordAfterThreshold(source, size: sourceSize) {
+                needsMigration = true
+                break
+            }
+        }
+        guard needsMigration else { return }
         let stage = URL(fileURLWithPath: path.path + ".migration-" + UUID().uuidString)
         var output: FileHandle? = try open(stage, flags: O_CREAT | O_EXCL | O_WRONLY)
         var failure: Error?
