@@ -1305,6 +1305,25 @@ public final class NativeUiHostedProfileTest {
                         + link + "): " + after);
             }
         }
+
+        String finalFeedback = invalidLinks[invalidLinks.length - 1][1];
+        deliverWarmImport(subscriptionURL);
+        waitForPreviousInvalidImportFeedbackToClear(finalFeedback, deadline);
+        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
+        if (findUiObject("Error") != null) {
+            throw new AssertionError("Accepted URL did not clear the final deep-link error");
+        }
+        JSONObject clearedCounts = waitForInFlightGets(0,
+                remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
+        JSONObject cleared = snapshotResult("");
+        if (MainActivity.current != activity
+                || clearedCounts.getInt("subscription_gets") != requests
+                || !before.optString("source_url").equals(cleared.optString("source_url"))
+                || !before.optString("digest").equals(cleared.optString("digest"))
+                || before.optLong("generation") != cleared.optLong("generation")
+                || !before.optString("state").equals(cleared.optString("state"))) {
+            throw new AssertionError("Accepted URL fetched or changed the accepted session: " + cleared);
+        }
     }
 
     private void waitForPreviousInvalidImportFeedbackToClear(String previousFeedback, long deadline)
