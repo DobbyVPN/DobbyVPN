@@ -1113,7 +1113,7 @@ class NativeUiInstrumentedTest {
     private fun launchImport(data: String, coldStart: Boolean) {
         if (coldStart) finishCurrentActivity()
         val output = device.executeShellCommand(
-            "am start -W -a android.intent.action.VIEW -d '$data' $packageName",
+            "am start -W -a android.intent.action.VIEW -d $data $packageName",
         )
         check(output.contains("Status: ok")) { "ANDROID_IMPORT_ACTIVATION_FAILED:$output" }
     }
