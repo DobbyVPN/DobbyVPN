@@ -905,11 +905,19 @@ class NativeUIController:
     def activate_profile(self, index: int) -> None:
         self._click(f"Profile {index + 1} action")
 
-    def cancel_profile_switch(self, index: int, competing_index: int) -> dict[str, object]:
+    def _profile_switch_action(
+        self, index: int, competing_index: int, *, protocol_uri: str | None = None,
+    ) -> dict[str, object]:
         if self.platform != "windows" or index < 0 or competing_index < 0 or index == competing_index:
-            raise ValueError("Windows profile cancellation requires two distinct profile indices")
+            raise ValueError("Windows profile transition requires two distinct profile indices")
         target, competing = f"Profile {index + 1} action", f"Profile {competing_index + 1} action"
-        result = self._call("cancel-profile-switch", target=target, competing=competing)
+        operation = "profile-switch-import" if protocol_uri is not None else "cancel-profile-switch"
+        fields = {"target": target, "competing": competing}
+        if protocol_uri is not None:
+            fields["uri"] = protocol_uri
+        expected_pid = getattr(self, "pid", None)
+        expected_identity = getattr(self, "identity", None)
+        result = self._call(operation, **fields)
         selected = result.get("target_at_stop")
         other = result.get("competing_at_stop")
         connection = result.get("connection_action_at_stop")
@@ -940,17 +948,46 @@ class NativeUIController:
             or not action_state(other, competing, "Connect", False)
             or not main_action_state(connection)
         ):
-            raise NativeUISmokeError(f"Windows profile cancellation did not observe an enabled Stop with competing Connect disabled: {result!r}")
-        timestamps = [result.get(key) for key in (
+            raise NativeUISmokeError(
+                f"Windows profile transition did not observe an enabled Stop with competing Connect disabled: {result!r}"
+            )
+        timestamp_keys = (
+            "connect_invoked_at_utc", "stop_observed_at_utc",
+            "protocol_dispatch_started_at_utc", "protocol_dispatch_returned_at_utc",
+        ) if protocol_uri is not None else (
             "connect_invoked_at_utc", "stop_observed_at_utc", "stop_invoked_at_utc",
-        )]
+        )
+        timestamps = [result.get(key) for key in timestamp_keys]
         try:
             parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps]
         except (AttributeError, TypeError, ValueError) as error:
-            raise NativeUISmokeError(f"Windows profile cancellation timestamps were invalid: {timestamps!r}") from error
+            raise NativeUISmokeError(f"Windows profile transition timestamps were invalid: {timestamps!r}") from error
         if any(value.tzinfo is None for value in parsed) or parsed != sorted(parsed):
-            raise NativeUISmokeError(f"Windows profile cancellation timestamps were not chronological: {timestamps!r}")
+            raise NativeUISmokeError(f"Windows profile transition timestamps were not chronological: {timestamps!r}")
+        if expected_pid is not None and result.get("pid") != expected_pid:
+            raise NativeUISmokeError(f"Windows profile transition changed the UI process: {result!r}")
+        if expected_identity is not None and result.get("identity") != expected_identity:
+            raise NativeUISmokeError(f"Windows profile transition changed the UI process identity: {result!r}")
+        if protocol_uri is not None and (
+            result.get("protocol_uri") != protocol_uri
+            or not isinstance(result.get("window_handle"), str)
+            or not result["window_handle"].startswith("0x")
+            or type(result.get("shell_execute_result")) is not int
+            or result["shell_execute_result"] <= 32
+        ):
+            raise NativeUISmokeError(f"Windows profile import was not dispatched by the observed Stop action: {result!r}")
         return result
+
+    def cancel_profile_switch(self, index: int, competing_index: int) -> dict[str, object]:
+        return self._profile_switch_action(index, competing_index)
+
+    def switch_profile_and_dispatch_import(
+        self, index: int, competing_index: int, url: str,
+    ) -> dict[str, object]:
+        from urllib.parse import quote
+
+        uri = "dobbyvpn://import?url=" + quote(url, safe="")
+        return self._profile_switch_action(index, competing_index, protocol_uri=uri)
 
     def open_deep_link(self, link: str) -> dict:
         self._open_link(link)

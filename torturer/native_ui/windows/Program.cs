@@ -61,6 +61,9 @@ internal static class Program
         IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out UIntPtr result);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint numberOfInputs, NativeInput[] inputs, int size);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern IntPtr ShellExecuteW(IntPtr window, string operation, string file,
+        string? parameters, string? directory, int showCommand);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetCursorPos(out NativePoint point);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW", SetLastError = true)]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
@@ -616,13 +619,16 @@ internal static class Program
             current.IsControlElement, current.IsEnabled, current.IsOffscreen);
     }
 
-    private static Dictionary<string, object?> CancelProfileSwitch(
+    private static Dictionary<string, object?> ProfileSwitchAction(
         AutomationElement root, IntPtr window, Process process, string identity,
-        string targetId, string competingId)
+        string targetId, string competingId, string? protocolUri = null)
     {
         if (!TryGetProfileNumber(targetId, " action", out _) ||
             !TryGetProfileNumber(competingId, " action", out _) || targetId == competingId)
-            throw new ArgumentException("Cancellation requires two distinct profile action identifiers");
+            throw new ArgumentException("Profile switch action requires two distinct profile action identifiers");
+        if (protocolUri is not null && !protocolUri.StartsWith(
+                "dobbyvpn://import?url=", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Profile switch import requires a DobbyVPN import URI");
 
         // Keep stable scopes; WinUI recreates profile action peers on each Snapshot.
         var controls = RequireAutomationId(root, "Connection controls");
@@ -689,13 +695,59 @@ internal static class Program
                     if (CanStop(target, competing, connection))
                     {
                         var stopElement = target.Element;
-                        if (stopElement is null ||
-                            !stopElement.TryGetCurrentPattern(InvokePattern.Pattern, out var stopPattern))
-                            throw new InvalidOperationException($"Observed Stop action has no native InvokePattern: {targetId}");
+                        if (stopElement is null)
+                            throw new InvalidOperationException($"Observed Stop action disappeared before invocation: {targetId}");
                         var current = stopElement.Current;
                         if (current.Name != "Stop" || !current.IsEnabled || current.IsOffscreen)
                             throw new InvalidOperationException("The selected profile action changed from Stop before Invoke");
                         var observedAt = Stopwatch.GetTimestamp();
+                        if (protocolUri is not null)
+                        {
+                            var dispatchStarted = Stopwatch.GetTimestamp();
+                            IntPtr shellResult;
+                            try { shellResult = ShellExecuteW(window, "open", protocolUri, null, null, 1); }
+                            catch (Exception error)
+                            {
+                                var dispatchFailedAt = Stopwatch.GetTimestamp();
+                                throw new InvalidOperationException(
+                                    $"ShellExecuteW threw for the observed profile switch import; " +
+                                    $"uri={protocolUri}; pid={process.Id}; identity={identity}; " +
+                                    $"window=0x{window.ToInt64():X}; " +
+                                    $"dispatch_started={Timestamp(dispatchStarted)}; " +
+                                    $"dispatch_failed_at={Timestamp(dispatchFailedAt)}; " +
+                                    $"target={JsonSerializer.Serialize(target.ToDiagnostic())}; " +
+                                    $"competing={JsonSerializer.Serialize(competing.ToDiagnostic())}; " +
+                                    $"connection={JsonSerializer.Serialize(connection.ToDiagnostic())}", error);
+                            }
+                            var dispatchReturned = Stopwatch.GetTimestamp();
+                            if (shellResult.ToInt64() <= 32)
+                                throw new InvalidOperationException(
+                                    $"ShellExecuteW failed for the observed pending profile switch; " +
+                                    $"hinstance={shellResult.ToInt64()}; uri={protocolUri}; " +
+                                    $"pid={process.Id}; identity={identity}; window=0x{window.ToInt64():X}; " +
+                                    $"dispatch_started={Timestamp(dispatchStarted)}; " +
+                                    $"dispatch_returned={Timestamp(dispatchReturned)}; " +
+                                    $"target={JsonSerializer.Serialize(target.ToDiagnostic())}; " +
+                                    $"competing={JsonSerializer.Serialize(competing.ToDiagnostic())}; " +
+                                    $"connection={JsonSerializer.Serialize(connection.ToDiagnostic())}");
+                            return new Dictionary<string, object?>
+                            {
+                                ["ready"] = true, ["pid"] = process.Id, ["identity"] = identity,
+                                ["window_handle"] = $"0x{window.ToInt64():X}",
+                                ["target_automation_id"] = targetId, ["competing_automation_id"] = competingId,
+                                ["protocol_uri"] = protocolUri,
+                                ["connect_invoked_at_utc"] = connectedAtUtc,
+                                ["stop_observed_at_utc"] = Timestamp(observedAt),
+                                ["protocol_dispatch_started_at_utc"] = Timestamp(dispatchStarted),
+                                ["protocol_dispatch_returned_at_utc"] = Timestamp(dispatchReturned),
+                                ["shell_execute_result"] = shellResult.ToInt64(),
+                                ["target_at_stop"] = target.ToDiagnostic(),
+                                ["competing_at_stop"] = competing.ToDiagnostic(),
+                                ["connection_action_at_stop"] = connection.ToDiagnostic(),
+                            };
+                        }
+                        if (!stopElement.TryGetCurrentPattern(InvokePattern.Pattern, out var stopPattern))
+                            throw new InvalidOperationException($"Observed Stop action has no native InvokePattern: {targetId}");
                         var invokedAt = Stopwatch.GetTimestamp();
                         ((InvokePattern)stopPattern).Invoke();
                         return new Dictionary<string, object?>
@@ -2023,8 +2075,15 @@ internal static class Program
             }
             if (operation == "cancel-profile-switch")
             {
-                var result = CancelProfileSwitch(
+                var result = ProfileSwitchAction(
                     root, window, process, identity, Text("target"), Text("competing"));
+                Console.WriteLine(JsonSerializer.Serialize(result));
+                return 0;
+            }
+            if (operation == "profile-switch-import")
+            {
+                var result = ProfileSwitchAction(
+                    root, window, process, identity, Text("target"), Text("competing"), Text("uri"));
                 Console.WriteLine(JsonSerializer.Serialize(result));
                 return 0;
             }

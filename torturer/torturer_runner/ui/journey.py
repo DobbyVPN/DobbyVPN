@@ -1123,6 +1123,14 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
             raise NativeUIJourneyError("the active connection had no enabled Disconnect control")
         return view
 
+    def prepare_pending_import() -> dict[str, object]:
+        current_url = ui.profile.read_text(encoding="utf-8").strip()
+        separator = "&" if "?" in current_url else "?"
+        return {
+            "url": current_url + separator + "import-during-connect=1",
+            "before_gets": stats()["subscription_gets"],
+        }
+
     def wait_for_logs(predicate, message: str) -> dict:
         deadline = time.monotonic() + timeout
         value = {}
@@ -1212,11 +1220,28 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         target = f"Profile {index + 1} action"
         competing = f"Profile {competing_index + 1} action"
         deadline = time.monotonic() + timeout
-        # Begin polling immediately after invoking Connect, but allow the
-        # frontend's in-flight Start response and snapshot refresh to render.
-        ui.activate_profile(index)
         transition_seen = False
         next_ui_check = 0.0
+        if ui.platform == "windows" and during_pending is not None:
+            prepared_import = prepare_pending_import()
+            fixture.hold_responses()
+            try:
+                dispatch = ui.switch_profile_and_dispatch_import(
+                    index, competing_index, str(prepared_import["url"])
+                )
+                transition_seen = True
+                observe_pending = during_pending
+                during_pending = None
+                observe_pending(
+                    None, prepared=prepared_import, dispatch_result=dispatch,
+                    response_held=True, source_snapshot=previous,
+                )
+            finally:
+                fixture.release_responses()
+        else:
+            # Begin polling immediately after invoking Connect, but allow the
+            # frontend's in-flight Start response and snapshot refresh to render.
+            ui.activate_profile(index)
         while time.monotonic() < deadline:
             current = base._snapshot(min(30, max(0.1, deadline - time.monotonic())), "NATIVE_SELECTION_STATUS_FAILED")
             pending = current.get("pending_target")
@@ -1318,23 +1343,33 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
 
     pending_import: dict[str, object] = {}
 
-    def import_while_switching(pending: dict) -> None:
-        expected = pending.get("pending_target")
-        if not (
-            isinstance(expected, dict)
-            and expected.get("mode") == "PROFILE_INDEX"
-            and expected.get("index") == second
-        ):
-            raise NativeUIJourneyError(
-                "desktop import test did not begin from the selected profile's pending switch target"
-            )
-        current_url = ui.profile.read_text(encoding="utf-8").strip()
-        separator = "&" if "?" in current_url else "?"
-        imported_url = current_url + separator + "import-during-connect=1"
-        before_gets = stats()["subscription_gets"]
-        fixture.hold_responses()
+    def import_while_switching(
+        pending: dict | None, *, prepared=None, dispatch_result=None,
+        response_held: bool = False, source_snapshot: dict | None = None,
+    ) -> None:
+        if pending is not None:
+            expected = pending.get("pending_target")
+            if not (
+                isinstance(expected, dict)
+                and expected.get("mode") == "PROFILE_INDEX"
+                and expected.get("index") == second
+            ):
+                raise NativeUIJourneyError(
+                    "desktop import test did not begin from the selected profile's pending switch target"
+                )
+            source_snapshot = pending
+        elif ui.platform != "windows" or dispatch_result is None:
+            raise NativeUIJourneyError("profile switch import did not retain its transition evidence")
+        prepared = prepared or prepare_pending_import()
+        imported_url = str(prepared["url"])
+        before_gets = int(prepared["before_gets"])
+        if not response_held:
+            fixture.hold_responses()
         try:
-            ui.dispatch_import_link(imported_url)
+            if dispatch_result is None:
+                ui.dispatch_import_link(imported_url)
+            else:
+                checks["windows_profile_switch_import"] = dispatch_result
             deadline = time.monotonic() + timeout
             current_stats = stats()
             while time.monotonic() < deadline:
@@ -1351,6 +1386,12 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
                     "desktop import did not begin a held subscription request during switching"
                 )
                 failure.add_note(f"held_import_fixture_stats={json.dumps(current_stats, sort_keys=True)}")
+                if dispatch_result is not None:
+                    failure.add_note(
+                        "windows_profile_switch_import=" + json.dumps(
+                            dispatch_result, sort_keys=True, separators=(",", ":")
+                        )
+                    )
                 observations = (
                     ("held_import_ui_snapshot", ui.snapshot),
                     ("held_import_backend_snapshot", lambda: base._snapshot(
@@ -1365,6 +1406,15 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
                     else:
                         failure.add_note(f"{label}={json.dumps(value, sort_keys=True, separators=(',', ':'))}")
                 raise failure
+
+            if dispatch_result is not None:
+                dispatch_started = datetime.fromisoformat(
+                    str(dispatch_result["protocol_dispatch_started_at_utc"]).replace("Z", "+00:00")
+                ).timestamp()
+                if current_stats["last_subscription_get_started_at_unix_ms"] < int(dispatch_started * 1000):
+                    raise NativeUIJourneyError(
+                        "held subscription GET timestamp preceded its native protocol dispatch"
+                    )
 
             loading = base._snapshot(min(30, timeout), "NATIVE_PENDING_IMPORT_STATUS_FAILED")
             pending_target = loading.get("pending_target")
@@ -1387,11 +1437,16 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
                 raise NativeUIJourneyError(
                     "subscription import interrupted or replaced the authoritative pending profile switch"
                 )
-            if loading.get("source_url") != pending.get("source_url"):
+            if source_snapshot is None or loading.get("source_url") != source_snapshot.get("source_url"):
                 raise NativeUIJourneyError("held subscription import changed the accepted URL before its response completed")
-            pending_import.update({"url": imported_url, "before_gets": before_gets})
+            pending_import.update({
+                "url": imported_url,
+                "before_gets": before_gets,
+                "held_get_started_at_unix_ms": current_stats["last_subscription_get_started_at_unix_ms"],
+            })
         finally:
-            fixture.release_responses()
+            if not response_held:
+                fixture.release_responses()
 
     switched = switch_profile(manual, second, first, during_pending=import_while_switching)
     if pending_import:

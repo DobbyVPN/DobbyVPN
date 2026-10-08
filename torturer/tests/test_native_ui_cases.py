@@ -249,6 +249,54 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                 with self.assertRaises(journey.smoke.NativeUISmokeError):
                     controller.cancel_profile_switch(1, 0)
 
+    def test_windows_switch_import_dispatches_only_after_fresh_stop_observation(self):
+        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
+        controller.platform = "windows"
+        controller.pid = 42
+        controller.identity = "candidate-ui-instance"
+        url = "https://127.0.0.1:49152/subscription?import-during-connect=1"
+        uri = "dobbyvpn://import?url=https%3A%2F%2F127.0.0.1%3A49152%2Fsubscription%3Fimport-during-connect%3D1"
+
+        def dispatch_response():
+            response = self.windows_cancel_switch_response()
+            response.pop("stop_invoked_at_utc")
+            response.update({
+                "pid": 42,
+                "identity": "candidate-ui-instance",
+                "window_handle": "0x100",
+                "protocol_uri": uri,
+                "protocol_dispatch_started_at_utc": "2026-10-08T12:00:00.2600000+00:00",
+                "protocol_dispatch_returned_at_utc": "2026-10-08T12:00:00.3100000+00:00",
+                "shell_execute_result": 33,
+            })
+            return response
+
+        response = dispatch_response()
+        with patch.object(controller, "_call", return_value=response) as call:
+            self.assertIs(controller.switch_profile_and_dispatch_import(1, 0, url), response)
+        call.assert_called_once_with(
+            "profile-switch-import",
+            target="Profile 2 action",
+            competing="Profile 1 action",
+            uri=uri,
+        )
+
+        mutations = (
+            lambda value: value["target_at_stop"].update(name="Disconnect"),
+            lambda value: value["competing_at_stop"].update(enabled=True),
+            lambda value: value.update(protocol_uri="dobbyvpn://"),
+            lambda value: value.update(window_handle="not-a-window"),
+            lambda value: value.update(shell_execute_result=32),
+            lambda value: value.update(protocol_dispatch_started_at_utc="2026-10-08T11:59:59+00:00"),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), patch.object(controller, "_call") as call:
+                invalid = dispatch_response()
+                mutation(invalid)
+                call.return_value = invalid
+                with self.assertRaises(journey.smoke.NativeUISmokeError):
+                    controller.switch_profile_and_dispatch_import(1, 0, url)
+
     def test_snapshot_preserves_readback_of_native_subscription_editor(self):
         controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
         controller.platform = "macos"
