@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -23,6 +24,45 @@ type rawCapture struct {
 	generation uint64
 }
 
+// Raw descriptors have no whole-record framing. Preserve their file identities;
+// the capture monitor owns rename rotation rather than structured migration.
+func openRawCapture(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	var file *os.File
+	err := withFileLock(path, func() error {
+		for _, name := range []string{path + PreviousSuffix, path} {
+			info, err := os.Stat(name)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return &os.PathError{Op: "open raw capture", Path: name, Err: os.ErrInvalid}
+			}
+		}
+		opened, err := openAppend(path)
+		if err != nil {
+			return err
+		}
+		if _, err := regularFile(opened); err != nil {
+			return errors.Join(err, opened.Close())
+		}
+		file = opened
+		return nil
+	})
+	if err != nil {
+		if file != nil {
+			err = errors.Join(err, file.Close())
+		}
+		return nil, err
+	}
+	return file, nil
+}
+
 // CaptureStderr redirects the OS descriptor to a regular append-only file.
 // Panic/startup output never depends on draining a pipe or a Go log callback.
 // The monitor replaces descriptors; an in-flight write keeps the old inode,
@@ -36,10 +76,7 @@ func CaptureStderr(path, permissionsFrom string) error {
 		}
 		return nil
 	}
-	if _, err := OpenWriter(path); err != nil {
-		return err
-	}
-	file, err := openAppend(path)
+	file, err := openRawCapture(path)
 	if err != nil {
 		return err
 	}
