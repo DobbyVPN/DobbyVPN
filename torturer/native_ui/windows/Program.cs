@@ -2698,6 +2698,15 @@ internal static class Program
                     TracePhase("paste-find-editor");
                     var pasteEditor = Find("Connection configuration", editor: true);
                     var pasteValue = File.ReadAllText(Text("source")).Trim();
+                    var expectedPasteValue = pasteValue;
+                    var pasteMismatchMessage = "Native Paste did not place clipboard text in the subscription field";
+                    if (request.TryGetProperty("expectedSource", out var expectedSource))
+                    {
+                        if (expectedSource.ValueKind != JsonValueKind.String)
+                            throw new ArgumentException("Expected Paste source must be a string");
+                        expectedPasteValue = expectedSource.GetString()!;
+                        pasteMismatchMessage = "Native Paste did not preserve the expected subscription field value";
+                    }
                     var fieldBeforeClipboard = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
                     TracePhase("paste-activate-window");
                     RequireForeground(window, "Paste");
@@ -2778,11 +2787,11 @@ internal static class Program
                         do
                         {
                             pasteObserved = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-                            if (NormalizeLineEndings(pasteObserved).Trim() == NormalizeLineEndings(pasteValue)) break;
+                            if (NormalizeLineEndings(pasteObserved).Trim() == NormalizeLineEndings(expectedPasteValue)) break;
                             Thread.Sleep(50);
                         } while (valueWait.Elapsed.TotalSeconds < 5);
-                        if (NormalizeLineEndings(pasteObserved).Trim() != NormalizeLineEndings(pasteValue))
-                            throw new InvalidOperationException("Native Paste did not place clipboard text in the subscription field");
+                        if (NormalizeLineEndings(pasteObserved).Trim() != NormalizeLineEndings(expectedPasteValue))
+                            throw new InvalidOperationException(pasteMismatchMessage);
 
                         TracePhase("paste-verify-narrow-window-layout");
                         VerifyNarrowWindow(root, window, process.Id, Text("source"));

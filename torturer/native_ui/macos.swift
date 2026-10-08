@@ -705,8 +705,11 @@ func paste(_ editor: AXUIElement, source: String) throws {
     if let error = primary { throw error }
 }
 
-func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, source: String) throws -> Int64 {
+func pasteWithNativeControl(
+    _ app: NSRunningApplication, window: AXUIElement, source: String, expectedSource: String? = nil
+) throws -> Int64 {
     let value = try String(contentsOfFile: source, encoding: .utf8)
+    let expectedValue = expectedSource ?? value
     let initialNodes = try retryTransientAccessibilityReads(
         context: "Paste initial tree discovery",
         deadline: Date().addingTimeInterval(5)
@@ -795,13 +798,18 @@ func pasteWithNativeControl(_ app: NSRunningApplication, window: AXUIElement, so
             } catch let error as AccessibilityReadError where isTransientAccessibilityRead(error) {
                 lastTransientValueError = error
             }
-            if observed == value { break }
+            if observed == expectedValue { break }
             if Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
         } while Date() < deadline
-        if observed != value, let lastTransientValueError {
+        if observed != expectedValue, let lastTransientValueError {
             throw HelperError("Native Paste could not verify the URL after transient Accessibility read errors; last error=\(lastTransientValueError)")
         }
-        try require(observed == value, "Native Paste button did not fill the subscription URL")
+        try require(
+            observed == expectedValue,
+            expectedSource == nil
+                ? "Native Paste button did not fill the subscription URL"
+                : "Native Paste did not preserve the expected subscription field value"
+        )
         board.clearContents()
         if !previous.isEmpty && !board.writeObjects(previous) {
             throw HelperError("Native Paste completed; clipboard restoration failed")
@@ -1353,12 +1361,21 @@ func run() throws -> [String: Any] {
         try paste(find(nodes, "Connection configuration", editor: true), source: source)
     case "paste":
         guard let source = request["source"] as? String else { throw HelperError("Missing source path") }
+        let expectedSource: String?
+        if let rawExpectedSource = request["expectedSource"] {
+            guard let value = rawExpectedSource as? String else { throw HelperError("Expected Paste source must be a string") }
+            expectedSource = value
+        } else {
+            expectedSource = nil
+        }
         try activate()
         guard let currentWindows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
               let currentWindow = currentWindows.first else {
             throw HelperError("Native application has no window for Paste")
         }
-        let pasteInvokedAtUnixMs = try pasteWithNativeControl(app, window: currentWindow, source: source)
+        let pasteInvokedAtUnixMs = try pasteWithNativeControl(
+            app, window: currentWindow, source: source, expectedSource: expectedSource
+        )
         return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity,
                 "paste_invoked_at_unix_ms": pasteInvokedAtUnixMs, "labels": []]
     case "capture":

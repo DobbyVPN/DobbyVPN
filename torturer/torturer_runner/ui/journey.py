@@ -1975,15 +1975,18 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     stop_observed = auto_connection.get("auto_stop_observed") is True
     if not stop_observed:
         raise NativeUIJourneyError("Auto selection returned without proving its rendered Stop action")
-    pasted_connection = selected(disconnected_during_load, None, stop_observed=stop_observed)
+    selected(disconnected_during_load, None, stop_observed=stop_observed)
     valid_source = ui.profile.read_text(encoding="utf-8").strip()
     before_http_paste = base._snapshot(min(timeout, 30), "NATIVE_HTTP_PASTE_STATUS_FAILED")
     http_paste_gets = stats()["subscription_gets"]
     logs_before_http_paste = ui._call("logs").get("text", "")
     ui.profile.write_text("http://example.invalid/not-a-subscription", encoding="utf-8")
-    ui.paste_source()
+    invalid_paste_view = ui.paste_source(expected_source=valid_source)
+    if invalid_paste_view.get("source_text") != valid_source:
+        raise NativeUIJourneyError("native Paste of HTTP text changed the accepted URL field")
+    validation_text = "HTTPS subscription URL with a host"
     invalid_paste_logs = wait_for_logs(
-        lambda value: "Paste an HTTPS subscription URL with a host" in value
+        lambda value: validation_text in value
         and value != logs_before_http_paste,
         "native Paste of HTTP text did not show actionable URL validation",
     )
@@ -1995,20 +1998,16 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         after_http_paste, before_http_paste,
         "invalid native Paste changed or interrupted the active connection",
     )
-    if "Paste an HTTPS subscription URL with a host" not in invalid_paste_logs.get("text", ""):
+    if (after_http_paste.get("source_url") != before_http_paste.get("source_url")
+            or after_http_paste.get("digest") != before_http_paste.get("digest")):
+        raise NativeUIJourneyError("invalid native Paste changed the accepted subscription")
+    if validation_text not in invalid_paste_logs.get("text", ""):
         raise NativeUIJourneyError("native Paste validation record was not readable")
     checks["invalid_http_native_paste_no_fetch"] = True
 
+    # Paste rejected the clipboard value and preserved the already-rendered URL.
+    # Restore only the fixture file for the following native helper operations.
     ui.profile.write_text(valid_source, encoding="utf-8")
-    restore_before_gets = stats()["subscription_gets"]
-    ui.type_source(valid_source)
-    wait_for_gets(restore_before_gets + 1, "restoring the accepted URL after invalid Paste did not load once")
-    restored_paste = wait_for_snapshot(
-        lambda value: value.get("source_url") == valid_source,
-        "restoring the accepted URL after invalid Paste failed",
-    )
-    require_active_generation(restored_paste, pasted_connection, "restoring the URL after Paste changed the active generation")
-
     # A long inventory must remain bounded to its profile viewport so the
     # independent diagnostics pane stays usable on desktop-sized windows.
     previous_inventory = fixture.profile_bytes
@@ -2033,7 +2032,7 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     if len(large_layout.get("profiles", [])) != 24:
         raise NativeUIJourneyError("desktop did not load all 24 profiles in source order")
     require_active_generation(
-        large_layout, restored_paste,
+        large_layout, after_http_paste,
         "loading a long profile list changed or interrupted the active connection",
     )
     layout_view = ui.snapshot()
@@ -2054,10 +2053,10 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     )
     wait_for_gets(before_restore_layout_gets + 1, "restoring the normal inventory did not complete exactly one request")
     require_active_generation(
-        restored_layout, restored_paste,
+        restored_layout, after_http_paste,
         "restoring the normal profile inventory changed or interrupted the active connection",
     )
-    if restored_layout.get("digest") != restored_paste.get("digest"):
+    if restored_layout.get("digest") != after_http_paste.get("digest"):
         raise NativeUIJourneyError("long-list verification did not restore the prior profile inventory")
     checks["long_profile_list_keeps_logs_accessible"] = True
 

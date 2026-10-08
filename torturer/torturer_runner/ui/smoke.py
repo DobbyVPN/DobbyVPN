@@ -872,8 +872,11 @@ class NativeUIController:
             "reconnecting_seen": self.reconnecting_seen,
         }
 
-    def paste_source(self) -> dict:
-        result = self._call("paste", source=str(self.profile))
+    def paste_source(self, *, expected_source: str | None = None) -> dict:
+        fields: dict[str, object] = {"source": str(self.profile)}
+        if expected_source is not None:
+            fields["expectedSource"] = expected_source
+        result = self._call("paste", **fields)
         if result.get("ready") is not True:
             raise NativeUISmokeError("native Paste control is unavailable")
         paste_invoked_at = result.get("paste_invoked_at_unix_ms")
