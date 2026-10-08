@@ -1910,11 +1910,11 @@ public final class NativeUiHostedProfileTest {
         String marker = "held-load-log-" + System.nanoTime();
         NativeUiTestBridge.recordDiagnostic(context, "ui.test.held.load", marker);
         waitForUiControl(marker, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        tapEnabledControl(CONNECTION_ACTION_LABEL, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject stopped = snapshotResult("");
         if (!"IDLE".equals(stopped.optString("state"))
-                || stopped.getLong("generation") <= active.getLong("generation")) {
+                || stopped.getLong("generation") != active.getLong("generation")) {
             throw new AssertionError("Stop did not complete while subscription loading was held");
         }
         subscriptionFixturePost("/release", new byte[0]);
@@ -2010,7 +2010,7 @@ public final class NativeUiHostedProfileTest {
             if (pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
                     && pending.optInt("index", -1) == targetIndex
                     && digest.equals(pending.optString("digest"))) {
-                tapEnabledControl("Stop", remainingTimeout(deadline, "ANDROID_SWITCH_STOP_TIMEOUT"));
+                tapEnabledControl("Stop", deadline);
                 waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_SWITCH_STOP_TIMEOUT"));
                 JSONObject stopped = snapshotResult("");
                 if (!"IDLE".equals(stopped.optString("state"))
@@ -2137,11 +2137,11 @@ public final class NativeUiHostedProfileTest {
         }
         if (!oldDescription.isEmpty()) waitForUiControl(oldDescription, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         waitForUiControl("Replacement inventory only", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        tapEnabledControl("Disconnect", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        tapEnabledControl("Disconnect", deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject stopped = snapshotResult("");
         if (!"IDLE".equals(stopped.optString("state"))
-                || stopped.getLong("generation") <= active.getLong("generation")) {
+                || stopped.getLong("generation") != active.getLong("generation")) {
             throw new AssertionError("Visible Stop control could not end an absent-profile connection");
         }
     }
