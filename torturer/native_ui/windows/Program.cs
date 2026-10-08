@@ -1942,8 +1942,34 @@ internal static class Program
             switch (operation)
             {
                 case "focus":
-                    if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
+                {
+                    var focusTarget = DescribeWindowContext(
+                        window, includeThreadDesktop: false, includeGeometry: true);
+                    focusTarget["isWindow"] = IsWindow(window);
+                    focusTarget["visible"] = IsWindowVisible(window);
+                    focusTarget["minimized"] = IsIconic(window);
+
+                    var foregroundBeforeHandle = GetForegroundWindow();
+                    var foregroundBefore = DescribeWindowContext(
+                        foregroundBeforeHandle, includeThreadDesktop: false, includeGeometry: true);
+                    var foregroundRequested = SetForegroundWindow(window);
+                    var foregroundAfterHandle = GetForegroundWindow();
+                    var foregroundAfter = DescribeWindowContext(
+                        foregroundAfterHandle, includeThreadDesktop: false, includeGeometry: true);
+                    if (!foregroundRequested)
+                    {
+                        var focusMeasurement = new
+                        {
+                            target = focusTarget,
+                            foregroundBefore,
+                            setForegroundWindow = foregroundRequested,
+                            foregroundAfter,
+                        };
+                        throw new InvalidOperationException(
+                            $"Could not activate UI window; focus measurement={JsonSerializer.Serialize(focusMeasurement)}");
+                    }
                     break;
+                }
                 case "click":
                     var element = Find(Text("target"), actionable: true);
                     if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
