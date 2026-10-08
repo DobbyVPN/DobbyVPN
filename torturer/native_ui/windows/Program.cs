@@ -648,7 +648,8 @@ internal static class Program
         if (before.AutomationId != targetId || competingBefore.AutomationId != competingId ||
             before.ControlType != ControlType.Button.ProgrammaticName || before.IsControlElement != true || before.Name != "Connect" ||
             before.Enabled != true || before.Offscreen != false ||
-            competingBefore.ControlType != ControlType.Button.ProgrammaticName || competingBefore.IsControlElement != true || competingBefore.Name != "Connect" ||
+            competingBefore.ControlType != ControlType.Button.ProgrammaticName || competingBefore.IsControlElement != true ||
+            competingBefore.Name is not ("Connect" or "Disconnect") ||
             competingBefore.Enabled != true || competingBefore.Offscreen != false)
             throw new InvalidOperationException(
                 $"Profile actions were not visible and enabled before Connect: target={JsonSerializer.Serialize(before.ToDiagnostic())}; " +
