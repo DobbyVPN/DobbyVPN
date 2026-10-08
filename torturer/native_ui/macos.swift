@@ -935,7 +935,54 @@ func run() throws -> [String: Any] {
         nodes = try elements(window)
         if operation == "tree" {
             let labels = try nodes.flatMap(names)
-            let enabled = try nodes.filter { (try attribute($0, kAXEnabledAttribute)) as? Bool == true }.flatMap(names)
+            var enabledNodes = [AXUIElement]()
+            for (index, node) in nodes.enumerated() {
+                do {
+                    if (try attribute(node, kAXEnabledAttribute)) as? Bool == true {
+                        enabledNodes.append(node)
+                    }
+                } catch let originalError {
+                    let timestamp = ISO8601DateFormatter().string(from: Date())
+                    func diagnosticValue(_ attributeName: String) -> String {
+                        do {
+                            guard let value = try attribute(node, attributeName) else { return "<no value>" }
+                            if let string = value as? String { return String(reflecting: string) }
+                            return String(describing: value)
+                        } catch {
+                            return "<error: \(error)>"
+                        }
+                    }
+                    let originalDescription = String(describing: originalError)
+                    FileHandle.standardError.write(Data((
+                        "AXEnabled read failure timestamp=\(timestamp) nodeIndex=\(index) nodeCount=\(nodes.count) " +
+                            "AXRole=\(diagnosticValue(kAXRoleAttribute)) " +
+                            "AXIdentifier=\(diagnosticValue(kAXIdentifierAttribute)) " +
+                            "AXTitle=\(diagnosticValue(kAXTitleAttribute)) original=\(originalDescription)\n"
+                    ).utf8))
+
+                    let reread: String
+                    do {
+                        if let value = try attribute(node, kAXEnabledAttribute) {
+                            if let number = value as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() {
+                                reread = String(number.boolValue)
+                            } else {
+                                reread = String(describing: value)
+                            }
+                        } else {
+                            reread = "<no value>"
+                        }
+                    } catch {
+                        reread = "<error: \(error)>"
+                    }
+                    FileHandle.standardError.write(Data((
+                        "AXEnabled diagnostic reread timestamp=\(ISO8601DateFormatter().string(from: Date())) " +
+                            "nodeIndex=\(index) nodeCount=\(nodes.count) result=\(reread) " +
+                            "original=\(originalDescription)\n"
+                    ).utf8))
+                    throw originalError
+                }
+            }
+            let enabled = try enabledNodes.flatMap(names)
             var sourceText: Any = NSNull()
             var sourceTextError: String?
             do {
