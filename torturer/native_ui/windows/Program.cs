@@ -2420,10 +2420,11 @@ internal static class Program
                     .Where(element => element.Current.ControlType == ControlType.Text)
                     .Select(element =>
                     {
-                        var text = element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
-                            ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name;
+                        var text = element.Current.Name;
                         int? foreground = null;
-                        if (element.TryGetCurrentPattern(TextPattern.Pattern, out pattern))
+                        if (!string.IsNullOrEmpty(paletteMarker) &&
+                            text.Contains(paletteMarker, StringComparison.Ordinal) &&
+                            element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern))
                         {
                             var value = ((TextPattern)pattern).DocumentRange.GetAttributeValue(TextPattern.ForegroundColorAttribute);
                             if (value is int color) foreground = color;
@@ -2514,8 +2515,7 @@ internal static class Program
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll position");
                 var firstVisibleRecord = Walk(logRoot)
                     .Where(element => element.Current.ControlType == ControlType.Text && !element.Current.IsOffscreen)
-                    .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
-                        ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
+                    .Select(element => element.Current.Name)
                     .FirstOrDefault(text => text.Contains(" · ", StringComparison.Ordinal)) ?? "";
                 Console.WriteLine(JsonSerializer.Serialize(new {
                     ready = true, vertical_scroll_percent = position,
