@@ -1330,6 +1330,17 @@ class NativeUIController:
 
     def connect_with_auto_stop(self) -> dict:
         """Require an enabled Stop control while Auto selection is pending."""
+        before = self.snapshot()
+        labels = set(before.get("labels", []))
+        enabled = set(before.get("enabled_controls", []))
+        if not (
+            "Auto connect" in labels
+            and "Auto connect" in enabled
+            and "VPN connection action" in enabled
+        ):
+            raise NativeUISmokeError(
+                "Auto selection did not start from a rendered, enabled Auto connect action"
+            )
         self._click("VPN connection action")
         deadline = time.monotonic() + self.timeout
         stop_seen = False
@@ -1337,7 +1348,7 @@ class NativeUIController:
         while time.monotonic() < deadline:
             latest = self.snapshot()
             status = latest.get("status")
-            if status in {"Connecting", "Reconnecting"}:
+            if status in {"Stopping", "Connecting", "Reconnecting"}:
                 labels = set(latest.get("labels", []))
                 enabled = set(latest.get("enabled_controls", []))
                 if "Stop" in labels and "Stop" in enabled:

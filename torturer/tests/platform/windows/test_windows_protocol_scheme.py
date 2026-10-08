@@ -697,8 +697,13 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         controller._click = mock.Mock()
         controller.snapshot = mock.Mock(side_effect=(
             {
-                "status": "Connecting",
-                "labels": ["Stop", "Profile 1 action"],
+                "status": "Connected",
+                "labels": ["Auto connect"],
+                "enabled_controls": ["VPN connection action", "Auto connect"],
+            },
+            {
+                "status": "Stopping",
+                "labels": ["Stopping", "Stop", "Profile 1 action"],
                 "enabled_controls": ["Stop"],
             },
             {
@@ -714,7 +719,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         self.assertTrue(result["auto_stop_observed"])
         controller._click.assert_called_once_with("VPN connection action")
 
-    def test_auto_selection_does_not_claim_stop_after_it_has_already_connected(self) -> None:
+    def test_auto_selection_requires_the_enabled_auto_action_before_click(self) -> None:
         controller = object.__new__(smoke.NativeUIController)
         controller._timeout = 10.0
         controller._deadline = None
@@ -724,6 +729,50 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             "labels": ["Disconnect"],
             "enabled_controls": ["VPN connection action"],
         })
+
+        with self.assertRaisesRegex(smoke.NativeUISmokeError, "rendered, enabled Auto connect action"):
+            controller.connect_with_auto_stop()
+
+        controller._click.assert_not_called()
+
+    def test_auto_selection_stopping_rejects_an_enabled_competing_profile_action(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller._timeout = 10.0
+        controller._deadline = None
+        controller._click = mock.Mock()
+        controller.snapshot = mock.Mock(side_effect=(
+            {
+                "status": "Connected",
+                "labels": ["Auto connect"],
+                "enabled_controls": ["VPN connection action", "Auto connect"],
+            },
+            {
+                "status": "Stopping",
+                "labels": ["Stopping", "Stop", "Profile 1 action"],
+                "enabled_controls": ["Stop", "Profile 1 action"],
+            },
+        ))
+
+        with self.assertRaisesRegex(smoke.NativeUISmokeError, "profile Connect actions remained enabled"):
+            controller.connect_with_auto_stop()
+
+    def test_auto_selection_does_not_claim_stop_after_it_has_already_connected(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller._timeout = 10.0
+        controller._deadline = None
+        controller._click = mock.Mock()
+        controller.snapshot = mock.Mock(side_effect=(
+            {
+                "status": "Connected",
+                "labels": ["Auto connect"],
+                "enabled_controls": ["VPN connection action", "Auto connect"],
+            },
+            {
+                "status": "Connected",
+                "labels": ["Disconnect"],
+                "enabled_controls": ["VPN connection action"],
+            },
+        ))
 
         with self.assertRaisesRegex(smoke.NativeUISmokeError, "without a rendered, enabled Stop"):
             controller.connect_with_auto_stop()

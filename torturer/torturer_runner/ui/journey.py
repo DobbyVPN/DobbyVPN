@@ -1162,11 +1162,11 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
         raise NativeUIJourneyError("the connection page exposed a separate Load action")
     checks["no_separate_load_action"] = True
 
-    def selected(previous: dict, index: int | None) -> dict:
+    def selected(previous: dict, index: int | None, *, stop_observed: bool = False) -> dict:
         deadline = time.monotonic() + timeout
         mode = "AUTO_SELECT" if index is None else "PROFILE_INDEX"
         target_index = index
-        transition_seen = False
+        transition_seen = stop_observed
         next_ui_check = 0.0
         while time.monotonic() < deadline:
             current = base._snapshot(min(30, max(0.1, deadline - time.monotonic())), "NATIVE_SELECTION_STATUS_FAILED")
@@ -1784,9 +1784,10 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
     checks["clear_boundary_survives_frontend_reopen"] = True
 
     auto_connection = ui.connect_with_auto_stop()
-    selected(switched, None)
-    if auto_connection.get("auto_stop_observed") is not True:
+    stop_observed = auto_connection.get("auto_stop_observed") is True
+    if not stop_observed:
         raise NativeUIJourneyError("Auto selection returned without proving its rendered Stop action")
+    selected(switched, None, stop_observed=stop_observed)
     checks["auto_stop_during_auto_selection"] = True
 
     # Replace the visible inventory while Auto is active. The active profile
