@@ -14,10 +14,23 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        var diagnostics = NativeDiagnostics.Current;
+        diagnostics.RecordInfo("activation.process-entry", "Entered Windows app Main before WinRT initialization", new
+        {
+            argv = args,
+            processPath = Environment.ProcessPath,
+            apartment = System.Threading.Thread.CurrentThread.GetApartmentState().ToString(),
+            localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            uiDiagnosticsPath = diagnostics.UiPath,
+        });
         if (System.Threading.Thread.CurrentThread.GetApartmentState() != System.Threading.ApartmentState.STA)
             throw new InvalidOperationException("WinUI entrypoint requires an STA thread.");
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
+        diagnostics.RecordInfo("activation.runtime-initialized", "Initialized WinRT COM wrappers", new
+        {
+            processPath = Environment.ProcessPath,
+        });
         var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
         LogActivation("activation.startup", "Captured Windows app startup activation", activation, args);
         var instance = AppInstance.FindOrRegisterForKey("DobbyVPN");

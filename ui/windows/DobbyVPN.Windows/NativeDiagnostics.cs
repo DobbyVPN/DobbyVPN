@@ -26,6 +26,7 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
     private readonly Dictionary<string, string> _lastErrors = new();
     private readonly string _run = Guid.NewGuid().ToString("N");
     private long _sequence;
+    internal string UiPath => uiPath;
     public string WriteFailure { get; private set; } = "";
 
     public void Record(string message, string category)
