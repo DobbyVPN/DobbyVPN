@@ -14,6 +14,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Threading;
 using System.Windows.Automation;
+using Microsoft.Win32.SafeHandles;
 using Forms = System.Windows.Forms;
 
 // Runs only in the interactive test user's session, outside the shipped app.
@@ -27,6 +28,7 @@ internal static class Program
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
@@ -39,11 +41,24 @@ internal static class Program
     [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessTimes(
+        SafeProcessHandle process, out NativeFileTime creationTime, out NativeFileTime exitTime,
+        out NativeFileTime kernelTime, out NativeFileTime userTime);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint GetProcessId(SafeProcessHandle process);
+    [DllImport("dbghelp.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool MiniDumpWriteDump(
+        SafeProcessHandle process, uint processId, SafeFileHandle file, uint dumpType,
+        IntPtr exceptionParam, IntPtr userStreamParam, IntPtr callbackParam);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
     [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
     [DllImport("user32.dll", SetLastError = true, EntryPoint = "PostMessageW")]
     private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SendMessageTimeoutW")]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out UIntPtr result);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW", SetLastError = true)]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
@@ -57,9 +72,18 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] private struct NativeFileTime { public uint Low, High; }
 
     private const string WindowsTextSizeSettingsUri = "ms-settings:easeofaccess-display";
     private const uint WmClose = 0x0010;
+    private const uint WmNull = 0x0000;
+    private const uint SmtoAbortIfHung = 0x0002;
+    private const uint SmtoErrorOnExit = 0x0020;
+    private const uint GaRootOwner = 3;
+    private const uint ProcessQueryInformation = 0x0400;
+    private const uint ProcessVmRead = 0x0010;
+    private const uint MiniDumpWithFullMemory = 0x00000002;
+    private const uint MiniDumpWithThreadInfo = 0x00001000;
 
     private const int UiaBoundingRectanglePropertyId = 30001;
     private const int UiaProcessIdPropertyId = 30002;
@@ -356,6 +380,180 @@ internal static class Program
             result["windowFromPoint"] = pointWindow;
             return result;
         });
+    }
+
+    private static Dictionary<string, object?> ProbeWindowMessageResponsiveness(
+        IntPtr window,
+        int expectedProcessId,
+        string expectedProcessIdentity)
+    {
+        const uint timeoutMs = 1000;
+        var started = Stopwatch.GetTimestamp();
+        var result = new Dictionary<string, object?>
+        {
+            ["capturedAtUtc"] = UtcTimestamp(),
+            ["message"] = "WM_NULL",
+            ["timeoutMs"] = timeoutMs,
+            ["flags"] = "SMTO_ABORTIFHUNG|SMTO_ERRORONEXIT",
+            ["windowHandle"] = $"0x{window.ToInt64():X}",
+            ["expectedProcessId"] = expectedProcessId,
+            ["expectedProcessIdentity"] = expectedProcessIdentity,
+            ["sendAttempted"] = false,
+        };
+        try
+        {
+            var windowContext = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false);
+            result["windowContext"] = windowContext;
+            var isWindow = IsWindow(window);
+            result["isWindow"] = isWindow;
+            var threadId = windowContext.GetValueOrDefault("threadId") is uint observedThreadId ? observedThreadId : 0;
+            var processId = windowContext.GetValueOrDefault("processId") is uint observedProcessId ? observedProcessId : 0;
+            if (!isWindow || threadId == 0 || processId != checked((uint)expectedProcessId))
+                throw new InvalidOperationException("The target HWND no longer has the verified window/process owner");
+
+            string actualIdentity;
+            try
+            {
+                using var owner = Process.GetProcessById(checked((int)processId));
+                actualIdentity = owner.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
+            }
+            catch (Exception error)
+            {
+                result["ownerProcessIdentityError"] = error.ToString();
+                throw;
+            }
+            result["ownerProcessIdentity"] = actualIdentity;
+            if (actualIdentity != expectedProcessIdentity)
+                throw new InvalidOperationException("The target HWND PID no longer has the verified process identity");
+
+            Marshal.SetLastPInvokeError(0);
+            var sendStarted = Stopwatch.GetTimestamp();
+            result["sendAttempted"] = true;
+            try
+            {
+                var messageResult = SendMessageTimeout(window, WmNull, IntPtr.Zero, IntPtr.Zero,
+                    SmtoAbortIfHung | SmtoErrorOnExit, timeoutMs, out var returnedResult);
+                var lastError = Marshal.GetLastWin32Error();
+                result["sendMessageTimeoutSucceeded"] = messageResult != IntPtr.Zero;
+                result["windowProcedureResult"] = returnedResult.ToUInt64();
+                result["lastError"] = lastError;
+                if (messageResult == IntPtr.Zero)
+                    result["error"] = lastError == 0
+                        ? "SendMessageTimeoutW returned zero without setting a Win32 last error"
+                        : new System.ComponentModel.Win32Exception(lastError, "SendMessageTimeoutW failed or timed out").ToString();
+            }
+            finally { result["sendDurationMs"] = Stopwatch.GetElapsedTime(sendStarted).TotalMilliseconds; }
+        }
+        catch (Exception error)
+        {
+            result["error"] = error.ToString();
+        }
+        result["durationMs"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        return result;
+    }
+
+    private static Dictionary<string, object?> CapturePointFailureDump(
+        Process process,
+        string expectedIdentity,
+        JsonElement request,
+        string failure)
+    {
+        const uint dumpType = MiniDumpWithFullMemory | MiniDumpWithThreadInfo;
+        var result = new Dictionary<string, object?>
+        {
+            ["attempted"] = true,
+            ["failure"] = failure,
+            ["processId"] = process.Id,
+            ["expectedProcessIdentity"] = expectedIdentity,
+            ["dumpTypeFlags"] = dumpType,
+            ["dumpType"] = "MiniDumpWithFullMemory|MiniDumpWithThreadInfo",
+            ["captureIntent"] = "live process memory and thread state; no exception record supplied",
+            ["exceptionInformationIncluded"] = false,
+            ["written"] = false,
+        };
+        string? partialPath = null;
+        try
+        {
+            if (!request.TryGetProperty("dumpDirectory", out var directoryElement) ||
+                string.IsNullOrWhiteSpace(directoryElement.GetString()))
+                throw new InvalidOperationException("Failure dump directory was not supplied by the Windows test harness");
+            var directory = Path.GetFullPath(directoryElement.GetString()!);
+            if (!Directory.Exists(directory))
+                throw new DirectoryNotFoundException($"Failure dump directory does not exist: {directory}");
+            result["dumpDirectory"] = directory;
+            try { result["availableDiskBytesBeforeDump"] = new DriveInfo(Path.GetPathRoot(directory)!).AvailableFreeSpace; }
+            catch (Exception error) { result["availableDiskBytesError"] = error.ToString(); }
+            try
+            {
+                process.Refresh();
+                result["workingSetBytesBeforeDump"] = process.WorkingSet64;
+                result["privateMemoryBytesBeforeDump"] = process.PrivateMemorySize64;
+            }
+            catch (Exception error) { result["processMemorySnapshotError"] = error.ToString(); }
+
+            using var target = OpenProcess(
+                ProcessQueryInformation | ProcessVmRead, false, checked((uint)process.Id));
+            if (target.IsInvalid)
+            {
+                var code = Marshal.GetLastWin32Error();
+                result["openProcessLastError"] = code;
+                throw new System.ComponentModel.Win32Exception(code, "OpenProcess for failure dump failed");
+            }
+            var actualPid = GetProcessId(target);
+            if (actualPid == 0)
+            {
+                var code = Marshal.GetLastWin32Error();
+                result["getProcessIdLastError"] = code;
+                throw new System.ComponentModel.Win32Exception(code, "GetProcessId for failure dump handle failed");
+            }
+            if (actualPid != process.Id)
+                throw new InvalidOperationException($"Failure dump handle PID changed: expected {process.Id}, observed {actualPid}");
+            if (!GetProcessTimes(target, out var creation, out _, out _, out _))
+            {
+                var code = Marshal.GetLastWin32Error();
+                result["getProcessTimesLastError"] = code;
+                throw new System.ComponentModel.Win32Exception(code, "GetProcessTimes for failure dump handle failed");
+            }
+            var creationFileTime = unchecked(((long)creation.High << 32) | creation.Low);
+            var actualIdentity = DateTime.FromFileTimeUtc(creationFileTime).Ticks.ToString(CultureInfo.InvariantCulture);
+            result["actualProcessIdentity"] = actualIdentity;
+            result["processIdentityVerified"] = actualIdentity == expectedIdentity;
+            if (actualIdentity != expectedIdentity)
+                throw new InvalidOperationException("Failure dump handle no longer refers to the verified process instance");
+
+            var dumpPath = Path.Combine(directory, $"uia-point-failure-{process.Id}-{Guid.NewGuid():N}.dmp");
+            partialPath = dumpPath + ".partial";
+            result["dumpPath"] = dumpPath;
+            result["partialPath"] = partialPath;
+            using (var dump = new FileStream(partialPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read))
+            {
+                var written = MiniDumpWriteDump(target, actualPid, dump.SafeFileHandle, dumpType,
+                    IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+                if (!written)
+                {
+                    var code = Marshal.GetLastWin32Error();
+                    result["miniDumpWriteDumpLastError"] = code;
+                    throw new System.ComponentModel.Win32Exception(code, "MiniDumpWriteDump failed");
+                }
+                dump.Flush(flushToDisk: true);
+                result["bytesWritten"] = dump.Length;
+                if (dump.Length == 0) throw new InvalidDataException("MiniDumpWriteDump returned success but wrote an empty file");
+            }
+            File.Move(partialPath, dumpPath);
+            result["partialPath"] = null;
+            result["written"] = true;
+        }
+        catch (Exception error)
+        {
+            result["error"] = error.ToString();
+            if (partialPath is not null && File.Exists(partialPath))
+            {
+                result["partialPath"] = partialPath;
+                try { result["partialBytes"] = new FileInfo(partialPath).Length; }
+                catch (Exception sizeError) { result["partialSizeError"] = sizeError.ToString(); }
+            }
+        }
+        return result;
     }
 
     private static AutomationElement RequireAutomationId(AutomationElement root, string automationId)
@@ -703,6 +901,36 @@ internal static class Program
             throw new ArgumentException("Settings helper supports inspect only at the fixed Text size URI");
     }
 
+    private static Dictionary<string, object?> CaptureSettingsWindowAfterClose(
+        IntPtr window,
+        int expectedProcessId,
+        long expectedProcessStartTicks,
+        int expectedSessionId,
+        bool closeMessagePosted)
+    {
+        var snapshot = new Dictionary<string, object?>
+        {
+            ["capturedAtUtc"] = UtcTimestamp(),
+            ["windowHandle"] = $"0x{window.ToInt64():X}",
+            ["closeMessagePosted"] = closeMessagePosted,
+            ["expectedProcessId"] = expectedProcessId,
+            ["expectedProcessStartUtcTicks"] = expectedProcessStartTicks.ToString(CultureInfo.InvariantCulture),
+            ["expectedSessionId"] = expectedSessionId,
+        };
+        var isWindow = IsWindow(window);
+        var windowContext = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false);
+        windowContext["isWindow"] = isWindow;
+        windowContext["isWindowVisible"] = isWindow && IsWindowVisible(window);
+        snapshot["window"] = windowContext;
+        var rootOwner = isWindow ? GetAncestor(window, GaRootOwner) : IntPtr.Zero;
+        var rootOwnerContext = DescribeWindowContext(
+            rootOwner, includeThreadDesktop: false, includeGeometry: false);
+        rootOwnerContext["isWindow"] = IsWindow(rootOwner);
+        rootOwnerContext["isWindowVisible"] = IsWindow(rootOwner) && IsWindowVisible(rootOwner);
+        snapshot["rootOwner"] = rootOwnerContext;
+        return snapshot;
+    }
+
     private static int InspectWindowsTextSizeSettings()
     {
         using var helper = Process.GetCurrentProcess();
@@ -790,6 +1018,7 @@ internal static class Program
         {
             if (window != IntPtr.Zero && !windowsBefore.Contains(window))
             {
+                var closeMessagePosted = false;
                 try
                 {
                     GetWindowThreadProcessId(window, out var actualPid);
@@ -803,11 +1032,24 @@ internal static class Program
                             throw new InvalidOperationException("Refusing to close a Settings window whose ownership changed");
                         if (!PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero))
                             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not close new Settings window");
+                        closeMessagePosted = true;
                         WaitFor(() => { GetWindowThreadProcessId(window, out var pid); return pid == 0 || pid != ownerPid; }, "New Settings window did not close", seconds: 5);
                         response["newSettingsWindowClosed"] = true;
                     }
                 }
                 catch (Exception error) { cleanupErrors.Add(error.ToString()); }
+                finally
+                {
+                    try
+                    {
+                        response["postCloseWindowSnapshot"] = CaptureSettingsWindowAfterClose(
+                            window, ownerPid, ownerStart, sessionId, closeMessagePosted);
+                    }
+                    catch (Exception error)
+                    {
+                        cleanupErrors.Add("Settings post-close HWND snapshot: " + error);
+                    }
+                }
             }
             else if (activationAttempted && window == IntPtr.Zero)
             {
@@ -1884,31 +2126,58 @@ internal static class Program
                 response["fromPointAttempted"] = false;
                 response["fromPointSkipped"] = "CUIAutomation initialization failed; no point query was attempted";
             }
+            else if (clientApi == "com")
+            {
+                response["windowMessageBeforeFromPoint"] =
+                    ProbeWindowMessageResponsiveness(window, process.Id, identity);
+                var fromPointStarted = Stopwatch.GetTimestamp();
+                response["fromPointAttempted"] = true;
+                int? hresult = null;
+                IUIAutomationElementCom? foundTarget = null;
+                try
+                {
+                    hresult = comAutomation!.ElementFromPoint(
+                        new NativePoint { X = pointX, Y = pointY }, out foundTarget);
+                }
+                catch (Exception error)
+                {
+                    response["fromPointException"] = error.ToString();
+                }
+                finally
+                {
+                    response["fromPointDurationMs"] = Stopwatch.GetElapsedTime(fromPointStarted).TotalMilliseconds;
+                    response["windowMessageAfterFromPoint"] =
+                        ProbeWindowMessageResponsiveness(window, process.Id, identity);
+                }
+                comTarget = foundTarget;
+                if (hresult is int result)
+                {
+                    response["fromPointHresult"] = FormatHresult(result);
+                    response["fromPointCompleted"] = result >= 0;
+                    response["targetFound"] = result >= 0 && comTarget is not null;
+                    comPointSucceeded = result >= 0;
+                    if (result < 0)
+                        response["fromPointException"] = new COMException(
+                            "IUIAutomation::ElementFromPoint failed", result).ToString();
+                }
+                var failedHresult = hresult.HasValue && hresult.Value < 0;
+                if (failedHresult || response.ContainsKey("fromPointException"))
+                {
+                    var failure = failedHresult
+                        ? $"IUIAutomation::ElementFromPoint returned {FormatHresult(hresult!.Value)}"
+                        : "IUIAutomation::ElementFromPoint threw an exception";
+                    response["failureDump"] = CapturePointFailureDump(process, identity, request, failure);
+                }
+            }
             else
             {
                 var fromPointStarted = Stopwatch.GetTimestamp();
                 response["fromPointAttempted"] = true;
                 try
                 {
-                    if (clientApi == "com")
-                    {
-                        var hresult = comAutomation!.ElementFromPoint(
-                            new NativePoint { X = pointX, Y = pointY }, out var foundTarget);
-                        comTarget = foundTarget;
-                        response["fromPointHresult"] = FormatHresult(hresult);
-                        response["fromPointCompleted"] = hresult >= 0;
-                        response["targetFound"] = hresult >= 0 && comTarget is not null;
-                        comPointSucceeded = hresult >= 0;
-                        if (hresult < 0)
-                            response["fromPointException"] = new COMException(
-                                "IUIAutomation::ElementFromPoint failed", hresult).ToString();
-                    }
-                    else
-                    {
-                        target = AutomationElement.FromPoint(new System.Windows.Point(pointX, pointY));
-                        response["fromPointCompleted"] = true;
-                        response["targetFound"] = target is not null;
-                    }
+                    target = AutomationElement.FromPoint(new System.Windows.Point(pointX, pointY));
+                    response["fromPointCompleted"] = true;
+                    response["targetFound"] = target is not null;
                 }
                 catch (Exception error)
                 {

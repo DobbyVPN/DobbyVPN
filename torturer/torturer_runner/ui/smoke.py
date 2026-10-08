@@ -687,18 +687,24 @@ class NativeUIController:
                         raise NativeUISmokeError(
                             "SourceEditor screen geometry is not in physical screen pixels"
                         )
+                    point_fields = {
+                        "windowHandle": baseline["windowHandle"],
+                        "x": screen_geometry["centerX"],
+                        "y": screen_geometry["centerY"],
+                        "clientOriginX": screen_geometry["clientOrigin"]["x"],
+                        "clientOriginY": screen_geometry["clientOrigin"]["y"],
+                        "expectedAutomationId": editor["automationId"],
+                        "expectedName": editor["name"],
+                        "expectedControlType": editor["controlType"],
+                        "expectedProcessId": baseline["pid"],
+                    }
+                    dump_directory = getattr(self, "_windows_wer_dump_dir", None)
+                    if dump_directory is not None:
+                        point_fields["dumpDirectory"] = str(dump_directory)
                     diagnostics["external_uia_point"] = self._call(
                         "uia-point",
                         clientApi="com",
-                        windowHandle=baseline["windowHandle"],
-                        x=screen_geometry["centerX"],
-                        y=screen_geometry["centerY"],
-                        clientOriginX=screen_geometry["clientOrigin"]["x"],
-                        clientOriginY=screen_geometry["clientOrigin"]["y"],
-                        expectedAutomationId=editor["automationId"],
-                        expectedName=editor["name"],
-                        expectedControlType=editor["controlType"],
-                        expectedProcessId=baseline["pid"],
+                        **point_fields,
                     )
                 except Exception as error:
                     diagnostics["external_uia_point_exception"] = "".join(
@@ -1591,19 +1597,22 @@ if ($events.Count -eq 0) {
 
     def _write_windows_wer_dump_inventory(self) -> None:
         assert self._windows_wer_dump_dir is not None
-        dumps = sorted(
+        artifacts = sorted(
             path for path in self._windows_wer_dump_dir.iterdir()
-            if path.is_file() and path.suffix.casefold() == ".dmp"
+            if path.is_file() and (
+                path.suffix.casefold() == ".dmp" or path.name.casefold().endswith(".dmp.partial")
+            )
         )
         lines = [f"wer_dump_directory={self._windows_wer_dump_dir}"]
-        if not dumps:
+        if not artifacts:
             lines.append("wer_dump_files=none")
         else:
-            for path in dumps:
+            for path in artifacts:
                 metadata = path.stat()
                 modified = datetime.fromtimestamp(metadata.st_mtime, timezone.utc).isoformat()
+                key = "wer_dump_partial_file" if path.name.casefold().endswith(".dmp.partial") else "wer_dump_file"
                 lines.append(
-                    f"wer_dump_file={path} bytes={metadata.st_size} modified_utc={modified}"
+                    f"{key}={path} bytes={metadata.st_size} modified_utc={modified}"
                 )
         (self.logs / "windows-wer-dump-inventory.log").write_text(
             "\n".join(lines) + "\n",

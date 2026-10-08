@@ -2759,6 +2759,13 @@ public final class NativeUiHostedProfileTest {
                 String label = "Profile " + (profileIndex + 1) + " action";
                 UiObject2 action = findUiObject(label);
                 if (action == null) continue;
+                while (action != null && !action.isClickable()) {
+                    action = action.getParent();
+                }
+                if (action == null) {
+                    throw new IllegalStateException(
+                            "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_UNAVAILABLE");
+                }
                 if (action.isEnabled()) {
                     throw recoveryProfileActionEnabled(profileIndex, label, action);
                 }

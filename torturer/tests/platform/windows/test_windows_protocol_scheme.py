@@ -405,6 +405,43 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             self.assertEqual(point_method.count("AutomationElement.FromPoint("), 1)
             self.assertEqual(point_method.count("comAutomation!.ElementFromPoint("), 1)
             self.assertIn("CapturePointContextBeforeFromPoint(window, pointX, pointY)", point_method)
+            point_query = point_method.index("comAutomation!.ElementFromPoint(")
+            self.assertEqual(point_method.count("ProbeWindowMessageResponsiveness("), 2)
+            self.assertLess(point_method.index('response["windowMessageBeforeFromPoint"]'), point_query)
+            after_probe = point_method.index('response["windowMessageAfterFromPoint"]')
+            self.assertLess(point_query, after_probe)
+            self.assertIn("finally", point_method[point_query:after_probe])
+            failure_dump_gate = point_method.index(
+                "if (failedHresult || response.ContainsKey(\"fromPointException\"))"
+            )
+            self.assertGreater(failure_dump_gate, after_probe)
+            self.assertEqual(point_method.count("CapturePointFailureDump("), 1)
+            dump_method_start = helper_source.index(
+                "private static Dictionary<string, object?> CapturePointFailureDump("
+            )
+            dump_method_end = helper_source.index(
+                "private static AutomationElement RequireAutomationId(", dump_method_start
+            )
+            dump_method = helper_source[dump_method_start:dump_method_end]
+            self.assertIn("MiniDumpWithFullMemory | MiniDumpWithThreadInfo", dump_method)
+            self.assertIn("actualIdentity != expectedIdentity", dump_method)
+            self.assertIn("MiniDumpWriteDump(", dump_method)
+            self.assertIn('result["miniDumpWriteDumpLastError"]', dump_method)
+            self.assertIn('result["partialBytes"]', dump_method)
+            message_probe_start = helper_source.index(
+                "private static Dictionary<string, object?> ProbeWindowMessageResponsiveness("
+            )
+            message_probe = helper_source[message_probe_start:helper_source.index(
+                "private static AutomationElement RequireAutomationId(", message_probe_start)]
+            self.assertTrue(all(fragment in message_probe for fragment in (
+                "DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false)",
+                "SendMessageTimeout(", "WmNull", "SmtoAbortIfHung | SmtoErrorOnExit",
+                "const uint timeoutMs = 1000", "owner.StartTime.ToUniversalTime().Ticks",
+            )))
+            self.assertNotIn("PostMessage(", message_probe)
+            self.assertIn('response["windowMessageBeforeFromPoint"]', point_method)
+            self.assertIn('response["windowMessageAfterFromPoint"]', point_method)
+            self.assertNotIn("windowMessageContinuity", point_method)
             self.assertLess(
                 point_method.index("CapturePointContextBeforeFromPoint(window, pointX, pointY)"),
                 min(
@@ -453,6 +490,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller._timeout = 5.0
             controller._deadline = None
             controller.process = None
+            controller._windows_wer_dump_dir = Path(directory) / "windows-wer-dumps"
+            controller._windows_wer_dump_dir.mkdir()
             root_peer_result = _windows_content_root_probe()
             (controller.logs / "windows-content-root-peers.json").write_text(
                 json.dumps(root_peer_result), encoding="utf-8"
@@ -483,6 +522,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
                     "expectedName": "Subscription URL",
                     "expectedControlType": "Edit",
                     "expectedProcessId": 42,
+                    "dumpDirectory": str(controller._windows_wer_dump_dir),
                 },
             )
             self.assertEqual(result["xaml_content_root_peers"], root_peer_result)
@@ -543,6 +583,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             dump_dir.mkdir()
             dump = dump_dir / "DobbyVPN.exe.1234.dmp"
             dump.write_bytes(b"minidump")
+            partial = dump_dir / "uia-point-failure-42-test.dmp.partial"
+            partial.write_bytes(b"partial")
             controller = object.__new__(smoke.NativeUIController)
             controller.logs = root
             controller._windows_wer_started_at_utc = smoke.datetime.now(smoke.timezone.utc)
@@ -576,6 +618,8 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             inventory = (root / "windows-wer-dump-inventory.log").read_text(encoding="utf-8")
             self.assertIn(str(dump), inventory)
             self.assertIn("bytes=8", inventory)
+            self.assertIn(f"wer_dump_partial_file={partial}", inventory)
+            self.assertIn("bytes=7", inventory)
 
     def test_windows_cold_launch_uses_exact_interactive_child_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

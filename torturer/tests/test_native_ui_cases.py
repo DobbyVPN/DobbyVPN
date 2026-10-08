@@ -230,6 +230,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         dispatch = source.index('if (operation == "settings-text-size")')
         product_resolution = source.index('var expected = Path.GetFullPath(Text("executable"));')
         validation = source.index("private static void ValidateSettingsTextSizeRequest")
+        snapshot_start = source.index("private static Dictionary<string, object?> CaptureSettingsWindowAfterClose(")
         inspection = source.index("private static int InspectWindowsTextSizeSettings")
         inspection_end = source.index("private static string DescribeElement", inspection)
 
@@ -256,6 +257,20 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         self.assertIn("cleanup of a potentially new Settings window cannot be verified", operation)
         self.assertIn('response["error"] = primaryError', operation)
         self.assertIn('response["cleanupErrors"] = cleanupErrors', operation)
+
+        close_start = operation.index("if (window != IntPtr.Zero && !windowsBefore.Contains(window))")
+        close_cleanup = operation[close_start:operation.index(
+            "else if (activationAttempted && window == IntPtr.Zero)", close_start)]
+        self.assertTrue(all(fragment in close_cleanup for fragment in (
+            '"New Settings window did not close"', "cleanupErrors.Add(error.ToString())", "finally",
+            'response["postCloseWindowSnapshot"] = CaptureSettingsWindowAfterClose(',
+        )))
+
+        snapshot = source[snapshot_start:inspection]
+        self.assertTrue(all(fragment in snapshot for fragment in (
+            'snapshot["window"] = windowContext', 'windowContext["isWindowVisible"]',
+            "GetAncestor(window, GaRootOwner)", 'snapshot["rootOwner"]', "DescribeWindowContext(",
+        )))
 
         smoke_source = Path(journey.smoke.__file__).read_text(encoding="utf-8")
         operation_limit = smoke_source.index("operation_limit = 30.0")
