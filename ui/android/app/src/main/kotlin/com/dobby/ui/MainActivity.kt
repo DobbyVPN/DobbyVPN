@@ -787,6 +787,8 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                             }) { Text(controller.actionTitle(profile.index)) }
                     }
                 }
+                // Keep the last control's 48dp touch target inside the clipped scroll viewport.
+                Spacer(Modifier.height(4.dp))
             }
             LogsPane(controller, Modifier.weight(1f))
         }
