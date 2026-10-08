@@ -676,7 +676,7 @@ func press(_ element: AXUIElement) throws {
     try require(code == .success, "Native AX press failed: \(code.rawValue)")
 }
 
-func pressConnectionAction(_ nodes: [AXUIElement], identifier expectedIdentifier: String) throws {
+func verifiedConnectionAction(_ nodes: [AXUIElement], identifier expectedIdentifier: String) throws -> AXUIElement {
     let element = try find(nodes, expectedIdentifier)
     let actualIdentifier = try identifier(element)
     try require(actualIdentifier == expectedIdentifier,
@@ -694,7 +694,7 @@ func pressConnectionAction(_ nodes: [AXUIElement], identifier expectedIdentifier
     let actionNames = rawActionNames as? [String] ?? []
     try require(actionNames.contains(kAXPressAction as String),
                 "Native connection action does not advertise AXPress: \(expectedIdentifier); actions=\(actionNames)")
-    try press(element)
+    return element
 }
 
 func key(_ code: CGKeyCode, command: Bool = true) throws {
@@ -983,6 +983,21 @@ func run() throws -> [String: Any] {
     if operation == "scroll-logs" || operation == "scroll-profile-list" { try activate() }
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 1)
+    if operation == "click", let target = request["target"] as? String,
+       target == "VPN connection action" {
+        try activate()
+        let element = try retryTransientAccessibilityReads(
+            context: "native connection action discovery",
+            deadline: Date().addingTimeInterval(0.5)
+        ) { () -> AXUIElement? in
+            guard let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
+                  let window = windows.first else { return nil }
+            return try verifiedConnectionAction(elements(window), identifier: target)
+        }
+        guard let element else { return ["ready": false, "pid": Int(pid), "identity": identity] }
+        try press(element)
+        return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": []]
+    }
     let nodes: [AXUIElement]
     do {
         guard let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
@@ -1397,10 +1412,6 @@ func run() throws -> [String: Any] {
     case "click":
         guard let target = request["target"] as? String else { throw HelperError("Missing control name") }
         try activate()
-        if target == "VPN connection action" {
-            try pressConnectionAction(nodes, identifier: target)
-            break
-        }
         // SwiftUI toolbar containers can inherit the button's label and identifier.
         let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
         try press(find(buttons, target))
