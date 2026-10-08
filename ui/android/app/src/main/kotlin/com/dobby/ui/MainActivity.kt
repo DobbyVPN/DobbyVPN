@@ -548,7 +548,7 @@ private class SessionController(
                     source = if (state.sourceDirty || current.sourceUrl.isEmpty()) state.source else current.sourceUrl,
                     error = when {
                         current.sourceError.isNotEmpty() -> current.sourceError
-                        reattached || state.session.sessionId.isEmpty() -> ""
+                        reattached || (state.session.sessionId.isNotEmpty() && current.sessionId != state.session.sessionId) -> ""
                         else -> state.error
                     },
                     busy = if (clearBusy) false else state.busy,
