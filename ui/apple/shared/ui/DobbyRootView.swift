@@ -87,6 +87,14 @@ public struct DobbyRootView: View {
 #endif
     }
 
+    private var profileListFraction: CGFloat {
+#if os(iOS)
+        0.25
+#else
+        0.18
+#endif
+    }
+
     private var content: some View {
         GeometryReader { geometry in
             VStack(spacing: 12) {
@@ -118,7 +126,7 @@ public struct DobbyRootView: View {
                                 }
                             }
                         }
-                        .frame(maxHeight: min(180, geometry.size.height * 0.25))
+                        .frame(maxHeight: min(180, geometry.size.height * profileListFraction))
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("Profile list viewport")
                     }
@@ -256,9 +264,9 @@ public struct DobbyRootView: View {
                 Text("Some diagnostics could not be read or shared. Details are included in the logs.")
                     .font(.caption).foregroundStyle(.red)
             }
+#if os(iOS)
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
-#if os(iOS)
             DobbyLogView(
                 entries: model.logEntries,
                 clear: model.clearRevision,
