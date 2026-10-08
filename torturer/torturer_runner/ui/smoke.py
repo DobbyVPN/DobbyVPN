@@ -1329,8 +1329,9 @@ class NativeUIController:
             if self._call("logs").get("text", "") != frozen:
                 raise NativeUISmokeError("macOS log entries changed while the view was scrolled up")
             current_position = self._call("log-position")
+            # visible_range_end is viewport extent and can change when Retry alters layout.
             if any(current_position.get(key) != frozen_position.get(key)
-                   for key in ("visible_range_start", "visible_range_end")):
+                   for key in ("visible_range_start", "scrollbar_position")):
                 raise NativeUISmokeError(
                     "macOS reading position changed while log following was frozen: "
                     f"before={frozen_position} after={current_position}"
@@ -1340,7 +1341,7 @@ class NativeUIController:
                 raise NativeUISmokeError("macOS log text could not be selected while the rendered view was frozen")
             selected_position = self._call("log-position")
             if any(selected_position.get(key) != current_position.get(key)
-                   for key in ("visible_range_start", "visible_range_end")):
+                   for key in ("visible_range_start", "scrollbar_position")):
                 raise NativeUISmokeError("macOS text selection moved the frozen reading position")
             self._call("scroll-logs", position="bottom")
             latest = ""
