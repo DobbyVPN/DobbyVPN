@@ -59,6 +59,9 @@ internal static class Program
     [DllImport("user32.dll", SetLastError = true, EntryPoint = "SendMessageTimeoutW")]
     private static extern IntPtr SendMessageTimeout(
         IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out UIntPtr result);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint numberOfInputs, NativeInput[] inputs, int size);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool GetCursorPos(out NativePoint point);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW", SetLastError = true)]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
@@ -73,15 +76,40 @@ internal static class Program
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct NativeFileTime { public uint Low, High; }
+    // INPUT and MOUSEINPUT use a pointer-sized dwExtraInfo on both architectures.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeInput
+    {
+        public uint Type;
+        public NativeInputUnion Union;
+    }
+    [StructLayout(LayoutKind.Explicit)]
+    private struct NativeInputUnion
+    {
+        [FieldOffset(0)] public NativeMouseInput Mouse;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMouseInput
+    {
+        public int Dx, Dy;
+        public uint MouseData, Flags, Time;
+        public UIntPtr ExtraInfo;
+    }
 
     private const string WindowsTextSizeSettingsUri = "ms-settings:easeofaccess-display";
     private const string WindowsTextSizeSliderAutomationId = "SystemSettings_EaseOfAccess_Experience_TextScalingDesktop_Slider";
     private const string WindowsTextSizeApplyAutomationId = "SystemSettings_EaseOfAccess_Experience_TextScalingDesktop_ButtonRemove";
     private const uint WmClose = 0x0010;
     private const uint WmNull = 0x0000;
+    private const uint WmNcHitTest = 0x0084;
     private const uint SmtoAbortIfHung = 0x0002;
     private const uint SmtoErrorOnExit = 0x0020;
+    private const uint GaRoot = 2;
     private const uint GaRootOwner = 3;
+    private const int HtCaption = 2;
+    private const uint InputMouse = 0;
+    private const uint MouseEventLeftDown = 0x0002;
+    private const uint MouseEventLeftUp = 0x0004;
     private const uint ProcessQueryInformation = 0x0400;
     private const uint ProcessVmRead = 0x0010;
     private const uint MiniDumpWithFullMemory = 0x00000002;
@@ -1324,7 +1352,7 @@ internal static class Program
                 if (element is null || element.Current.IsOffscreen)
                     throw new InvalidOperationException($"Native control was not rendered in the narrow window: {id}");
             }
-            if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate the native window for narrow capture");
+            RequireForeground(window, "narrow-window screenshot");
             Capture(window, processId, screenshot);
         }
         catch (Exception error) { operationFailure = error; throw; }
@@ -1365,10 +1393,131 @@ internal static class Program
         return bounds;
     }
 
+    private static NativeInput CreateMouseInput(uint flags) => new()
+    {
+        Type = InputMouse,
+        Union = new NativeInputUnion
+        {
+            Mouse = new NativeMouseInput { Flags = flags, ExtraInfo = UIntPtr.Zero },
+        },
+    };
+
+    private static void RequireForeground(IntPtr window, string operation)
+    {
+        var targetUsable = window != IntPtr.Zero && IsWindow(window) && IsWindowVisible(window) && !IsIconic(window);
+        var foregroundBeforeHandle = GetForegroundWindow();
+        if (targetUsable && foregroundBeforeHandle == window)
+            return;
+
+        var measurement = new Dictionary<string, object?>
+        {
+            ["operation"] = operation,
+            ["target"] = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: true),
+            ["foregroundBefore"] = DescribeWindowContext(
+                foregroundBeforeHandle, includeThreadDesktop: false, includeGeometry: true),
+        };
+
+        try
+        {
+            if (!targetUsable)
+                throw new InvalidOperationException(
+                    "Candidate UI window is not visible and usable for foreground activation");
+
+            var foregroundRequested = SetForegroundWindow(window);
+            var foregroundAfterRequestHandle = GetForegroundWindow();
+            measurement["setForegroundWindowResult"] = foregroundRequested;
+            measurement["foregroundAfterRequest"] = DescribeWindowContext(
+                foregroundAfterRequestHandle, includeThreadDesktop: false, includeGeometry: true);
+
+            if (foregroundAfterRequestHandle != window)
+            {
+                var captionClick = new Dictionary<string, object?>();
+                measurement["captionClick"] = captionClick;
+                var bounds = GetPhysicalWindowRect(window);
+                var clientOrigin = GetPhysicalClientOrigin(window);
+                var captionHeight = clientOrigin.Y - bounds.Top;
+                if (bounds.Width <= 0 || bounds.Height <= 0 || captionHeight <= 0 || captionHeight >= bounds.Height)
+                    throw new InvalidOperationException("Native window has no measurable nonclient caption band");
+                var point = new NativePoint { X = checked((int)Math.Round(bounds.Left + bounds.Width / 2, MidpointRounding.AwayFromZero)),
+                    Y = checked((int)Math.Round(bounds.Top + captionHeight / 2.0, MidpointRounding.AwayFromZero)) };
+                captionClick["screenPoint"] = new { x = point.X, y = point.Y };
+
+                if (point.X < short.MinValue || point.X > short.MaxValue || point.Y < short.MinValue || point.Y > short.MaxValue)
+                    throw new InvalidOperationException($"Caption point is outside WM_NCHITTEST range: ({point.X},{point.Y})");
+                Marshal.SetLastPInvokeError(0);
+                if (!SetCursorPos(point.X, point.Y))
+                    throw new System.ComponentModel.Win32Exception(
+                        Marshal.GetLastPInvokeError(), "Could not move the pointer to the candidate caption");
+                Marshal.SetLastPInvokeError(0);
+                var cursorRead = GetCursorPos(out var cursor);
+                var cursorError = Marshal.GetLastPInvokeError();
+                if (!cursorRead || cursor.X != point.X || cursor.Y != point.Y)
+                    throw new InvalidOperationException($"Cursor did not reach caption point: expected=({point.X},{point.Y}) " +
+                        $"actual=({cursor.X},{cursor.Y}) lastError={cursorError}");
+
+                var packedPoint = new IntPtr(unchecked((int)((uint)(ushort)cursor.X | ((uint)(ushort)cursor.Y << 16))));
+                Marshal.SetLastPInvokeError(0);
+                var hitTestDelivered = SendMessageTimeout(window, WmNcHitTest, IntPtr.Zero, packedPoint,
+                    SmtoAbortIfHung | SmtoErrorOnExit, 1000, out var hitTestResult) != IntPtr.Zero;
+                var hitTestError = Marshal.GetLastPInvokeError();
+                var hitTestCode = unchecked((int)hitTestResult.ToUInt64());
+                captionClick["wmNcHitTestResult"] = hitTestCode;
+                if (!hitTestDelivered || hitTestCode != HtCaption)
+                    throw new InvalidOperationException($"Refusing caption click: WM_NCHITTEST result={hitTestCode}, " +
+                        $"lastError={hitTestError}, expected HTCAPTION={HtCaption}");
+
+                var pointRoot = GetAncestor(WindowFromPoint(cursor), GaRoot);
+                captionClick["windowFromPointRoot"] = $"0x{pointRoot.ToInt64():X}";
+                if (pointRoot != window) throw new InvalidOperationException(
+                    $"Refusing caption click: WindowFromPoint root 0x{pointRoot.ToInt64():X} " +
+                    $"does not match candidate 0x{window.ToInt64():X}");
+
+                var inputSize = Marshal.SizeOf<NativeInput>();
+                captionClick["sendInputStructSize"] = inputSize;
+                var clickInputs = new[] { CreateMouseInput(MouseEventLeftDown), CreateMouseInput(MouseEventLeftUp) };
+                Marshal.SetLastPInvokeError(0);
+                var inserted = SendInput((uint)clickInputs.Length, clickInputs, inputSize);
+                var sendInputError = Marshal.GetLastPInvokeError();
+                captionClick["sendInputInserted"] = inserted;
+                captionClick["sendInputLastError"] = sendInputError;
+                if (inserted == 1)
+                {
+                    Marshal.SetLastPInvokeError(0);
+                    captionClick["partialClickReleaseInserted"] = SendInput(
+                        1, new[] { CreateMouseInput(MouseEventLeftUp) }, inputSize);
+                    captionClick["partialClickReleaseLastError"] = Marshal.GetLastPInvokeError();
+                }
+                if (inserted != (uint)clickInputs.Length) throw new InvalidOperationException(
+                    $"SendInput inserted {inserted} of {clickInputs.Length} caption-click events; lastError={sendInputError}");
+
+                var focusWait = Stopwatch.StartNew();
+                while (GetForegroundWindow() != window && focusWait.Elapsed.TotalSeconds < 3) Thread.Sleep(25);
+            }
+            var foregroundAfterHandle = GetForegroundWindow();
+            measurement["foregroundAfter"] = DescribeWindowContext(
+                foregroundAfterHandle, includeThreadDesktop: false, includeGeometry: true);
+            if (!IsWindow(window) || !IsWindowVisible(window) || IsIconic(window) || foregroundAfterHandle != window)
+                throw new InvalidOperationException("Candidate UI window did not become the actual foreground window");
+            measurement["ready"] = true;
+        }
+        catch (Exception error)
+        {
+            measurement["foregroundAtFailure"] = DescribeWindowContext(
+                GetForegroundWindow(), includeThreadDesktop: false, includeGeometry: true);
+            measurement["ready"] = false;
+            measurement["error"] = error.ToString();
+            var serializedFailure = JsonSerializer.Serialize(measurement);
+            TracePhase($"require-foreground {serializedFailure}");
+            throw new InvalidOperationException(
+                $"Could not activate UI window; focus measurement={serializedFailure}", error);
+        }
+
+        TracePhase($"require-foreground {JsonSerializer.Serialize(measurement)}");
+    }
+
     private static void PrepareCaptureCursor(IntPtr window, Rectangle target, Rectangle client, Rectangle display)
     {
-        if (!SetForegroundWindow(window))
-            throw new InvalidOperationException("Could not activate UI before screenshot");
+        RequireForeground(window, "screenshot");
         // CTRL dismisses keyboard-focus tooltips without changing page or input.
         Forms.SendKeys.SendWait("^");
         var corners = new[]
@@ -1871,7 +2020,7 @@ internal static class Program
                 var scroll = (ScrollPattern)scrollPattern;
                 if (scroll.Current.VerticalScrollPercent < 0)
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll range");
-                if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI before log scrolling");
+                RequireForeground(window, "log scrolling");
                 logRoot.SetFocus();
                 Forms.SendKeys.SendWait(position == "top" ? "{HOME}" : "{END}");
                 scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
@@ -1943,36 +2092,12 @@ internal static class Program
             {
                 case "focus":
                 {
-                    var focusTarget = DescribeWindowContext(
-                        window, includeThreadDesktop: false, includeGeometry: true);
-                    focusTarget["isWindow"] = IsWindow(window);
-                    focusTarget["visible"] = IsWindowVisible(window);
-                    focusTarget["minimized"] = IsIconic(window);
-
-                    var foregroundBeforeHandle = GetForegroundWindow();
-                    var foregroundBefore = DescribeWindowContext(
-                        foregroundBeforeHandle, includeThreadDesktop: false, includeGeometry: true);
-                    var foregroundRequested = SetForegroundWindow(window);
-                    var foregroundAfterHandle = GetForegroundWindow();
-                    var foregroundAfter = DescribeWindowContext(
-                        foregroundAfterHandle, includeThreadDesktop: false, includeGeometry: true);
-                    if (!foregroundRequested)
-                    {
-                        var focusMeasurement = new
-                        {
-                            target = focusTarget,
-                            foregroundBefore,
-                            setForegroundWindow = foregroundRequested,
-                            foregroundAfter,
-                        };
-                        throw new InvalidOperationException(
-                            $"Could not activate UI window; focus measurement={JsonSerializer.Serialize(focusMeasurement)}");
-                    }
+                    RequireForeground(window, "initial focus");
                     break;
                 }
                 case "click":
                     var element = Find(Text("target"), actionable: true);
-                    if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
+                    RequireForeground(window, "UI Automation click");
                     if (element.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke))
                         ((InvokePattern)invoke).Invoke();
                     else if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var select))
@@ -1985,7 +2110,7 @@ internal static class Program
                     TracePhase("type-read-profile");
                     var value = File.ReadAllText(Text("source"));
                     TracePhase("type-activate-window");
-                    if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
+                    RequireForeground(window, "typing");
                     TracePhase("type-focus-editor");
                     editor.SetFocus();
                     TracePhase("type-read-clipboard");
@@ -2055,7 +2180,7 @@ internal static class Program
                     var pasteValue = File.ReadAllText(Text("source")).Trim();
                     var fieldBeforeClipboard = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
                     TracePhase("paste-activate-window");
-                    if (!SetForegroundWindow(window)) throw new InvalidOperationException("Could not activate UI window");
+                    RequireForeground(window, "Paste");
                     TracePhase("paste-read-clipboard");
                     var previousPaste = Forms.Clipboard.GetDataObject();
                     var savedClipboard = new Forms.DataObject();
