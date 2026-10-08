@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -292,8 +293,16 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                     controller.observe_profile_switch(1, 0)
 
     def test_windows_switch_import_dispatches_only_after_fresh_stop_observation(self):
-        controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
-        controller.platform = "windows"
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        helper = root / "native-ui-helper.exe"
+        helper.touch()
+        controller = journey.smoke.NativeUIController(
+            "windows", root / "DobbyVPN.exe", root / "source.url", 20.0,
+            helper=helper, screenshot_dir=root / "logs" / "screenshots",
+        )
+        self.assertIsNone(controller._windows_wer_dump_dir)
         controller.pid = 42
         controller.identity = "candidate-ui-instance"
         url = "https://127.0.0.1:49152/subscription?import-during-connect=1"
@@ -314,14 +323,29 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             return response
 
         response = dispatch_response()
-        with patch.object(controller, "_call", return_value=response) as call:
-            self.assertIs(controller.switch_profile_and_dispatch_import(1, 0, url), response)
-        call.assert_called_once_with(
-            "profile-switch-import",
-            target="Profile 2 action",
-            competing="Profile 1 action",
-            uri=uri,
+        native_result = SimpleNamespace(
+            returncode=0, args=[str(helper)], stdout=json.dumps(response).encode("utf-8"), stderr=b"",
         )
+        with (
+            patch.object(journey.smoke, "_windows_job_capture_callbacks", return_value=(None, None, None)) as capture,
+            patch.object(journey.smoke, "_native_run", return_value=native_result) as native_run,
+        ):
+            self.assertEqual(controller.switch_profile_and_dispatch_import(1, 0, url), response)
+        capture.assert_called_once()
+        native_run.assert_called_once()
+        request = json.loads(native_run.call_args.kwargs["input_bytes"])
+        dump_directory = controller.logs / "windows-wer-dumps"
+        self.assertTrue(dump_directory.is_dir())
+        self.assertEqual(request, {
+            "operation": "profile-switch-import",
+            "executable": str(controller.executable),
+            "target": "Profile 2 action",
+            "competing": "Profile 1 action",
+            "uri": uri,
+            "dumpDirectory": str(dump_directory),
+            "pid": 42,
+            "identity": "candidate-ui-instance",
+        })
 
         mutations = (
             lambda value: value["target_at_stop"].update(name="Disconnect"),

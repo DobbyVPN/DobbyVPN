@@ -921,6 +921,11 @@ class NativeUIController:
         fields = {"target": target, "competing": competing}
         if protocol_uri is not None:
             fields["uri"] = protocol_uri
+            dump_directory = getattr(self, "_windows_wer_dump_dir", None)
+            if dump_directory is None:
+                dump_directory = self.logs / "windows-wer-dumps"
+            dump_directory.mkdir(parents=True, exist_ok=True)
+            fields["dumpDirectory"] = str(dump_directory)
         if observe_only:
             fields["observe_only"] = True
         expected_pid = getattr(self, "pid", None)

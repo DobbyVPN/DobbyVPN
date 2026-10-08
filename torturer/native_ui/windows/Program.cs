@@ -524,7 +524,8 @@ internal static class Program
         Process process,
         string expectedIdentity,
         JsonElement request,
-        string failure)
+        string failure,
+        string dumpPrefix = "uia-point-failure")
     {
         const uint dumpType = MiniDumpWithFullMemory | MiniDumpWithThreadInfo;
         var result = new Dictionary<string, object?>
@@ -589,7 +590,7 @@ internal static class Program
             if (actualIdentity != expectedIdentity)
                 throw new InvalidOperationException("Failure dump handle no longer refers to the verified process instance");
 
-            var dumpPath = Path.Combine(directory, $"uia-point-failure-{process.Id}-{Guid.NewGuid():N}.dmp");
+            var dumpPath = Path.Combine(directory, $"{dumpPrefix}-{process.Id}-{Guid.NewGuid():N}.dmp");
             partialPath = dumpPath + ".partial";
             result["dumpPath"] = dumpPath;
             result["partialPath"] = partialPath;
@@ -720,7 +721,7 @@ internal static class Program
 
     private static Dictionary<string, object?> ShellDispatchEvidence(
         string protocolUri, IntPtr window, int pid, string identity,
-        Dictionary<string, object?> effectiveRegistration, Func<long, string> timestamp)
+        Dictionary<string, object?> effectiveRegistration, JsonElement request, Func<long, string> timestamp)
     {
         const uint SeeMaskNoCloseProcess = 0x00000040;
         // The STA helper has no shell message loop to finish an asynchronous DDE handoff.
@@ -745,6 +746,7 @@ internal static class Program
         }
         catch (Exception error) { callException = error; }
         var dispatchReturned = Stopwatch.GetTimestamp();
+        var shellResult = executeInfo.Instance.ToInt64();
 
         var processHandle = executeInfo.Process;
         Dictionary<string, object?> processEvidence;
@@ -756,6 +758,62 @@ internal static class Program
                 ["handle_returned"] = processHandle != IntPtr.Zero,
                 ["observation_error"] = error.ToString(),
             };
+        }
+
+        if (protocolUri.Contains("import-during-connect%3D1", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!returned || shellResult <= 32 || processHandle == IntPtr.Zero)
+            {
+                processEvidence["live_process_dump"] = new
+                {
+                    attempted = false,
+                    reason = "ShellExecuteEx did not return a successful process handle for the held import",
+                };
+            }
+            else if (processEvidence.GetValueOrDefault("pid") is not uint childPid ||
+                processEvidence.GetValueOrDefault("creation_identity") is not string childIdentity ||
+                processEvidence.GetValueOrDefault("still_active") is not true)
+            {
+                processEvidence["live_process_dump"] = new
+                {
+                    attempted = false,
+                    reason = "Returned ShellExecute process identity was unavailable or the process had exited",
+                };
+            }
+            else
+            {
+                try
+                {
+                    using var child = Process.GetProcessById(checked((int)childPid));
+                    processEvidence["live_process_dump"] = CapturePointFailureDump(
+                        child, childIdentity, request,
+                        "ShellExecuteEx returned a live handler process for import-during-connect",
+                        "shell-import-handler");
+                }
+                catch (Exception error)
+                {
+                    processEvidence["live_process_dump"] = new
+                    {
+                        attempted = true,
+                        processId = childPid,
+                        expectedProcessIdentity = childIdentity,
+                        captureIntent = "live process memory and thread state; no exception record supplied",
+                        written = false,
+                        error = error.ToString(),
+                    };
+                }
+            }
+            if (processHandle != IntPtr.Zero)
+            {
+                if (GetExitCodeProcess(processHandle, out var exitCodeAfterDump))
+                {
+                    processEvidence["exit_code_after_dump"] = exitCodeAfterDump;
+                    processEvidence["still_active_after_dump"] = exitCodeAfterDump == 259;
+                }
+                else
+                    processEvidence["exit_code_after_dump_error"] =
+                        new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()).ToString();
+            }
         }
 
         bool? handleClosed = null;
@@ -771,7 +829,6 @@ internal static class Program
             catch (Exception error) { handleCloseException = error; }
         }
 
-        var shellResult = executeInfo.Instance.ToInt64();
         var context = $"uri={protocolUri}; pid={pid}; identity={identity}; window=0x{window.ToInt64():X}; " +
             $"dispatch_started={timestamp(dispatchStarted)}; dispatch_returned={timestamp(dispatchReturned)}; " +
             $"shell_execute_returned={returned}; hinstance={shellResult}; last_error={lastError?.ToString(CultureInfo.InvariantCulture) ?? "null"}; " +
@@ -813,7 +870,8 @@ internal static class Program
 
     private static Dictionary<string, object?> ProfileSwitchAction(
         AutomationElement root, IntPtr window, Process process, string identity,
-        string targetId, string competingId, string? protocolUri = null, bool observeOnly = false)
+        string targetId, string competingId, string? protocolUri = null, bool observeOnly = false,
+        JsonElement? request = null)
     {
         if (observeOnly && protocolUri is not null)
             throw new ArgumentException("Profile switch observation cannot dispatch a protocol URI");
@@ -1021,7 +1079,7 @@ internal static class Program
                             try
                             {
                                 dispatchEvidence = ShellDispatchEvidence(
-                                    protocolUri, window, process.Id, identity, registration!, Timestamp);
+                                    protocolUri, window, process.Id, identity, registration!, request ?? default, Timestamp);
                             }
                             catch (Exception error)
                             {
@@ -2392,7 +2450,8 @@ internal static class Program
             if (operation == "profile-switch-import")
             {
                 var result = ProfileSwitchAction(
-                    root, window, process, identity, Text("target"), Text("competing"), Text("uri"));
+                    root, window, process, identity, Text("target"), Text("competing"), Text("uri"),
+                    request: request);
                 Console.WriteLine(JsonSerializer.Serialize(result));
                 return 0;
             }
