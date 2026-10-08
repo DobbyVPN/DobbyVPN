@@ -2617,6 +2617,7 @@ public final class NativeUiHostedProfileTest {
             throw new IllegalStateException(
                     "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_NOT_RESTORED");
         }
+        renderedStop = returnToStoppedRecoverySurface(recoveryGeneration, deadline);
         for (int sample = 0; sample < UI_STABILITY_SAMPLES; sample++) {
             idle = snapshotResult("");
             if (!isStoppedRecoverySnapshot(idle, recoveryGeneration)) {
@@ -3128,6 +3129,44 @@ public final class NativeUiHostedProfileTest {
                 throw new IllegalStateException(
                         "ANDROID_TEST_RECOVERY_STOP_UI_INVALID");
             }
+            waitForIdleBounded(device, deadline);
+            SystemClock.sleep(POLL_MILLIS);
+        }
+        throw new IllegalStateException("ANDROID_TEST_RECOVERY_STOP_UI_INVALID");
+    }
+
+    private JSONObject returnToStoppedRecoverySurface(long generation, long deadline)
+            throws Exception {
+        UiDevice device = uiDevice();
+        int width = device.getDisplayWidth();
+        int height = device.getDisplayHeight();
+        int startY = Math.max(1, (int) (height * 0.34f));
+        int endY = Math.max(1, (int) (height * 0.42f));
+        int maximumSwipes = 12;
+        int swipes = 0;
+        while (System.currentTimeMillis() < deadline && swipes <= maximumSwipes) {
+            JSONObject snapshot = snapshotResult("");
+            if (snapshot.optLong("generation") > generation) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_GENERATION_ADVANCED");
+            }
+            if (!isStoppedRecoverySnapshot(snapshot, generation)) {
+                throw new IllegalStateException(
+                        "ANDROID_TEST_RECOVERY_STOP_FINAL_STATE_INVALID");
+            }
+            try {
+                JSONObject rendered = stoppedRecoveryRendering(snapshot, generation);
+                if (rendered != null && System.currentTimeMillis() < deadline) return rendered;
+            } catch (StaleObjectException replacedUi) {
+                // Retry against the next accessibility tree within the same deadline.
+            }
+            if (swipes == maximumSwipes
+                    || System.currentTimeMillis() >= deadline
+                    || width <= 0 || height <= 0
+                    || !device.swipe(width / 2, startY, width / 2, endY, 8)) {
+                break;
+            }
+            swipes++;
             waitForIdleBounded(device, deadline);
             SystemClock.sleep(POLL_MILLIS);
         }
