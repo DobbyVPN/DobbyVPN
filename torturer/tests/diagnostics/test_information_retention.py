@@ -698,7 +698,7 @@ class InformationRetentionTests(unittest.TestCase):
             controller.cleared_record = None
             structured = "2026 · INFO · Backend · ready"
             initial = structured + "\nDetails\n"
-            log_texts = iter((initial, initial, initial))
+            log_texts = iter((initial, initial, initial, initial))
             positions = iter((0.0, 25.0))
 
             def call(operation: str, **fields: object) -> dict:
@@ -750,7 +750,7 @@ class InformationRetentionTests(unittest.TestCase):
             structured = "2026 · INFO · Backend · ready"
             initial = structured + "\nDetails\n"
             capture = "2026-10-06T00:00:00Z · INFO · Backend stderr\nStderr capture initialized"
-            log_texts = iter((initial, initial, initial, initial, initial, initial + "new record\n", ""))
+            log_texts = iter((initial, initial, initial, initial, initial, initial, initial + "new record\n", ""))
             positions = iter((25.0, 25.0, 25.0, 25.0))
             selected = iter((structured, structured))
             operations: list[str] = []
