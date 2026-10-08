@@ -215,8 +215,16 @@ class SubscriptionFixtureTests(unittest.TestCase):
                             secured.sendall(b'GET /subscription HTTP/1.0\r\nHost: localhost\r\n\r\n')
                             with secured.makefile('rb') as response:
                                 self.assertTrue(response.read().endswith(profile.read_bytes()))
+                    stats = fixture.control_stats()
+                    self.assertEqual(
+                        {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                        {name: stats[name] for name in ("subscription_gets", "in_flight_gets", "max_in_flight_gets")},
+                    )
+                    self.assertGreater(stats["last_subscription_get_started_at_unix_ms"], 0)
                 finally:
                     fixture.close()
+                with self.assertRaisesRegex(RuntimeError, "subscription fixture is not running"):
+                    fixture.control_stats()
                 calls.assert_any_call(['adb', 'reverse', '--no-rebind', f'tcp:{fixture.port}', f'localfilesystem:{fixture.socket_path}'])
                 calls.assert_any_call(['adb', 'reverse', '--remove', f'tcp:{fixture.port}'])
             self.assertFalse(Path(fixture.socket_path).exists())

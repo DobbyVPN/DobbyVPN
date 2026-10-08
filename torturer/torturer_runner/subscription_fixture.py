@@ -238,13 +238,7 @@ class SubscriptionFixture:
             return
         path = urlsplit(request.path).path
         if request.command == "GET" and path == self.control_path:
-            with self.control_condition:
-                state = {
-                    "subscription_gets": self.subscription_gets,
-                    "last_subscription_get_started_at_unix_ms": self.last_subscription_get_started_at_unix_ms,
-                    "in_flight_gets": self.in_flight_gets,
-                    "max_in_flight_gets": self.max_in_flight_gets,
-                }
+            state = self._control_stats_snapshot()
             body = json.dumps(state, sort_keys=True).encode("ascii")
             request.send_response(200)
             request.send_header("Content-Type", "application/json")
@@ -310,7 +304,22 @@ class SubscriptionFixture:
             return response.read()
 
     def control_stats(self) -> dict[str, int]:
+        if not self.url:
+            raise RuntimeError("subscription fixture is not running")
+        if self.platform == "android":
+            if self.thread is None or not self.thread.is_alive():
+                raise RuntimeError("subscription fixture is not running")
+            return self._control_stats_snapshot()
         return json.loads(self._control_request())
+
+    def _control_stats_snapshot(self) -> dict[str, int]:
+        with self.control_condition:
+            return {
+                "subscription_gets": self.subscription_gets,
+                "last_subscription_get_started_at_unix_ms": self.last_subscription_get_started_at_unix_ms,
+                "in_flight_gets": self.in_flight_gets,
+                "max_in_flight_gets": self.max_in_flight_gets,
+            }
 
     def replace_response(self, content: bytes) -> None:
         if not content or len(content) > 1 << 20:
