@@ -556,7 +556,31 @@ def _build_windows_msi(
         env=env,
     )
     env["PATH"] = str(wix_tools) + os.pathsep + env.get("PATH", "")
-    _run("Windows MSI build", ["cmd.exe", "/c", "build.bat"], cwd=installer, env=env)
+    completed = _run(
+        "Windows MSI build", ["cmd.exe", "/c", "build.bat"],
+        cwd=installer, env=env, capture=True, check=False,
+    )
+    if completed.returncode != 0:
+        # Keep the original WiX streams above, then inspect the exact reported
+        # paths before TemporaryDirectory removes the failed build's inputs.
+        _log(f"MSI failure cwd={installer} TEMP={env.get('TEMP')} TMP={env.get('TMP')}")
+        output = (completed.stdout or b"") + (completed.stderr or b"")
+        cabinets = re.findall(r"failed to compress cabinet: ([^\r\n]+)", output.decode("utf-8", errors="replace"))
+        try:
+            paths = list(installer.rglob("*"))
+        except OSError as error:
+            _log(f"MSI failure input collection error={error}")
+            paths = [installer]
+        for cabinet in cabinets:
+            path = Path(cabinet.strip())
+            paths.extend((path, path.parent, path.parent.parent))
+        for path in dict.fromkeys(paths):
+            try:
+                attributes = path.stat()
+                _log(f"MSI failure path={path} directory={path.is_dir()} bytes={attributes.st_size}")
+            except OSError as error:
+                _log(f"MSI failure path={path} inspection error={error}")
+        _fail(f"Windows MSI build: command exited {completed.returncode}")
     package = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi"
     log_path = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi.log"
     try:

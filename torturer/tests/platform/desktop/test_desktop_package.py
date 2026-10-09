@@ -75,6 +75,37 @@ class DesktopPlatformTimeoutTests(unittest.TestCase):
         )
 
 
+class WindowsMSIFailureTests(unittest.TestCase):
+    def test_failed_compression_preserves_bytes_and_inspects_missing_scratch_parent(self) -> None:
+        output_capture = BinaryCapture()
+        error_capture = BinaryCapture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "payload.zip"
+            archive.write_bytes(b"synthetic archive")
+            service = root / "service"
+            service.mkdir()
+            for name in ("dobbyvpn-backend.exe", "dobby_bridge.dll", "wintun.dll"):
+                (service / name).write_bytes(b"synthetic input")
+            cabinet = root / "missing-scratch" / "cab1.cab"
+            original_stdout = b"original WiX output \xff\n"
+            original_stderr = f"failed to compress cabinet: {cabinet}\n".encode()
+            results = [
+                subprocess.CompletedProcess(["dotnet"], 0),
+                subprocess.CompletedProcess(["cmd.exe"], 1, original_stdout, original_stderr),
+            ]
+            with mock.patch.object(desktop_package.subprocess, "run", side_effect=results), \
+                    mock.patch.object(desktop_package, "_verify_msi") as verify, \
+                    redirect_stdout(output_capture), redirect_stderr(error_capture):
+                with self.assertRaisesRegex(desktop_package.DesktopPlatformError, "Windows MSI build: command exited 1"):
+                    desktop_package._build_windows_msi(archive, service, "1.5.4", "0" * 40, root, {})
+            self.assertIn(f"path={cabinet.parent} inspection error=", output_capture.text.getvalue())
+            self.assertIn("dobbyvpn-backend.exe directory=False", output_capture.text.getvalue())
+            self.assertEqual(output_capture.buffer.getvalue(), original_stdout)
+            self.assertEqual(error_capture.buffer.getvalue(), original_stderr)
+            verify.assert_not_called()
+
+
 class WindowsTempPreflightTests(unittest.TestCase):
     def _build_args(self, output_dir: Path) -> argparse.Namespace:
         return argparse.Namespace(
