@@ -2758,7 +2758,8 @@ internal static class Program
                                         TraceDetails("failure-screenshot-complete", new
                                         {
                                             path = failureScreenshotPath,
-                                            screen_bounds = RectJson(screenshotBounds),
+                                            screen_bounds = new { x = screenshotBounds.X, y = screenshotBounds.Y,
+                                                width = screenshotBounds.Width, height = screenshotBounds.Height },
                                         });
                                     }
                                     catch (Exception error)
