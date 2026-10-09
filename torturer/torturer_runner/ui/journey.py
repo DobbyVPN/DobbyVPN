@@ -69,6 +69,42 @@ def _exception_details(error: BaseException) -> str:
     return "".join(traceback.format_exception(error)).rstrip()
 
 
+def _require_profile_switch_dispatch_state(
+    current: dict[str, Any], previous: dict[str, Any], target_index: int,
+) -> dict[str, Any]:
+    digest = current.get("digest")
+    same_inventory = isinstance(digest, str) and bool(digest) and digest == previous.get("digest")
+    same_source = current.get("source_url") == previous.get("source_url")
+    pending = current.get("pending_target")
+    pending_matches = (
+        isinstance(pending, dict)
+        and pending.get("mode") == "PROFILE_INDEX"
+        and pending.get("index") == target_index
+        and pending.get("digest") == digest
+    )
+    selected_is_starting = (
+        current.get("state") in {"PROBING", "PREPARING"}
+        and current.get("active_mode") == "PROFILE_INDEX"
+        and current.get("active_index") == target_index
+        and current.get("active_digest") == digest
+    )
+    already_connected = (
+        current.get("state") == "CONNECTED"
+        and current.get("active_mode") == "PROFILE_INDEX"
+        and current.get("active_index") == target_index
+    )
+    if (
+        not same_inventory or not same_source or already_connected
+        or not (pending_matches or selected_is_starting)
+    ):
+        error = NativeUIJourneyError(
+            "Windows profile import dispatch no longer coincided with the selected profile switch"
+        )
+        error.add_note(f"windows_profile_switch_dispatch_snapshot={json.dumps(current, sort_keys=True)}")
+        raise error
+    return current
+
+
 def _valid_windows_content_root_probe(probe: object) -> bool:
     """Validate the direct XAML editor observation from configure-tree."""
 
@@ -1227,8 +1263,24 @@ def _exercise_subscription_controls(ui, base, url: str, fixture, timeout: float)
             prepared_import = prepare_pending_import()
             fixture.hold_responses()
             try:
+                def require_switch_in_progress() -> dict[str, Any]:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise NativeUIJourneyError(
+                            "Windows profile switch deadline expired before import dispatch"
+                        )
+                    current = base._snapshot(
+                        min(30.0, remaining), "NATIVE_SELECTION_STATUS_FAILED"
+                    )
+                    if time.monotonic() >= deadline:
+                        raise NativeUIJourneyError(
+                            "Windows profile switch deadline expired before import dispatch"
+                        )
+                    return _require_profile_switch_dispatch_state(current, previous, index)
+
                 dispatch = ui.switch_profile_and_dispatch_import(
-                    index, competing_index, str(prepared_import["url"])
+                    index, competing_index, str(prepared_import["url"]),
+                    before_dispatch=require_switch_in_progress,
                 )
                 transition_seen = True
                 observe_pending = during_pending

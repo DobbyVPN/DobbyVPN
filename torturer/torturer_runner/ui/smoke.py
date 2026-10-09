@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 from collections import Counter
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -783,24 +784,26 @@ class NativeUIController:
             diagnostics["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
             path.write_text(json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
 
-    def _open_link(self, link: str) -> None:
+    def _open_link(self, link: str) -> dict[str, str] | None:
         if self.platform == "windows":
-            def record_dispatch(event_name: str, **fields: object) -> None:
+            def record_dispatch(event_name: str, **fields: object) -> str:
+                timestamp = datetime.now(timezone.utc).isoformat()
                 print(json.dumps({
                     "event": event_name,
                     "uri": link,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": timestamp,
                     **fields,
                 }), file=sys.stderr, flush=True)
+                return timestamp
 
-            record_dispatch("windows.shell.dispatch.start")
+            started_at = record_dispatch("windows.shell.dispatch.start")
             try:
                 os.startfile(link)  # type: ignore[attr-defined]
             except Exception as error:
                 record_dispatch("windows.shell.dispatch.return", exception=repr(error))
                 raise
-            record_dispatch("windows.shell.dispatch.return")
-            return
+            returned_at = record_dispatch("windows.shell.dispatch.return")
+            return {"started_at_utc": started_at, "returned_at_utc": returned_at}
         command = ["open"]
         if self.platform == "macos":
             for name in ("HOME", "DOBBYVPN_CONTROL_SOCKET", "DOBBY_LOG_PATH"):
@@ -901,28 +904,22 @@ class NativeUIController:
         self._click(f"Profile {index + 1} action")
 
     def _profile_switch_action(
-        self, index: int, competing_index: int, *, protocol_uri: str | None = None,
-        observe_only: bool = False,
+        self, index: int, competing_index: int, *, observe_only: bool = False,
     ) -> dict[str, object]:
-        if self.platform != "windows" or index < 0 or competing_index < 0 or index == competing_index or (
-            observe_only and protocol_uri is not None
-        ):
+        if self.platform != "windows" or index < 0 or competing_index < 0 or index == competing_index:
             raise ValueError("Windows profile transition requires two distinct profile indices")
         target, competing = f"Profile {index + 1} action", f"Profile {competing_index + 1} action"
-        operation = "profile-switch-import" if protocol_uri is not None else "cancel-profile-switch"
         fields = {"target": target, "competing": competing}
         dump_directory = getattr(self, "_windows_wer_dump_dir", None)
         if dump_directory is None:
             dump_directory = self.logs / "windows-wer-dumps"
         dump_directory.mkdir(parents=True, exist_ok=True)
         fields["dumpDirectory"] = str(dump_directory)
-        if protocol_uri is not None:
-            fields["uri"] = protocol_uri
         if observe_only:
             fields["observe_only"] = True
         expected_pid = getattr(self, "pid", None)
         expected_identity = getattr(self, "identity", None)
-        result = self._call(operation, **fields)
+        result = self._call("cancel-profile-switch", **fields)
         selected = result.get("target_at_stop")
         other = result.get("competing_at_stop")
         connection = result.get("connection_action_at_stop")
@@ -956,12 +953,7 @@ class NativeUIController:
             raise NativeUISmokeError(
                 f"Windows profile transition did not observe an enabled Stop with competing Connect disabled: {result!r}"
             )
-        if protocol_uri is not None:
-            timestamp_keys = (
-                "connect_invoked_at_utc", "stop_observed_at_utc",
-                "protocol_dispatch_started_at_utc", "protocol_dispatch_returned_at_utc",
-            )
-        elif observe_only:
+        if observe_only:
             timestamp_keys = ("connect_invoked_at_utc", "stop_observed_at_utc")
         else:
             timestamp_keys = ("connect_invoked_at_utc", "stop_observed_at_utc", "stop_invoked_at_utc")
@@ -980,14 +972,6 @@ class NativeUIController:
             result.get("observe_only") is not True or "stop_invoked_at_utc" in result
         ):
             raise NativeUISmokeError(f"Windows profile observation invoked Stop or lacked observe-only evidence: {result!r}")
-        if protocol_uri is not None and (
-            result.get("protocol_uri") != protocol_uri
-            or not isinstance(result.get("window_handle"), str)
-            or not result["window_handle"].startswith("0x")
-            or type(result.get("shell_execute_result")) is not int
-            or result["shell_execute_result"] <= 32
-        ):
-            raise NativeUISmokeError(f"Windows profile import was not dispatched by the observed Stop action: {result!r}")
         return result
 
     def cancel_profile_switch(self, index: int, competing_index: int) -> dict[str, object]:
@@ -997,12 +981,47 @@ class NativeUIController:
         return self._profile_switch_action(index, competing_index, observe_only=True)
 
     def switch_profile_and_dispatch_import(
-        self, index: int, competing_index: int, url: str,
+        self, index: int, competing_index: int, url: str, *,
+        before_dispatch: Callable[[], dict[str, object]],
     ) -> dict[str, object]:
         from urllib.parse import quote
 
         uri = "dobbyvpn://import?url=" + quote(url, safe="")
-        return self._profile_switch_action(index, competing_index, protocol_uri=uri)
+        observed = self.observe_profile_switch(index, competing_index)
+        if not isinstance(observed.get("window_handle"), str) or not observed["window_handle"].startswith("0x"):
+            raise NativeUISmokeError(f"Windows profile observation lacked its native window identity: {observed!r}")
+        guard_snapshot = before_dispatch()
+        if not isinstance(guard_snapshot, dict):
+            raise NativeUISmokeError("Windows profile import guard did not return a backend snapshot")
+        dispatch = self._open_link(uri)
+        if not isinstance(dispatch, dict):
+            raise NativeUISmokeError("Windows shell dispatch did not return timestamp evidence")
+
+        timestamp_keys = (
+            "connect_invoked_at_utc", "stop_observed_at_utc",
+            "started_at_utc", "returned_at_utc",
+        )
+        timestamps = [
+            observed.get(timestamp_keys[0]), observed.get(timestamp_keys[1]),
+            dispatch.get(timestamp_keys[2]), dispatch.get(timestamp_keys[3]),
+        ]
+        try:
+            parsed = [datetime.fromisoformat(value.replace("Z", "+00:00")) for value in timestamps]
+        except (AttributeError, TypeError, ValueError) as error:
+            raise NativeUISmokeError(
+                f"Windows profile import dispatch timestamps were invalid: {timestamps!r}"
+            ) from error
+        if any(value.tzinfo is None for value in parsed) or parsed != sorted(parsed):
+            raise NativeUISmokeError(
+                f"Windows profile import dispatch timestamps were not chronological: {timestamps!r}"
+            )
+        return {
+            **observed,
+            "protocol_uri": uri,
+            "dispatch_guard_snapshot": guard_snapshot,
+            "protocol_dispatch_started_at_utc": dispatch["started_at_utc"],
+            "protocol_dispatch_returned_at_utc": dispatch["returned_at_utc"],
+        }
 
     def open_deep_link(self, link: str) -> dict:
         self._open_link(link)

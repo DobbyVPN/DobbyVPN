@@ -6,7 +6,7 @@ import unittest
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from torturer_runner import subscription_fixture
 from torturer_runner.ui import journey
@@ -321,7 +321,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                 with self.assertRaises(journey.smoke.NativeUISmokeError):
                     controller.observe_profile_switch(1, 0)
 
-    def test_windows_switch_import_dispatches_only_after_fresh_stop_observation(self):
+    def test_windows_switch_import_dispatches_after_helper_cleanup_and_fresh_guard(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -336,61 +336,233 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         controller.identity = "candidate-ui-instance"
         url = "https://127.0.0.1:49152/subscription?import-during-connect=1"
         uri = "dobbyvpn://import?url=https%3A%2F%2F127.0.0.1%3A49152%2Fsubscription%3Fimport-during-connect%3D1"
-
-        def dispatch_response():
-            response = self.windows_cancel_switch_response()
-            response.pop("stop_invoked_at_utc")
-            response.update({
-                "pid": 42,
-                "identity": "candidate-ui-instance",
-                "window_handle": "0x100",
-                "protocol_uri": uri,
-                "protocol_dispatch_started_at_utc": "2026-10-08T12:00:00.2600000+00:00",
-                "protocol_dispatch_returned_at_utc": "2026-10-08T12:00:00.3100000+00:00",
-                "shell_execute_result": 33,
-            })
-            return response
-
-        response = dispatch_response()
+        events = []
+        observed = self.windows_cancel_switch_response()
+        observed.pop("stop_invoked_at_utc")
+        observed.update({
+            "pid": 42,
+            "identity": "candidate-ui-instance",
+            "window_handle": "0x100",
+            "observe_only": True,
+        })
         native_result = SimpleNamespace(
-            returncode=0, args=[str(helper)], stdout=json.dumps(response).encode("utf-8"), stderr=b"",
+            returncode=0, args=[str(helper)], stdout=json.dumps(observed).encode("utf-8"), stderr=b"",
         )
+        helper_requests = []
+
+        def capture_callbacks(deadline):
+            def close(_process, _cleanup_deadline):
+                events.append("helper-job-closed")
+            return None, None, close
+
+        def native_run(_command, **kwargs):
+            helper_requests.append(kwargs["input_bytes"])
+            events.append("helper-exited")
+            kwargs["close_boundary"](object(), 10.0)
+            events.append("helper-capture-returned")
+            return native_result
+
+        guard_snapshot = {
+            "state": "PROBING", "digest": "profiles-v1", "source_url": "https://old.invalid/source",
+            "pending_target": None, "active_mode": "PROFILE_INDEX", "active_index": 1,
+            "active_digest": "profiles-v1",
+        }
+
+        def before_dispatch():
+            events.append("fresh-backend-guard")
+            return journey._require_profile_switch_dispatch_state(
+                guard_snapshot,
+                {"digest": "profiles-v1", "source_url": "https://old.invalid/source"},
+                1,
+            )
+
+        dispatch_times = {
+            "started_at_utc": "2026-10-08T12:00:00.3000000+00:00",
+            "returned_at_utc": "2026-10-08T12:00:00.3500000+00:00",
+        }
+
+        def open_link(link):
+            events.append("python-shell-dispatch")
+            self.assertEqual(link, uri)
+            return dispatch_times
+
         with (
-            patch.object(journey.smoke, "_windows_job_capture_callbacks", return_value=(None, None, None)) as capture,
-            patch.object(journey.smoke, "_native_run", return_value=native_result) as native_run,
+            patch.object(journey.smoke, "_windows_job_capture_callbacks", side_effect=capture_callbacks),
+            patch.object(journey.smoke, "_native_run", side_effect=native_run),
+            patch.object(controller, "_open_link", side_effect=open_link),
         ):
-            self.assertEqual(controller.switch_profile_and_dispatch_import(1, 0, url), response)
-        capture.assert_called_once()
-        native_run.assert_called_once()
-        request = json.loads(native_run.call_args.kwargs["input_bytes"])
+            response = controller.switch_profile_and_dispatch_import(
+                1, 0, url, before_dispatch=before_dispatch,
+            )
+
+        self.assertEqual(events, [
+            "helper-exited", "helper-job-closed", "helper-capture-returned",
+            "fresh-backend-guard", "python-shell-dispatch",
+        ])
+        request = json.loads(helper_requests[0])
         dump_directory = controller.logs / "windows-wer-dumps"
         self.assertTrue(dump_directory.is_dir())
         self.assertEqual(request, {
-            "operation": "profile-switch-import",
+            "operation": "cancel-profile-switch",
             "executable": str(controller.executable),
             "target": "Profile 2 action",
             "competing": "Profile 1 action",
-            "uri": uri,
             "dumpDirectory": str(dump_directory),
+            "observe_only": True,
             "pid": 42,
             "identity": "candidate-ui-instance",
         })
+        self.assertEqual(response["dispatch_guard_snapshot"], guard_snapshot)
+        self.assertEqual(response["protocol_uri"], uri)
+        self.assertEqual(response["protocol_dispatch_started_at_utc"], dispatch_times["started_at_utc"])
+        self.assertEqual(response["protocol_dispatch_returned_at_utc"], dispatch_times["returned_at_utc"])
 
-        mutations = (
-            lambda value: value["target_at_stop"].update(name="Disconnect"),
-            lambda value: value["competing_at_stop"].update(enabled=True),
-            lambda value: value.update(protocol_uri="dobbyvpn://"),
-            lambda value: value.update(window_handle="not-a-window"),
-            lambda value: value.update(shell_execute_result=32),
-            lambda value: value.update(protocol_dispatch_started_at_utc="2026-10-08T11:59:59+00:00"),
+    def test_windows_switch_import_rejects_invalid_native_observation_before_dispatch(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        helper = root / "native-ui-helper.exe"
+        helper.touch()
+        controller = journey.smoke.NativeUIController(
+            "windows", root / "DobbyVPN.exe", root / "source.url", 20.0,
+            helper=helper, screenshot_dir=root / "logs" / "screenshots",
         )
-        for mutation in mutations:
-            with self.subTest(mutation=mutation), patch.object(controller, "_call") as call:
-                invalid = dispatch_response()
-                mutation(invalid)
-                call.return_value = invalid
-                with self.assertRaises(journey.smoke.NativeUISmokeError):
-                    controller.switch_profile_and_dispatch_import(1, 0, url)
+        controller.pid = 42
+        controller.identity = "candidate-ui-instance"
+        invalid = self.windows_cancel_switch_response()
+        invalid.pop("stop_invoked_at_utc")
+        invalid.update({
+            "pid": 42, "identity": "candidate-ui-instance", "window_handle": "0x100",
+            "observe_only": True,
+        })
+        invalid["target_at_stop"]["name"] = "Connect"
+        guard = Mock(return_value={})
+        with (
+            patch.object(controller, "_call", return_value=invalid),
+            patch.object(controller, "_open_link") as open_link,
+            self.assertRaisesRegex(journey.smoke.NativeUISmokeError, "enabled Stop"),
+        ):
+            controller.switch_profile_and_dispatch_import(1, 0, "https://example.invalid/a", before_dispatch=guard)
+        guard.assert_not_called()
+        open_link.assert_not_called()
+
+    def test_windows_switch_import_rejects_connected_guard_and_propagates_shell_error(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        helper = root / "native-ui-helper.exe"
+        helper.touch()
+        controller = journey.smoke.NativeUIController(
+            "windows", root / "DobbyVPN.exe", root / "source.url", 20.0,
+            helper=helper, screenshot_dir=root / "logs" / "screenshots",
+        )
+        controller.pid = 42
+        controller.identity = "candidate-ui-instance"
+        observed = self.windows_cancel_switch_response()
+        observed.pop("stop_invoked_at_utc")
+        observed.update({
+            "pid": 42, "identity": "candidate-ui-instance", "window_handle": "0x100",
+            "observe_only": True,
+        })
+        native_result = SimpleNamespace(
+            returncode=0, args=[str(helper)], stdout=json.dumps(observed).encode("utf-8"), stderr=b"",
+        )
+        connected = {
+            "state": "CONNECTED", "digest": "profiles-v1", "source_url": "https://old.invalid/source",
+            "pending_target": None, "active_mode": "PROFILE_INDEX", "active_index": 1,
+            "active_digest": "profiles-v1",
+        }
+        with (
+            patch.object(journey.smoke, "_windows_job_capture_callbacks", return_value=(None, None, None)),
+            patch.object(journey.smoke, "_native_run", return_value=native_result),
+            patch.object(controller, "_open_link") as open_link,
+        ):
+            with self.assertRaisesRegex(journey.NativeUIJourneyError, "no longer coincided"):
+                controller.switch_profile_and_dispatch_import(
+                    1, 0, "https://example.invalid/a",
+                    before_dispatch=lambda: journey._require_profile_switch_dispatch_state(
+                        connected,
+                        {"digest": "profiles-v1", "source_url": "https://old.invalid/source"},
+                        1,
+                    ),
+                )
+        open_link.assert_not_called()
+
+        sentinel = OSError("original shell dispatch error")
+        with (
+            patch.object(journey.smoke, "_windows_job_capture_callbacks", return_value=(None, None, None)),
+            patch.object(journey.smoke, "_native_run", return_value=native_result),
+            patch.object(controller, "_open_link", side_effect=sentinel),
+        ):
+            with self.assertRaises(OSError) as raised:
+                controller.switch_profile_and_dispatch_import(
+                    1, 0, "https://example.invalid/a", before_dispatch=lambda: connected,
+                )
+        self.assertIs(raised.exception, sentinel)
+
+    def test_windows_switch_import_rejects_invalid_driver_timestamps(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        helper = root / "native-ui-helper.exe"
+        helper.touch()
+        controller = journey.smoke.NativeUIController(
+            "windows", root / "DobbyVPN.exe", root / "source.url", 20.0,
+            helper=helper, screenshot_dir=root / "logs" / "screenshots",
+        )
+        controller.pid = 42
+        controller.identity = "candidate-ui-instance"
+        observed = self.windows_cancel_switch_response()
+        observed.pop("stop_invoked_at_utc")
+        observed.update({
+            "pid": 42, "identity": "candidate-ui-instance", "window_handle": "0x100",
+            "observe_only": True,
+        })
+        native_result = SimpleNamespace(
+            returncode=0, args=[str(helper)], stdout=json.dumps(observed).encode("utf-8"), stderr=b"",
+        )
+        with (
+            patch.object(journey.smoke, "_windows_job_capture_callbacks", return_value=(None, None, None)),
+            patch.object(journey.smoke, "_native_run", return_value=native_result),
+            patch.object(controller, "_open_link", return_value={
+                "started_at_utc": "not-a-time", "returned_at_utc": "2026-10-08T12:00:00.3500000+00:00",
+            }),
+        ):
+            with self.assertRaisesRegex(journey.smoke.NativeUISmokeError, "timestamps were invalid"):
+                controller.switch_profile_and_dispatch_import(
+                    1, 0, "https://example.invalid/a", before_dispatch=lambda: {},
+                )
+
+    def test_profile_switch_dispatch_state_requires_exact_pending_or_starting_target(self):
+        previous = {"digest": "profiles-v1", "source_url": "https://old.invalid/source"}
+        pending = {
+            "state": "STOPPING", "digest": "profiles-v1", "source_url": "https://old.invalid/source",
+            "pending_target": {"mode": "PROFILE_INDEX", "index": 1, "digest": "profiles-v1"},
+        }
+        self.assertIs(journey._require_profile_switch_dispatch_state(pending, previous, 1), pending)
+        starting = {
+            "state": "PREPARING", "digest": "profiles-v1", "source_url": "https://old.invalid/source",
+            "pending_target": None, "active_mode": "PROFILE_INDEX", "active_index": 1,
+            "active_digest": "profiles-v1",
+        }
+        self.assertIs(journey._require_profile_switch_dispatch_state(starting, previous, 1), starting)
+        for state in (
+            {
+                "state": "CONNECTED", "digest": "profiles-v1", "source_url": "https://old.invalid/source",
+                "pending_target": None, "active_mode": "PROFILE_INDEX", "active_index": 1,
+                "active_digest": "profiles-v1",
+            },
+            {
+                "state": "STOPPING", "digest": "profiles-v1", "source_url": "https://old.invalid/source",
+                "pending_target": {"mode": "PROFILE_INDEX", "index": 0, "digest": "profiles-v1"},
+            },
+            {
+                "state": "STOPPING", "digest": "profiles-v1", "source_url": "https://old.invalid/source",
+                "pending_target": {"mode": "PROFILE_INDEX", "index": 1, "digest": "stale"},
+            },
+        ):
+            with self.subTest(state=state), self.assertRaises(journey.NativeUIJourneyError):
+                journey._require_profile_switch_dispatch_state(state, previous, 1)
 
     def test_snapshot_preserves_readback_of_native_subscription_editor(self):
         controller = journey.smoke.NativeUIController.__new__(journey.smoke.NativeUIController)
