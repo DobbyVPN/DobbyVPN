@@ -128,6 +128,401 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         ui.base = base
         return ui, base, events, clock
 
+    def phase_restore_fakes(self, *, fail_first_request=False, stale_active_digest=False):
+        state = {"gets": 10, "in_flight": 0, "retry": False, "restore_url": None}
+        digest = "normal-digest"
+
+        def snapshot(source_url):
+            return {
+                "state": "CONNECTED", "active_mode": "PROFILE_INDEX",
+                "active_profile": {"index": 0}, "active_index": 0,
+                "active_digest": "stale-active-digest" if stale_active_digest else digest,
+                "digest": digest,
+                "source_kind": "URL", "source_url": source_url,
+                "pending_target": None,
+                "profiles": [{"index": 0}, {"index": 1}],
+            }
+
+        state["snapshot"] = snapshot("https://example.invalid/old")
+        ui = Mock(platform="windows", process=None)
+        ui._alive.return_value = True
+        ui.wait_status.return_value = {
+            "status": "Connected", "enabled_controls": ["Disconnect"],
+        }
+        ui.snapshot.side_effect = lambda: {
+            "labels": ["Retry"] if state["retry"] else ["Profile 1 action"],
+        }
+
+        def type_source(source):
+            state["gets"] += 1
+            state["restore_url"] = source
+            if fail_first_request:
+                state["retry"] = True
+            else:
+                state["snapshot"] = snapshot(source)
+            return {"ready": True}
+
+        def retry():
+            state["gets"] += 1
+            state["retry"] = False
+            state["snapshot"] = snapshot(state["restore_url"])
+            return {"ready": True}
+
+        ui.type_source.side_effect = type_source
+        ui.retry.side_effect = retry
+        ui.activate_profile.side_effect = lambda _index: state["snapshot"].update(
+            {"active_digest": digest, "active_mode": "PROFILE_INDEX", "active_index": 0,
+            "active_profile": {"index": 0}, "state": "CONNECTED"}
+        )
+        base = Mock()
+        base._snapshot.side_effect = lambda *_args: dict(state["snapshot"])
+        fixture = Mock()
+        fixture.control_stats.side_effect = lambda: {
+            "subscription_gets": state["gets"],
+            "last_subscription_get_started_at_unix_ms": 1000,
+            "in_flight_gets": state["in_flight"],
+            "max_in_flight_gets": 1,
+        }
+        return ui, base, fixture, state, digest
+
+    def test_native_paste_timing_keeps_the_1500ms_limit_strict(self):
+        self.assertEqual(journey._native_paste_timing("windows", 1000, 2499), (1499, None))
+        for delay_ms in (1500, 1501):
+            with self.subTest(delay_ms=delay_ms):
+                delay, failure = journey._native_paste_timing(
+                    "windows", 1000, 1000 + delay_ms,
+                )
+                self.assertEqual(delay, delay_ms)
+                self.assertIn(f"{delay_ms} ms", failure)
+                self.assertIn("required <1500 ms", failure)
+
+    def test_native_paste_timing_failure_remains_a_required_check(self):
+        delay, failure = journey._native_paste_timing("windows", 1000, 3500)
+        checks = {name: True for name in journey._REQUIRED_TRUE_CHECKS}
+        checks.update({
+            "native_paste_immediate": False,
+            "paste_delay_ms": delay,
+            "native_paste_immediate_error": failure,
+        })
+
+        with self.assertRaisesRegex(
+            journey.NativeUIJourneyError,
+            "required native UI checks did not pass: native_paste_immediate",
+        ) as caught:
+            journey._require_complete_checks(checks, "windows")
+
+        self.assertIn("2500 ms; required <1500 ms", caught.exception.__notes__[0])
+
+    def test_subscription_controls_continue_after_paste_timing_failure(self):
+        ui = Mock(platform="windows", last_paste_invoked_at_unix_ms=1000)
+        later_failure = journey.NativeUIJourneyError("Retry appeared before failure")
+        ui.snapshot.side_effect = [{"labels": []}, later_failure]
+        base = Mock()
+        base._snapshot.return_value = {
+            "profiles": [{"index": 0}, {"index": 1}],
+            "active_profile": {"index": 0},
+        }
+        fixture = Mock()
+        fixture.control_stats.return_value = {
+            "subscription_gets": 1,
+            "last_subscription_get_started_at_unix_ms": 2500,
+            "in_flight_gets": 0,
+            "max_in_flight_gets": 1,
+        }
+        check_sink = {}
+
+        with self.assertRaisesRegex(
+            journey.NativeUIJourneyError,
+            "Retry appeared before failure",
+        ) as caught:
+            journey._exercise_subscription_controls(
+                ui, base, "https://example.invalid/subscription", fixture, 1.0,
+                check_sink=check_sink,
+            )
+
+        self.assertIs(caught.exception, later_failure)
+        self.assertEqual(ui.snapshot.call_count, 2)
+        self.assertFalse(check_sink["native_paste_immediate"])
+        self.assertEqual(check_sink["paste_delay_ms"], 1500)
+        self.assertIn("required <1500 ms", check_sink["native_paste_immediate_error"])
+
+    def test_native_paste_timing_rejects_missing_or_preceding_markers(self):
+        for invoked_at, started_at in ((None, 1000), (1000, 999)):
+            with self.subTest(invoked_at=invoked_at, started_at=started_at):
+                delay, failure = journey._native_paste_timing(
+                    "windows", invoked_at, started_at,
+                )
+                self.assertIsNone(delay)
+                self.assertIn("timing was unavailable or preceded", failure)
+
+    def test_logs_phase_requires_a_visible_manual_connection(self):
+        ui = Mock(platform="windows")
+        base = Mock()
+        base._snapshot.return_value = {
+            "state": "CONNECTED", "active_mode": "AUTO_SELECT",
+            "active_profile": {"index": 0}, "active_index": 0,
+            "source_kind": "URL", "source_url": "https://example.invalid/subscription",
+            "digest": "accepted-digest", "profiles": [{"index": 0}, {"index": 1}],
+        }
+        fixture = Mock(profile_bytes=b"normal subscription")
+
+        with self.assertRaisesRegex(
+            journey.NativeUIJourneyError,
+            "accepted multi-profile URL and a connected manual selection",
+        ):
+            journey._exercise_subscription_controls(
+                ui, base, "https://example.invalid/subscription", fixture, 1.0,
+                phase="logs",
+            )
+
+        ui.wait_status.assert_not_called()
+        ui.clear_logs.assert_not_called()
+        fixture.control_stats.assert_not_called()
+
+    def test_logs_phase_rejects_one_profile_before_view_or_fixture(self):
+        ui = Mock(platform="windows")
+        base = Mock()
+        base._snapshot.return_value = {
+            "state": "CONNECTED", "active_mode": "PROFILE_INDEX",
+            "active_profile": {"index": 0}, "active_index": 0,
+            "source_kind": "URL", "source_url": "https://example.invalid/subscription",
+            "digest": "accepted-digest", "profiles": [{"index": 0}],
+        }
+        fixture = Mock(profile_bytes=b"normal subscription")
+
+        with self.assertRaisesRegex(
+            journey.NativeUIJourneyError,
+            "requires two supplied profiles",
+        ):
+            journey._exercise_subscription_controls(
+                ui, base, "https://example.invalid/subscription", fixture, 1.0,
+                phase="logs",
+            )
+
+        ui.wait_status.assert_not_called()
+        ui.clear_logs.assert_not_called()
+        fixture.control_stats.assert_not_called()
+
+    def test_logs_phase_enters_without_claiming_subscription_checks(self):
+        ui = Mock(platform="windows")
+        ui.wait_status.return_value = {
+            "status": "Connected", "enabled_controls": ["Disconnect"],
+        }
+        clear_failure = journey.NativeUIJourneyError("Clear phase probe")
+        ui.clear_logs.side_effect = clear_failure
+        base = Mock()
+        base._snapshot.return_value = {
+            "state": "CONNECTED", "active_mode": "PROFILE_INDEX",
+            "active_profile": {"index": 0}, "active_index": 0,
+            "source_kind": "URL", "source_url": "https://example.invalid/subscription?restored=1",
+            "digest": "accepted-digest", "profiles": [{"index": 0}, {"index": 1}],
+        }
+        fixture = Mock(profile_bytes=b"normal subscription")
+        checks = {}
+
+        with self.assertRaisesRegex(journey.NativeUIJourneyError, "Clear phase probe") as caught:
+            journey._exercise_subscription_controls(
+                ui, base, "https://example.invalid/subscription", fixture, 1.0,
+                check_sink=checks, phase="logs",
+            )
+
+        self.assertIs(caught.exception, clear_failure)
+        ui.wait_status.assert_called_once_with("Connected")
+        ui.clear_logs.assert_called_once_with()
+        fixture.control_stats.assert_not_called()
+        self.assertFalse({
+            "native_paste_immediate", "manual_selection_native", "profile_switch_native",
+            "failed_load_preserves_tunnel", "warm_import_native",
+        } & checks.keys())
+
+    def test_subscription_phase_failure_does_not_enter_logs_tail(self):
+        ui = Mock(platform="windows", last_paste_invoked_at_unix_ms=1000)
+        base = Mock()
+        base._snapshot.return_value = {
+            "state": "CONNECTED", "active_mode": "PROFILE_INDEX",
+            "active_profile": {"index": 0}, "active_index": 0,
+            "profiles": [{"index": 0}, {"index": 1}],
+        }
+        fixture = Mock(profile_bytes=b"normal subscription")
+        fixture.control_stats.return_value = {
+            "subscription_gets": 0,
+            "last_subscription_get_started_at_unix_ms": 1000,
+            "in_flight_gets": 0,
+            "max_in_flight_gets": 0,
+        }
+
+        with self.assertRaisesRegex(
+            journey.NativeUIJourneyError,
+            "did not load the disposable subscription exactly once",
+        ):
+            journey._exercise_subscription_controls(
+                ui, base, "https://example.invalid/subscription", fixture, 1.0,
+                phase="subscription",
+            )
+
+        ui.clear_logs.assert_not_called()
+        ui.wait_status.assert_not_called()
+
+    def test_windows_phase_coordinator_runs_logs_after_subscription_failure(self):
+        subscription_failure = journey.NativeUIJourneyError("subscription phase failed")
+        calls = []
+
+        def exercise(_ui, _base, _url, _fixture, _timeout, *, phase, **_kwargs):
+            calls.append(("phase", phase))
+            if phase == "subscription":
+                raise subscription_failure
+
+        def restore(*args):
+            purpose = args[-1]
+            calls.append(("restore", purpose))
+            return {"state": "CONNECTED", "active_mode": "PROFILE_INDEX"}
+
+        with (
+            patch.object(journey, "_exercise_subscription_controls", side_effect=exercise),
+            patch.object(journey, "_restore_windows_subscription_preconditions", side_effect=restore),
+        ):
+            failures, logs_succeeded, legacy_ready = journey._run_windows_subscription_phases(
+                Mock(), Mock(), "https://example.invalid/subscription", Mock(), 1.0,
+                b"normal subscription", "normal-digest", {}, {},
+            )
+
+        self.assertEqual(calls, [
+            ("phase", "subscription"), ("restore", "before-logs"),
+            ("phase", "logs"),
+        ])
+        self.assertIs(failures[0][1], subscription_failure)
+        self.assertTrue(logs_succeeded)
+        self.assertTrue(legacy_ready)
+
+    def test_windows_phase_coordinator_keeps_both_failures_and_restores_for_legacy(self):
+        subscription_failure = journey.NativeUIJourneyError("subscription phase failed")
+        logs_failure = journey.NativeUIJourneyError("logs phase failed")
+        calls = []
+
+        def exercise(_ui, _base, _url, _fixture, _timeout, *, phase, **_kwargs):
+            calls.append(("phase", phase))
+            raise subscription_failure if phase == "subscription" else logs_failure
+
+        def restore(*args):
+            purpose = args[-1]
+            calls.append(("restore", purpose))
+            return {"state": "CONNECTED", "active_mode": "PROFILE_INDEX"}
+
+        with (
+            patch.object(journey, "_exercise_subscription_controls", side_effect=exercise),
+            patch.object(journey, "_restore_windows_subscription_preconditions", side_effect=restore),
+        ):
+            failures, logs_succeeded, legacy_ready = journey._run_windows_subscription_phases(
+                Mock(), Mock(), "https://example.invalid/subscription", Mock(), 1.0,
+                b"normal subscription", "normal-digest", {}, {},
+            )
+
+        self.assertEqual(calls, [
+            ("phase", "subscription"), ("restore", "before-logs"),
+            ("phase", "logs"), ("restore", "before-legacy-integration"),
+        ])
+        self.assertIs(failures[0][1], subscription_failure)
+        self.assertIs(failures[1][1], logs_failure)
+        self.assertFalse(logs_succeeded)
+        self.assertTrue(legacy_ready)
+        group = journey._windows_phase_failure_group(failures, {})
+        self.assertEqual(group.exceptions, (subscription_failure, logs_failure))
+        self.assertIn("Windows subscription-controls phase_traceback", "\n".join(group.__notes__))
+        self.assertIn("Windows logs-layout phase_traceback", "\n".join(group.__notes__))
+
+    def test_windows_phase_coordinator_skips_phase_without_restored_precondition(self):
+        subscription_failure = journey.NativeUIJourneyError("subscription phase failed")
+        restore_failure = journey.NativeUIJourneyError("rendered restore failed")
+        calls = []
+
+        def exercise(_ui, _base, _url, _fixture, _timeout, *, phase, **_kwargs):
+            calls.append(("phase", phase))
+            raise subscription_failure
+
+        def restore(*args):
+            purpose = args[-1]
+            calls.append(("restore", purpose))
+            if purpose == "before-logs":
+                raise restore_failure
+            return {"state": "CONNECTED", "active_mode": "PROFILE_INDEX"}
+
+        with (
+            patch.object(journey, "_exercise_subscription_controls", side_effect=exercise),
+            patch.object(journey, "_restore_windows_subscription_preconditions", side_effect=restore),
+        ):
+            failures, logs_succeeded, legacy_ready = journey._run_windows_subscription_phases(
+                Mock(), Mock(), "https://example.invalid/subscription", Mock(), 1.0,
+                b"normal subscription", "normal-digest", {}, {},
+            )
+
+        self.assertEqual(calls, [
+            ("phase", "subscription"), ("restore", "before-logs"),
+            ("restore", "before-legacy-integration"),
+        ])
+        self.assertIs(failures[0][1], subscription_failure)
+        self.assertIs(failures[1][1], restore_failure)
+        self.assertFalse(logs_succeeded)
+        self.assertTrue(legacy_ready)
+
+    def test_windows_phase_restore_requires_proven_unused_one_shot_503(self):
+        ui, base, fixture, state, digest = self.phase_restore_fakes(fail_first_request=True)
+        phase_state = {"windows_fail_next_before_gets": state["gets"]}
+
+        def run_action(controller, _operation, _stage, _timeout, action, **_kwargs):
+            return action()
+
+        with patch.object(journey, "_native_ui_action", side_effect=run_action):
+            restored = journey._restore_windows_subscription_preconditions(
+                ui, base, fixture, "https://example.invalid/subscription",
+                b"normal subscription", digest, 1.0, phase_state, "before-logs",
+            )
+
+        self.assertEqual(restored["digest"], digest)
+        self.assertEqual(restored["source_url"], state["restore_url"])
+        self.assertEqual(state["gets"], 12)
+        ui.retry.assert_called_once_with()
+        fixture.release_responses.assert_called_once_with()
+        fixture.replace_response.assert_called_once_with(b"normal subscription")
+        self.assertEqual(phase_state, {})
+
+        ui, base, fixture, state, digest = self.phase_restore_fakes(fail_first_request=True)
+        phase_state = {"windows_fail_next_before_gets": state["gets"] - 1}
+        with patch.object(journey, "_native_ui_action", side_effect=run_action):
+            with self.assertRaisesRegex(
+                journey.NativeUIJourneyError,
+                "failed without an unused controlled 503",
+            ):
+                journey._restore_windows_subscription_preconditions(
+                    ui, base, fixture, "https://example.invalid/subscription",
+                    b"normal subscription", digest, 1.0, phase_state, "before-logs",
+                )
+        ui.retry.assert_not_called()
+
+    def test_windows_phase_restore_switches_stale_active_digest_visibly(self):
+        ui, base, fixture, state, digest = self.phase_restore_fakes(stale_active_digest=True)
+
+        def run_action(_controller, _operation, _stage, _timeout, action, **_kwargs):
+            return action()
+
+        with patch.object(journey, "_native_ui_action", side_effect=run_action):
+            restored = journey._restore_windows_subscription_preconditions(
+                ui, base, fixture, "https://example.invalid/subscription",
+                b"normal subscription", digest, 1.0, {}, "before-logs",
+            )
+
+        self.assertEqual(restored["active_digest"], digest)
+        base.prepare_native_connect.assert_called_once_with(1.0)
+        ui.activate_profile.assert_called_once_with(0)
+
+    def test_cold_clear_boundary_stays_unreached_when_clear_phase_failed(self):
+        ui = Mock()
+        checks = {"cold_os_scheme_launch": True}
+
+        journey._verify_cold_reopen_clear_boundary(ui, checks)
+
+        self.assertEqual(checks, {"cold_os_scheme_launch": True})
+        ui._call.assert_not_called()
+
     def test_auto_recovery_stop_arms_after_route_and_traffic_then_stays_idle(self):
         with tempfile.TemporaryDirectory() as temporary:
             marker = Path(temporary) / "recovery-stop.arm"

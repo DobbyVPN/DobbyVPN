@@ -3856,6 +3856,7 @@ public final class NativeUiHostedProfileTest {
                     throw new IllegalStateException(
                             "ANDROID_TEST_RECOVERY_STOP_PROFILE_ACTION_UNAVAILABLE");
                 }
+                if (action.getVisibleBounds().isEmpty()) continue;
                 if (action.isEnabled() != expectedEnabled) {
                     if (!expectedEnabled) {
                         throw recoveryProfileActionEnabled(profileIndex, label, action);

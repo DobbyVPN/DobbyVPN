@@ -455,18 +455,24 @@ class InformationRetentionTests(unittest.TestCase):
             def palette_check(_ui, _log_path, _timeout, current_checks):
                 current_checks["windows_rendered_log_palette"] = True
 
+            def subscription_phases(*phase_args):
+                phase_args[-1].update(native_checks)
+                return [], True, True
+
             with (
                 mock.patch.object(native_ui, "_ensure_directory"),
                 mock.patch.object(native_ui, "SubprocessRunner"),
                 mock.patch.object(native_ui, "adapter_for_platform", return_value=base),
                 mock.patch.object(native_ui, "smoke", smoke),
                 mock.patch.object(native_ui, "_exercise_subscription_controls", return_value=native_checks),
+                mock.patch.object(native_ui, "_run_windows_subscription_phases", side_effect=subscription_phases),
                 mock.patch.object(native_ui, "_exercise_windows_rendered_log_palette", side_effect=palette_check),
                 mock.patch.dict(os.environ, {"DOBBY_LOG_PATH": str(palette_log)}, clear=False),
                 mock.patch(
                     "torturer_runner.subscription_fixture.SubscriptionFixture",
                     return_value=mock.Mock(
                         directory=args.profile.parent,
+                        profile_bytes=b"synthetic subscription",
                         start=mock.Mock(return_value="https://127.0.0.1:12345/subscription"),
                         control_stats=mock.Mock(side_effect=[
                             {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},

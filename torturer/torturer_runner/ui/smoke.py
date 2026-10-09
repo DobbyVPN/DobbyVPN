@@ -1481,6 +1481,12 @@ class NativeUIController:
         """Return a read-only Accessibility snapshot of Stop/connection-action nodes."""
         return self._call("connection-action-details")
 
+    def inspect_macos_text_size_settings(self) -> dict[str, object]:
+        """Inspect the installed candidate's entry in macOS Text Size settings."""
+        if self.platform != "macos":
+            raise ValueError("macOS Text Size inspection requires a macOS frontend")
+        return self._call("inspect-macos-text-size")
+
     def inspect_windows_text_size_settings(self) -> dict[str, object]:
         """Open Windows Text size Settings and inspect its native controls without changing them."""
         if self.platform != "windows":

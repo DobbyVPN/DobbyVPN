@@ -938,6 +938,252 @@ func capture(_ pid: pid_t, path: String) throws {
     try require(id == afterID && bounds == afterBounds, "Native window changed during screenshot")
 }
 
+func inspectMacOSTextSize(
+    executablePath: String, candidateApp: NSRunningApplication, candidatePID: pid_t,
+    candidateIdentity: String, reactivateCandidate: () throws -> Void
+) throws -> [String: Any] {
+    var settingsApp: NSRunningApplication?
+    var settingsOpenedByHelper = false
+    var settingsWindow: AXUIElement?
+    var baselineSheets = [AXUIElement]()
+    var buttonPressed = false
+    var cleanupErrors = [String]()
+
+    func textSizeSheet(_ nodes: [AXUIElement]) throws -> AXUIElement? {
+        let sheets = try nodes.filter { node in
+            guard try label(node, kAXRoleAttribute) == "AXSheet" else { return false }
+            return try elements(node).contains {
+                try label($0, kAXRoleAttribute) == "AXHeading" && names($0).contains("Text Size")
+            }
+        }
+        try require(sheets.count <= 1, "Found \(sheets.count) Text Size sheets")
+        return sheets.first
+    }
+
+    func appName(_ popup: AXUIElement) throws -> String? {
+        var child = popup
+        for _ in 0..<8 {
+            guard let parent = try axElement(child, kAXParentAttribute) else { return nil }
+            if ["AXGroup", "AXRow", "AXCell"].contains(try label(parent, kAXRoleAttribute)) {
+                let siblings = try attribute(parent, kAXChildrenAttribute) as? [AXUIElement] ?? []
+                let controls = try siblings.filter { try label($0, kAXRoleAttribute) == "AXPopUpButton" }
+                let labels = try siblings.compactMap { item -> String? in
+                    guard try label(item, kAXRoleAttribute) == kAXStaticTextRole else { return nil }
+                    let candidates = Set(try names(item).map {
+                        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    }.filter { !$0.isEmpty })
+                    return candidates.count == 1 ? candidates.first : nil
+                }
+                if controls.count == 1, CFEqual(controls[0], popup), labels.count == 1 { return labels[0] }
+            }
+            child = parent
+        }
+        return nil
+    }
+
+    let outcome: Result<[String: Any], Error> = {
+        defer {
+            if buttonPressed, let window = settingsWindow {
+                do {
+                    let current = try textSizeSheet(elements(window))
+                    if let sheet = current, !baselineSheets.contains(where: { CFEqual($0, sheet) }) {
+                        try press(find(elements(sheet), "Done"))
+                    }
+                } catch { cleanupErrors.append("Close helper-opened Text Size sheet: \(error)") }
+            }
+            if settingsOpenedByHelper, let settings = settingsApp, !settings.isTerminated {
+                do {
+                    try require(settings.terminate(), "System Settings quit request failed")
+                    let deadline = Date().addingTimeInterval(3)
+                    while !settings.isTerminated && Date() < deadline {
+                        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+                    }
+                    try require(settings.isTerminated, "Helper-owned System Settings did not terminate")
+                } catch { cleanupErrors.append("Close helper-owned System Settings: \(error)") }
+            }
+            do { try reactivateCandidate() }
+            catch { cleanupErrors.append("Reactivate installed app: \(error)") }
+        }
+        do {
+            let executable = URL(fileURLWithPath: executablePath).standardizedFileURL
+            var bundleURL = executable
+            while bundleURL.pathExtension.lowercased() != "app" {
+                let parent = bundleURL.deletingLastPathComponent()
+                try require(parent.path != bundleURL.path, "Installed executable is not inside an app bundle")
+                bundleURL = parent
+            }
+            guard let info = Bundle(url: bundleURL)?.infoDictionary,
+                  let bundleID = info["CFBundleIdentifier"] as? String else {
+                throw HelperError("Installed app bundle identity is unavailable: \(bundleURL.path)")
+            }
+            let bundleName = (info["CFBundleDisplayName"] as? String) ??
+                (info["CFBundleName"] as? String) ?? bundleURL.deletingPathExtension().lastPathComponent
+            let candidateNames = Set([bundleName, info["CFBundleName"] as? String ?? "",
+                                       candidateApp.localizedName ?? ""].filter { !$0.isEmpty }.map { $0.lowercased() })
+            let version = info["CFBundleShortVersionString"] as? String ?? ""
+            try require(AXIsProcessTrusted(), "Accessibility permission unavailable")
+
+            let settingsID = "com.apple.systempreferences"
+            let running = NSWorkspace.shared.runningApplications.filter {
+                $0.bundleIdentifier == settingsID && !$0.isTerminated
+            }
+            try require(running.count <= 1, "Found \(running.count) System Settings app processes")
+            if let existing = running.first {
+                settingsApp = existing
+            } else {
+                guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: settingsID) else {
+                    throw HelperError("System Settings app bundle was not found")
+                }
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = true
+                var launched: NSRunningApplication?
+                var launchError: Error?
+                var launchFinished = false
+                NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { app, error in
+                    launched = app
+                    launchError = error
+                    launchFinished = true
+                }
+                let deadline = Date().addingTimeInterval(8)
+                while !launchFinished && Date() < deadline {
+                    _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+                }
+                try require(launchFinished, "System Settings launch timed out")
+                if let launchError { throw HelperError("System Settings launch failed: \(launchError)") }
+                guard let launched, launched.bundleIdentifier == settingsID else {
+                    throw HelperError("System Settings launch returned no matching process")
+                }
+                settingsApp = launched
+                settingsOpenedByHelper = true
+            }
+            guard let settings = settingsApp else { throw HelperError("System Settings process is unavailable") }
+            try require(settings.activate(options: [.activateAllWindows]), "System Settings activation failed")
+            let activationDeadline = Date().addingTimeInterval(3)
+            while NSWorkspace.shared.frontmostApplication?.processIdentifier != settings.processIdentifier &&
+                    Date() < activationDeadline {
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == settings.processIdentifier,
+                        "System Settings did not become foreground")
+
+            let root = AXUIElementCreateApplication(settings.processIdentifier)
+            AXUIElementSetMessagingTimeout(root, 1)
+            let windowDeadline = Date().addingTimeInterval(8)
+            repeat {
+                settingsWindow = try axElement(root, kAXFocusedWindowAttribute)
+                if settingsWindow == nil, let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement] {
+                    settingsWindow = try windows.first { (try attribute($0, kAXMainAttribute)) as? Bool == true }
+                    if settingsWindow == nil && windows.count == 1 { settingsWindow = windows[0] }
+                }
+                if settingsWindow == nil { Thread.sleep(forTimeInterval: 0.05) }
+            } while settingsWindow == nil && Date() < windowDeadline
+            guard let window = settingsWindow else { throw HelperError("System Settings AX window unavailable") }
+            var ownerPID: pid_t = 0
+            try require(AXUIElementGetPid(window, &ownerPID) == .success, "System Settings window owner PID unavailable")
+            try require(ownerPID == settings.processIdentifier,
+                        "System Settings AX window belongs to PID \(ownerPID), expected \(settings.processIdentifier)")
+            if let initialSheet = try textSizeSheet(elements(window)) { baselineSheets = [initialSheet] }
+
+            guard let displayURL = URL(string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?Display") else {
+                throw HelperError("Could not construct the Accessibility Display URL")
+            }
+            let urlConfiguration = NSWorkspace.OpenConfiguration()
+            urlConfiguration.activates = true
+            var urlError: Error?
+            var urlFinished = false
+            NSWorkspace.shared.open(displayURL, configuration: urlConfiguration) { _, error in
+                urlError = error
+                urlFinished = true
+            }
+            let urlDeadline = Date().addingTimeInterval(6)
+            while !urlFinished && Date() < urlDeadline {
+                _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            try require(urlFinished, "Accessibility Display URL open timed out")
+            if let urlError { throw HelperError("Accessibility Display URL open failed: \(urlError)") }
+
+            var button: AXUIElement?
+            var buttonDescription = ""
+            let displayDeadline = Date().addingTimeInterval(10)
+            repeat {
+                let nodes = try elements(window)
+                if try textSizeSheet(nodes) != nil { break }
+                let buttons = try nodes.filter {
+                    try label($0, kAXRoleAttribute) == kAXButtonRole &&
+                        label($0, kAXDescriptionAttribute).lowercased().hasPrefix("text size") &&
+                        label($0, kAXDescriptionAttribute).lowercased().contains("preferred reading size") &&
+                        label($0, kAXDescriptionAttribute).lowercased().contains("supported apps")
+                }
+                try require(buttons.count <= 1, "Found \(buttons.count) Text size settings buttons")
+                if let found = buttons.first {
+                    button = found
+                    buttonDescription = try label(found, kAXDescriptionAttribute)
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.1)
+            } while Date() < displayDeadline
+
+            var sheet = try textSizeSheet(elements(window))
+            if sheet == nil {
+                guard let button, (try attribute(button, kAXEnabledAttribute)) as? Bool == true else {
+                    throw HelperError("Display settings did not expose an enabled Text size button")
+                }
+                try press(button)
+                buttonPressed = true
+                let sheetDeadline = Date().addingTimeInterval(10)
+                repeat {
+                    sheet = try textSizeSheet(elements(window))
+                    if sheet != nil { break }
+                    Thread.sleep(forTimeInterval: 0.05)
+                } while Date() < sheetDeadline
+            }
+            guard let sheet else { throw HelperError("Text Size button did not expose its AXSheet") }
+
+            let popups = try elements(sheet).filter { try label($0, kAXRoleAttribute) == "AXPopUpButton" }
+            var rows = [[String: Any]]()
+            var unmapped = 0
+            var targetMatches = 0
+            var targetEnabled = false
+            for popup in popups {
+                guard let appName = try appName(popup),
+                      let size = try attribute(popup, kAXValueAttribute) as? String,
+                      let enabled = try attribute(popup, kAXEnabledAttribute) as? Bool else {
+                    unmapped += 1
+                    continue
+                }
+                rows.append(["app": appName, "size": size, "enabled": enabled])
+                if candidateNames.contains(appName.lowercased()) {
+                    targetMatches += 1
+                    targetEnabled = enabled
+                }
+            }
+            let rowNames = rows.compactMap { $0["app"] as? String }.map { $0.lowercased() }
+            let complete = !popups.isEmpty && rows.count == popups.count &&
+                Set(rowNames).count == rowNames.count && targetMatches <= 1
+            let eligible: Any
+            if complete { eligible = targetMatches == 1 && targetEnabled }
+            else { eligible = NSNull() }
+            return .success([
+                "ready": true, "available": true, "rows_complete": complete, "eligible": eligible,
+                "candidate_bundle_identifier": bundleID, "candidate_name": bundleName,
+                "candidate_version": version, "candidate_pid": Int(candidatePID),
+                "candidate_identity": candidateIdentity, "settings_pid": Int(settings.processIdentifier),
+                "settings_window_owner_pid": Int(ownerPID), "settings_opened_by_helper": settingsOpenedByHelper,
+                "os_version": ProcessInfo.processInfo.operatingSystemVersionString,
+                "text_size_button_description": buttonDescription, "app_rows": rows,
+                "unmapped_control_count": unmapped,
+            ])
+        } catch { return .failure(error) }
+    }()
+    if case let .failure(error) = outcome {
+        if cleanupErrors.isEmpty { throw error }
+        throw HelperError("\(error); cleanup errors: \(cleanupErrors.joined(separator: "; "))")
+    }
+    if !cleanupErrors.isEmpty { throw HelperError("Text Size cleanup failed: \(cleanupErrors.joined(separator: "; "))") }
+    if case let .success(result) = outcome { return result }
+    throw HelperError("Text Size inspection returned no result")
+}
+
 func run() throws -> [String: Any] {
     let data = FileHandle.standardInput.readDataToEndOfFile()
     guard let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -981,6 +1227,15 @@ func run() throws -> [String: Any] {
         try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, "Native app did not become foreground")
     }
     if operation == "scroll-logs" || operation == "scroll-profile-list" { try activate() }
+    if operation == "inspect-macos-text-size" {
+        return try inspectMacOSTextSize(
+            executablePath: expected,
+            candidateApp: app,
+            candidatePID: pid,
+            candidateIdentity: identity,
+            reactivateCandidate: activate
+        )
+    }
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 1)
     if operation == "click", let target = request["target"] as? String,
