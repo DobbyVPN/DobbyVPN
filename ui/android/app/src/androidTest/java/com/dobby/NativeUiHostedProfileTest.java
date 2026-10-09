@@ -2042,14 +2042,16 @@ public final class NativeUiHostedProfileTest {
 
     private void verifyHeldLoadKeepsControlsResponsive(String subscriptionURL, JSONObject active,
             long deadline) throws Exception {
-        int before = subscriptionFixtureState().getInt("subscription_gets");
+        markProgress("configure", "held-load-controls-responsive", "started");
+        JSONObject before = subscriptionFixtureState();
+        int beforeGets = before.getInt("subscription_gets");
         subscriptionFixturePost("/hold", new byte[0]);
         String heldURL = urlWithQuery(subscriptionURL, "android-held", "1");
         String intermediateURL = urlWithQuery(subscriptionURL, "android-intermediate", "1");
         String newestURL = urlWithQuery(subscriptionURL, "android-newest", "1");
         expectedRenderedSource = newestURL;
         deliverWarmImport(heldURL);
-        waitForSubscriptionGets(before + 1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForSubscriptionGets(beforeGets + 1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject held = waitForInFlightGets(1, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         waitForUiControl("Loading profiles…", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         if (findUiObject("Retry") != null) {
@@ -2060,7 +2062,7 @@ public final class NativeUiHostedProfileTest {
         deliverWarmImport(newestURL);
         SystemClock.sleep(200L);
         JSONObject whileHeld = subscriptionFixtureState();
-        if (whileHeld.getInt("subscription_gets") != before + 1
+        if (whileHeld.getInt("subscription_gets") != beforeGets + 1
                 || whileHeld.getInt("in_flight_gets") != 1
                 || held.getInt("max_in_flight_gets") > 1) {
             throw new AssertionError("Held request allowed a duplicate or concurrent subscription load");
@@ -2077,17 +2079,29 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Stop did not complete while subscription loading was held");
         }
         subscriptionFixturePost("/release", new byte[0]);
-        waitForSubscriptionGets(before + 2, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForSubscriptionGets(beforeGets + 2, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject completed = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject latest = waitForSessionSource(newestURL,
                 remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        if (completed.getInt("subscription_gets") != before + 2
+        if (completed.getInt("subscription_gets") != beforeGets + 2
                 || completed.getInt("max_in_flight_gets") != 1
-                || !"IDLE".equals(latest.optString("state"))
-                || latest.getLong("generation") != stopped.getLong("generation")) {
-            throw new AssertionError("Newest request did not win after the held response completed");
+                || !newestURL.equals(latest.optString("source_url"))
+                || !latest.optBoolean("configured")
+                || !"CONFIGURED".equals(latest.optString("state"))
+                || !stopped.getString("session_id").equals(latest.getString("session_id"))
+                || latest.getLong("generation") != stopped.getLong("generation")
+                || !latest.optBoolean("cleanup_complete")
+                || latest.optBoolean("recovering")
+                || latest.optJSONObject("active_profile") != null
+                || latest.optJSONObject("pending_target") != null) {
+            throw new AssertionError("Newest request did not win after the held response completed"
+                    + "; before=" + before
+                    + "; completed=" + completed
+                    + "; stopped=" + stopped
+                    + "; latest=" + latest);
         }
+        markProgress("configure", "held-load-controls-responsive", "completed");
     }
 
     private void verifyTypedURLChangesWhileLoadHeld(String subscriptionURL, long deadline)
