@@ -2879,6 +2879,38 @@ internal static class Program
                         ((SelectionItemPattern)select).Select();
                     else throw new InvalidOperationException("Control has no native invoke or selection action");
                     break;
+                case "disconnect":
+                {
+                    RequireForeground(window, "UI Automation disconnect");
+                    var mainAction = RequireAutomationId(root, "VPN connection action");
+                    var mainRendersDisconnect = Walk(mainAction)
+                        .Any(candidate => candidate.Current.Name == "Disconnect");
+                    var disconnectAction = mainRendersDisconnect
+                        ? mainAction
+                        : Walk(root).FirstOrDefault(candidate =>
+                        {
+                            var current = candidate.Current;
+                            return current.IsControlElement && current.ControlType == ControlType.Button &&
+                                current.Name == "Disconnect" && !current.IsOffscreen && current.IsEnabled &&
+                                candidate.TryGetCurrentPattern(InvokePattern.Pattern, out _);
+                        });
+                    if (disconnectAction is null)
+                        throw new InvalidOperationException(
+                            "No visible, enabled native button renders Disconnect with an InvokePattern");
+
+                    var disconnectCurrent = disconnectAction.Current;
+                    if (!disconnectCurrent.IsControlElement || disconnectCurrent.ControlType != ControlType.Button ||
+                        disconnectCurrent.IsOffscreen || !disconnectCurrent.IsEnabled)
+                        throw new InvalidOperationException(
+                            $"Rendered Disconnect action is not a visible, enabled button: {DescribeElement(disconnectAction)}");
+                    if (!disconnectAction.TryGetCurrentPattern(InvokePattern.Pattern, out var disconnectInvoke))
+                        throw new InvalidOperationException(
+                            $"Rendered Disconnect button has no native InvokePattern: {DescribeElement(disconnectAction)}");
+
+                    ((InvokePattern)disconnectInvoke).Invoke();
+                    Console.WriteLine(JsonSerializer.Serialize(new { ready = true }));
+                    return 0;
+                }
                 case "type":
                     TracePhase("type-find-editor");
                     var editor = Find("Connection configuration", editor: true);

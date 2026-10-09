@@ -543,7 +543,6 @@ class NativeUIController:
             app_environment = os.environ.copy()
             # Never let a test theme leak into ordinary or diagnostic launches.
             app_environment.pop(_WINDOWS_TEST_THEME_VARIABLE, None)
-            app_environment["DOBBYVPN_TEST_LOG_SCROLL_TRACE"] = "1"
         if windows_content_root_diagnostics:
             assert app_environment is not None
             app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"] = str(
@@ -1450,7 +1449,22 @@ class NativeUIController:
         raise NativeUISmokeError("Auto selection did not complete before the native UI deadline")
 
     def disconnect(self) -> dict:
-        self._click("VPN connection action")
+        if self.platform == "windows":
+            def rendered_disconnect_is_enabled() -> bool:
+                state = self.snapshot()
+                return (
+                    "Disconnect" in state.get("labels", [])
+                    and "Disconnect" in state.get("enabled_controls", [])
+                )
+
+            self._wait(
+                rendered_disconnect_is_enabled,
+                "native UI did not expose a rendered, enabled Disconnect action",
+            )
+            if self._call("disconnect").get("ready") is not True:
+                raise NativeUISmokeError("native UI helper could not invoke the rendered Disconnect action")
+        else:
+            self._click("VPN connection action")
         return self.wait_status("Disconnected")
 
     def recover_after_process_loss(self) -> dict:

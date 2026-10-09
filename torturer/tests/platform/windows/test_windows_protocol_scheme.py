@@ -777,6 +777,35 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         with self.assertRaisesRegex(smoke.NativeUISmokeError, "without a rendered, enabled Stop"):
             controller.connect_with_auto_stop()
 
+    def test_windows_disconnect_uses_the_rendered_action_not_auto_connect(self) -> None:
+        controller = object.__new__(smoke.NativeUIController)
+        controller.platform = "windows"
+        controller._timeout = 10.0
+        controller._deadline = None
+        controller._click = mock.Mock()
+        controller.snapshot = mock.Mock(side_effect=(
+            {
+                "status": "Connected",
+                "labels": ["Auto connect", "Disconnect"],
+                "enabled_controls": ["VPN connection action", "Auto connect"],
+            },
+            {
+                "status": "Connected",
+                "labels": ["Auto connect", "Disconnect"],
+                "enabled_controls": ["VPN connection action", "Auto connect", "Disconnect"],
+            },
+        ))
+        controller._call = mock.Mock(return_value={"ready": True})
+        controller.wait_status = mock.Mock(return_value={"status": "Disconnected"})
+
+        with mock.patch("torturer_runner.ui.smoke.time.sleep"):
+            result = controller.disconnect()
+
+        self.assertEqual(result["status"], "Disconnected")
+        controller._call.assert_called_once_with("disconnect")
+        controller._click.assert_not_called()
+        controller.wait_status.assert_called_once_with("Disconnected")
+
     def test_warm_deep_link_requires_the_same_window_not_only_the_same_process(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
