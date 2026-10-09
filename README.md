@@ -18,8 +18,9 @@ and the `dobby-cli` command.
 Enter or paste an HTTPS subscription URL to load its profiles automatically.
 Choose **Auto connect** to try profiles in subscription order, or **Connect**
 beside a profile to select it. Choosing another profile while connected stops
-the old tunnel before starting the new one. Loading a subscription keeps the
-current connection running. Failed loads offer **Retry**; **Stop** or
+the old tunnel before starting the new one. If the new connection fails, DobbyVPN
+does not reconnect the old profile automatically. Loading a subscription keeps
+the current connection running. Failed loads offer **Retry**; **Stop** or
 **Disconnect** remains available for the active connection. The backend saves
 the accepted URL and restores it when the app reopens. About shows the version,
 commit and source link. File and inline configuration remain available in the CLI.
