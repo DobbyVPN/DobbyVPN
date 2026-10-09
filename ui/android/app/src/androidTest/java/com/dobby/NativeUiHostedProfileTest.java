@@ -124,6 +124,7 @@ public final class NativeUiHostedProfileTest {
     private static final long DEFAULT_TIMEOUT_MILLIS = 60_000L;
     private static final long NETWORK_RECOVERY_TIMEOUT_MILLIS = 10_000L;
     private static final long ACTIVITY_RESUME_TIMEOUT_MILLIS = 15_000L;
+    private static final long NATIVE_RELEASE_HOLD_TIMEOUT_MILLIS = 10_000L;
     private static final int UI_STABILITY_SAMPLES = 10;
     private static final int STABILITY_SAMPLES = 5;
     private static final String FALLBACK_ERROR_CODE = "ANDROID_HOSTED_DRIVER_FAILED";
@@ -1848,18 +1849,38 @@ public final class NativeUiHostedProfileTest {
         if (count > 1) {
             verifyRenderedStopCancelsPendingSwitch(first, deadline);
             initial = snapshotResult("");
+            scrollControlsToTop(count, deadline);
+            tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
+            awaitSelection(initial.getLong("generation"), "AUTO_SELECT", -1, deadline);
+            initial = snapshotResult("");
+            first = initial.getJSONObject("active_profile").getInt("index") == 0 ? 1 : 0;
         }
         if (count == 1) disconnectThroughRenderedUI(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        if (count > 1) scrollControlsToProfileAction(first, count, deadline);
-        tapEnabledControl("Profile " + (first + 1) + " action", deadline);
-        if (count > 1) verifyPendingProfileTransition(first, first == 0 ? 1 : 0,
-                subscriptionURL, deadline);
+        if (count > 1) {
+            scrollControlsToProfileAction(first, count, deadline);
+            Object service = currentNativeVpnService();
+            long releaseHoldDeadline = Math.min(
+                    deadline, System.currentTimeMillis() + NATIVE_RELEASE_HOLD_TIMEOUT_MILLIS);
+            synchronized (service) {
+                tapEnabledControl("Profile " + (first + 1) + " action", releaseHoldDeadline);
+                verifyPendingProfileTransition(
+                        first, first == 0 ? 1 : 0, subscriptionURL, initial, releaseHoldDeadline);
+            }
+        } else {
+            tapEnabledControl("Profile " + (first + 1) + " action", deadline);
+        }
         JSONObject manual = awaitSelection(initial.getLong("generation"), "PROFILE_INDEX", first, deadline);
         if (count > 1) {
             int second = first == 0 ? 1 : 0;
             scrollControlsToProfileAction(second, count, deadline);
-            tapEnabledControl("Profile " + (second + 1) + " action", deadline);
-            verifyPendingProfileTransition(second, first, subscriptionURL, deadline);
+            Object service = currentNativeVpnService();
+            long releaseHoldDeadline = Math.min(
+                    deadline, System.currentTimeMillis() + NATIVE_RELEASE_HOLD_TIMEOUT_MILLIS);
+            synchronized (service) {
+                tapEnabledControl("Profile " + (second + 1) + " action", releaseHoldDeadline);
+                verifyPendingProfileTransition(
+                        second, first, subscriptionURL, manual, releaseHoldDeadline);
+            }
             manual = awaitSelection(manual.getLong("generation"), "PROFILE_INDEX", second, deadline);
             manual = verifyNativeRevokeCancelsPendingSwitch(manual, deadline);
             nativeShutdownVerified = true;
@@ -1950,9 +1971,15 @@ public final class NativeUiHostedProfileTest {
         if (MainActivity.current != warmActivity) {
             throw new AssertionError("Repeated warm deep link replaced the existing Activity");
         }
-        tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
-        verifyPendingAutoTransition(subscriptionURL, deadline);
-        JSONObject auto = awaitSelection(manual.getLong("generation"), "AUTO_SELECT", -1, deadline);
+        Object service = currentNativeVpnService();
+        long releaseHoldDeadline = Math.min(
+                deadline, System.currentTimeMillis() + NATIVE_RELEASE_HOLD_TIMEOUT_MILLIS);
+        synchronized (service) {
+            tapEnabledControl(CONNECTION_ACTION_LABEL, releaseHoldDeadline);
+            verifyPendingAutoTransition(subscriptionURL, warmSnapshot, releaseHoldDeadline);
+        }
+        JSONObject auto = awaitSelection(
+                warmSnapshot.getLong("generation"), "AUTO_SELECT", -1, deadline);
         tapUiControl("Clear", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         verifyHeldLoadKeepsControlsResponsive(subscriptionURL, auto, deadline);
         verifyTypedURLChangesWhileLoadHeld(subscriptionURL, deadline);
@@ -2134,36 +2161,77 @@ public final class NativeUiHostedProfileTest {
         if (!"CONNECTED".equals(before.optString("state"))) {
             throw new AssertionError("Pending-switch Stop scenario did not start connected: " + before);
         }
+        long originGeneration = before.getLong("generation");
         scrollControlsToProfileAction(
                 targetIndex, before.getJSONArray("profiles").length(), deadline);
-        tapEnabledControl("Profile " + (targetIndex + 1) + " action", deadline);
-        String digest = before.optString("digest");
-        while (System.currentTimeMillis() < deadline) {
-            JSONObject pendingState = snapshotResult("");
-            JSONObject pending = pendingState.optJSONObject("pending_target");
-            if (pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
-                    && pending.optInt("index", -1) == targetIndex
-                    && digest.equals(pending.optString("digest"))) {
-                tapEnabledControl("Stop", deadline);
-                waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_SWITCH_STOP_TIMEOUT"));
-                JSONObject stopped = snapshotResult("");
-                if (!"IDLE".equals(stopped.optString("state"))
-                        || stopped.optJSONObject("pending_target") != null
-                        || stopped.getLong("generation") <= before.getLong("generation")) {
-                    throw new AssertionError("Rendered Stop did not cancel the pending profile switch: " + stopped);
+        Object service = currentNativeVpnService();
+        long releaseHoldDeadline = Math.min(
+                deadline, System.currentTimeMillis() + NATIVE_RELEASE_HOLD_TIMEOUT_MILLIS);
+        JSONObject pendingState = null;
+        JSONObject cancelledWhileHeld = null;
+        synchronized (service) {
+            tapEnabledControl("Profile " + (targetIndex + 1) + " action", releaseHoldDeadline);
+            while (System.currentTimeMillis() < releaseHoldDeadline) {
+                JSONObject current = snapshotResult("");
+                if (!sameSessionAndSelection(current, before)) {
+                    throw new AssertionError(
+                            "Profile switch changed its session, source, digest, or origin generation: "
+                                    + current);
                 }
-                Thread.sleep(300L);
-                JSONObject settled = snapshotResult("");
-                if (!"IDLE".equals(settled.optString("state"))
-                        || settled.optJSONObject("pending_target") != null
-                        || settled.getLong("generation") != stopped.getLong("generation")) {
-                    throw new AssertionError("Canceled switch connected after rendered Stop: " + settled);
+                JSONObject pending = current.optJSONObject("pending_target");
+                if (pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
+                        && pending.optInt("index", -1) == targetIndex
+                        && before.optString("digest").equals(pending.optString("digest"))) {
+                    pendingState = current;
+                    break;
                 }
-                return;
+                Thread.sleep(POLL_MILLIS);
             }
-            Thread.sleep(POLL_MILLIS);
+            if (pendingState == null
+                    || !"STOPPING".equals(pendingState.optString("state"))) {
+                throw new AssertionError("Profile switch did not expose a pending target for Stop cancellation");
+            }
+            tapEnabledControl("Stop", releaseHoldDeadline);
+            while (System.currentTimeMillis() < releaseHoldDeadline) {
+                JSONObject current = snapshotResult("");
+                if (!sameSessionAndSelection(current, before)) {
+                    throw new AssertionError(
+                            "Rendered Stop changed its session, source, digest, or origin generation: "
+                                    + current);
+                }
+                if (current.optJSONObject("pending_target") == null) {
+                    cancelledWhileHeld = current;
+                    break;
+                }
+                Thread.sleep(POLL_MILLIS);
+            }
+            if (cancelledWhileHeld == null
+                    || !"STOPPING".equals(cancelledWhileHeld.optString("state"))) {
+                throw new AssertionError(
+                        "Rendered Stop did not clear the pending target before native release: "
+                                + snapshotResult(""));
+            }
         }
-        throw new AssertionError("Profile switch did not expose a pending target for Stop cancellation");
+
+        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_SWITCH_STOP_TIMEOUT"));
+        boolean vpnRemoved = awaitVpnNetwork(
+                false, remainingTimeout(deadline, "ANDROID_SWITCH_STOP_TIMEOUT")) == null;
+        JSONObject stopped = snapshotResult("");
+        if (!vpnRemoved
+                || !sameSessionAndSelection(stopped, before)
+                || !"IDLE".equals(stopped.optString("state"))
+                || stopped.optJSONObject("pending_target") != null
+                || stopped.getLong("generation") != originGeneration) {
+            throw new AssertionError("Rendered Stop did not cancel the pending profile switch: " + stopped);
+        }
+        Thread.sleep(300L);
+        JSONObject settled = snapshotResult("");
+        if (!sameSessionAndSelection(settled, before)
+                || !"IDLE".equals(settled.optString("state"))
+                || settled.optJSONObject("pending_target") != null
+                || settled.getLong("generation") != stopped.getLong("generation")) {
+            throw new AssertionError("Canceled switch connected after rendered Stop: " + settled);
+        }
     }
 
     private JSONObject verifyNativeRevokeCancelsPendingSwitch(JSONObject connected, long deadline)
@@ -2174,32 +2242,60 @@ public final class NativeUiHostedProfileTest {
         int activeIndex = connected.getJSONObject("active_profile").getInt("index");
         int targetIndex = activeIndex == 0 ? 1 : 0;
         int profileCount = connected.getJSONArray("profiles").length();
-        String digest = connected.optString("digest");
+        long originGeneration = connected.getLong("generation");
         JSONObject pendingState = null;
+        JSONObject fencedWhileHeld = null;
         Object service = currentNativeVpnService();
         // The real service's synchronized release callback holds cleanup at the
         // pending-target boundary until the OS lifecycle callback has fenced it.
         scrollControlsToProfileAction(targetIndex, profileCount, deadline);
+        long releaseHoldDeadline = Math.min(
+                deadline, System.currentTimeMillis() + NATIVE_RELEASE_HOLD_TIMEOUT_MILLIS);
         synchronized (service) {
-            tapEnabledControl("Profile " + (targetIndex + 1) + " action", deadline);
-            while (System.currentTimeMillis() < deadline) {
+            tapEnabledControl("Profile " + (targetIndex + 1) + " action", releaseHoldDeadline);
+            while (System.currentTimeMillis() < releaseHoldDeadline) {
                 JSONObject current = snapshotResult("");
+                if (!sameSessionAndSelection(current, connected)) {
+                    throw new AssertionError(
+                            "Pending switch changed its session, source, digest, or origin generation: "
+                                    + current);
+                }
                 JSONObject pending = current.optJSONObject("pending_target");
                 if (pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
                         && pending.optInt("index", -1) == targetIndex
-                        && digest.equals(pending.optString("digest"))) {
+                        && connected.optString("digest").equals(pending.optString("digest"))) {
                     pendingState = current;
                     break;
                 }
                 Thread.sleep(10L);
             }
-            if (pendingState == null) {
+            if (pendingState == null
+                    || !"STOPPING".equals(pendingState.optString("state"))) {
                 throw new AssertionError("Profile switch did not expose a pending target before native revoke");
             }
             // Invoke the same callback body while holding the service monitor;
             // the owner then cancels before the held release can let a new
             // profile attempt proceed.
             ((DobbyVpnService) service).onRevoke();
+            while (System.currentTimeMillis() < releaseHoldDeadline) {
+                JSONObject current = snapshotResult("");
+                if (!sameSessionAndSelection(current, connected)) {
+                    throw new AssertionError(
+                            "Native revoke changed its session, source, digest, or origin generation: "
+                                    + current);
+                }
+                if (current.optJSONObject("pending_target") == null) {
+                    fencedWhileHeld = current;
+                    break;
+                }
+                Thread.sleep(POLL_MILLIS);
+            }
+            if (fencedWhileHeld == null
+                    || !"STOPPING".equals(fencedWhileHeld.optString("state"))) {
+                throw new AssertionError(
+                        "Native revoke did not fence the pending target before native release: "
+                                + snapshotResult(""));
+            }
         }
 
         JSONObject cancelled = null;
@@ -2215,15 +2311,18 @@ public final class NativeUiHostedProfileTest {
             }
             Thread.sleep(POLL_MILLIS);
         }
-        if (cancelled == null || cancelled.getLong("generation") <= connected.getLong("generation")) {
+        if (cancelled == null
+                || !sameSessionAndSelection(cancelled, connected)
+                || cancelled.getLong("generation") != originGeneration) {
             throw new AssertionError("Native revoke did not clear the pending switch: " + snapshotResult(""));
         }
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_NATIVE_REVOKE_TIMEOUT"));
         SystemClock.sleep(300L);
         JSONObject settled = snapshotResult("");
-        if (!"IDLE".equals(settled.optString("state"))
+        if (!sameSessionAndSelection(settled, connected)
+                || !"IDLE".equals(settled.optString("state"))
                 || settled.optJSONObject("pending_target") != null
-                || settled.getLong("generation") != cancelled.getLong("generation")
+                || settled.getLong("generation") != originGeneration
                 || awaitVpnNetwork(false, remainingTimeout(deadline, "ANDROID_NATIVE_REVOKE_TIMEOUT")) != null) {
             throw new AssertionError("Canceled replacement started after native revoke: " + settled);
         }
@@ -2821,7 +2920,8 @@ public final class NativeUiHostedProfileTest {
     }
 
     private void verifyPendingProfileTransition(int targetIndex, int competingIndex,
-            String subscriptionURL, long deadline) throws Exception {
+            String subscriptionURL, JSONObject origin, long deadline) throws Exception {
+        String digest = origin.getString("digest");
         String targetLabel = "Profile " + (targetIndex + 1) + " action";
         String competingLabel = "Profile " + (competingIndex + 1) + " action";
         UiDevice device = uiDevice();
@@ -2832,6 +2932,11 @@ public final class NativeUiHostedProfileTest {
         Rect competingBounds = new Rect();
         while (System.currentTimeMillis() < deadline) {
             JSONObject state = snapshotResult("");
+            if (!sameSessionAndSelection(state, origin)) {
+                throw new AssertionError(
+                        "Pending profile transition changed its session, source, digest, or origin generation: "
+                                + state);
+            }
             JSONObject pending = state.optJSONObject("pending_target");
             boolean pendingMatches = pending != null && "PROFILE_INDEX".equals(pending.optString("mode"))
                     && pending.optInt("index", -1) == targetIndex
@@ -2856,7 +2961,8 @@ public final class NativeUiHostedProfileTest {
                         throw new AssertionError("Could not inject a competing tap during profile switching");
                     }
                     JSONObject afterCompetingTap = snapshotResult("");
-                    if (!selectionRemainsTarget(afterCompetingTap, targetIndex, state.optString("digest"))) {
+                    if (!sameSessionAndSelection(afterCompetingTap, origin)
+                            || !selectionRemainsTarget(afterCompetingTap, targetIndex, digest)) {
                         throw new AssertionError("Competing tap displaced the authoritative profile target");
                     }
                     Activity activity = MainActivity.current;
@@ -2865,11 +2971,12 @@ public final class NativeUiHostedProfileTest {
                     deliverWarmImport(subscriptionURL);
                     JSONObject afterImport = snapshotResult("");
                     if (MainActivity.current != activity
+                            || !sameSessionAndSelection(afterImport, origin)
                             || subscriptionFixtureState().getInt("subscription_gets") != requests
-                            || !state.optString("digest").equals(afterImport.optString("digest"))) {
+                            || !digest.equals(afterImport.optString("digest"))) {
                         throw new AssertionError("Warm import changed the in-flight selection or reloaded its inventory");
                     }
-                    if (!selectionRemainsTarget(afterImport, targetIndex, state.optString("digest"))) {
+                    if (!selectionRemainsTarget(afterImport, targetIndex, digest)) {
                         throw new AssertionError("Warm import superseded the pending profile selection");
                     }
                     return;
@@ -2909,15 +3016,32 @@ public final class NativeUiHostedProfileTest {
                 && selected != null && selected.optInt("index", -1) == targetIndex;
     }
 
-    private void verifyPendingAutoTransition(String subscriptionURL, long deadline) throws Exception {
+    private boolean sameSessionAndSelection(JSONObject snapshot, JSONObject origin) {
+        String sessionID = origin.optString("session_id");
+        return !sessionID.isEmpty()
+                && sessionID.equals(snapshot.optString("session_id"))
+                && origin.optString("source_url").equals(snapshot.optString("source_url"))
+                && origin.optString("digest").equals(snapshot.optString("digest"))
+                && origin.optLong("generation", -1L) == snapshot.optLong("generation", -2L);
+    }
+
+    private void verifyPendingAutoTransition(String subscriptionURL, JSONObject origin, long deadline)
+            throws Exception {
+        String digest = origin.getString("digest");
+        long originGeneration = origin.getLong("generation");
         boolean pendingObserved = false;
         boolean stopEnabled = false;
         boolean profileActionsDisabled = false;
         while (System.currentTimeMillis() < deadline) {
             JSONObject state = snapshotResult("");
+            if (!sameSessionAndSelection(state, origin)) {
+                throw new AssertionError(
+                        "Pending Auto transition changed its session, source, digest, or origin generation: "
+                                + state);
+            }
             JSONObject pending = state.optJSONObject("pending_target");
             boolean pendingMatches = pending != null && "AUTO_SELECT".equals(pending.optString("mode"))
-                    && state.optString("digest").equals(pending.optString("digest"));
+                    && digest.equals(pending.optString("digest"));
             if (pendingMatches) {
                 pendingObserved = true;
                 UiObject2 stop = findUiObject("Stop");
@@ -2938,7 +3062,6 @@ public final class NativeUiHostedProfileTest {
                     String importedURL = urlWithQuery(subscriptionURL, "android-pending-auto", "1");
                     expectedRenderedSource = importedURL;
                     subscriptionFixturePost("/hold", new byte[0]);
-                    long generationDuringLoad = state.optLong("generation");
                     try {
                         deliverWarmImport(importedURL);
                         waitForSubscriptionGets(requests + 1,
@@ -2946,8 +3069,10 @@ public final class NativeUiHostedProfileTest {
                         JSONObject heldRequest = waitForInFlightGets(1,
                                 remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
                         JSONObject duringLoad = snapshotResult("");
-                        generationDuringLoad = duringLoad.optLong("generation");
-                        if (!autoSelectionRemainsAuthoritative(duringLoad, state.optString("digest"))
+                        if (!sameSessionAndSelection(duringLoad, origin)
+                                || !origin.optString("active_digest").equals(
+                                        duringLoad.optString("active_digest"))
+                                || !autoSelectionRemainsAuthoritative(duringLoad, digest)
                                 || heldRequest.getInt("subscription_gets") != requests + 1
                                 || heldRequest.getInt("max_in_flight_gets") > 1) {
                             throw new AssertionError("Import changed the pending Auto selection or duplicated its load");
@@ -2960,8 +3085,14 @@ public final class NativeUiHostedProfileTest {
                     JSONObject afterLoad = waitForSessionSource(importedURL,
                             remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
                     if (completed.getInt("subscription_gets") != requests + 1
-                            || generationDuringLoad != afterLoad.optLong("generation")
-                            || !autoSelectionRemainsAuthoritative(afterLoad, state.optString("digest"))) {
+                            || !importedURL.equals(afterLoad.optString("source_url"))
+                            || !origin.optString("session_id").equals(
+                                    afterLoad.optString("session_id"))
+                            || afterLoad.optLong("generation", -1L) != originGeneration
+                            || !digest.equals(afterLoad.optString("digest"))
+                            || !origin.optString("active_digest").equals(
+                                    afterLoad.optString("active_digest"))
+                            || !autoSelectionRemainsAuthoritative(afterLoad, digest)) {
                         throw new AssertionError("Import interrupted or replaced the authoritative Auto connection");
                     }
                     return;
