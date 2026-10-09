@@ -435,6 +435,52 @@ def _build_windows_msi(
         env=env,
     )
     env["PATH"] = str(wix_tools) + os.pathsep + env.get("PATH", "")
+    # .NET 8+ uses GetTempPath2 when available; SYSTEM resolves to
+    # SystemTemp there, regardless of TEMP and TMP.
+    temp_diagnostics = r'''$ErrorActionPreference = "Stop"
+try {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $managed = [IO.Path]::GetTempPath()
+  Write-Output "Identity=$($identity.Name) SID=$($identity.User.Value) IsSystem=$($identity.IsSystem)"
+  foreach ($name in @("TEMP", "TMP", "SystemTemp")) { Write-Output "$name=$([Environment]::GetEnvironmentVariable($name, "Process"))" }
+  Write-Output "PowerShell .NET $([Environment]::Version) Path.GetTempPath=$managed"
+  $paths = @(@{Name="PowerShellGetTempPath"; Path=$managed})
+  try {
+    Add-Type -Namespace DobbyVpn -Name TempPath -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetTempPath2W", ExactSpelling=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)] public static extern uint GetTempPath2(uint length, System.Text.StringBuilder path);' -ErrorAction Stop
+    $buffer = [Text.StringBuilder]::new(32768)
+    $length = [DobbyVpn.TempPath]::GetTempPath2([uint32]$buffer.Capacity, $buffer)
+    if ($length -eq 0) { throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+    if ($length -ge $buffer.Capacity) { throw "GetTempPath2 path exceeds diagnostic buffer capacity $($buffer.Capacity): $length" }
+    $native = $buffer.ToString()
+    Write-Output "GetTempPath2=$native"
+    $paths += @{Name="GetTempPath2"; Path=$native}
+  } catch { [Console]::Out.WriteLine("GetTempPath2 diagnostic error: " + $_.Exception.ToString()) }
+  foreach ($entry in $paths) {
+    $probe = $null
+    try {
+      $path = [string]$entry.Path
+      $attributes = [IO.File]::GetAttributes($path)
+      if (($attributes -band [IO.FileAttributes]::Directory) -eq 0) { throw "GetTempPath is not a directory: $path" }
+      $free = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($path)).AvailableFreeSpace
+      Write-Output "$($entry.Name) exists=true available_bytes=$free"
+      $probe = Join-Path $path ("dobbyvpn-wix-probe-" + [Guid]::NewGuid().ToString("N"))
+      [IO.Directory]::CreateDirectory($probe) | Out-Null
+      [IO.File]::WriteAllText((Join-Path $probe "probe.txt"), "ok")
+      [IO.Directory]::Delete($probe, $true)
+      $probe = $null
+      Write-Output "$($entry.Name) create_write_delete=passed"
+    } catch { [Console]::Out.WriteLine("$($entry.Name) probe error: " + $_.Exception.ToString()) }
+    finally { if ($probe -and [IO.Directory]::Exists($probe)) { try { [IO.Directory]::Delete($probe, $true) } catch { [Console]::Error.WriteLine("Probe cleanup error: " + $_.Exception.ToString()) } } }
+  }
+} catch { [Console]::Error.WriteLine("Windows MSI temp diagnostics error: " + $_.Exception.ToString()) }
+'''
+    _run(
+        "Windows MSI temp diagnostics",
+        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", temp_diagnostics],
+        cwd=installer,
+        env=env,
+        check=False,
+    )
     _run("Windows MSI build", ["cmd.exe", "/c", "build.bat"], cwd=installer, env=env)
     package = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi"
     log_path = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi.log"
