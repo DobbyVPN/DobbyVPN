@@ -48,6 +48,7 @@ class SubscriptionFixtureTests(unittest.TestCase):
                     {name: initial_stats[name] for name in ("subscription_gets", "in_flight_gets", "max_in_flight_gets")},
                 )
                 self.assertGreater(initial_stats["last_subscription_get_started_at_unix_ms"], 0)
+                self.assertGreater(initial_stats["server_now_unix_ms"], 0)
 
                 with self.assertRaises(urllib.error.HTTPError) as denied:
                     control(key="incorrect-test-key")
@@ -221,6 +222,7 @@ class SubscriptionFixtureTests(unittest.TestCase):
                         {name: stats[name] for name in ("subscription_gets", "in_flight_gets", "max_in_flight_gets")},
                     )
                     self.assertGreater(stats["last_subscription_get_started_at_unix_ms"], 0)
+                    self.assertGreater(stats["server_now_unix_ms"], 0)
                 finally:
                     fixture.close()
                 with self.assertRaisesRegex(RuntimeError, "subscription fixture is not running"):

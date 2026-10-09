@@ -319,6 +319,7 @@ class SubscriptionFixture:
                 "last_subscription_get_started_at_unix_ms": self.last_subscription_get_started_at_unix_ms,
                 "in_flight_gets": self.in_flight_gets,
                 "max_in_flight_gets": self.max_in_flight_gets,
+                "server_now_unix_ms": time.time_ns() // 1_000_000,
             }
 
     def replace_response(self, content: bytes) -> None:

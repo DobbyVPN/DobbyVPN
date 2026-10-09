@@ -1919,13 +1919,11 @@ public final class NativeUiHostedProfileTest {
                 || !failedLoad.getString("active_digest").equals(manual.getString("active_digest"))) {
             throw new AssertionError("Failed subscription load interrupted the tunnel");
         }
-        long retryStarted = SystemClock.elapsedRealtime();
-        tapEnabledControl("Retry", deadline);
+        FixtureClockAnchor retryClock = readFixtureClockAnchor();
+        long retryTapStarted = tapEnabledControl("Retry", deadline);
         JSONObject retryResult = waitForSubscriptionGets(beforeFailedLoad + 2,
                 remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        if (SystemClock.elapsedRealtime() - retryStarted >= 350L) {
-            throw new AssertionError("Retry waited for the text-field debounce");
-        }
+        assertImmediateSubscriptionRequest("retry", retryClock, retryTapStarted, retryResult);
         retryResult = waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject retried = waitForSessionSource(failedURL, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         if (retryResult.getInt("subscription_gets") != beforeFailedLoad + 2
@@ -1945,13 +1943,11 @@ public final class NativeUiHostedProfileTest {
         Activity warmActivity = MainActivity.current;
         if (warmActivity == null) throw new AssertionError("Android Activity missing before warm import");
         expectedRenderedSource = subscriptionURL;
-        long importStarted = SystemClock.elapsedRealtime();
-        deliverWarmImport(subscriptionURL);
+        FixtureClockAnchor importClock = readFixtureClockAnchor();
+        long importStarted = deliverWarmImport(subscriptionURL);
         JSONObject immediateImport = waitForSubscriptionGets(beforeWarmLinks + 1,
                 remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-        if (SystemClock.elapsedRealtime() - importStarted >= 350L) {
-            throw new AssertionError("Deep-link import waited for the text-field debounce");
-        }
+        assertImmediateSubscriptionRequest("warm-import", importClock, importStarted, immediateImport);
         deliverWarmImport(subscriptionURL);
         if (MainActivity.current != warmActivity) {
             throw new AssertionError("Warm deep link replaced the existing Activity");
@@ -2032,11 +2028,14 @@ public final class NativeUiHostedProfileTest {
         return Uri.parse(url).buildUpon().appendQueryParameter(key, value).build().toString();
     }
 
-    private void deliverWarmImport(String subscriptionURL) throws Exception {
+    private long deliverWarmImport(String subscriptionURL) throws Exception {
         String link = "dobbyvpn://import?url=" + java.net.URLEncoder.encode(subscriptionURL, "UTF-8");
-        String output = uiDevice().executeShellCommand("am start -W -a android.intent.action.VIEW -d "
+        UiDevice device = uiDevice();
+        long dispatchedAt = SystemClock.elapsedRealtime();
+        String output = device.executeShellCommand("am start -W -a android.intent.action.VIEW -d "
                 + link + " " + context.getPackageName());
         if (!output.contains("Status: ok")) throw new AssertionError("ANDROID_IMPORT_ACTIVATION_FAILED");
+        return dispatchedAt;
     }
 
     private void verifyHeldLoadKeepsControlsResponsive(String subscriptionURL, JSONObject active,
@@ -2392,15 +2391,16 @@ public final class NativeUiHostedProfileTest {
         try {
             clipboard.setPrimaryClip(ClipData.newPlainText("subscription", pastedURL));
             waitForUiControl("Paste", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-            int before = subscriptionFixtureState().getInt("subscription_gets");
-            long pasteStarted = SystemClock.elapsedRealtime();
-            tapUiControl("Paste", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+            FixtureClockAnchor pasteClock = readFixtureClockAnchor();
+            int before = pasteClock.stats.getInt("subscription_gets");
+            long pasteTapStarted = tapUiControl(
+                    "Paste", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             JSONObject pasteRequest = waitForSubscriptionGets(before + 1,
                     remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-            if (pasteRequest.getInt("subscription_gets") != before + 1
-                    || SystemClock.elapsedRealtime() - pasteStarted >= 350L) {
+            if (pasteRequest.getInt("subscription_gets") != before + 1) {
                 throw new AssertionError("Paste did not request its URL immediately");
             }
+            assertImmediateSubscriptionRequest("paste", pasteClock, pasteTapStarted, pasteRequest);
             waitForInFlightGets(0, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             JSONObject loaded = waitForSessionSource(pastedURL,
                     remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
@@ -2882,13 +2882,12 @@ public final class NativeUiHostedProfileTest {
                 + (nodeDiagnostics == null ? "first_target_nodes=not_observed\n" : nodeDiagnostics);
     }
 
-    private void tapEnabledControl(String label, long deadline) throws Exception {
+    private long tapEnabledControl(String label, long deadline) throws Exception {
         while (System.currentTimeMillis() < deadline) {
             UiObject2 control = findUiObject(label);
             while (control != null && !control.isClickable()) control = control.getParent();
             if (control != null && control.isEnabled()) {
-                tapUiControl(label, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
-                return;
+                return tapUiControl(label, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             }
             SystemClock.sleep(POLL_MILLIS);
         }
@@ -4197,7 +4196,7 @@ public final class NativeUiHostedProfileTest {
         throw uiControlTimeout(label, timeout, startedAt, counters, "none");
     }
 
-    private void tapUiControl(String label, long timeout) throws Exception {
+    private long tapUiControl(String label, long timeout) throws Exception {
         UiDevice device = uiDevice();
         long startedAt = SystemClock.uptimeMillis();
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
@@ -4213,11 +4212,12 @@ public final class NativeUiHostedProfileTest {
                         counters.emptyBounds++;
                     } else {
                         lastBounds = bounds.toShortString();
+                        long tapStarted = SystemClock.elapsedRealtime();
                         if (!device.click(bounds.centerX(), bounds.centerY())) {
                             throw new IllegalStateException("ANDROID_UI_TAP_FAILED");
                         }
                         waitForIdleBounded(device, deadline);
-                        return;
+                        return tapStarted;
                     }
                 } catch (StaleObjectException ignored) {
                     // Retry if Compose replaced the visible node after lookup.
@@ -4227,6 +4227,38 @@ public final class NativeUiHostedProfileTest {
             Thread.sleep(POLL_MILLIS);
         }
         throw uiControlTimeout(label, timeout, startedAt, counters, lastBounds);
+    }
+
+    private FixtureClockAnchor readFixtureClockAnchor() throws Exception {
+        long readStarted = SystemClock.elapsedRealtime();
+        JSONObject stats = subscriptionFixtureState();
+        long readCompleted = SystemClock.elapsedRealtime();
+        return new FixtureClockAnchor(stats, stats.getLong("server_now_unix_ms"),
+                readStarted, readCompleted);
+    }
+
+    private void assertImmediateSubscriptionRequest(String action, FixtureClockAnchor anchor,
+            long actionStarted, JSONObject request) throws Exception {
+        long requestStarted = request.getLong("last_subscription_get_started_at_unix_ms");
+        long roundTrip = anchor.readCompletedElapsedRealtime - anchor.readStartedElapsedRealtime;
+        long delayUpperBound = requestStarted - anchor.serverNowUnixMs
+                - (actionStarted - anchor.readCompletedElapsedRealtime) + 1L;
+        System.out.println("DOBBY_UI_ACTION_TIMING action=" + action
+                + " fixture_clock_rtt_ms=" + roundTrip
+                + " delay_upper_bound_ms=" + delayUpperBound
+                + " threshold_ms=350");
+        if (actionStarted < anchor.readCompletedElapsedRealtime
+                || requestStarted < anchor.serverNowUnixMs
+                || delayUpperBound < 0L) {
+            throw new AssertionError("Immediate request timing calibration is ambiguous: action="
+                    + action + " fixture_clock_rtt_ms=" + roundTrip
+                    + " delay_upper_bound_ms=" + delayUpperBound);
+        }
+        if (delayUpperBound >= 350L) {
+            throw new AssertionError("Immediate request exceeded 350 ms: action=" + action
+                    + " fixture_clock_rtt_ms=" + roundTrip
+                    + " delay_upper_bound_ms=" + delayUpperBound);
+        }
     }
 
     private IllegalStateException uiControlTimeout(
@@ -4352,6 +4384,21 @@ public final class NativeUiHostedProfileTest {
             } else if ("text".equals(selectorKind)) {
                 textCandidates += count;
             }
+        }
+    }
+
+    private static final class FixtureClockAnchor {
+        final JSONObject stats;
+        final long serverNowUnixMs;
+        final long readStartedElapsedRealtime;
+        final long readCompletedElapsedRealtime;
+
+        FixtureClockAnchor(JSONObject stats, long serverNowUnixMs,
+                long readStartedElapsedRealtime, long readCompletedElapsedRealtime) {
+            this.stats = stats;
+            this.serverNowUnixMs = serverNowUnixMs;
+            this.readStartedElapsedRealtime = readStartedElapsedRealtime;
+            this.readCompletedElapsedRealtime = readCompletedElapsedRealtime;
         }
     }
 
