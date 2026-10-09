@@ -15,8 +15,10 @@ import json
 from pathlib import Path
 import re
 import shlex
+import tempfile
 import threading
 import time
+import tomllib
 from typing import Callable, Mapping
 import uuid
 
@@ -111,6 +113,13 @@ _AUTO_RECOVERY_STOP_DISCONNECT_SECONDS = 45
 _AUTO_RECOVERY_STOP_CASE = "android:auto-recovery-stop"
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
+_ANDROID_PROFILE_TABLES = ("Outline", "Xray", "TrustTunnel")
+_ANDROID_PROFILE_TABLE_HEADER = re.compile(
+    r"(?m)^\[\[\s*(Outline|Xray|TrustTunnel)\s*\]\][ \t]*(?:#.*)?$"
+)
+_ANDROID_EXCLUDE_IPS_TABLE_HEADER = re.compile(
+    r"(?m)^\[\s*ExcludeIPs\s*\][ \t]*(?:#.*)?$"
+)
 _ANDROID_UI_PROGRESS_VALUE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _ANDROID_UI_CONSENT_DIAGNOSTIC_VALUES = {
     "foreground": frozenset({"VPN_DIALOG", "PRODUCT", "OTHER", "NONE"}),
@@ -209,6 +218,58 @@ def _scenario_deadlines(
     work_deadline = started + scenario_seconds - cleanup_reserve
     cleanup_deadline = work_deadline + cleanup_reserve
     return work_deadline, cleanup_deadline
+
+
+def _duplicate_single_android_profile(profile_bytes: bytes) -> bytes | None:
+    """Give Android N11 a second rendered entry when its source has one.
+
+    The duplicate is test-only input for the consent journey. Callers keep it
+    in a private temporary file and remove it before returning; normal profile
+    inventory and the protocol-matrix lane continue to use the source bytes.
+    """
+
+    try:
+        text = profile_bytes.decode("utf-8")
+        parsed = tomllib.loads(text)
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+
+    profile_arrays = {name: parsed.get(name, []) for name in _ANDROID_PROFILE_TABLES}
+    if any(not isinstance(entries, list) for entries in profile_arrays.values()):
+        return None
+    profile_count = sum(len(entries) for entries in profile_arrays.values())
+    if profile_count != 1:
+        return None
+
+    profile_name = next(name for name, entries in profile_arrays.items() if entries)
+    profile_headers = list(_ANDROID_PROFILE_TABLE_HEADER.finditer(text))
+    if len(profile_headers) != 1 or profile_headers[0].group(1) != profile_name:
+        raise ScenarioExecutionError("ANDROID_N11_PROFILE_FIXTURE_BOUNDARY_INVALID")
+
+    block_start = profile_headers[0].start()
+    block_end = len(text)
+    if "ExcludeIPs" in parsed:
+        exclude_headers = list(_ANDROID_EXCLUDE_IPS_TABLE_HEADER.finditer(text))
+        if len(exclude_headers) != 1:
+            raise ScenarioExecutionError(
+                "ANDROID_N11_PROFILE_FIXTURE_BOUNDARY_INVALID"
+            )
+        if exclude_headers[0].start() > block_start:
+            block_end = exclude_headers[0].start()
+
+    profile_block = text[block_start:block_end].rstrip()
+    if not profile_block:
+        raise ScenarioExecutionError("ANDROID_N11_PROFILE_FIXTURE_BOUNDARY_INVALID")
+    duplicated_text = text.rstrip() + "\n\n" + profile_block + "\n"
+    try:
+        duplicated = tomllib.loads(duplicated_text)
+    except tomllib.TOMLDecodeError as error:
+        raise ScenarioExecutionError(
+            "ANDROID_N11_PROFILE_FIXTURE_BOUNDARY_INVALID"
+        ) from error
+    if len(duplicated.get(profile_name, [])) != 2:
+        raise ScenarioExecutionError("ANDROID_N11_PROFILE_FIXTURE_BOUNDARY_INVALID")
+    return duplicated_text.encode("utf-8")
 
 
 def _cleanup_timeout(deadline: float) -> float:
@@ -420,11 +481,42 @@ class AndroidAdapter:
                 timeout_seconds=120,
             ),
         )
+        original_profile = self.profile
+        n11_profile_copy: Path | None = None
+        try:
+            profile_bytes = original_profile.read_bytes()
+        except OSError as error:
+            raise ScenarioExecutionError(
+                "ANDROID_N11_PROFILE_FIXTURE_READ_FAILED"
+            ) from error
+        n11_profile_bytes = _duplicate_single_android_profile(profile_bytes)
+        if n11_profile_bytes is not None:
+            if self._subscription_fixture is not None:
+                raise ScenarioExecutionError(
+                    "ANDROID_N11_PROFILE_FIXTURE_ALREADY_STARTED"
+                )
         device_files: list[str] = []
         primary_error: BaseException | None = None
         selection: Mapping[str, object] | None = None
         self._progress_scenario_id = "android.n11-consent-grant-selection"
         try:
+            if n11_profile_bytes is not None:
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        mode="wb",
+                        prefix=".android-n11-",
+                        suffix=".toml",
+                        dir=original_profile.parent,
+                        delete=False,
+                    ) as fixture_profile:
+                        fixture_profile_path = Path(fixture_profile.name)
+                        n11_profile_copy = fixture_profile_path
+                        fixture_profile.write(n11_profile_bytes)
+                except OSError as error:
+                    raise ScenarioExecutionError(
+                        "ANDROID_N11_PROFILE_FIXTURE_WRITE_FAILED"
+                    ) from error
+                self.profile = fixture_profile_path
             self._install_fresh_apk_pair(work_deadline)
             observation = self._execute_phase(
                 scenario,
@@ -460,29 +552,51 @@ class AndroidAdapter:
                 tuple(device_files), cleanup_deadline
             )
             scratch_error = self._cleanup_local_scratch()
+            fixture_error: BaseException | None = None
+            if n11_profile_copy is not None and self._subscription_fixture is not None:
+                try:
+                    self._subscription_fixture.close()
+                except BaseException as error:
+                    fixture_error = error
+                finally:
+                    self._subscription_fixture = None
+            self.profile = original_profile
+            profile_file_error: ScenarioExecutionError | None = None
+            if n11_profile_copy is not None:
+                try:
+                    n11_profile_copy.unlink(missing_ok=True)
+                except OSError as error:
+                    profile_file_error = ScenarioExecutionError(
+                        "ANDROID_N11_PROFILE_FIXTURE_CLEANUP_FAILED"
+                    )
+                    add_exception_notes(
+                        profile_file_error, "temporary_profile_cleanup", error
+                    )
             self._active_controls = ()
             self._progress_scenario_id = None
+            cleanup_failures = tuple(
+                (label, error)
+                for label, error in (
+                    ("android_n11_cleanup", cleanup_error),
+                    ("android_n11_scratch_cleanup", scratch_error),
+                    ("android_n11_subscription_fixture_cleanup", fixture_error),
+                    ("android_n11_profile_file_cleanup", profile_file_error),
+                )
+                if error is not None
+            )
             if primary_error is not None:
-                if cleanup_error is not None:
-                    add_exception_notes(primary_error, "android_n11_cleanup", cleanup_error)
-                if scratch_error is not None:
-                    add_exception_notes(primary_error, "android_n11_scratch_cleanup", scratch_error)
-            elif cleanup_error is not None:
-                if scratch_error is not None:
-                    add_exception_notes(cleanup_error, "android_n11_scratch_cleanup", scratch_error)
+                for label, error in cleanup_failures:
+                    add_exception_notes(primary_error, label, error)
+            elif cleanup_failures:
+                failure = cleanup_failures[0][1]
+                for label, error in cleanup_failures[1:]:
+                    add_exception_notes(failure, label, error)
                 self._collect_functional_failure_diagnostics(
-                    cleanup_error,
+                    failure,
                     "android.n11-consent-grant-selection",
                     cleanup_deadline,
                 )
-                raise cleanup_error
-            elif scratch_error is not None:
-                self._collect_functional_failure_diagnostics(
-                    scratch_error,
-                    "android.n11-consent-grant-selection",
-                    cleanup_deadline,
-                )
-                raise scratch_error
+                raise failure
 
         self._install_fresh_apk_pair(cleanup_deadline)
         if selection is None:

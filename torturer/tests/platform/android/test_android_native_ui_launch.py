@@ -5,16 +5,23 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 import unittest
 import time
 from types import SimpleNamespace
 from unittest import mock
 
+from disposable_vpn_server.outline import OutlineWSSProfile
 from torturer_contract.engine import ScenarioExecutionError
 from torturer_contract.results import ConnectionIdentity
 from torturer_contract.scenarios import select_scenarios
 from torturer_runner import local_vm_android
-from torturer_runner.adapters.android import AndroidAdapter, _MAIN_ACTIVITY, _PACKAGE_NAME
+from torturer_runner.adapters.android import (
+    AndroidAdapter,
+    _duplicate_single_android_profile,
+    _MAIN_ACTIVITY,
+    _PACKAGE_NAME,
+)
 
 
 FIXTURE_CA_PEM = "synthetic run-owned fixture CA\n"
@@ -88,6 +95,57 @@ def output_result(*, connected: bool = False) -> SimpleNamespace:
 
 
 class AndroidNativeUiColdLaunchTests(unittest.TestCase):
+    def test_n11_single_profile_fixture_duplicates_only_the_profile_entry(self) -> None:
+        source = OutlineWSSProfile(
+            web_path="/dobby-test", secret="synthetic-secret"
+        ).client_toml("https://vpn.invalid").encode("utf-8")
+
+        duplicated = _duplicate_single_android_profile(source)
+
+        self.assertIsNotNone(duplicated)
+        original_config = tomllib.loads(source.decode("utf-8"))
+        duplicated_config = tomllib.loads(duplicated.decode("utf-8"))
+        self.assertEqual(
+            duplicated_config["Outline"],
+            [original_config["Outline"][0], original_config["Outline"][0]],
+        )
+        self.assertEqual(duplicated_config["ExcludeIPs"], original_config["ExcludeIPs"])
+
+    def test_n11_single_nested_profile_fixture_duplicates_its_nested_tables(self) -> None:
+        source = (
+            b'[[TrustTunnel]]\n'
+            b'Description = "single nested profile"\n'
+            b'vpn_mode = "general"\n'
+            b'\n[TrustTunnel.endpoint]\n'
+            b'hostname = "vpn.invalid"\n'
+            b'addresses = ["198.51.100.10:443"]\n'
+            b'username = "synthetic-user"\n'
+            b'password = "synthetic-secret"\n'
+            b'\n[TrustTunnel.listener.socks]\n'
+            b'address = "127.0.0.1:10808"\n'
+            b'\n[ExcludeIPs]\nIPs = []\n'
+        )
+
+        duplicated = _duplicate_single_android_profile(source)
+
+        self.assertIsNotNone(duplicated)
+        original_config = tomllib.loads(source.decode("utf-8"))
+        duplicated_config = tomllib.loads(duplicated.decode("utf-8"))
+        self.assertEqual(
+            duplicated_config["TrustTunnel"],
+            [original_config["TrustTunnel"][0], original_config["TrustTunnel"][0]],
+        )
+        self.assertEqual(duplicated_config["ExcludeIPs"], original_config["ExcludeIPs"])
+
+    def test_n11_multi_profile_fixture_preserves_protocol_matrix_bytes(self) -> None:
+        source = (
+            b'[[Outline]]\nDescription = "outline"\nServer = "outline.invalid"\n'
+            b'\n[[Xray]]\noutbounds = [{ tag = "proxy", protocol = "vless" }]\n'
+            b'\n[ExcludeIPs]\nIPs = []\n'
+        )
+
+        self.assertIsNone(_duplicate_single_android_profile(source))
+
     def test_first_rendered_configure_records_one_process_cold_import_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -301,6 +359,17 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             adapter._scratch_files = set()
             adapter._diagnostic_collection_sequence = 0
             adapter._connections = ()
+            profile = root / "profile.toml"
+            source_profile = (
+                b'[[Outline]]\n'
+                b'Description = "single"\n'
+                b'Server = "vpn.invalid"\n'
+                b'Port = 443\n'
+                b'Password = "synthetic-secret"\n'
+                b'\n[ExcludeIPs]\nIPs = []\n'
+            )
+            profile.write_bytes(source_profile)
+            adapter.profile = profile
             adapter._subscription_fixture = None
             adapter._process_cold_import_queued = False
             events: list[str] = []
@@ -310,20 +379,33 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                 "profile_identity_verified": True,
                 "mode": "PROFILE_INDEX",
                 "index": 1,
-                "protocol": "XRAY",
+                "protocol": "OUTLINE",
                 "generation": 2,
                 "generation_advanced": True,
                 "disconnect_clean": True,
             }
+            lifecycle_valid = False
 
             def execute_phase(_scenario, steps, _deadline, _device_files):
                 events.append("rendered-case")
+                self.assertNotEqual(adapter.profile, profile)
+                temporary_config = tomllib.loads(
+                    adapter.profile.read_text(encoding="utf-8")
+                )
+                self.assertEqual(len(temporary_config["Outline"]), 2)
+                self.assertEqual(
+                    temporary_config["Outline"][0],
+                    temporary_config["Outline"][1],
+                )
                 self.assertEqual(
                     [step.operation for step in steps],
                     ["configure", "consent_grant_selection"],
                 )
+                adapter._subscription_fixture = SimpleNamespace(
+                    close=lambda: events.append("fixture-close")
+                )
                 return SimpleNamespace(
-                    configured=True,
+                    configured=lifecycle_valid,
                     connected=True,
                     vpn_consent_handled=True,
                     disconnect_clean=True,
@@ -340,12 +422,37 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             adapter._cleanup_local_scratch = lambda: None
             adapter._collect_functional_failure_diagnostics = lambda *_args: None
 
+            with self.assertRaisesRegex(
+                ScenarioExecutionError,
+                "ANDROID_CONSENT_N11_LIFECYCLE_OBSERVATION_INVALID",
+            ):
+                adapter.run_unchanged_consent_selection(
+                    deadline=time.monotonic() + 240,
+                )
+            self.assertEqual(
+                events,
+                ["install", "rendered-case", "cleanup", "fixture-close"],
+            )
+            self.assertEqual(adapter.profile, profile)
+            self.assertEqual(profile.read_bytes(), source_profile)
+            self.assertFalse(any(root.glob(".android-n11-*.toml")))
+            self.assertIsNone(adapter._subscription_fixture)
+            events.clear()
+            lifecycle_valid = True
+
             result = adapter.run_unchanged_consent_selection(
                 deadline=time.monotonic() + 240,
             )
 
-            self.assertEqual(events, ["install", "rendered-case", "cleanup", "install"])
+            self.assertEqual(
+                events,
+                ["install", "rendered-case", "cleanup", "fixture-close", "install"],
+            )
             self.assertEqual(result, {"passed": True, **expected})
+            self.assertEqual(adapter.profile, profile)
+            self.assertEqual(profile.read_bytes(), source_profile)
+            self.assertFalse(any(root.glob(".android-n11-*")))
+            self.assertIsNone(adapter._subscription_fixture)
 
     def test_hosted_valid_import_launches_after_force_stop_before_instrumentation(self) -> None:
         adapter = object.__new__(AndroidAdapter)
