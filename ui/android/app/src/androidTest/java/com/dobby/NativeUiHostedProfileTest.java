@@ -2106,6 +2106,7 @@ public final class NativeUiHostedProfileTest {
 
     private void verifyTypedURLChangesWhileLoadHeld(String subscriptionURL, long deadline)
             throws Exception {
+        markProgress("configure", "typed-url-changes-while-load-held", "started");
         int before = subscriptionFixtureState().getInt("subscription_gets");
         String heldURL = urlWithQuery(subscriptionURL, "android-typed-held", "1");
         String intermediateURL = urlWithQuery(subscriptionURL, "android-typed-intermediate", "1");
@@ -2174,6 +2175,7 @@ public final class NativeUiHostedProfileTest {
                 }
             }
         }
+        markProgress("configure", "typed-url-changes-while-load-held", "completed");
     }
 
     private void verifyRenderedStopCancelsPendingSwitch(int targetIndex, long deadline)
@@ -2371,10 +2373,13 @@ public final class NativeUiHostedProfileTest {
 
     private void verifyReplacementInventoryWhileOldProfileIsActive(String subscriptionURL,
             long deadline) throws Exception {
+        markProgress("configure", "replacement-inventory-while-old-profile-active", "started");
         JSONObject before = snapshotResult("");
         tapEnabledControl("Profile 1 action", deadline);
         JSONObject active = awaitSelection(before.getLong("generation"), "PROFILE_INDEX", 0, deadline);
-        String oldDescription = active.getJSONObject("active_profile").optString("description");
+        JSONObject oldActiveProfile = active.getJSONObject("active_profile");
+        String oldProtocol = oldActiveProfile.optString("protocol");
+        String oldDescription = oldActiveProfile.optString("description");
         byte[] replacement = syntheticOutlineInventory(1, "Replacement inventory only");
         subscriptionFixturePost("/profile", replacement);
         int requests = subscriptionFixtureState().getInt("subscription_gets");
@@ -2394,8 +2399,30 @@ public final class NativeUiHostedProfileTest {
                 || oldDescription.equals(profiles.getJSONObject(0).optString("description"))) {
             throw new AssertionError("New inventory displaced or hid the still-active profile");
         }
-        if (!oldDescription.isEmpty()) waitForUiControl(oldDescription, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+
+        scrollControlsToTop(profiles.length(), deadline);
+        UiObject2 activeProfileControl = waitForUiControl(
+                "Active profile", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        String expectedActiveProfileText = "";
+        if (!oldProtocol.trim().isEmpty()) {
+            expectedActiveProfileText = oldProtocol;
+        }
+        if (!oldDescription.trim().isEmpty()) {
+            expectedActiveProfileText = expectedActiveProfileText.isEmpty()
+                    ? oldDescription : expectedActiveProfileText + " · " + oldDescription;
+        }
+        CharSequence activeProfileText = activeProfileControl.getText();
+        String renderedActiveProfileText = activeProfileText == null
+                ? "" : activeProfileText.toString();
+        if (!expectedActiveProfileText.equals(renderedActiveProfileText)) {
+            throw new AssertionError("Displayed active profile changed with the replacement inventory"
+                    + "; expected=" + JSONObject.quote(expectedActiveProfileText)
+                    + "; rendered=" + JSONObject.quote(renderedActiveProfileText));
+        }
+
+        scrollControlsToProfileAction(0, profiles.length(), deadline);
         waitForUiControl("Replacement inventory only", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        scrollControlsToTop(profiles.length(), deadline);
         tapEnabledControl("Disconnect", deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject stopped = snapshotResult("");
@@ -2403,9 +2430,11 @@ public final class NativeUiHostedProfileTest {
                 || stopped.getLong("generation") != active.getLong("generation")) {
             throw new AssertionError("Visible Stop control could not end an absent-profile connection");
         }
+        markProgress("configure", "replacement-inventory-while-old-profile-active", "completed");
     }
 
     private void verifyLongListAndValidPaste(String subscriptionURL, long deadline) throws Exception {
+        markProgress("configure", "long-list-valid-paste", "started");
         byte[] longList = syntheticOutlineInventory(24, "long-list");
         subscriptionFixturePost("/profile", longList);
         String pastedURL = urlWithQuery(subscriptionURL, "android-paste", "valid");
@@ -2434,7 +2463,7 @@ public final class NativeUiHostedProfileTest {
                     || !"Profile 24 long-list".equals(profiles.getJSONObject(23).optString("description"))) {
                 throw new AssertionError("Ordered profile description, protocol, or fallback inventory was not retained");
             }
-            assertRenderedProfileInventory(profiles);
+            assertRenderedProfileInventory(profiles, deadline);
             verifyBareLinkPreservesSource(deadline);
             scrollControlsToLastProfile(deadline);
             waitForUiControl("Profile 24 long-list", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
@@ -2443,6 +2472,7 @@ public final class NativeUiHostedProfileTest {
         } finally {
             clipboard.clearPrimaryClip();
         }
+        markProgress("configure", "long-list-valid-paste", "completed");
     }
 
     private void assertLongListLeavesLogsUsable(long deadline) throws Exception {
@@ -2520,13 +2550,14 @@ public final class NativeUiHostedProfileTest {
                 + context.getPackageName());
     }
 
-    private void assertRenderedProfileInventory(JSONArray profiles) throws Exception {
+    private void assertRenderedProfileInventory(JSONArray profiles, long operationDeadline)
+            throws Exception {
         ArrayList<String> renderedTexts = new ArrayList<>();
         ArrayList<String> renderedDescriptions = new ArrayList<>();
         AtomicReference<String> failure = new AtomicReference<>();
         String lastName = profiles.getJSONObject(profiles.length() - 1).optString("description");
         String lastAction = "Profile " + profiles.length() + " action";
-        long deadline = System.currentTimeMillis() + 5_000L;
+        long deadline = Math.min(operationDeadline, System.currentTimeMillis() + 5_000L);
         while (System.currentTimeMillis() < deadline) {
             renderedTexts.clear();
             renderedDescriptions.clear();
@@ -4490,16 +4521,11 @@ public final class NativeUiHostedProfileTest {
             long startedAt,
             UiLookupCounters counters,
             String lastBounds) {
-        String safeLabel = "About".equals(label)
-                || "Back".equals(label)
-                || "Subscription URL".equals(label)
-                || CONNECTION_ACTION_LABEL.equals(label)
-                ? label
-                : "other";
+        String quotedLabel = JSONObject.quote(label);
         IllegalStateException failure = new IllegalStateException(
-                "ANDROID_UI_CONTROL_TIMEOUT: label=" + safeLabel
-                        + ", selector=By.desc(" + JSONObject.quote(safeLabel)
-                        + ")|By.text(" + JSONObject.quote(safeLabel) + ")"
+                "ANDROID_UI_CONTROL_TIMEOUT: label=" + quotedLabel
+                        + ", selector=By.desc(" + quotedLabel
+                        + ")|By.text(" + quotedLabel + ")"
                         + ", package=" + context.getPackageName()
                         + ", timeoutMillis=" + timeout
                         + ", elapsedMillis="
