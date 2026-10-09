@@ -442,11 +442,13 @@ class NativeUIController:
             request["identity"] = self.identity
         available = self.timeout
         cleanup_timeout = min(2.0, available / 3)
+        # Settings operations include activation/navigation and owned cleanup.
+        # Windows capture prepares focus/cursor before its bounded render check.
         operation_limit = 30.0 if operation in {
             "profile-list-layout", "scroll-profile-list", "connection-action-details",
-            "settings-text-size",
+            "settings-text-size", "inspect-macos-text-size",
         } or (
-            self.platform == "windows" and operation in {"tree", "resize-window", "windows-baseline", "uia-point"}
+            self.platform == "windows" and operation in {"tree", "capture", "resize-window", "windows-baseline", "uia-point"}
         ) else 10.0
         operation_timeout = min(operation_limit, available - cleanup_timeout)
         capture_callbacks = {}

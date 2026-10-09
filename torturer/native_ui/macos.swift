@@ -944,10 +944,11 @@ func inspectMacOSTextSize(
 ) throws -> [String: Any] {
     var settingsApp: NSRunningApplication?
     var settingsOpenedByHelper = false
-    var settingsWindow: AXUIElement?
     var baselineSheets = [AXUIElement]()
     var buttonPressed = false
     var cleanupErrors = [String]()
+    // Reserve the caller's remaining budget for owned Settings cleanup.
+    let inspectionDeadline = Date().addingTimeInterval(20)
 
     func textSizeSheet(_ nodes: [AXUIElement]) throws -> AXUIElement? {
         let sheets = try nodes.filter { node in
@@ -981,14 +982,62 @@ func inspectMacOSTextSize(
         return nil
     }
 
+    func readSettingsTree<T>(
+        context: String, deadline: Date,
+        read: ([AXUIElement]) throws -> T
+    ) throws -> (ownerPID: pid_t, value: T)? {
+        try require(Date() < deadline, "\(context): read deadline expired")
+        guard let settings = settingsApp else { throw HelperError("System Settings process is unavailable") }
+        do {
+            let snapshot: (ownerPID: pid_t, value: T)? = try retryTransientAccessibilityReads(
+                context: context, deadline: deadline
+            ) {
+                let root = AXUIElementCreateApplication(settings.processIdentifier)
+                AXUIElementSetMessagingTimeout(root, 1)
+                var window = try axElement(root, kAXFocusedWindowAttribute)
+                if window == nil {
+                    let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
+                    window = try windows.first { (try attribute($0, kAXMainAttribute)) as? Bool == true }
+                    if window == nil && windows.count == 1 { window = windows[0] }
+                }
+                guard let window else { return nil }
+                var ownerPID: pid_t = 0
+                let ownerStatus = AXUIElementGetPid(window, &ownerPID)
+                guard ownerStatus == .success else {
+                    throw AccessibilityReadError(attribute: "AXWindowOwnerPID", code: ownerStatus)
+                }
+                try require(ownerPID == settings.processIdentifier,
+                            "System Settings AX window belongs to PID \(ownerPID), expected \(settings.processIdentifier)")
+                let nodes = try elements(window)
+                return (ownerPID, try read(nodes))
+            }
+            return snapshot
+        } catch {
+            throw HelperError("\(context): \(error)")
+        }
+    }
+
     let outcome: Result<[String: Any], Error> = {
         defer {
-            if buttonPressed, let window = settingsWindow {
+            if buttonPressed, settingsApp != nil {
                 do {
-                    let current = try textSizeSheet(elements(window))
-                    if let sheet = current, !baselineSheets.contains(where: { CFEqual($0, sheet) }) {
-                        try press(find(elements(sheet), "Done"))
+                    let deadline = Date().addingTimeInterval(3)
+                    var cleanupRead: (ownerPID: pid_t, value: AXUIElement?)?
+                    repeat {
+                        cleanupRead = try readSettingsTree(
+                            context: "Text Size cleanup sheet read", deadline: deadline
+                        ) { nodes -> AXUIElement? in
+                            guard let sheet = try textSizeSheet(nodes),
+                                  !baselineSheets.contains(where: { CFEqual($0, sheet) }) else { return nil }
+                            return try find(elements(sheet), "Done")
+                        }
+                        if cleanupRead != nil { break }
+                        Thread.sleep(forTimeInterval: 0.05)
+                    } while Date() < deadline
+                    guard let cleanupRead else {
+                        throw HelperError("System Settings AX window unavailable during Text Size cleanup")
                     }
+                    if let done = cleanupRead.value { try press(done) }
                 } catch { cleanupErrors.append("Close helper-opened Text Size sheet: \(error)") }
             }
             if settingsOpenedByHelper, let settings = settingsApp, !settings.isTerminated {
@@ -1044,7 +1093,7 @@ func inspectMacOSTextSize(
                     launchError = error
                     launchFinished = true
                 }
-                let deadline = Date().addingTimeInterval(8)
+                let deadline = min(Date().addingTimeInterval(8), inspectionDeadline)
                 while !launchFinished && Date() < deadline {
                     _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
                 }
@@ -1058,7 +1107,7 @@ func inspectMacOSTextSize(
             }
             guard let settings = settingsApp else { throw HelperError("System Settings process is unavailable") }
             try require(settings.activate(options: [.activateAllWindows]), "System Settings activation failed")
-            let activationDeadline = Date().addingTimeInterval(3)
+            let activationDeadline = min(Date().addingTimeInterval(3), inspectionDeadline)
             while NSWorkspace.shared.frontmostApplication?.processIdentifier != settings.processIdentifier &&
                     Date() < activationDeadline {
                 _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
@@ -1066,23 +1115,19 @@ func inspectMacOSTextSize(
             try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == settings.processIdentifier,
                         "System Settings did not become foreground")
 
-            let root = AXUIElementCreateApplication(settings.processIdentifier)
-            AXUIElementSetMessagingTimeout(root, 1)
-            let windowDeadline = Date().addingTimeInterval(8)
+            let windowDeadline = min(Date().addingTimeInterval(8), inspectionDeadline)
+            var baselineRead = false
             repeat {
-                settingsWindow = try axElement(root, kAXFocusedWindowAttribute)
-                if settingsWindow == nil, let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement] {
-                    settingsWindow = try windows.first { (try attribute($0, kAXMainAttribute)) as? Bool == true }
-                    if settingsWindow == nil && windows.count == 1 { settingsWindow = windows[0] }
+                if let snapshot = try readSettingsTree(
+                    context: "Text Size baseline sheet read", deadline: windowDeadline,
+                    read: { nodes -> AXUIElement? in try textSizeSheet(nodes) }
+                ) {
+                    baselineSheets = snapshot.value.map { [$0] } ?? []
+                    baselineRead = true
                 }
-                if settingsWindow == nil { Thread.sleep(forTimeInterval: 0.05) }
-            } while settingsWindow == nil && Date() < windowDeadline
-            guard let window = settingsWindow else { throw HelperError("System Settings AX window unavailable") }
-            var ownerPID: pid_t = 0
-            try require(AXUIElementGetPid(window, &ownerPID) == .success, "System Settings window owner PID unavailable")
-            try require(ownerPID == settings.processIdentifier,
-                        "System Settings AX window belongs to PID \(ownerPID), expected \(settings.processIdentifier)")
-            if let initialSheet = try textSizeSheet(elements(window)) { baselineSheets = [initialSheet] }
+                if !baselineRead { Thread.sleep(forTimeInterval: 0.05) }
+            } while !baselineRead && Date() < windowDeadline
+            try require(baselineRead, "System Settings AX window unavailable during Text Size baseline read")
 
             guard let displayURL = URL(string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?Display") else {
                 throw HelperError("Could not construct the Accessibility Display URL")
@@ -1095,7 +1140,7 @@ func inspectMacOSTextSize(
                 urlError = error
                 urlFinished = true
             }
-            let urlDeadline = Date().addingTimeInterval(6)
+            let urlDeadline = min(Date().addingTimeInterval(6), inspectionDeadline)
             while !urlFinished && Date() < urlDeadline {
                 _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
             }
@@ -1104,75 +1149,97 @@ func inspectMacOSTextSize(
 
             var button: AXUIElement?
             var buttonDescription = ""
-            let displayDeadline = Date().addingTimeInterval(10)
+            var buttonEnabled = false
+            var textSizeSheetVisible = false
+            let displayDeadline = min(Date().addingTimeInterval(10), inspectionDeadline)
             repeat {
-                let nodes = try elements(window)
-                if try textSizeSheet(nodes) != nil { break }
-                let buttons = try nodes.filter {
-                    try label($0, kAXRoleAttribute) == kAXButtonRole &&
-                        label($0, kAXDescriptionAttribute).lowercased().hasPrefix("text size") &&
-                        label($0, kAXDescriptionAttribute).lowercased().contains("preferred reading size") &&
-                        label($0, kAXDescriptionAttribute).lowercased().contains("supported apps")
+                if let snapshot = try readSettingsTree(
+                    context: "Accessibility Display Text Size control read", deadline: displayDeadline,
+                    read: { nodes -> (Bool, AXUIElement?, String, Bool) in
+                        if try textSizeSheet(nodes) != nil { return (true, nil, "", false) }
+                        let buttons = try nodes.filter {
+                            try label($0, kAXRoleAttribute) == kAXButtonRole &&
+                                label($0, kAXDescriptionAttribute).lowercased().hasPrefix("text size") &&
+                                label($0, kAXDescriptionAttribute).lowercased().contains("preferred reading size") &&
+                                label($0, kAXDescriptionAttribute).lowercased().contains("supported apps")
+                        }
+                        try require(buttons.count <= 1, "Found \(buttons.count) Text size settings buttons")
+                        guard let found = buttons.first else { return (false, nil, "", false) }
+                        let enabled = (try attribute(found, kAXEnabledAttribute)) as? Bool == true
+                        return (false, found, try label(found, kAXDescriptionAttribute), enabled)
+                    }
+                ) {
+                    textSizeSheetVisible = snapshot.value.0
+                    button = snapshot.value.1
+                    buttonDescription = snapshot.value.2
+                    buttonEnabled = snapshot.value.3
+                    if textSizeSheetVisible || button != nil { break }
                 }
-                try require(buttons.count <= 1, "Found \(buttons.count) Text size settings buttons")
-                if let found = buttons.first {
-                    button = found
-                    buttonDescription = try label(found, kAXDescriptionAttribute)
-                    break
-                }
-                Thread.sleep(forTimeInterval: 0.1)
+                if Date() < displayDeadline { Thread.sleep(forTimeInterval: 0.1) }
             } while Date() < displayDeadline
 
-            var sheet = try textSizeSheet(elements(window))
-            if sheet == nil {
-                guard let button, (try attribute(button, kAXEnabledAttribute)) as? Bool == true else {
+            if !textSizeSheetVisible {
+                guard let button, buttonEnabled else {
                     throw HelperError("Display settings did not expose an enabled Text size button")
                 }
-                try press(button)
                 buttonPressed = true
-                let sheetDeadline = Date().addingTimeInterval(10)
-                repeat {
-                    sheet = try textSizeSheet(elements(window))
-                    if sheet != nil { break }
-                    Thread.sleep(forTimeInterval: 0.05)
-                } while Date() < sheetDeadline
+                do { try press(button) }
+                catch { throw HelperError("Press Text Size button: \(error)") }
             }
-            guard let sheet else { throw HelperError("Text Size button did not expose its AXSheet") }
 
-            let popups = try elements(sheet).filter { try label($0, kAXRoleAttribute) == "AXPopUpButton" }
-            var rows = [[String: Any]]()
-            var unmapped = 0
-            var targetMatches = 0
-            var targetEnabled = false
-            for popup in popups {
-                guard let appName = try appName(popup),
-                      let size = try attribute(popup, kAXValueAttribute) as? String,
-                      let enabled = try attribute(popup, kAXEnabledAttribute) as? Bool else {
-                    unmapped += 1
-                    continue
+            var inventory: [String: Any]?
+            let sheetDeadline = min(Date().addingTimeInterval(10), inspectionDeadline)
+            repeat {
+                if let snapshot = try readSettingsTree(
+                    context: "Text Size complete app-row inventory", deadline: sheetDeadline,
+                    read: { nodes -> (Bool, [String: Any]?) in
+                        guard let sheet = try textSizeSheet(nodes) else { return (false, nil) }
+                        let popups = try elements(sheet).filter { try label($0, kAXRoleAttribute) == "AXPopUpButton" }
+                        var rows = [[String: Any]]()
+                        var unmapped = 0
+                        var targetMatches = 0
+                        var targetEnabled = false
+                        for popup in popups {
+                            guard let appName = try appName(popup),
+                                  let size = try attribute(popup, kAXValueAttribute) as? String,
+                                  let enabled = try attribute(popup, kAXEnabledAttribute) as? Bool else {
+                                unmapped += 1
+                                continue
+                            }
+                            rows.append(["app": appName, "size": size, "enabled": enabled])
+                            if candidateNames.contains(appName.lowercased()) {
+                                targetMatches += 1
+                                targetEnabled = enabled
+                            }
+                        }
+                        let rowNames = rows.compactMap { $0["app"] as? String }.map { $0.lowercased() }
+                        let complete = !popups.isEmpty && rows.count == popups.count &&
+                            Set(rowNames).count == rowNames.count && targetMatches <= 1
+                        let eligible: Any
+                        if complete { eligible = targetMatches == 1 && targetEnabled }
+                        else { eligible = NSNull() }
+                        return (true, [
+                            "ready": true, "available": true, "rows_complete": complete, "eligible": eligible,
+                            "candidate_bundle_identifier": bundleID, "candidate_name": bundleName,
+                            "candidate_version": version, "candidate_pid": Int(candidatePID),
+                            "candidate_identity": candidateIdentity, "settings_pid": Int(settings.processIdentifier),
+                            "settings_opened_by_helper": settingsOpenedByHelper,
+                            "os_version": ProcessInfo.processInfo.operatingSystemVersionString,
+                            "text_size_button_description": buttonDescription, "app_rows": rows,
+                            "unmapped_control_count": unmapped,
+                        ])
+                    }
+                ) {
+                    if snapshot.value.0, var details = snapshot.value.1 {
+                        details["settings_window_owner_pid"] = Int(snapshot.ownerPID)
+                        inventory = details
+                        break
+                    }
                 }
-                rows.append(["app": appName, "size": size, "enabled": enabled])
-                if candidateNames.contains(appName.lowercased()) {
-                    targetMatches += 1
-                    targetEnabled = enabled
-                }
-            }
-            let rowNames = rows.compactMap { $0["app"] as? String }.map { $0.lowercased() }
-            let complete = !popups.isEmpty && rows.count == popups.count &&
-                Set(rowNames).count == rowNames.count && targetMatches <= 1
-            let eligible: Any
-            if complete { eligible = targetMatches == 1 && targetEnabled }
-            else { eligible = NSNull() }
-            return .success([
-                "ready": true, "available": true, "rows_complete": complete, "eligible": eligible,
-                "candidate_bundle_identifier": bundleID, "candidate_name": bundleName,
-                "candidate_version": version, "candidate_pid": Int(candidatePID),
-                "candidate_identity": candidateIdentity, "settings_pid": Int(settings.processIdentifier),
-                "settings_window_owner_pid": Int(ownerPID), "settings_opened_by_helper": settingsOpenedByHelper,
-                "os_version": ProcessInfo.processInfo.operatingSystemVersionString,
-                "text_size_button_description": buttonDescription, "app_rows": rows,
-                "unmapped_control_count": unmapped,
-            ])
+                if Date() < sheetDeadline { Thread.sleep(forTimeInterval: 0.05) }
+            } while Date() < sheetDeadline
+            guard let inventory else { throw HelperError("Text Size sheet did not expose its app-row inventory") }
+            return .success(inventory)
         } catch { return .failure(error) }
     }()
     if case let .failure(error) = outcome {
