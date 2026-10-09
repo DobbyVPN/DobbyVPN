@@ -1969,10 +1969,12 @@ public final class NativeUiHostedProfileTest {
         Object service = currentNativeVpnService();
         long releaseHoldDeadline = Math.min(
                 deadline, System.currentTimeMillis() + NATIVE_RELEASE_HOLD_TIMEOUT_MILLIS);
+        markProgress("configure", "pending-auto-transition", "started");
         synchronized (service) {
             tapEnabledControl(CONNECTION_ACTION_LABEL, releaseHoldDeadline);
             verifyPendingAutoTransition(subscriptionURL, warmSnapshot, releaseHoldDeadline);
         }
+        markProgress("configure", "pending-auto-transition", "completed");
         JSONObject auto = awaitSelection(
                 warmSnapshot.getLong("generation"), "AUTO_SELECT", -1, deadline);
         tapUiControl("Clear", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
@@ -2063,7 +2065,7 @@ public final class NativeUiHostedProfileTest {
                 || held.getInt("max_in_flight_gets") > 1) {
             throw new AssertionError("Held request allowed a duplicate or concurrent subscription load");
         }
-        assertOldConnectActionsDisabled(active);
+        assertOldConnectActionsDisabled(active, deadline);
         String marker = "held-load-log-" + System.nanoTime();
         NativeUiTestBridge.recordDiagnostic(context, "ui.test.held.load", marker);
         waitForUiLogMessage(marker, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
@@ -2928,7 +2930,6 @@ public final class NativeUiHostedProfileTest {
         int profileCount = origin.getJSONArray("profiles").length();
         UiDevice device = uiDevice();
         boolean pendingObserved = false;
-        boolean competingScrollAttempted = false;
         boolean stopEnabled = false;
         boolean targetEnabled = false;
         boolean competingDisabled = false;
@@ -2946,32 +2947,64 @@ public final class NativeUiHostedProfileTest {
                     && state.optString("digest").equals(pending.optString("digest"));
             if (pendingMatches) {
                 pendingObserved = true;
-                if (!competingScrollAttempted && findUiObject(competingLabel) == null) {
-                    competingScrollAttempted = true;
-                    scrollControlsToProfileAction(competingIndex, profileCount, deadline);
+                if (!stopEnabled) {
+                    scrollControlsToTop(profileCount, deadline);
                     state = snapshotResult("");
-                    pending = state.optJSONObject("pending_target");
-                    if (!sameSessionAndSelection(state, origin)
-                            || pending == null || !"PROFILE_INDEX".equals(pending.optString("mode"))
-                            || pending.optInt("index", -1) != targetIndex
-                            || !digest.equals(pending.optString("digest"))) {
+                    if (!pendingProfileSelectionMatches(state, origin, targetIndex, digest)) {
                         throw new AssertionError(
-                                "Pending profile transition changed while revealing the competing action: " + state);
+                                "Pending profile transition changed while returning to the visible Stop action: "
+                                        + state);
                     }
+                    UiObject2 viewport = findUiObject("Connection controls");
+                    Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+                    UiObject2 stopLabelNode = findUiObject("Stop");
+                    UiObject2 stop = stopLabelNode;
+                    while (stop != null && !stop.isClickable()) stop = stop.getParent();
+                    Rect stopBounds = stop == null ? new Rect() : stop.getVisibleBounds();
+                    Rect stopLabelBounds = stopLabelNode == null
+                            ? new Rect() : stopLabelNode.getVisibleBounds();
+                    stopEnabled = stop != null && stop.isEnabled()
+                            && !viewportBounds.isEmpty()
+                            && Rect.intersects(viewportBounds, stopBounds)
+                            && Rect.intersects(viewportBounds, stopLabelBounds);
                 }
 
-                UiObject2 stop = findUiObject("Stop");
-                while (stop != null && !stop.isClickable()) stop = stop.getParent();
-                stopEnabled = stop != null && stop.isEnabled();
+                if (stopEnabled && !targetEnabled) {
+                    scrollControlsToProfileAction(targetIndex, profileCount, deadline);
+                    state = snapshotResult("");
+                    if (!pendingProfileSelectionMatches(state, origin, targetIndex, digest)) {
+                        throw new AssertionError(
+                                "Pending profile transition changed while revealing its target action: " + state);
+                    }
+                    UiObject2 viewport = findUiObject("Connection controls");
+                    Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+                    UiObject2 target = findUiObject(targetLabel);
+                    while (target != null && !target.isClickable()) target = target.getParent();
+                    Rect targetBounds = target == null ? new Rect() : target.getVisibleBounds();
+                    targetEnabled = target != null && target.isEnabled()
+                            && !viewportBounds.isEmpty()
+                            && Rect.intersects(viewportBounds, targetBounds);
+                }
 
-                UiObject2 target = findUiObject(targetLabel);
-                while (target != null && !target.isClickable()) target = target.getParent();
-                targetEnabled = target != null && target.isEnabled();
-
-                UiObject2 competing = findUiObject(competingLabel);
-                while (competing != null && !competing.isClickable()) competing = competing.getParent();
-                competingDisabled = competing != null && !competing.isEnabled();
-                competingBounds = competing == null ? new Rect() : competing.getVisibleBounds();
+                if (stopEnabled && targetEnabled && !competingDisabled) {
+                    scrollControlsToProfileAction(competingIndex, profileCount, deadline);
+                    state = snapshotResult("");
+                    if (!pendingProfileSelectionMatches(state, origin, targetIndex, digest)) {
+                        throw new AssertionError(
+                                "Pending profile transition changed while revealing the competing action: "
+                                        + state);
+                    }
+                    UiObject2 viewport = findUiObject("Connection controls");
+                    Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+                    UiObject2 competing = findUiObject(competingLabel);
+                    while (competing != null && !competing.isClickable()) {
+                        competing = competing.getParent();
+                    }
+                    competingBounds = competing == null ? new Rect() : competing.getVisibleBounds();
+                    competingDisabled = competing != null && !competing.isEnabled()
+                            && !viewportBounds.isEmpty()
+                            && Rect.intersects(viewportBounds, competingBounds);
+                }
 
                 if (stopEnabled && targetEnabled && competingDisabled && !competingBounds.isEmpty()) {
                     if (!device.click(competingBounds.centerX(), competingBounds.centerY())) {
@@ -3043,13 +3076,34 @@ public final class NativeUiHostedProfileTest {
                 && origin.optLong("generation", -1L) == snapshot.optLong("generation", -2L);
     }
 
+    private boolean pendingProfileSelectionMatches(
+            JSONObject snapshot, JSONObject origin, int targetIndex, String digest) {
+        JSONObject pending = snapshot.optJSONObject("pending_target");
+        return sameSessionAndSelection(snapshot, origin)
+                && digest.equals(snapshot.optString("digest"))
+                && pending != null
+                && "PROFILE_INDEX".equals(pending.optString("mode"))
+                && pending.optInt("index", -1) == targetIndex
+                && digest.equals(pending.optString("digest"));
+    }
+
+    private boolean pendingAutoSelectionMatches(JSONObject snapshot, JSONObject origin, String digest) {
+        JSONObject pending = snapshot.optJSONObject("pending_target");
+        return sameSessionAndSelection(snapshot, origin)
+                && digest.equals(snapshot.optString("digest"))
+                && pending != null
+                && "AUTO_SELECT".equals(pending.optString("mode"))
+                && digest.equals(pending.optString("digest"));
+    }
+
     private void verifyPendingAutoTransition(String subscriptionURL, JSONObject origin, long deadline)
             throws Exception {
         String digest = origin.getString("digest");
         long originGeneration = origin.getLong("generation");
+        int profileCount = origin.getJSONArray("profiles").length();
         boolean pendingObserved = false;
         boolean stopEnabled = false;
-        boolean profileActionsDisabled = false;
+        int disabledProfileCount = 0;
         while (System.currentTimeMillis() < deadline) {
             JSONObject state = snapshotResult("");
             if (!sameSessionAndSelection(state, origin)) {
@@ -3057,25 +3111,65 @@ public final class NativeUiHostedProfileTest {
                         "Pending Auto transition changed its session, source, digest, or origin generation: "
                                 + state);
             }
-            JSONObject pending = state.optJSONObject("pending_target");
-            boolean pendingMatches = pending != null && "AUTO_SELECT".equals(pending.optString("mode"))
-                    && digest.equals(pending.optString("digest"));
-            if (pendingMatches) {
+            if (pendingAutoSelectionMatches(state, origin, digest)) {
                 pendingObserved = true;
-                UiObject2 stop = findUiObject("Stop");
-                while (stop != null && !stop.isClickable()) stop = stop.getParent();
-                stopEnabled = stop != null && stop.isEnabled();
-                profileActionsDisabled = true;
-                for (int index = 0; index < state.getJSONArray("profiles").length(); index++) {
-                    UiObject2 profile = findUiObject("Profile " + (index + 1) + " action");
-                    while (profile != null && !profile.isClickable()) profile = profile.getParent();
-                    if (profile == null || profile.isEnabled()) {
-                        profileActionsDisabled = false;
-                        break;
+                if (state.getJSONArray("profiles").length() != profileCount) {
+                    throw new AssertionError("Pending Auto transition changed its profile inventory");
+                }
+                if (disabledProfileCount < profileCount) {
+                    int index = disabledProfileCount;
+                    scrollControlsToProfileAction(index, profileCount, deadline);
+                    state = snapshotResult("");
+                    if (!pendingAutoSelectionMatches(state, origin, digest)) {
+                        throw new AssertionError(
+                                "Pending Auto transition changed while revealing a profile action: " + state);
                     }
+                    if (state.getJSONArray("profiles").length() != profileCount) {
+                        throw new AssertionError("Pending Auto transition changed its profile inventory");
+                    }
+                    UiObject2 viewport = findUiObject("Connection controls");
+                    Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+                    String profileLabel = "Profile " + (index + 1) + " action";
+                    UiObject2 profile = findUiObject(profileLabel);
+                    while (profile != null && !profile.isClickable()) profile = profile.getParent();
+                    Rect profileBounds = profile == null ? new Rect() : profile.getVisibleBounds();
+                    if (profile == null || viewportBounds.isEmpty()
+                            || !Rect.intersects(viewportBounds, profileBounds)) {
+                        throw new AssertionError(
+                                "Pending Auto profile action is missing or offscreen: " + profileLabel);
+                    }
+                    if (!profile.isEnabled()) {
+                        disabledProfileCount++;
+                    }
+                } else {
+                    scrollControlsToTop(profileCount, deadline);
+                    state = snapshotResult("");
+                    if (!pendingAutoSelectionMatches(state, origin, digest)
+                            || !autoSelectionRemainsAuthoritative(state, digest)) {
+                        throw new AssertionError(
+                                "Pending Auto transition changed while returning to its visible Stop action: "
+                                        + state);
+                    }
+                    UiObject2 viewport = findUiObject("Connection controls");
+                    Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+                    UiObject2 stopLabelNode = findUiObject("Stop");
+                    UiObject2 stop = stopLabelNode;
+                    while (stop != null && !stop.isClickable()) stop = stop.getParent();
+                    Rect stopBounds = stop == null ? new Rect() : stop.getVisibleBounds();
+                    Rect stopLabelBounds = stopLabelNode == null
+                            ? new Rect() : stopLabelNode.getVisibleBounds();
+                    stopEnabled = stop != null && stop.isEnabled()
+                            && !viewportBounds.isEmpty()
+                            && Rect.intersects(viewportBounds, stopBounds)
+                            && Rect.intersects(viewportBounds, stopLabelBounds);
                 }
 
-                if (stopEnabled && profileActionsDisabled) {
+                if (stopEnabled && disabledProfileCount == profileCount) {
+                    if (!pendingAutoSelectionMatches(state, origin, digest)
+                            || !autoSelectionRemainsAuthoritative(state, digest)) {
+                        throw new AssertionError(
+                                "Pending Auto transition changed before held import: " + state);
+                    }
                     int requests = subscriptionFixtureState().getInt("subscription_gets");
                     String importedURL = urlWithQuery(subscriptionURL, "android-pending-auto", "1");
                     expectedRenderedSource = importedURL;
@@ -3123,7 +3217,7 @@ public final class NativeUiHostedProfileTest {
             if (!stopEnabled) {
                 throw new AssertionError("Auto selection did not expose its enabled Stop action");
             }
-            if (!profileActionsDisabled) {
+            if (disabledProfileCount != profileCount) {
                 throw new AssertionError("Profile Connect remained enabled during Auto selection");
             }
         }
@@ -3142,22 +3236,58 @@ public final class NativeUiHostedProfileTest {
                 && "AUTO_SELECT".equals(snapshot.optString("active_mode"));
     }
 
-    private void assertOldConnectActionsDisabled(JSONObject active) throws Exception {
+    private boolean sameActiveConnection(JSONObject snapshot, JSONObject expected) {
+        JSONObject expectedProfile = expected.optJSONObject("active_profile");
+        JSONObject currentProfile = snapshot.optJSONObject("active_profile");
+        JSONArray expectedProfiles = expected.optJSONArray("profiles");
+        JSONArray currentProfiles = snapshot.optJSONArray("profiles");
+        return sameSessionAndSelection(snapshot, expected)
+                && "CONNECTED".equals(snapshot.optString("state"))
+                && expected.optString("active_mode").equals(snapshot.optString("active_mode"))
+                && expected.optString("active_digest").equals(snapshot.optString("active_digest"))
+                && expectedProfile != null
+                && currentProfile != null
+                && expectedProfile.optInt("index", -1) == currentProfile.optInt("index", -2)
+                && expectedProfile.optString("protocol").equals(currentProfile.optString("protocol"))
+                && expectedProfile.optString("description").equals(currentProfile.optString("description"))
+                && expectedProfiles != null
+                && currentProfiles != null
+                && expectedProfiles.length() == currentProfiles.length();
+    }
+
+    private void assertOldConnectActionsDisabled(JSONObject active, long deadline) throws Exception {
         int activeIndex = active.getJSONObject("active_profile").getInt("index");
         JSONArray profiles = active.getJSONArray("profiles");
         for (int index = 0; index < profiles.length(); index++) {
+            scrollControlsToProfileAction(index, profiles.length(), deadline);
+            JSONObject current = snapshotResult("");
+            if (!sameActiveConnection(current, active)) {
+                throw new AssertionError(
+                        "Held subscription load changed the active connection while revealing old profile "
+                                + (index + 1) + ": " + current);
+            }
+            UiObject2 viewport = findUiObject("Connection controls");
+            Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
             UiObject2 button = findUiObject("Profile " + (index + 1) + " action");
             while (button != null && !button.isClickable()) button = button.getParent();
-            if (button == null) throw new AssertionError("Old inventory action disappeared during loading");
+            Rect buttonBounds = button == null ? new Rect() : button.getVisibleBounds();
+            if (button == null || viewportBounds.isEmpty()
+                    || !Rect.intersects(viewportBounds, buttonBounds)) {
+                throw new AssertionError(
+                        "Old inventory action is missing or offscreen during loading: Profile " + (index + 1));
+            }
             if (index == activeIndex) {
-                UiObject2 disconnect = findUiObject("Disconnect");
-                while (disconnect != null && !disconnect.isClickable()) disconnect = disconnect.getParent();
-                if (!button.isEnabled() || disconnect == null || !disconnect.isEnabled()) {
-                    throw new AssertionError("Active old profile did not retain only its Disconnect action");
-                }
+                verifyVisibleProfileDisconnectAction(activeIndex, viewportBounds);
             } else if (button.isEnabled()) {
                 throw new AssertionError("A stale old-inventory Connect action remained enabled during loading");
             }
+        }
+        scrollControlsToTop(profiles.length(), deadline);
+        JSONObject restored = snapshotResult("");
+        if (!sameActiveConnection(restored, active)) {
+            throw new AssertionError(
+                    "Held subscription load changed the active connection while restoring the controls viewport: "
+                            + restored);
         }
     }
 
