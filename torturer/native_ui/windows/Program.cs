@@ -2622,7 +2622,8 @@ internal static class Program
                 if (!logRoot.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
                     throw new InvalidOperationException("Native log viewer does not expose scrolling");
                 var scroll = (ScrollPattern)scrollPattern;
-                if (scroll.Current.VerticalScrollPercent < 0)
+                var initialPercent = scroll.Current.VerticalScrollPercent;
+                if (initialPercent < 0)
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll range");
                 RequireForeground(window, "log scrolling");
 
@@ -2641,6 +2642,18 @@ internal static class Program
                     X = checked((int)Math.Round((visibleLeft + visibleRight) / 2, MidpointRounding.AwayFromZero)),
                     Y = checked((int)Math.Round((visibleTop + visibleBottom) / 2, MidpointRounding.AwayFromZero)),
                 };
+                var visibleViewport = new System.Windows.Rect(
+                    visibleLeft, visibleTop, visibleRight - visibleLeft, visibleBottom - visibleTop);
+                TracePhase("scroll-logs-target " + JsonSerializer.Serialize(new
+                {
+                    utc = UtcTimestamp(),
+                    position,
+                    initial_vertical_scroll_percent = initialPercent,
+                    log_bounds = RectJson(logBounds),
+                    window_bounds = RectJson(windowBounds),
+                    visible_viewport = RectJson(visibleViewport),
+                    point = new { x = point.X, y = point.Y },
+                }));
                 var pointWindow = WindowFromPoint(point);
                 var pointRoot = pointWindow == IntPtr.Zero ? IntPtr.Zero : GetAncestor(pointWindow, GaRoot);
                 if (pointRoot != window)
@@ -2670,11 +2683,35 @@ internal static class Program
                 if (inserted != 1)
                     throw new InvalidOperationException(
                         $"SendInput inserted {inserted} of 1 log wheel events; lastError={sendInputError}");
+                var afterWheelPercent = scroll.Current.VerticalScrollPercent;
+                TracePhase("scroll-logs-after-wheel " + JsonSerializer.Serialize(new
+                {
+                    utc = UtcTimestamp(), vertical_scroll_percent = afterWheelPercent,
+                }));
                 scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
-                Thread.Sleep(100);
                 var actual = scroll.Current.VerticalScrollPercent;
-                var atRequestedEnd = position == "top" ? actual <= 1 : actual >= 99;
-                if (!atRequestedEnd) throw new InvalidOperationException($"Log viewer did not scroll to {position}; position={actual}");
+                TracePhase("scroll-logs-after-set " + JsonSerializer.Serialize(new
+                {
+                    utc = UtcTimestamp(), vertical_scroll_percent = actual,
+                }));
+                bool AtRequestedEnd(double percent) => position == "top" ? percent <= 1 : percent >= 99;
+                var lastLoggedPercent = actual;
+                // NativeUIController bounds this helper process with its existing operation watchdog.
+                while (!AtRequestedEnd(actual))
+                {
+                    Thread.Sleep(50);
+                    actual = scroll.Current.VerticalScrollPercent;
+                    if (actual.Equals(lastLoggedPercent)) continue;
+                    lastLoggedPercent = actual;
+                    TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new
+                    {
+                        utc = UtcTimestamp(), vertical_scroll_percent = actual,
+                    }));
+                }
+                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new
+                {
+                    utc = UtcTimestamp(), position, vertical_scroll_percent = actual,
+                }));
                 Console.WriteLine(JsonSerializer.Serialize(new { ready = true, position = actual }));
                 return 0;
             }
