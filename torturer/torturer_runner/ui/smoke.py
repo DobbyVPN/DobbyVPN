@@ -38,7 +38,6 @@ class NativeUISmokeError(RuntimeError):
 
 
 _WINDOWS_TEST_THEME_VARIABLE = "DOBBYVPN_TEST_REQUESTED_THEME"
-_WINDOWS_LOG_VIEW_PROBE_PATH_VARIABLE = "DOBBYVPN_NATIVE_UI_LOG_VIEW_PROBE_PATH"
 _WINDOWS_PALETTE_SEVERITIES = ("DEBUG", "INFO", "WARN", "ERROR")
 _WINDOWS_TEXT_SIZE_SETTINGS_URI = "ms-settings:easeofaccess-display"
 
@@ -544,12 +543,6 @@ class NativeUIController:
             app_environment = os.environ.copy()
             # Never let a test theme leak into ordinary or diagnostic launches.
             app_environment.pop(_WINDOWS_TEST_THEME_VARIABLE, None)
-            app_environment.pop(_WINDOWS_LOG_VIEW_PROBE_PATH_VARIABLE, None)
-            native_ui_log_dir = os.environ.get("DOBBYVPN_NATIVE_UI_LOG_DIR")
-            if native_ui_log_dir and Path(native_ui_log_dir).resolve() == self.logs.resolve():
-                app_environment[_WINDOWS_LOG_VIEW_PROBE_PATH_VARIABLE] = str(
-                    self.logs / "native-ui.log-view-probe.jsonl"
-                )
         if windows_content_root_diagnostics:
             assert app_environment is not None
             app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"] = str(

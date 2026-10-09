@@ -22,7 +22,6 @@ public sealed partial class MainWindow : Window
 {
     private const string PipeName = "DobbyVPN.Control";
     private const string ContentRootPeersPathVariable = "DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH";
-    private const string LogViewProbePathVariable = "DOBBYVPN_NATIVE_UI_LOG_VIEW_PROBE_PATH";
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool ClientToScreen(IntPtr window, ref ScreenPoint point);
     [DllImport("user32.dll", SetLastError = true)]
@@ -93,10 +92,6 @@ public sealed partial class MainWindow : Window
     private bool _logScrollbarPointerDown;
     private bool _pendingLogUpwardIntent;
     private bool _logTailChangeViewPending;
-    private readonly string? _logViewProbePath = Environment.GetEnvironmentVariable(LogViewProbePathVariable);
-    private int _logViewProbeRecordCount;
-    private bool _logViewProbeDisabled;
-    private const int LogViewProbeRecordLimit = 8192;
     private List<NativeDiagnostics.Entry> _latestLogs = [];
     private readonly HashSet<string> _expandedLogs = [];
     private readonly Dictionary<LogRowKey, RenderedLogRow> _logRowCache = [];
@@ -722,67 +717,40 @@ public sealed partial class MainWindow : Window
     {
         _logScroll = LogsScroll;
         CaptureLogScrollPosition();
-        RecordLogViewProbe("loaded");
-        LogsScroll.SizeChanged += (_, args) =>
+        LogsScroll.SizeChanged += (_, _) =>
         {
-            RecordLogViewProbe("viewport-size-changed", details: new
-            {
-                previousWidth = args.PreviousSize.Width,
-                previousHeight = args.PreviousSize.Height,
-                newWidth = args.NewSize.Width,
-                newHeight = args.NewSize.Height
-            });
             if (!_followingLogs) ClearPendingLogDownScrollIntent();
             if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
         };
-        LogEntries.SizeChanged += (_, args) => RecordLogViewProbe("content-size-changed", details: new
+        LogEntries.SizeChanged += (_, _) =>
         {
-            previousWidth = args.PreviousSize.Width,
-            previousHeight = args.PreviousSize.Height,
-            newWidth = args.NewSize.Width,
-            newHeight = args.NewSize.Height
-        });
+            if (_followingLogs && !_clearingLogs)
+                QueueLogTailChangeView(_logRenderGeneration);
+        };
         LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
             var properties = args.GetCurrentPoint(LogsScroll).Properties;
-            RecordLogViewProbe("wheel-received", properties.MouseWheelDelta, details: new
-            {
-                horizontal = properties.IsHorizontalMouseWheel
-            });
             if (properties.IsHorizontalMouseWheel || properties.MouseWheelDelta == 0) return;
-            var direction = properties.MouseWheelDelta > 0 ? -1 : 1;
-            if (direction < 0) RequestLogFollowFreezeForUpwardIntent();
+            if (properties.MouseWheelDelta > 0) RequestLogFollowFreezeForUpwardIntent();
             else RegisterLogDownScrollIntent();
-            RecordLogViewProbe("wheel-input", properties.MouseWheelDelta, details: new
-            {
-                direction,
-                horizontal = properties.IsHorizontalMouseWheel
-            });
         }), true);
         LogsScroll.AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, args) =>
         {
-            double? inputDelta = null;
             switch (args.Key)
             {
                 case global::Windows.System.VirtualKey.Up:
                 case global::Windows.System.VirtualKey.PageUp:
                 case global::Windows.System.VirtualKey.Home:
-                    inputDelta = -1;
                     RequestLogFollowFreezeForUpwardIntent();
                     break;
                 case global::Windows.System.VirtualKey.Down:
                 case global::Windows.System.VirtualKey.PageDown:
-                    inputDelta = 1;
                     RegisterLogDownScrollIntent();
                     break;
                 case global::Windows.System.VirtualKey.End:
-                    inputDelta = 1;
                     RegisterLogDownScrollIntent();
-                    if (IsLogScrollAtBottom()) _followingLogs = true;
                     break;
             }
-            if (inputDelta is not null)
-                RecordLogViewProbe("key-input", inputDelta, details: new { key = args.Key.ToString() });
         }), true);
         LogsScroll.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
@@ -790,7 +758,6 @@ public sealed partial class MainWindow : Window
             {
                 ClearPendingLogDownScrollIntent();
                 _logScrollbarPointerDown = true;
-                RecordLogViewProbe("scrollbar-pointer-pressed");
             }
         }), true);
         LogsScroll.AddHandler(UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
@@ -798,7 +765,6 @@ public sealed partial class MainWindow : Window
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
-            RecordLogViewProbe("scrollbar-pointer-released");
             if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
         }), true);
         LogsScroll.AddHandler(UIElement.PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
@@ -806,36 +772,39 @@ public sealed partial class MainWindow : Window
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
-            RecordLogViewProbe("scrollbar-pointer-capture-lost");
             if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
         }), true);
         LogsScroll.DirectManipulationStarted += (_, _) =>
         {
             ClearPendingLogDownScrollIntent();
             _logDirectManipulation = true;
-            RecordLogViewProbe("direct-manipulation-started");
         };
         LogsScroll.DirectManipulationCompleted += (_, _) =>
         {
             ObserveLogScrollPosition();
             _logDirectManipulation = false;
-            RecordLogViewProbe("direct-manipulation-completed");
             if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
         };
         LogsScroll.ViewChanged += (_, args) =>
         {
-            var offsetDelta = LogsScroll.VerticalOffset - _lastLogScrollOffset;
             ObserveLogScrollPosition(args.IsIntermediate);
-            RecordLogViewProbe("view-changed", offsetDelta, details: new { args.IsIntermediate });
         };
         _ = RefreshLogsAsync();
     }
 
     private void RegisterLogDownScrollIntent()
     {
-        if (_logScroll is null || _followingLogs) return;
+        if (_logScroll is null) return;
         var remainingRange = _logScroll.ScrollableHeight - _logScroll.VerticalOffset;
-        if (remainingRange <= 0.5 && !_updatingLogs && !_logTailChangeViewPending) return;
+        if (remainingRange <= 0.5)
+        {
+            ClearPendingLogDownScrollIntent();
+            _pendingLogUpwardIntent = false;
+            _followingLogs = true;
+            if (!_clearingLogs) RenderLogs();
+            return;
+        }
+        if (_followingLogs) return;
         _pendingLogScrollOffset = _logScroll.VerticalOffset;
         _pendingLogDownScroll = true;
     }
@@ -864,74 +833,6 @@ public sealed partial class MainWindow : Window
             current = VisualTreeHelper.GetParent(current);
         }
         return null;
-    }
-
-    private void RecordLogViewProbe(string eventName, double? inputDelta = null, object? details = null)
-    {
-        if (_logViewProbeDisabled || string.IsNullOrWhiteSpace(_logViewProbePath)
-            || _logViewProbeRecordCount >= LogViewProbeRecordLimit) return;
-
-        try
-        {
-            var scroll = _logScroll;
-            static double? Finite(double value) => double.IsFinite(value) ? value : null;
-            var record = new
-            {
-                timestamp_utc = DateTimeOffset.UtcNow,
-                process_id = Environment.ProcessId,
-                source_commit = _commit,
-                record = _logViewProbeRecordCount + 1,
-                record_limit = LogViewProbeRecordLimit,
-                @event = eventName,
-                input_delta = inputDelta,
-                following_logs = _followingLogs,
-                updating_logs = _updatingLogs,
-                pending = new
-                {
-                    scroll_offset = _pendingLogScrollOffset,
-                    down_scroll = _pendingLogDownScroll,
-                    upward_intent = _pendingLogUpwardIntent,
-                    tail_change_view = _logTailChangeViewPending,
-                    direct_manipulation = _logDirectManipulation,
-                    scrollbar_pointer_down = _logScrollbarPointerDown,
-                    clearing_logs = _clearingLogs
-                },
-                render_generation = _logRenderGeneration,
-                log_revision = _logRevision,
-                content = new
-                {
-                    actual_width = Finite(LogEntries.ActualWidth),
-                    actual_height = Finite(LogEntries.ActualHeight)
-                },
-                scroll_viewer = scroll is null ? null : new
-                {
-                    extent_height = Finite(scroll.ExtentHeight),
-                    scrollable_height = Finite(scroll.ScrollableHeight),
-                    vertical_offset = Finite(scroll.VerticalOffset)
-                },
-                details
-            };
-
-            File.AppendAllText(_logViewProbePath, JsonSerializer.Serialize(record) + "\n", Encoding.UTF8);
-            _logViewProbeRecordCount++;
-        }
-        catch (Exception error)
-        {
-            _logViewProbeDisabled = true;
-            try
-            {
-                _diagnostics.Record(error.ToString(), "log.view_probe.failure");
-            }
-            catch (Exception reportingError)
-            {
-                try
-                {
-                    System.Diagnostics.Trace.TraceError(
-                        $"Log-view probe failed: {error}\nProbe failure reporting also failed: {reportingError}");
-                }
-                catch { }
-            }
-        }
     }
 
     private void ObserveLogScrollPosition(bool isIntermediate = false)
@@ -1078,19 +979,9 @@ public sealed partial class MainWindow : Window
         CaptureLogScrollPosition();
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            RecordLogViewProbe("render-completion", details: new { render_generation = renderGeneration });
-            if (renderGeneration != _logRenderGeneration)
-            {
-                RecordLogViewProbe("render-completion-skipped", details: new
-                {
-                    render_generation = renderGeneration,
-                    reason = "stale-render-generation"
-                });
-                return;
-            }
+            if (renderGeneration != _logRenderGeneration) return;
             _updatingLogs = false;
             CaptureLogScrollPosition();
-            RecordLogViewProbe("render-end", details: new { render_generation = renderGeneration });
             var latestKeys = _latestLogs.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
             if (_followingLogs && !latestKeys.SequenceEqual(_renderedLogRows.Select(row => row.Key)))
             {
@@ -1130,89 +1021,30 @@ public sealed partial class MainWindow : Window
 
     private void QueueLogTailChangeView(long renderGeneration)
     {
-        RecordLogViewProbe("tail-queue-request", details: new { render_generation = renderGeneration });
-        if (_updatingLogs)
-        {
-            RecordLogViewProbe("tail-queue-skipped", details: new
-            {
-                render_generation = renderGeneration,
-                reason = "updating-logs"
-            });
-            return;
-        }
+        if (_updatingLogs) return;
         _logTailChangeViewPending = true;
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            RecordLogViewProbe("tail-callback-start", details: new { render_generation = renderGeneration });
             if (renderGeneration != _logRenderGeneration)
-            {
-                RecordLogViewProbe("tail-callback-skipped", details: new
-                {
-                    render_generation = renderGeneration,
-                    reason = "stale-render-generation"
-                });
                 return;
-            }
-            if (_clearingLogs || _updatingLogs || _logDirectManipulation || _logScrollbarPointerDown || _logScroll is null)
-            {
-                var reason = _clearingLogs ? "clearing-logs"
-                    : _updatingLogs ? "updating-logs"
-                    : _logDirectManipulation ? "direct-manipulation"
-                    : _logScrollbarPointerDown ? "scrollbar-pointer-down"
-                    : "scroll-viewer-unavailable";
-                RecordLogViewProbe("tail-callback-skipped", details: new
-                {
-                    render_generation = renderGeneration,
-                    reason
-                });
-                return;
-            }
+            if (_clearingLogs || _updatingLogs || _logDirectManipulation || _logScrollbarPointerDown || _logScroll is null) return;
             _logTailChangeViewPending = false;
             if (_pendingLogUpwardIntent)
             {
-                RecordLogViewProbe("tail-upward-intent", details: new
-                {
-                    render_generation = renderGeneration,
-                    scrollable_height = _logScroll.ScrollableHeight
-                });
                 _pendingLogUpwardIntent = false;
                 if (_logScroll.ScrollableHeight > 0.5)
                 {
                     ClearPendingLogDownScrollIntent();
                     _followingLogs = false;
-                    RecordLogViewProbe("tail-callback-skipped", details: new
-                    {
-                        render_generation = renderGeneration,
-                        reason = "upward-intent-preserved"
-                    });
                     return;
                 }
                 ClearPendingLogDownScrollIntent();
                 _followingLogs = true;
             }
-            if (!_followingLogs)
-            {
-                RecordLogViewProbe("tail-callback-skipped", details: new
-                {
-                    render_generation = renderGeneration,
-                    reason = "not-following"
-                });
-                return;
-            }
+            if (!_followingLogs) return;
             var targetOffset = _logScroll.ScrollableHeight;
-            RecordLogViewProbe("tail-before-change-view", details: new
-            {
-                render_generation = renderGeneration,
-                target_offset = targetOffset
-            });
-            var accepted = _logScroll.ChangeView(null, targetOffset, null, true);
+            _logScroll.ChangeView(null, targetOffset, null, true);
             CaptureLogScrollPosition();
-            RecordLogViewProbe("tail-after-change-view", details: new
-            {
-                render_generation = renderGeneration,
-                target_offset = targetOffset,
-                accepted
-            });
         });
     }
 
