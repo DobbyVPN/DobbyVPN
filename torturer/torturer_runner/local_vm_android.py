@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -120,6 +121,53 @@ def _adb_call(adb: str, serial: str, arguments: list[str], *, run_dir: Path, log
         [adb, "-s", serial, *arguments], cwd=run_dir, logs=logs, label=label,
         timeout=timeout, environment=environment, check=check,
     )
+
+
+def _verify_local_adb_socket(environment: dict[str, str]) -> None:
+    endpoint = environment["ADB_SERVER_SOCKET"]
+    prefix = "localfilesystem:"
+    if not endpoint.startswith(prefix):
+        return
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(2.0)
+            connection.connect(endpoint[len(prefix):])
+    except OSError as error:
+        raise _error(f"Android ADB server socket is unavailable: {error}") from error
+
+
+def preflight(*, run_dir: Path, logs: Path, timeout: float) -> None:
+    """Check the configured emulator is ready before spending time on a build."""
+
+    adb, serial, environment = _adb_and_environment()
+    _verify_local_adb_socket(environment)
+    probe_timeout = min(timeout, 5.0)
+    device = _adb_call(
+        adb, serial, ["get-state"], run_dir=run_dir, logs=logs,
+        label="android-preflight-state", timeout=probe_timeout,
+        environment=environment, check=False,
+    )
+    if device.returncode != 0 or device.stdout.strip() != b"device":
+        raise _error("Android ADB device is unavailable during preflight")
+
+    boot = _adb_call(
+        adb, serial, ["shell", "getprop", "sys.boot_completed"],
+        run_dir=run_dir, logs=logs, label="android-preflight-boot",
+        timeout=probe_timeout, environment=environment, check=False,
+    )
+    if boot.returncode != 0 or boot.stdout.strip() != b"1":
+        raise _error("Android device boot is incomplete during preflight")
+
+    for service in ("package", "activity", "SurfaceFlinger"):
+        result = _adb_call(
+            adb, serial, ["shell", "service", "check", service],
+            run_dir=run_dir, logs=logs,
+            label=f"android-preflight-service-{service.lower()}",
+            timeout=probe_timeout, environment=environment, check=False,
+        )
+        expected = f"Service {service}: found".encode("ascii")
+        if result.returncode != 0 or result.stdout.strip() != expected:
+            raise _error(f"Android prerequisite service is unavailable: {service}")
 
 
 def _require_root(adb: str, serial: str, run_dir: Path, logs: Path, timeout: float,

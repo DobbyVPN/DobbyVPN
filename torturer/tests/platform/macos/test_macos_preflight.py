@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
+import json
 from pathlib import Path
 import socket
 import subprocess
@@ -14,6 +17,36 @@ from torturer_runner.ui.smoke import NativeUIController, NativeUISmokeError
 
 
 class MacOSPreflightTests(unittest.TestCase):
+    def test_full_desktop_preflight_failure_stops_before_source_checks_and_build(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            run_dir = Path(name)
+            (run_dir / "source").mkdir()
+            (run_dir / "profile").write_text("synthetic profile\n", encoding="utf-8")
+            args = local_vm.build_parser().parse_args([
+                "prepare", "--platform", "macos", "--suite", "full",
+                "--run-dir", str(run_dir), "--timeout", "90", "--source-checks",
+            ])
+            diagnostic = io.StringIO()
+            with (
+                mock.patch.object(
+                    local_vm_macos, "preflight_interactive_desktop",
+                    side_effect=local_vm.LocalVMError("synthetic Aqua unavailable"),
+                ) as preflight,
+                mock.patch.object(local_vm, "_run_platform_source_checks") as source_checks,
+                mock.patch.object(local_vm, "_prepare_candidate") as build,
+                redirect_stderr(diagnostic),
+            ):
+                self.assertEqual(local_vm.prepare(args), 1)
+
+            preflight.assert_called_once()
+            self.assertEqual(preflight.call_args.kwargs["timeout"], 30.0)
+            source_checks.assert_not_called()
+            build.assert_not_called()
+            self.assertIn("synthetic Aqua unavailable", diagnostic.getvalue())
+            state = json.loads((run_dir / "platform.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "failed")
+            self.assertNotIn("source_checks_attempted", state)
+
     def test_native_paste_captures_button_invocation_time(self) -> None:
         controller = object.__new__(NativeUIController)
         controller.platform = "macos"

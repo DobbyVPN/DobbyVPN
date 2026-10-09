@@ -1881,12 +1881,31 @@ def prepare(args: argparse.Namespace) -> int:
     }
     _write_json(run_dir / "platform.json", state)
     try:
-        if args.source_checks:
-            state["source_checks_attempted"] = True
-            state["status"] = "source-checks"
+        if args.platform == "android":
+            from .local_vm_android import preflight as preflight_android
+
+            state["status"] = "android-preflight"
             _write_json(run_dir / "platform.json", state)
-            _run_platform_source_checks(run_dir, args.platform, logs, args.timeout)
-            state["source_checks"] = "passed"
+            preflight_android(
+                run_dir=run_dir,
+                logs=logs,
+                timeout=min(args.timeout, 30.0),
+            )
+            state["android_preflight"] = "passed"
+            state["status"] = "preparing"
+            _write_json(run_dir / "platform.json", state)
+
+        if args.platform == "windows":
+            state["status"] = "windows-temp-preflight"
+            _write_json(run_dir / "platform.json", state)
+            source = run_dir / "source"
+            _run_logged(
+                [sys.executable, str(source / ".github" / "scripts" / "desktop" / "desktop_package.py"),
+                 "preflight-windows-temp"],
+                cwd=source, logs=logs, label="windows-temp-preflight",
+                timeout=min(args.timeout, 30.0),
+            )
+            state["windows_temp_preflight"] = "passed"
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
 
@@ -1901,6 +1920,15 @@ def prepare(args: argparse.Namespace) -> int:
                 timeout=min(args.timeout, 30.0),
             )
             state["macos_desktop_preflight"] = "passed"
+            state["status"] = "preparing"
+            _write_json(run_dir / "platform.json", state)
+
+        if args.source_checks:
+            state["source_checks_attempted"] = True
+            state["status"] = "source-checks"
+            _write_json(run_dir / "platform.json", state)
+            _run_platform_source_checks(run_dir, args.platform, logs, args.timeout)
+            state["source_checks"] = "passed"
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
 

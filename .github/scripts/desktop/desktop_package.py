@@ -25,6 +25,111 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 PLATFORMS = ("linux", "windows", "macos")
 NATIVE_UI_REQUIREMENTS = SCRIPT_DIR.parent / "requirements-native-ui.txt"
 WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS = 180
+WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS = 30
+
+WINDOWS_TEMP_PREFLIGHT_SCRIPT = r'''$ErrorActionPreference = "Stop"
+try {
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+Write-Output "Identity=$($identity.Name) SID=$($identity.User.Value) IsSystem=$($identity.IsSystem)"
+foreach ($name in @("TEMP", "TMP", "SystemTemp", "DOTNET_ROLL_FORWARD")) {
+  Write-Output "$name=$([Environment]::GetEnvironmentVariable($name, "Process"))"
+}
+$memberDefinition = @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetTempPathW", ExactSpelling=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+public static extern uint GetTempPathW(uint length, System.Text.StringBuilder path);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetTempPath2W", ExactSpelling=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
+public static extern uint GetTempPath2W(uint length, System.Text.StringBuilder path);
+'@
+Add-Type -Namespace DobbyVpn -Name TempPaths -MemberDefinition $memberDefinition -ErrorAction Stop
+function Read-TempPath([bool]$modern) {
+  $buffer = [System.Text.StringBuilder]::new(32768)
+  if ($modern) {
+    $length = [DobbyVpn.TempPaths]::GetTempPath2W([uint32]$buffer.Capacity, $buffer)
+  } else {
+    $length = [DobbyVpn.TempPaths]::GetTempPathW([uint32]$buffer.Capacity, $buffer)
+  }
+  if ($length -eq 0) { throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+  if ($length -ge $buffer.Capacity) { throw "Native temp path exceeds buffer capacity $($buffer.Capacity): $length" }
+  return $buffer.ToString()
+}
+$legacyPath = Read-TempPath $false
+Write-Output "GetTempPathW=$legacyPath"
+$modernAvailable = $true
+try {
+  $modernPath = Read-TempPath $true
+  Write-Output "GetTempPath2W=$modernPath"
+} catch [System.EntryPointNotFoundException] {
+  $modernAvailable = $false
+  $modernPath = $legacyPath
+  Write-Output "GetTempPath2W=unavailable fallback=GetTempPathW"
+}
+$candidates = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+function Add-TempCandidate([string]$label, [string]$path) {
+  if ([string]::IsNullOrWhiteSpace($path)) { return }
+  $resolved = [System.IO.Path]::GetFullPath($path)
+  $root = [System.IO.Path]::GetPathRoot($resolved)
+  $resolved = $resolved.TrimEnd([char[]]@('\', '/'))
+  if ($resolved.Length -lt $root.Length) { $resolved = $root }
+  if ($candidates.ContainsKey($resolved)) {
+    $candidates[$resolved] = $candidates[$resolved] + "," + $label
+  } else {
+    $candidates.Add($resolved, $label)
+  }
+}
+Add-TempCandidate "GetTempPathW" $legacyPath
+if ($modernAvailable) { Add-TempCandidate "GetTempPath2W" $modernPath }
+$failures = [System.Collections.Generic.List[string]]::new()
+function Format-TempFailure([string]$label, $record) {
+  $details = $record | Format-List * -Force | Out-String -Width 4096
+  return "$label`n$details`nCLR exception:`n$($record.Exception.ToString())`nPowerShell script stack:`n$($record.ScriptStackTrace)"
+}
+foreach ($candidate in $candidates.GetEnumerator()) {
+  $path = $candidate.Key
+  $labels = $candidate.Value
+  Write-Output "TempCandidate=$labels path=$path"
+  $probe = Join-Path $path ("dobbyvpn-temp-preflight-" + [Guid]::NewGuid().ToString("N") + ".tmp")
+  $stream = $null
+  $created = $false
+  $primary = $null
+  $cleanupErrors = [System.Collections.Generic.List[object]]::new()
+  try {
+    $attributes = [System.IO.File]::GetAttributes($path)
+    if (($attributes -band [System.IO.FileAttributes]::Directory) -eq 0) { throw "Temp candidate is not a directory: $path" }
+    $drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($path))
+    $free = $drive.AvailableFreeSpace
+    Write-Output "TempCandidate=$labels available_bytes=$free"
+    $stream = [System.IO.File]::Open($probe, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    $created = $true
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes("DobbyVPN Windows temp preflight`n")
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush($true)
+  } catch {
+    $primary = $_
+  } finally {
+    if ($null -ne $stream) {
+      try { $stream.Dispose() } catch { $cleanupErrors.Add($_) }
+    }
+    if ($created) {
+      try { [System.IO.File]::Delete($probe) } catch { $cleanupErrors.Add($_) }
+    }
+  }
+  if ($null -ne $primary) { $failures.Add((Format-TempFailure "Temp candidate $labels primary failure" $primary)) }
+  foreach ($cleanupError in $cleanupErrors) {
+    $failures.Add((Format-TempFailure "Temp candidate $labels cleanup failure" $cleanupError))
+  }
+  if ($null -eq $primary -and $cleanupErrors.Count -eq 0) { Write-Output "TempCandidate=$labels create_write_delete=passed" }
+}
+if ($failures.Count -gt 0) {
+  [Console]::Error.WriteLine("Windows temp preflight failed:")
+  foreach ($failure in $failures) { [Console]::Error.WriteLine($failure) }
+  exit 1
+}
+} catch {
+  $details = $_ | Format-List * -Force | Out-String -Width 4096
+  [Console]::Error.WriteLine("Windows temp preflight exception:`n$details`nCLR exception:`n$($_.Exception.ToString())`nPowerShell script stack:`n$($_.ScriptStackTrace)")
+  exit 1
+}
+'''
 
 
 class DesktopPlatformError(RuntimeError):
@@ -192,7 +297,6 @@ def _build(args: argparse.Namespace) -> int:
     version = _version(args.version)
     source_sha = _source_sha(args.source_sha)
     output = args.output_dir.resolve()
-    output.mkdir(parents=True, exist_ok=True)
     service_arch = architecture
     service_directory = SERVICES / f"{platform}-{service_arch}"
     environment = os.environ.copy()
@@ -200,6 +304,10 @@ def _build(args: argparse.Namespace) -> int:
     environment["GITHUB_SHA"] = source_sha
     environment["APP_MAJOR_VERSION"], environment["APP_MINOR_VERSION"], environment["APP_MAINTENANCE_VERSION"] = version.split(".")
 
+    if platform == "windows":
+        _windows_temp_preflight(environment)
+
+    output.mkdir(parents=True, exist_ok=True)
     desktop = SCRIPT_DIR / "desktop_build.py"
     _run(
         "Go backend and CLI build",
@@ -408,6 +516,19 @@ def _ensure_windows_pillow(work: Path, env: dict[str, str]) -> dict[str, str]:
     return updated
 
 
+def _windows_temp_preflight(env: dict[str, str] | None = None) -> None:
+    _run(
+        "Windows temp preflight",
+        [
+            "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+            "-Command", WINDOWS_TEMP_PREFLIGHT_SCRIPT,
+        ],
+        env=env,
+        capture=True,
+        timeout_seconds=WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS,
+    )
+
+
 def _build_windows_msi(
     archive: Path,
     service_directory: Path,
@@ -435,52 +556,6 @@ def _build_windows_msi(
         env=env,
     )
     env["PATH"] = str(wix_tools) + os.pathsep + env.get("PATH", "")
-    # .NET 8+ uses GetTempPath2 when available; SYSTEM resolves to
-    # SystemTemp there, regardless of TEMP and TMP.
-    temp_diagnostics = r'''$ErrorActionPreference = "Stop"
-try {
-  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-  $managed = [IO.Path]::GetTempPath()
-  Write-Output "Identity=$($identity.Name) SID=$($identity.User.Value) IsSystem=$($identity.IsSystem)"
-  foreach ($name in @("TEMP", "TMP", "SystemTemp")) { Write-Output "$name=$([Environment]::GetEnvironmentVariable($name, "Process"))" }
-  Write-Output "PowerShell .NET $([Environment]::Version) Path.GetTempPath=$managed"
-  $paths = @(@{Name="PowerShellGetTempPath"; Path=$managed})
-  try {
-    Add-Type -Namespace DobbyVpn -Name TempPath -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetTempPath2W", ExactSpelling=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)] public static extern uint GetTempPath2(uint length, System.Text.StringBuilder path);' -ErrorAction Stop
-    $buffer = [Text.StringBuilder]::new(32768)
-    $length = [DobbyVpn.TempPath]::GetTempPath2([uint32]$buffer.Capacity, $buffer)
-    if ($length -eq 0) { throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
-    if ($length -ge $buffer.Capacity) { throw "GetTempPath2 path exceeds diagnostic buffer capacity $($buffer.Capacity): $length" }
-    $native = $buffer.ToString()
-    Write-Output "GetTempPath2=$native"
-    $paths += @{Name="GetTempPath2"; Path=$native}
-  } catch { [Console]::Out.WriteLine("GetTempPath2 diagnostic error: " + $_.Exception.ToString()) }
-  foreach ($entry in $paths) {
-    $probe = $null
-    try {
-      $path = [string]$entry.Path
-      $attributes = [IO.File]::GetAttributes($path)
-      if (($attributes -band [IO.FileAttributes]::Directory) -eq 0) { throw "GetTempPath is not a directory: $path" }
-      $free = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($path)).AvailableFreeSpace
-      Write-Output "$($entry.Name) exists=true available_bytes=$free"
-      $probe = Join-Path $path ("dobbyvpn-wix-probe-" + [Guid]::NewGuid().ToString("N"))
-      [IO.Directory]::CreateDirectory($probe) | Out-Null
-      [IO.File]::WriteAllText((Join-Path $probe "probe.txt"), "ok")
-      [IO.Directory]::Delete($probe, $true)
-      $probe = $null
-      Write-Output "$($entry.Name) create_write_delete=passed"
-    } catch { [Console]::Out.WriteLine("$($entry.Name) probe error: " + $_.Exception.ToString()) }
-    finally { if ($probe -and [IO.Directory]::Exists($probe)) { try { [IO.Directory]::Delete($probe, $true) } catch { [Console]::Error.WriteLine("Probe cleanup error: " + $_.Exception.ToString()) } } }
-  }
-} catch { [Console]::Error.WriteLine("Windows MSI temp diagnostics error: " + $_.Exception.ToString()) }
-'''
-    _run(
-        "Windows MSI temp diagnostics",
-        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", temp_diagnostics],
-        cwd=installer,
-        env=env,
-        check=False,
-    )
     _run("Windows MSI build", ["cmd.exe", "/c", "build.bat"], cwd=installer, env=env)
     package = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi"
     log_path = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi.log"
@@ -784,6 +859,10 @@ def _parser() -> argparse.ArgumentParser:
         help="run the shared functional mini suite against an installed package",
         add_help=False,
     )
+    commands.add_parser(
+        "preflight-windows-temp",
+        help="verify writable Windows temp paths used by desktop builds",
+    )
     build = commands.add_parser("build", help="build and package one native desktop target")
     build.add_argument("--platform", choices=PLATFORMS, required=True)
     build.add_argument("--arch", choices=("amd64", "arm64"))
@@ -820,6 +899,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     if args.action == "build":
         return _build(args)
+    if args.action == "preflight-windows-temp":
+        _select_host("windows", "amd64")
+        _windows_temp_preflight()
+        return 0
     if args.action == "describe":
         return _describe(args)
     if args.action == "install":

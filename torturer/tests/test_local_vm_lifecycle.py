@@ -12,6 +12,56 @@ from torturer_runner import diagnostics, local_vm
 
 
 class LocalVMLifecycleTests(unittest.TestCase):
+    def test_windows_temp_failure_stops_before_source_checks_and_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "source").mkdir()
+            (run_dir / "profile").write_text("synthetic profile")
+            args = local_vm.build_parser().parse_args([
+                "prepare", "--platform", "windows", "--run-dir", str(run_dir),
+                "--timeout", "90", "--source-checks",
+            ])
+            diagnostic = io.StringIO()
+            with (
+                mock.patch.object(local_vm, "_run_logged", side_effect=local_vm.LocalVMError(
+                    "original temp permission failure")) as preflight,
+                mock.patch.object(local_vm, "_run_platform_source_checks") as checks,
+                mock.patch.object(local_vm, "_prepare_candidate") as build,
+                redirect_stderr(diagnostic),
+            ):
+                self.assertEqual(local_vm.prepare(args), 1)
+            checks.assert_not_called()
+            build.assert_not_called()
+            self.assertEqual(preflight.call_args.args[0][-1], "preflight-windows-temp")
+            self.assertEqual(preflight.call_args.kwargs["timeout"], 30.0)
+            self.assertIn("original temp permission failure", diagnostic.getvalue())
+            state = json.loads((run_dir / "platform.json").read_text())
+            self.assertEqual(state["status"], "failed")
+            self.assertNotIn("source_checks_attempted", state)
+
+    def test_windows_temp_preflight_precedes_source_checks_and_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "source").mkdir()
+            (run_dir / "profile").write_text("synthetic profile")
+            args = local_vm.build_parser().parse_args([
+                "prepare", "--platform", "windows", "--run-dir", str(run_dir),
+                "--timeout", "90", "--source-checks",
+            ])
+            events = []
+            with (
+                mock.patch.object(local_vm, "_run_logged", side_effect=lambda *_args, **_kw:
+                                  events.append("preflight")),
+                mock.patch.object(local_vm, "_run_platform_source_checks", side_effect=lambda *_args:
+                                  events.append("source-checks")),
+                mock.patch.object(local_vm, "_prepare_candidate", side_effect=lambda *_args, **_kw:
+                                  (events.append("build") or {"mode": "local-build"})),
+            ):
+                self.assertEqual(local_vm.prepare(args), 0)
+            self.assertEqual(events, ["preflight", "source-checks", "build"])
+            state = json.loads((run_dir / "platform.json").read_text())
+            self.assertEqual(state["windows_temp_preflight"], "passed")
+
     def test_recovery_seams_cannot_replace_qualification_packages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
