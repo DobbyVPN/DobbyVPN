@@ -296,8 +296,9 @@ class NativeUiInstrumentedTest {
         val context = instrumentation.targetContext
         val application = context.packageManager.getApplicationInfo(packageName, 0)
         check(application.icon != 0) { "ANDROID_LAUNCHER_ICON_MISSING" }
-        check(context.resources.getResourceEntryName(application.icon) == "ic_launcher") {
-            "ANDROID_INSTALLED_LAUNCHER_ICON_RESOURCE_UNEXPECTED"
+        val iconResource = context.resources.getResourceEntryName(application.icon)
+        check(iconResource == "ic_launcher" || iconResource == "ic_launcher_round") {
+            "ANDROID_INSTALLED_LAUNCHER_ICON_RESOURCE_UNEXPECTED resource=$iconResource"
         }
         val icon = context.packageManager.getApplicationIcon(packageName)
         check(icon is AdaptiveIconDrawable) { "ANDROID_INSTALLED_LAUNCHER_ICON_NOT_ADAPTIVE" }
@@ -317,7 +318,7 @@ class NativeUiInstrumentedTest {
                 }
             }
             check(output.isFile && output.length() > 8L) { "ANDROID_LAUNCHER_ARTWORK_PNG_INVALID" }
-            val marker = "DOBBY_INSTALLED_LAUNCHER_ARTWORK path=${output.absolutePath} " +
+            val marker = "DOBBY_INSTALLED_LAUNCHER_ARTWORK resource=$iconResource path=${output.absolutePath} " +
                 "bytes=${output.length()} sha256=${sha256(output)} width=${bitmap.width} " +
                 "height=${bitmap.height} sampled_colors=${colors.size}\n"
             instrumentation.sendStatus(0, Bundle().apply {
