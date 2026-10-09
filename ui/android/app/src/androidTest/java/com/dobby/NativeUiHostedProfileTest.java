@@ -2944,10 +2944,13 @@ public final class NativeUiHostedProfileTest {
         int profileCount = origin.getJSONArray("profiles").length();
         UiDevice device = uiDevice();
         boolean pendingObserved = false;
-        boolean stopEnabled = false;
         boolean targetEnabled = false;
         boolean competingDisabled = false;
         Rect competingBounds = new Rect();
+        String targetActionContext = "target action not observed";
+        UiObject2 targetLabelNode = null;
+        UiObject2 targetAction = null;
+        UiObject2 targetStopLabelNode = null;
         while (System.currentTimeMillis() < deadline) {
             JSONObject state = snapshotResult("");
             if (!sameSessionAndSelection(state, origin)) {
@@ -2961,46 +2964,71 @@ public final class NativeUiHostedProfileTest {
                     && state.optString("digest").equals(pending.optString("digest"));
             if (pendingMatches) {
                 pendingObserved = true;
-                if (!stopEnabled) {
-                    scrollControlsToTop(profileCount, deadline);
-                    state = snapshotResult("");
-                    if (!pendingProfileSelectionMatches(state, origin, targetIndex, digest)) {
-                        throw new AssertionError(
-                                "Pending profile transition changed while returning to the visible Stop action: "
-                                        + state);
-                    }
-                    UiObject2 viewport = findUiObject("Connection controls");
-                    Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
-                    UiObject2 stopLabelNode = findUiObject("Stop");
-                    UiObject2 stop = stopLabelNode;
-                    while (stop != null && !stop.isClickable()) stop = stop.getParent();
-                    Rect stopBounds = stop == null ? new Rect() : stop.getVisibleBounds();
-                    Rect stopLabelBounds = stopLabelNode == null
-                            ? new Rect() : stopLabelNode.getVisibleBounds();
-                    stopEnabled = stop != null && stop.isEnabled()
-                            && !viewportBounds.isEmpty()
-                            && Rect.intersects(viewportBounds, stopBounds)
-                            && Rect.intersects(viewportBounds, stopLabelBounds);
-                }
-
-                if (stopEnabled && !targetEnabled) {
+                if (!targetEnabled) {
                     scrollControlsToProfileAction(targetIndex, profileCount, deadline);
                     state = snapshotResult("");
                     if (!pendingProfileSelectionMatches(state, origin, targetIndex, digest)) {
                         throw new AssertionError(
-                                "Pending profile transition changed while revealing its target action: " + state);
+                                "Pending profile transition changed while revealing its target Stop action: "
+                                        + state);
                     }
                     UiObject2 viewport = findUiObject("Connection controls");
                     Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
-                    UiObject2 target = findUiObject(targetLabel);
-                    while (target != null && !target.isClickable()) target = target.getParent();
-                    Rect targetBounds = target == null ? new Rect() : target.getVisibleBounds();
-                    targetEnabled = target != null && target.isEnabled()
-                            && !viewportBounds.isEmpty()
+                    targetLabelNode = findUiObject(targetLabel);
+                    targetAction = targetLabelNode;
+                    while (targetAction != null && !targetAction.isClickable()) {
+                        targetAction = targetAction.getParent();
+                    }
+                    targetStopLabelNode = targetLabelNode;
+                    if (targetStopLabelNode == null
+                            || !"Stop".equals(targetStopLabelNode.getText())) {
+                        targetStopLabelNode = targetAction == null
+                                ? null : targetAction.findObject(By.text("Stop"));
+                    }
+                    Rect targetLabelBounds = targetLabelNode == null
+                            ? new Rect() : targetLabelNode.getVisibleBounds();
+                    Rect targetBounds = targetAction == null
+                            ? new Rect() : targetAction.getVisibleBounds();
+                    Rect stopLabelBounds = targetStopLabelNode == null
+                            ? new Rect() : targetStopLabelNode.getVisibleBounds();
+                    String renderedStopText = targetStopLabelNode == null
+                            ? "null" : targetStopLabelNode.getText();
+                    boolean targetVisible = !viewportBounds.isEmpty()
+                            && Rect.intersects(viewportBounds, targetLabelBounds)
                             && Rect.intersects(viewportBounds, targetBounds);
+                    boolean stopLabelVisible = !viewportBounds.isEmpty()
+                            && Rect.intersects(viewportBounds, stopLabelBounds);
+                    targetEnabled = targetAction != null && targetAction.isClickable()
+                            && targetAction.isEnabled()
+                            && targetStopLabelNode != null && "Stop".equals(renderedStopText)
+                            && !viewportBounds.isEmpty()
+                            && targetVisible && stopLabelVisible;
+                    JSONObject pendingTarget = state.optJSONObject("pending_target");
+                    targetActionContext = "target_label=" + JSONObject.quote(targetLabel)
+                            + " state=" + JSONObject.quote(state.optString("state"))
+                            + " active_mode=" + JSONObject.quote(state.optString("active_mode"))
+                            + " generation=" + state.optLong("generation")
+                            + " origin_generation=" + origin.optLong("generation")
+                            + " pending_mode=" + JSONObject.quote(
+                                    pendingTarget == null ? "null" : pendingTarget.optString("mode"))
+                            + " pending_index=" + (pendingTarget == null
+                                    ? -1 : pendingTarget.optInt("index", -1))
+                            + " pending_digest_matches=" + (pendingTarget != null
+                                    && digest.equals(pendingTarget.optString("digest")))
+                            + " viewport_bounds=" + viewportBounds.toShortString()
+                            + " target_label_bounds=" + targetLabelBounds.toShortString()
+                            + " target_action_bounds=" + targetBounds.toShortString()
+                            + " target_action_enabled="
+                            + (targetAction != null && targetAction.isEnabled())
+                            + " target_action_clickable="
+                            + (targetAction != null && targetAction.isClickable())
+                            + " target_visible=" + targetVisible
+                            + " stop_text=" + JSONObject.quote(String.valueOf(renderedStopText))
+                            + " stop_text_bounds=" + stopLabelBounds.toShortString()
+                            + " stop_text_visible=" + stopLabelVisible;
                 }
 
-                if (stopEnabled && targetEnabled && !competingDisabled) {
+                if (targetEnabled && !competingDisabled) {
                     scrollControlsToProfileAction(competingIndex, profileCount, deadline);
                     state = snapshotResult("");
                     if (!pendingProfileSelectionMatches(state, origin, targetIndex, digest)) {
@@ -3020,7 +3048,7 @@ public final class NativeUiHostedProfileTest {
                             && Rect.intersects(viewportBounds, competingBounds);
                 }
 
-                if (stopEnabled && targetEnabled && competingDisabled && !competingBounds.isEmpty()) {
+                if (targetEnabled && competingDisabled && !competingBounds.isEmpty()) {
                     if (!device.click(competingBounds.centerX(), competingBounds.centerY())) {
                         throw new AssertionError("Could not inject a competing tap during profile switching");
                     }
@@ -3050,11 +3078,24 @@ public final class NativeUiHostedProfileTest {
             if (remaining > 0) SystemClock.sleep(Math.min(20L, remaining));
         }
         if (pendingObserved) {
-            if (!stopEnabled) {
-                throw new AssertionError("Pending profile selection did not retain an enabled Stop action");
-            }
             if (!targetEnabled) {
-                throw new AssertionError("Pending profile target did not retain its Stop action");
+                StringBuilder diagnostics = new StringBuilder(targetActionContext).append('\n');
+                List<Throwable> diagnosticFailures = new ArrayList<>();
+                appendStoppedRecoveryNodeFields(
+                        diagnostics, "target_label_node", targetLabelNode, diagnosticFailures);
+                appendStoppedRecoveryNodeFields(
+                        diagnostics, "target_clickable_action", targetAction, diagnosticFailures);
+                appendStoppedRecoveryNodeFields(
+                        diagnostics, "target_scoped_stop_text", targetStopLabelNode,
+                        diagnosticFailures);
+                AssertionError failure = new AssertionError(
+                        "Pending profile selection did not retain an enabled scoped Stop action: "
+                                + diagnostics);
+                for (Throwable diagnosticFailure : diagnosticFailures) {
+                    failure.addSuppressed(new IllegalStateException(
+                            "ANDROID_PENDING_PROFILE_STOP_DIAGNOSTIC_FAILED", diagnosticFailure));
+                }
+                throw failure;
             }
             if (competingBounds.isEmpty()) {
                 throw new AssertionError(
