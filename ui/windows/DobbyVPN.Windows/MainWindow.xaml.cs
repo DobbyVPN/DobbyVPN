@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Reflection;
 using Windows.ApplicationModel.DataTransfer;
 using System.Collections.Generic;
@@ -11,6 +10,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.Storage.Pickers;
@@ -83,32 +83,32 @@ public sealed partial class MainWindow : Window
     private bool _followingLogs = true;
     private bool _updatingLogs;
     private ScrollViewer? _logScroll;
-    private bool _userScrolling;
-    private readonly bool _traceLogScrolling = string.Equals(
-        Environment.GetEnvironmentVariable("DOBBYVPN_TEST_LOG_SCROLL_TRACE"), "1", StringComparison.Ordinal);
-    private long _logScrollInputSequence;
-    private long _logScrollInputTimestamp;
-    private long _tracedLogScrollViewSequence;
-    private long _tracedLogScrollRenderSequence;
-    private long _logScrollRenderRevision;
+    private long _logRenderGeneration;
+    private double _lastLogScrollOffset;
+    private double _pendingLogScrollOffset;
+    private bool _pendingLogDownScroll;
+    private bool _logDirectManipulation;
+    private bool _logScrollbarPointerDown;
+    private bool _pendingLogUpwardIntent;
+    private bool _logTailChangeViewPending;
     private List<NativeDiagnostics.Entry> _latestLogs = [];
     private readonly HashSet<string> _expandedLogs = [];
-    private string _renderedLogs = "";
+    private readonly Dictionary<LogRowKey, RenderedLogRow> _logRowCache = [];
+    private List<RenderedLogRow> _renderedLogRows = [];
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
     private bool _exportingLogs;
+
+    private readonly record struct LogRowKey(string Id, string Raw);
+    private sealed record RenderedLogRow(LogRowKey Key, UIElement[] Controls);
 
     public MainWindow()
     {
         InitializeComponent();
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ContentRootPeersPathVariable)))
             Root.Loaded += (_, _) => WriteContentRootPeerDiagnostic();
-        Root.SizeChanged += (_, args) =>
-        {
-            ControlsScroll.MaxHeight = args.NewSize.Height * 0.6;
-            ProfilesScroll.MaxHeight = Math.Min(180, args.NewSize.Height * 0.2);
-        };
+        Root.LayoutUpdated += (_, _) => UpdateContentLayout();
         foreach (var details in new[] { LoadStatus, ProfileText, FailureText, ErrorText, LogsErrorText })
         {
             details.Visibility = Visibility.Collapsed;
@@ -142,6 +142,29 @@ public sealed partial class MainWindow : Window
         Closed += (_, _) => Clipboard.ContentChanged -= ClipboardChanged;
         _ = PollSnapshotsAsync(_shutdown.Token);
         _ = RefreshSnapshotAsync();
+    }
+
+    private void UpdateContentLayout()
+    {
+        var height = Root.ActualHeight;
+        if (height <= 0) return;
+        var logChrome = LogsGrid.RowDefinitions[0].ActualHeight +
+            LogsGrid.RowDefinitions[1].ActualHeight +
+            LogsGrid.RowSpacing * (LogsGrid.RowDefinitions.Count - 1);
+        var controlsHeight = Math.Max(0, Math.Min(height * 0.6,
+            height - Root.RowSpacing - logChrome - LogsScroll.MinHeight));
+        var fixedControls = ControlsContent.RowDefinitions[0].ActualHeight +
+            ControlsContent.RowDefinitions[1].ActualHeight +
+            ControlsContent.RowSpacing * (ControlsContent.RowDefinitions.Count - 1);
+        var profileHeight = Math.Max(0, Math.Min(Math.Min(180, height * 0.2),
+            controlsHeight - fixedControls));
+
+        // Header/error rows grow with the OS text size. Cap only the scrolling
+        // controls so the log viewport keeps its usable minimum at that size.
+        if (Math.Abs(ControlsScroll.MaxHeight - controlsHeight) > 0.5)
+            ControlsScroll.MaxHeight = controlsHeight;
+        if (Math.Abs(ProfilesScroll.MaxHeight - profileHeight) > 0.5)
+            ProfilesScroll.MaxHeight = profileHeight;
     }
 
     private void WriteContentRootPeerDiagnostic()
@@ -692,59 +715,154 @@ public sealed partial class MainWindow : Window
     private void LogsText_Loaded(object sender, RoutedEventArgs e)
     {
         _logScroll = LogsScroll;
-        LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => MarkLogScrollInput("wheel")), true);
-        LogsScroll.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => MarkLogScrollInput("pointer-pressed")), true);
+        CaptureLogScrollPosition();
+        LogsScroll.SizeChanged += (_, _) =>
+        {
+            if (!_followingLogs) ClearPendingLogDownScrollIntent();
+            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+        };
+        LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
+        {
+            var properties = args.GetCurrentPoint(LogsScroll).Properties;
+            if (properties.IsHorizontalMouseWheel || properties.MouseWheelDelta == 0) return;
+            var direction = properties.MouseWheelDelta > 0 ? -1 : 1;
+            if (direction < 0) RequestLogFollowFreezeForUpwardIntent();
+            else RegisterLogDownScrollIntent();
+        }), true);
         LogsScroll.AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, args) =>
         {
-            if (args.Key is global::Windows.System.VirtualKey.Up or global::Windows.System.VirtualKey.Down
-                or global::Windows.System.VirtualKey.PageUp or global::Windows.System.VirtualKey.PageDown
-                or global::Windows.System.VirtualKey.Home or global::Windows.System.VirtualKey.End)
+            switch (args.Key)
             {
-                if (_traceLogScrolling) MarkLogScrollInput($"key-{args.Key}");
-                else _userScrolling = true;
+                case global::Windows.System.VirtualKey.Up:
+                case global::Windows.System.VirtualKey.PageUp:
+                case global::Windows.System.VirtualKey.Home:
+                    RequestLogFollowFreezeForUpwardIntent();
+                    break;
+                case global::Windows.System.VirtualKey.Down:
+                case global::Windows.System.VirtualKey.PageDown:
+                    RegisterLogDownScrollIntent();
+                    break;
+                case global::Windows.System.VirtualKey.End:
+                    RegisterLogDownScrollIntent();
+                    if (IsLogScrollAtBottom()) _followingLogs = true;
+                    break;
             }
         }), true);
-        LogsScroll.ViewChanged += (_, _) =>
+        LogsScroll.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
-            var inputSequence = RecentLogScrollInputSequence();
-            if (inputSequence != 0 && _tracedLogScrollViewSequence != inputSequence)
+            if (FindLogVerticalScrollBar(args.OriginalSource) is not null)
             {
-                _tracedLogScrollViewSequence = inputSequence;
-                _diagnostics.RecordInfo("test.log-scroll.view-changed", "Observed the first log ViewChanged after user input", new
-                {
-                    input_sequence = inputSequence, log_revision = _logRevision, entry_count = _latestLogs.Count,
-                    updating_logs = _updatingLogs, user_scrolling = _userScrolling,
-                    ignored_by_updating_logs = _updatingLogs, ignored_by_user_scrolling = !_userScrolling,
-                    following_logs = _followingLogs, vertical_offset = LogsScroll.VerticalOffset,
-                    scrollable_height = LogsScroll.ScrollableHeight,
-                    input_elapsed_ms = Stopwatch.GetElapsedTime(_logScrollInputTimestamp).TotalMilliseconds,
-                });
+                ClearPendingLogDownScrollIntent();
+                _logScrollbarPointerDown = true;
             }
-            if (_updatingLogs || !_userScrolling) return;
-            _followingLogs = LogsScroll.VerticalOffset >= LogsScroll.ScrollableHeight - 8;
-            if (_followingLogs) RenderLogs();
+        }), true);
+        LogsScroll.AddHandler(UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
+        {
+            if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
+            ObserveLogScrollPosition();
+            _logScrollbarPointerDown = false;
+            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+        }), true);
+        LogsScroll.AddHandler(UIElement.PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
+        {
+            if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
+            ObserveLogScrollPosition();
+            _logScrollbarPointerDown = false;
+            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+        }), true);
+        LogsScroll.DirectManipulationStarted += (_, _) =>
+        {
+            ClearPendingLogDownScrollIntent();
+            _logDirectManipulation = true;
         };
+        LogsScroll.DirectManipulationCompleted += (_, _) =>
+        {
+            ObserveLogScrollPosition();
+            _logDirectManipulation = false;
+            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+        };
+        LogsScroll.ViewChanged += (_, args) => ObserveLogScrollPosition(args.IsIntermediate);
         _ = RefreshLogsAsync();
     }
 
-    private void MarkLogScrollInput(string input)
+    private void RegisterLogDownScrollIntent()
     {
-        _userScrolling = true;
-        if (!_traceLogScrolling) return;
-        var sequence = ++_logScrollInputSequence;
-        _logScrollInputTimestamp = Stopwatch.GetTimestamp();
-        _diagnostics.RecordInfo("test.log-scroll.input", "Observed user input in the log viewer", new
-        {
-            input_sequence = sequence, input, log_revision = _logRevision, entry_count = _latestLogs.Count,
-            updating_logs = _updatingLogs, user_scrolling = _userScrolling, following_logs = _followingLogs,
-            vertical_offset = _logScroll?.VerticalOffset, scrollable_height = _logScroll?.ScrollableHeight,
-        });
+        if (_logScroll is null || _followingLogs) return;
+        var remainingRange = _logScroll.ScrollableHeight - _logScroll.VerticalOffset;
+        if (remainingRange <= 0.5 && !_updatingLogs && !_logTailChangeViewPending) return;
+        _pendingLogScrollOffset = _logScroll.VerticalOffset;
+        _pendingLogDownScroll = true;
     }
 
-    private long RecentLogScrollInputSequence() =>
-        _traceLogScrolling && _logScrollInputSequence != 0 &&
-        Stopwatch.GetElapsedTime(_logScrollInputTimestamp).TotalSeconds <= 10
-            ? _logScrollInputSequence : 0;
+    private void RequestLogFollowFreezeForUpwardIntent()
+    {
+        if (_logScroll is null) return;
+        ClearPendingLogDownScrollIntent();
+        if (_logScroll.ScrollableHeight > 0.5)
+        {
+            _followingLogs = false;
+            return;
+        }
+
+        if (_updatingLogs || _logTailChangeViewPending)
+            _pendingLogUpwardIntent = true;
+    }
+
+    private static ScrollBar? FindLogVerticalScrollBar(object? source)
+    {
+        var current = source as DependencyObject;
+        while (current is not null)
+        {
+            if (current is ScrollBar scrollBar)
+                return scrollBar.Orientation == Orientation.Vertical ? scrollBar : null;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
+    private void ObserveLogScrollPosition(bool isIntermediate = false)
+    {
+        if (_logScroll is null) return;
+        var currentOffset = _logScroll.VerticalOffset;
+        var offsetDelta = currentOffset - _lastLogScrollOffset;
+        CaptureLogScrollPosition();
+        if (Math.Abs(offsetDelta) <= 0.5)
+        {
+            if (!isIntermediate && !_updatingLogs && !_logTailChangeViewPending)
+                ClearPendingLogDownScrollIntent();
+            return;
+        }
+
+        var directManipulation = _logDirectManipulation;
+        var scrollbarInteraction = _logScrollbarPointerDown;
+        var directedInput = _pendingLogDownScroll && currentOffset - _pendingLogScrollOffset > 0.5;
+        if (!directManipulation && !scrollbarInteraction && !directedInput) return;
+
+        if (directManipulation || scrollbarInteraction)
+            ClearPendingLogDownScrollIntent();
+        else
+        {
+            _followingLogs = IsLogScrollAtBottom();
+            if (!isIntermediate) ClearPendingLogDownScrollIntent();
+        }
+        if (directManipulation || scrollbarInteraction)
+            _followingLogs = IsLogScrollAtBottom();
+        if (!_updatingLogs && _followingLogs) RenderLogs();
+    }
+
+    private void ClearPendingLogDownScrollIntent()
+    {
+        _pendingLogDownScroll = false;
+    }
+
+    private void CaptureLogScrollPosition()
+    {
+        if (_logScroll is null) return;
+        _lastLogScrollOffset = _logScroll.VerticalOffset;
+    }
+
+    private bool IsLogScrollAtBottom() => _logScroll is not null &&
+        _logScroll.VerticalOffset >= _logScroll.ScrollableHeight - 8;
 
     private async void ClearLogs_Click(object sender, RoutedEventArgs e)
     {
@@ -753,12 +871,19 @@ public sealed partial class MainWindow : Window
             if (_clearingLogs) return;
             _clearingLogs = true;
             ++_logRevision;
+            ++_logRenderGeneration;
+            _updatingLogs = false;
+            ClearPendingLogDownScrollIntent();
+            _pendingLogUpwardIntent = false;
+            _logTailChangeViewPending = false;
             await _diagnostics.ClearViewAsync();
             _followingLogs = true;
             _latestLogs = [];
             _expandedLogs.Clear();
-            _renderedLogs = "";
+            _logRowCache.Clear();
+            _renderedLogRows = [];
             LogEntries.Children.Clear();
+            CaptureLogScrollPosition();
             _clearingLogs = false;
             await RefreshLogsAsync();
         }
@@ -783,88 +908,126 @@ public sealed partial class MainWindow : Window
 
     private void RenderLogs()
     {
-        var key = string.Join("|", _latestLogs.Select(entry => entry.Id + entry.Raw));
-        if (_updatingLogs || key == _renderedLogs) return;
-        var inputSequenceAtStart = RecentLogScrollInputSequence();
-        var captureRender = _traceLogScrolling;
-        var renderRevision = captureRender ? ++_logScrollRenderRevision : 0;
-        var renderStarted = captureRender ? Stopwatch.GetTimestamp() : 0;
-        var startLogRevision = captureRender ? _logRevision : 0;
-        var startEntryCount = captureRender ? _latestLogs.Count : 0;
-        var startUpdatingLogs = captureRender && _updatingLogs;
-        var startUserScrolling = captureRender && _userScrolling;
-        var startFollowingLogs = captureRender && _followingLogs;
-        var startVerticalOffset = captureRender ? _logScroll?.VerticalOffset : null;
-        var startScrollableHeight = captureRender ? _logScroll?.ScrollableHeight : null;
+        var keys = _latestLogs.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
+        if (_updatingLogs || keys.SequenceEqual(_renderedLogRows.Select(row => row.Key))) return;
+
+        var desiredKeys = keys.ToHashSet();
+        var retainedRows = _renderedLogRows.Where(row => desiredKeys.Contains(row.Key)).ToArray();
+        var retainedKeysInNewOrder = keys.Where(_logRowCache.ContainsKey).ToArray();
+        var retainedOrderMatches = retainedRows.Select(row => row.Key).SequenceEqual(retainedKeysInNewOrder);
+        HashSet<LogRowKey> retainedKeys = retainedOrderMatches
+            ? retainedRows.Select(row => row.Key).ToHashSet()
+            : [];
+
         _updatingLogs = true;
-        _renderedLogs = key;
-        LogEntries.Children.Clear();
+        var renderGeneration = ++_logRenderGeneration;
+
+        // Normal refreshes append rows or trim the oldest preview rows. Keep
+        // retained controls attached so text selection and expanded Details
+        // survive those updates. If timestamps reorder streams, reattach the
+        // keyed controls in the new chronological order without recreating them.
+        if (!retainedOrderMatches)
+            foreach (var row in _renderedLogRows)
+                foreach (var control in row.Controls)
+                    LogEntries.Children.Remove(control);
+
+        foreach (var row in _renderedLogRows)
+        {
+            if (desiredKeys.Contains(row.Key)) continue;
+            foreach (var control in row.Controls)
+                LogEntries.Children.Remove(control);
+            _logRowCache.Remove(row.Key);
+        }
+
         _expandedLogs.IntersectWith(_latestLogs.Select(entry => entry.Id));
-        foreach (var entry in _latestLogs)
+        var nextRows = new List<RenderedLogRow>(_latestLogs.Count);
+        var childIndex = 0;
+        for (var rowIndex = 0; rowIndex < _latestLogs.Count; rowIndex++)
         {
-            var resource = entry.Level switch
+            var entry = _latestLogs[rowIndex];
+            var key = keys[rowIndex];
+            if (!_logRowCache.TryGetValue(key, out var row))
             {
-                "ERROR" or "FATAL" or "PANIC" => "SystemFillColorCriticalBrush",
-                "WARN" or "WARNING" => "SystemFillColorCautionBrush",
-                "DEBUG" or "TRACE" => "TextFillColorSecondaryBrush",
-                _ => "TextFillColorPrimaryBrush"
-            };
-            var text = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap,
-                Foreground = (Brush)Application.Current.Resources[resource] };
-            var paragraph = new Paragraph();
-            paragraph.Inlines.Add(new Run { Text = string.Join(" · ", new[] { entry.Timestamp, entry.Level, entry.Source }.Where(value => value.Length > 0)) + "\n" + entry.Message });
-            text.Blocks.Add(paragraph);
-            LogEntries.Children.Add(text);
-            if (entry.Level != "RAW")
-            {
-                var details = new Expander { Header = "Details", HorizontalAlignment = HorizontalAlignment.Stretch,
-                    IsExpanded = _expandedLogs.Contains(entry.Id),
-                    Content = new TextBlock { Text = entry.Raw, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } };
-                details.Expanding += (_, _) => _expandedLogs.Add(entry.Id);
-                details.Collapsed += (_, _) => _expandedLogs.Remove(entry.Id);
-                LogEntries.Children.Add(details);
+                row = CreateLogRow(entry, key);
+                _logRowCache.Add(key, row);
             }
+
+            if (!retainedKeys.Contains(key))
+                foreach (var control in row.Controls)
+                    LogEntries.Children.Insert(childIndex++, control);
+            else
+                childIndex += row.Controls.Length;
+
+            nextRows.Add(row);
         }
-        LogEntries.UpdateLayout();
-        double? requestedVerticalOffset = null;
-        bool? changeViewResult = null;
-        double? immediateVerticalOffset = null;
-        if (captureRender && _logScroll is not null)
-        {
-            requestedVerticalOffset = _logScroll.ScrollableHeight;
-            changeViewResult = _logScroll.ChangeView(null, requestedVerticalOffset, null, true);
-            immediateVerticalOffset = _logScroll.VerticalOffset;
-        }
-        else _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
+        _renderedLogRows = nextRows;
+        CaptureLogScrollPosition();
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
-            var inputSequenceAtCompletion = RecentLogScrollInputSequence();
-            var inputTimestampAtCompletion = inputSequenceAtCompletion == 0 ? 0 : _logScrollInputTimestamp;
-            var traceRender = inputSequenceAtCompletion != 0 &&
-                _tracedLogScrollRenderSequence != inputSequenceAtCompletion;
-            if (traceRender) _tracedLogScrollRenderSequence = inputSequenceAtCompletion;
-            var userScrollingBeforeReset = _userScrolling;
+            if (renderGeneration != _logRenderGeneration) return;
             _updatingLogs = false;
-            _userScrolling = false;
-            if (traceRender)
-                _diagnostics.RecordInfo("test.log-scroll.render-complete", "Completed the first log render after user input", new
+            CaptureLogScrollPosition();
+            var latestKeys = _latestLogs.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
+            if (_followingLogs && !latestKeys.SequenceEqual(_renderedLogRows.Select(row => row.Key)))
+            {
+                RenderLogs();
+                return;
+            }
+            QueueLogTailChangeView(renderGeneration);
+        });
+    }
+
+    private RenderedLogRow CreateLogRow(NativeDiagnostics.Entry entry, LogRowKey key)
+    {
+        var resource = entry.Level switch
+        {
+            "ERROR" or "FATAL" or "PANIC" => "SystemFillColorCriticalBrush",
+            "WARN" or "WARNING" => "SystemFillColorCautionBrush",
+            "DEBUG" or "TRACE" => "TextFillColorSecondaryBrush",
+            _ => "TextFillColorPrimaryBrush"
+        };
+        var text = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)Application.Current.Resources[resource] };
+        var paragraph = new Paragraph();
+        paragraph.Inlines.Add(new Run { Text = string.Join(" · ", new[] { entry.Timestamp, entry.Level, entry.Source }.Where(value => value.Length > 0)) + "\n" + entry.Message });
+        text.Blocks.Add(paragraph);
+        var controls = new List<UIElement> { text };
+        if (entry.Level != "RAW")
+        {
+            var details = new Expander { Header = "Details", HorizontalAlignment = HorizontalAlignment.Stretch,
+                IsExpanded = _expandedLogs.Contains(entry.Id),
+                Content = new TextBlock { Text = entry.Raw, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } };
+            details.Expanding += (_, _) => _expandedLogs.Add(entry.Id);
+            details.Collapsed += (_, _) => _expandedLogs.Remove(entry.Id);
+            controls.Add(details);
+        }
+        return new RenderedLogRow(key, controls.ToArray());
+    }
+
+    private void QueueLogTailChangeView(long renderGeneration)
+    {
+        if (_updatingLogs) return;
+        _logTailChangeViewPending = true;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (renderGeneration != _logRenderGeneration) return;
+            if (_clearingLogs || _updatingLogs || _logDirectManipulation || _logScrollbarPointerDown || _logScroll is null) return;
+            _logTailChangeViewPending = false;
+            if (_pendingLogUpwardIntent)
+            {
+                _pendingLogUpwardIntent = false;
+                if (_logScroll.ScrollableHeight > 0.5)
                 {
-                    input_sequence_at_start = inputSequenceAtStart, input_sequence_at_completion = inputSequenceAtCompletion,
-                    render_revision = renderRevision, log_revision = startLogRevision, entry_count = startEntryCount,
-                    render_duration_ms = Stopwatch.GetElapsedTime(renderStarted).TotalMilliseconds,
-                    input_to_render_start_ms = Stopwatch.GetElapsedTime(inputTimestampAtCompletion, renderStarted).TotalMilliseconds,
-                    input_to_render_completion_ms = Stopwatch.GetElapsedTime(inputTimestampAtCompletion).TotalMilliseconds,
-                    start_updating_logs = startUpdatingLogs, start_user_scrolling = startUserScrolling,
-                    start_following_logs = startFollowingLogs, start_vertical_offset = startVerticalOffset,
-                    start_scrollable_height = startScrollableHeight,
-                    change_view_requested_offset = requestedVerticalOffset, change_view_result = changeViewResult,
-                    immediate_vertical_offset = immediateVerticalOffset,
-                    user_scrolling_before_reset = userScrollingBeforeReset, user_scrolling_after_reset = _userScrolling,
-                    completion_cleared_user_scrolling = userScrollingBeforeReset && !_userScrolling,
-                    updating_logs_after_reset = _updatingLogs, following_logs_at_completion = _followingLogs,
-                    vertical_offset_at_completion = _logScroll?.VerticalOffset,
-                    scrollable_height_at_completion = _logScroll?.ScrollableHeight,
-                });
+                    ClearPendingLogDownScrollIntent();
+                    _followingLogs = false;
+                    return;
+                }
+                ClearPendingLogDownScrollIntent();
+                _followingLogs = true;
+            }
+            if (!_followingLogs) return;
+            _logScroll.ChangeView(null, _logScroll.ScrollableHeight, null, true);
+            CaptureLogScrollPosition();
         });
     }
 
