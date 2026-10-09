@@ -2816,7 +2816,8 @@ public final class NativeUiHostedProfileTest {
         while (profileAction != null && !profileAction.isClickable()) {
             profileAction = profileAction.getParent();
         }
-        UiObject2 disconnectLabel = findUiObject("Disconnect");
+        UiObject2 disconnectLabel = profileAction == null
+                ? null : profileAction.findObject(By.text("Disconnect"));
         UiObject2 disconnectAction = disconnectLabel;
         while (disconnectAction != null && !disconnectAction.isClickable()) {
             disconnectAction = disconnectAction.getParent();
