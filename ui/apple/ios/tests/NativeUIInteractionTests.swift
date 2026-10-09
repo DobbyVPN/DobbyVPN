@@ -55,6 +55,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
     func testNativeConnectionAboutAndLogs() throws {
         app.terminate()
+        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
         app.launch()
 
         let configuration = app.textFields["Connection configuration"]
