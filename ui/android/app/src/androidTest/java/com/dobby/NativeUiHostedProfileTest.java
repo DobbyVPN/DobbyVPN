@@ -1715,8 +1715,8 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Fresh current-source consent did not create a VPN tunnel");
         }
 
-        tapEnabledControl(control, deadline);
-        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        disconnectThroughRenderedUI(
+                remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
         if (awaitVpnNetwork(false, remainingTimeout(
                 deadline, "ANDROID_UI_DISCONNECT_TIMEOUT")) != null) {
             throw new AssertionError("Fresh current-source consent tunnel remained after Disconnect");
@@ -1850,18 +1850,21 @@ public final class NativeUiHostedProfileTest {
             initial = snapshotResult("");
         }
         if (count == 1) disconnectThroughRenderedUI(remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        if (count > 1) scrollControlsToProfileAction(first, count, deadline);
         tapEnabledControl("Profile " + (first + 1) + " action", deadline);
         if (count > 1) verifyPendingProfileTransition(first, first == 0 ? 1 : 0,
                 subscriptionURL, deadline);
         JSONObject manual = awaitSelection(initial.getLong("generation"), "PROFILE_INDEX", first, deadline);
         if (count > 1) {
             int second = first == 0 ? 1 : 0;
+            scrollControlsToProfileAction(second, count, deadline);
             tapEnabledControl("Profile " + (second + 1) + " action", deadline);
             verifyPendingProfileTransition(second, first, subscriptionURL, deadline);
             manual = awaitSelection(manual.getLong("generation"), "PROFILE_INDEX", second, deadline);
             manual = verifyNativeRevokeCancelsPendingSwitch(manual, deadline);
             nativeShutdownVerified = true;
         }
+        scrollControlsToTop(count, deadline);
         tapUiControl("Subscription URL", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         int beforeFailedLoad = subscriptionFixtureState().getInt("subscription_gets");
         subscriptionFixturePost("/fail-next", new byte[0]);
@@ -2128,6 +2131,8 @@ public final class NativeUiHostedProfileTest {
         if (!"CONNECTED".equals(before.optString("state"))) {
             throw new AssertionError("Pending-switch Stop scenario did not start connected: " + before);
         }
+        scrollControlsToProfileAction(
+                targetIndex, before.getJSONArray("profiles").length(), deadline);
         tapEnabledControl("Profile " + (targetIndex + 1) + " action", deadline);
         String digest = before.optString("digest");
         while (System.currentTimeMillis() < deadline) {
@@ -2165,11 +2170,13 @@ public final class NativeUiHostedProfileTest {
         }
         int activeIndex = connected.getJSONObject("active_profile").getInt("index");
         int targetIndex = activeIndex == 0 ? 1 : 0;
+        int profileCount = connected.getJSONArray("profiles").length();
         String digest = connected.optString("digest");
         JSONObject pendingState = null;
         Object service = currentNativeVpnService();
         // The real service's synchronized release callback holds cleanup at the
         // pending-target boundary until the OS lifecycle callback has fenced it.
+        scrollControlsToProfileAction(targetIndex, profileCount, deadline);
         synchronized (service) {
             tapEnabledControl("Profile " + (targetIndex + 1) + " action", deadline);
             while (System.currentTimeMillis() < deadline) {
@@ -2218,6 +2225,7 @@ public final class NativeUiHostedProfileTest {
             throw new AssertionError("Canceled replacement started after native revoke: " + settled);
         }
 
+        scrollControlsToProfileAction(activeIndex, profileCount, deadline);
         tapEnabledControl("Profile " + (activeIndex + 1) + " action", deadline);
         JSONObject resumed = awaitSelection(
                 settled.getLong("generation"), "PROFILE_INDEX", activeIndex, deadline);
