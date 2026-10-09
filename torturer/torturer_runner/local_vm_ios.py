@@ -30,6 +30,12 @@ def prepare(
         )
     except BaseException as error:
         try:
+            ios.retain_ios_failure_diagnostic(work, error)
+        except BaseException as report_error:
+            error.add_note(
+                f"iOS Simulator build failure report collection failed: {report_error}"
+            )
+        try:
             ios.retain_ios_diagnostics(work, logs / "ios-simulator")
         except BaseException as collection_error:
             error.add_note(
@@ -135,7 +141,14 @@ def run(
         # The contract retains artifacts before uninstall even when XCTest's
         # assertion is the primary failure. Copy them into the guest manifest
         # tree before the supervisor removes the disposable work directory;
-        # a copy failure is explicit secondary diagnostic information.
+        # retain the original exception before copying, and keep either
+        # collection failure secondary to it.
+        try:
+            ios.retain_ios_failure_diagnostic(work, error)
+        except BaseException as report_error:
+            error.add_note(
+                f"iOS Simulator failure report collection failed: {report_error}"
+            )
         try:
             ios.retain_ios_diagnostics(work, logs / "ios-simulator")
         except BaseException as collection_error:

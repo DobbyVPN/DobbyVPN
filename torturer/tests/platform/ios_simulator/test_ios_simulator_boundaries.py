@@ -16,6 +16,7 @@ from torturer_runner import ios_simulator_app, local_vm, local_vm_ios
 from torturer_runner.native_cases import (
     IOS_LOGS_FREEZE_RESUME_CASE,
     IOS_RENDERER_SEVERITY_CASE,
+    IOS_SUBSCRIPTION_FIXTURE_CASE,
 )
 
 _ENTRYPOINT_PATH = Path(__file__).with_name("run_app_contract.py")
@@ -186,6 +187,154 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         self.assertIn("command_stdout:\ninstall stdout", content)
         self.assertIn("command_stderr:\ninstall stderr", content)
         self.assertEqual([path.name for path in retained], ["runner-failure.txt"])
+
+    def _run_local_adapter_failure(
+        self, phase: str, root: Path, failure: BaseException,
+    ) -> tuple[BaseException, Path, Path]:
+        run_dir = root / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        logs = root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        work = run_dir / "work" / "ios"
+
+        if phase == "prepare":
+            with mock.patch.object(
+                local_vm_ios.ios,
+                "prepare_ios_simulator_candidate",
+                side_effect=failure,
+            ):
+                with self.assertRaises(
+                    ios_simulator_app.IOSSimulatorAppContractError
+                ) as caught:
+                    local_vm_ios.prepare(
+                        run_dir,
+                        logs,
+                        timeout=30,
+                        architecture="arm64",
+                        source_sha="c" * 40,
+                    )
+        else:
+            screenshot_python = run_dir / "screenshot-python"
+            screenshot_python.mkdir()
+            contract = ios_simulator_app.public_ios_simulator_app_contract("arm64")
+            app_path = contract.app_path(work)
+            app_path.mkdir(parents=True)
+            candidate = {
+                "mode": "ios-simulator",
+                "app": str(app_path),
+                "architecture": "arm64",
+                "screenshot_python": str(screenshot_python),
+                "source_sha": "d" * 40,
+            }
+            with mock.patch.object(local_vm_ios.sys, "path", sys.path[:]):
+                with mock.patch.object(
+                    local_vm_ios.ios,
+                    "run_ios_simulator_app_contract",
+                    side_effect=failure,
+                ):
+                    with self.assertRaises(
+                        ios_simulator_app.IOSSimulatorAppContractError
+                    ) as caught:
+                        local_vm_ios.run(run_dir, candidate, logs, timeout=30)
+
+        return caught.exception, work, logs
+
+    def test_local_prepare_and_run_retain_original_early_failure_reports(self) -> None:
+        for phase, stage in (("prepare", "ios-simulator-build"), ("run", "bootstatus")):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as name:
+                failure = ios_simulator_app.IOSSimulatorStageError(
+                    stage, f"{phase} command failed"
+                )
+                try:
+                    raise TimeoutError(f"original {stage} cause")
+                except TimeoutError as cause:
+                    failure.__cause__ = cause
+                original_cause = failure.__cause__
+                failure.add_note(f"command_stdout:\noriginal {phase} stdout")
+                failure.add_note(f"command_stderr:\noriginal {phase} stderr")
+                original_notes = failure.__notes__[:]
+
+                caught, work, logs = self._run_local_adapter_failure(
+                    phase, Path(name), failure
+                )
+
+                self.assertIs(caught, failure)
+                self.assertIs(caught.__cause__, original_cause)
+                self.assertEqual(caught.__notes__, original_notes)
+                source_report = (
+                    work / "diagnostics" / "ios-simulator" / "runner-failure.txt"
+                )
+                copied_report = logs / "ios-simulator" / "runner-failure.txt"
+                source_bytes = source_report.read_bytes()
+                self.assertTrue(source_bytes)
+                self.assertEqual(copied_report.read_bytes(), source_bytes)
+                self.assertIn(f"IOSSimulatorStageError: {failure}".encode(), source_bytes)
+                self.assertIn(f"TimeoutError: original {stage} cause".encode(), source_bytes)
+                for note in original_notes:
+                    self.assertIn(note.encode(), source_bytes)
+
+    def test_local_prepare_write_failure_does_not_skip_existing_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            run_dir = root / "run"
+            work = run_dir / "work" / "ios"
+            existing = work / "diagnostics" / "ios-simulator" / "ui_diagnostics.jsonl"
+            existing.parent.mkdir(parents=True)
+            existing_bytes = b'{"event":"ui.failure","message":"retained before build failure"}\n'
+            existing.write_bytes(existing_bytes)
+            failure = ios_simulator_app.IOSSimulatorStageError(
+                "ios-simulator-build", "xcodebuild failed"
+            )
+            failure.add_note("original build note")
+            report_error = OSError("runner failure report write failed")
+
+            with mock.patch.object(
+                local_vm_ios.ios,
+                "retain_ios_failure_diagnostic",
+                side_effect=report_error,
+            ) as retain_report:
+                caught, _work, logs = self._run_local_adapter_failure(
+                    "prepare", root, failure
+                )
+
+            self.assertIs(caught, failure)
+            self.assertEqual(caught.__notes__[0], "original build note")
+            self.assertIn(
+                f"iOS Simulator build failure report collection failed: {report_error}",
+                caught.__notes__,
+            )
+            retain_report.assert_called_once_with(work, failure)
+            copied_existing = logs / "ios-simulator" / "ui_diagnostics.jsonl"
+            self.assertEqual(copied_existing.read_bytes(), existing_bytes)
+
+    def test_local_run_copy_failure_keeps_boot_failure_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            failure = ios_simulator_app.IOSSimulatorStageError(
+                "bootstatus", "simulator did not reach BackBoard"
+            )
+            failure.add_note("original bootstatus output")
+            collection_error = OSError("guest diagnostic copy failed")
+            with mock.patch.object(
+                local_vm_ios.ios,
+                "retain_ios_diagnostics",
+                side_effect=collection_error,
+            ) as retain_diagnostics:
+                caught, work, logs = self._run_local_adapter_failure(
+                    "run", root, failure
+                )
+
+            self.assertIs(caught, failure)
+            self.assertEqual(caught.__notes__[0], "original bootstatus output")
+            self.assertIn(
+                f"iOS Simulator local diagnostic collection failed: {collection_error}",
+                caught.__notes__,
+            )
+            retain_diagnostics.assert_called_once_with(work, logs / "ios-simulator")
+            report = work / "diagnostics" / "ios-simulator" / "runner-failure.txt"
+            report_bytes = report.read_bytes()
+            self.assertTrue(report_bytes)
+            self.assertIn(b"simulator did not reach BackBoard", report_bytes)
 
     def test_run_reactivates_prepared_screenshot_decoder_without_installing(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -565,6 +714,205 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 self.assertIn("install stdout", report)
                 self.assertEqual(budget.cleanup_timeout(), 120)
                 self.assertEqual(runner.shutdown_timeout, 75)
+
+    def test_bootstatus_failure_collects_bounded_host_observations_before_cleanup(self) -> None:
+        selected_udid = "11111111-2222-3333-4444-555555555555"
+        simulator_udid = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        process_command = ["/bin/ps", "-A", "-o", "pid,ppid,state,etime,comm"]
+        backboard_command = [
+            "xcrun", "simctl", "spawn", simulator_udid,
+            "launchctl", "print", "system/com.apple.backboardd",
+        ]
+        observation_modes = (
+            ("denied", "success"),
+            ("timeout", "denied"),
+            ("success", "timeout"),
+        )
+
+        class Runner:
+            def __init__(self, clock, process_mode, backboard_mode):
+                self.clock = clock
+                self.process_mode = process_mode
+                self.backboard_mode = backboard_mode
+                self.commands: list[tuple[list[str], float | None]] = []
+                self.observation_calls: list[tuple[list[str], float | None]] = []
+                self.boot_failure: subprocess.TimeoutExpired | None = None
+                self.shutdown_timeout: float | None = None
+                self.delete_timeout: float | None = None
+
+            def _observation(self, command, timeout_seconds, mode, label):
+                self.observation_calls.append((list(command), timeout_seconds))
+                self.clock[0] += timeout_seconds or 0
+                if mode == "timeout":
+                    raise subprocess.TimeoutExpired(
+                        command,
+                        timeout_seconds,
+                        output=f"{label} timeout stdout".encode() + b"\x00\xff",
+                        stderr=f"{label} timeout stderr\n".encode(),
+                    )
+                if mode == "denied":
+                    return ios_simulator_app.CommandResult(
+                        9,
+                        f"{label} denied stdout\x00ÿ\n",
+                        f"{label} denied stderr\n",
+                    )
+                return ios_simulator_app.CommandResult(
+                    0,
+                    f"{label} stdout\x00ÿ\n",
+                    f"{label} stderr\n",
+                )
+
+            def run(self, command, *, cwd=None, timeout_seconds=None):
+                del cwd
+                arguments = list(command)
+                self.commands.append((arguments, timeout_seconds))
+                if arguments == ["xcrun", "simctl", "list", "devices", "available", "-j"]:
+                    inventory = {"devices": {
+                        "com.apple.CoreSimulator.SimRuntime.iOS-26-2": [{
+                            "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+                            "isAvailable": True,
+                            "name": "iPhone 17 Pro",
+                            "state": "Shutdown",
+                            "udid": selected_udid,
+                        }],
+                    }}
+                    return ios_simulator_app.CommandResult(0, json.dumps(inventory), "")
+                if arguments == ["xcrun", "--sdk", "iphonesimulator", "--show-sdk-version"]:
+                    return ios_simulator_app.CommandResult(0, "26.2\n", "")
+                if arguments[:3] == ["xcrun", "simctl", "create"]:
+                    return ios_simulator_app.CommandResult(0, simulator_udid + "\n", "")
+                if arguments == ["xcrun", "simctl", "boot", simulator_udid]:
+                    return ios_simulator_app.CommandResult(0, "", "")
+                if arguments == ["xcrun", "simctl", "bootstatus", simulator_udid, "-b"]:
+                    self.clock[0] += timeout_seconds or 0
+                    self.boot_failure = subprocess.TimeoutExpired(
+                        command,
+                        timeout_seconds,
+                        output=b"bootstatus original stdout\x00\xff",
+                        stderr=b"bootstatus original stderr\n",
+                    )
+                    raise self.boot_failure
+                if arguments == process_command:
+                    return self._observation(
+                        command, timeout_seconds, self.process_mode, "process"
+                    )
+                if arguments == backboard_command:
+                    return self._observation(
+                        command, timeout_seconds, self.backboard_mode, "backboardd"
+                    )
+                if arguments[:3] == ["xcrun", "simctl", "shutdown"]:
+                    self.shutdown_timeout = timeout_seconds
+                    return ios_simulator_app.CommandResult(0, "", "")
+                if arguments == ["xcrun", "simctl", "delete", simulator_udid]:
+                    self.delete_timeout = timeout_seconds
+                    return ios_simulator_app.CommandResult(0, "", "")
+                raise AssertionError(f"unexpected command: {arguments}")
+
+        for process_mode, backboard_mode in observation_modes:
+            with self.subTest(process=process_mode, backboardd=backboard_mode):
+                clock = [0.0]
+                runner = Runner(clock, process_mode, backboard_mode)
+                with tempfile.TemporaryDirectory() as name:
+                    root = Path(name)
+                    contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
+                    budget = ios_simulator_app.RunBudget(
+                        max_seconds=600,
+                        cleanup_reserve_seconds=120,
+                        clock=lambda: clock[0],
+                    )
+                    with (
+                        mock.patch.object(
+                            ios_simulator_app,
+                            "_read_simulator_hardware_keyboard_override",
+                            return_value=False,
+                        ),
+                        self.assertRaises(ios_simulator_app.IOSSimulatorStageError) as caught,
+                    ):
+                        ios_simulator_app.run_ios_simulator_app_contract(
+                            candidate_root=root / "candidate",
+                            work_dir=root / "work",
+                            runner=runner,
+                            contract=contract,
+                            budget=budget,
+                            native_cases=[IOS_SUBSCRIPTION_FIXTURE_CASE],
+                        )
+
+                failure = caught.exception
+                self.assertEqual(failure.stage, "bootstatus")
+                self.assertEqual(failure.timeout_seconds, 360)
+                self.assertIsNotNone(failure.elapsed_seconds)
+                self.assertIs(failure.__cause__, runner.boot_failure)
+                self.assertEqual(
+                    runner.boot_failure.output,
+                    b"bootstatus original stdout\x00\xff",
+                )
+                self.assertEqual(
+                    runner.boot_failure.stderr,
+                    b"bootstatus original stderr\n",
+                )
+                notes = "\n".join(failure.__notes__)
+                self.assertIn("bootstatus_failure_simulator_udid=" + simulator_udid, notes)
+                self.assertIn(
+                    "command_stdout:\nbootstatus original stdout\x00\\xff", notes
+                )
+                self.assertIn(
+                    "command_stderr:\nbootstatus original stderr\n", notes
+                )
+
+                self.assertEqual(
+                    runner.observation_calls,
+                    [(process_command, 5), (backboard_command, 5)],
+                )
+                for label, mode, source in (
+                    ("bootstatus_failure_processes", process_mode, "process"),
+                    ("bootstatus_failure_backboardd", backboard_mode, "backboardd"),
+                ):
+                    if mode == "timeout":
+                        self.assertIn(
+                            f"{label}_error=IOSSimulatorStageError: "
+                            f"iOS Simulator stage '{label}' timed out (limit 5s",
+                            notes,
+                        )
+                        self.assertIn(
+                            f"{label}_command_stdout:\n{source} timeout stdout\x00\\xff",
+                            notes,
+                        )
+                        self.assertIn(
+                            f"{label}_command_stderr:\n{source} timeout stderr\n",
+                            notes,
+                        )
+                    elif mode == "denied":
+                        self.assertIn(f"{label}_error=IOSSimulatorStageError:", notes)
+                        self.assertIn("exit code 9", notes)
+                        self.assertIn(
+                            f"{label}_command_stdout:\n{source} denied stdout\x00ÿ\n",
+                            notes,
+                        )
+                        self.assertIn(
+                            f"{label}_command_stderr:\n{source} denied stderr\n",
+                            notes,
+                        )
+                    else:
+                        self.assertIn(f"{label}_stdout:\n{source} stdout\x00ÿ\n", notes)
+                        self.assertIn(f"{label}_stderr:\n{source} stderr\n", notes)
+
+                command_arguments = [arguments for arguments, _ in runner.commands]
+                process_index = command_arguments.index(process_command)
+                backboard_index = command_arguments.index(backboard_command)
+                shutdown_index = command_arguments.index(
+                    ["xcrun", "simctl", "shutdown", simulator_udid]
+                )
+                delete_index = command_arguments.index(
+                    ["xcrun", "simctl", "delete", simulator_udid]
+                )
+                self.assertLess(process_index, backboard_index)
+                self.assertLess(backboard_index, shutdown_index)
+                self.assertLess(shutdown_index, delete_index)
+                self.assertEqual(clock[0], 370)
+                self.assertEqual(budget.deadline, 600)
+                self.assertEqual(budget.cleanup_timeout(), 120)
+                self.assertEqual(runner.shutdown_timeout, 75)
+                self.assertEqual(runner.delete_timeout, 75)
 
     def test_stalled_process_pipe_drain_is_bounded_and_keeps_all_available_output(self) -> None:
         process = mock.Mock()

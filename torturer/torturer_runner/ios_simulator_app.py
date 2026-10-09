@@ -1417,15 +1417,50 @@ def run_ios_simulator_app_contract(
                 )
                 add_stream_notes(failure, "command", boot.stdout, boot.stderr)
                 raise failure
-            _timed_stage(
-                "simctl-bootstatus",
-                lambda: _require_success(
-                    runner,
-                    simctl_bootstatus_command(simulator.udid),
-                    "bootstatus",
-                    budget=budget,
-                ),
-            )
+            try:
+                _timed_stage(
+                    "simctl-bootstatus",
+                    lambda: _require_success(
+                        runner,
+                        simctl_bootstatus_command(simulator.udid),
+                        "bootstatus",
+                        budget=budget,
+                    ),
+                )
+            except IOSSimulatorStageError as error:
+                if error.stage != "bootstatus":
+                    raise
+                error.add_note(
+                    f"bootstatus_failure_simulator_udid={simulator.udid}"
+                )
+                observations = (
+                    (
+                        "bootstatus_failure_processes",
+                        ["/bin/ps", "-A", "-o", "pid,ppid,state,etime,comm"],
+                        5,
+                    ),
+                    (
+                        "bootstatus_failure_backboardd",
+                        [
+                            "xcrun", "simctl", "spawn", simulator.udid,
+                            "launchctl", "print", "system/com.apple.backboardd",
+                        ],
+                        5,
+                    ),
+                )
+                for label, command, timeout in observations:
+                    try:
+                        _run_install_observations(
+                            runner,
+                            ((label, command, timeout),),
+                            budget=budget,
+                            failure=error,
+                        )
+                    except BaseException as diagnostic_error:
+                        add_exception_notes(
+                            error, f"{label}_collection", diagnostic_error
+                        )
+                raise
             _timed_stage(
                 "open-simulator",
                 lambda: _open_simulator(runner, simulator.udid, budget=budget),
