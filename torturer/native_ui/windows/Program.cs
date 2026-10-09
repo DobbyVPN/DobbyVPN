@@ -1422,6 +1422,122 @@ internal static class Program
         return selected;
     }
 
+    private static Dictionary<string, object?> DescribeSettingsDiagnosticProcess(Process process, bool includeWindows)
+    {
+        var errors = new List<string>();
+        var result = new Dictionary<string, object?>();
+        void Read(string key, Func<object?> read)
+        {
+            result[key] = null;
+            try { result[key] = read(); }
+            catch (Exception error) { errors.Add(key + ": " + error); }
+        }
+        Read("pid", () => process.Id);
+        Read("name", () => process.ProcessName);
+        Read("sessionId", () => process.SessionId);
+        Read("startTimeUtcTicks", () => process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture));
+        Read("hasExited", () => process.HasExited);
+
+        if (includeWindows)
+        {
+            Read("currentWindows", () => DescribeProcessWindows(process));
+            Read("visibleTopLevelWindows", () => EnumerateProcessWindows(process)
+                .Where(window => IsWindowVisible(window) && !IsIconic(window))
+                .Select(window => new
+                {
+                    window = DescribeWindow(window),
+                    windowIdentity = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false),
+                    ownerWindow = DescribeWindowContext(GetWindow(window, 4), includeThreadDesktop: false, includeGeometry: false),
+                    rootOwnerWindow = DescribeWindowContext(GetAncestor(window, GaRootOwner), includeThreadDesktop: false, includeGeometry: false),
+                }).ToArray());
+        }
+
+        result["captureErrors"] = errors;
+        return result;
+    }
+
+    private static Dictionary<string, object?> CaptureSettingsActivationDiagnostics(
+        int sessionId, Process? selectedSettings, Process? activation)
+    {
+        var errors = new List<string>();
+        var snapshot = new Dictionary<string, object?>
+        {
+            ["capturedAtUtc"] = UtcTimestamp(),
+            ["helperSessionId"] = sessionId,
+        };
+
+        void RecordProcess(string key, Process? process, bool includeWindows)
+        {
+            if (process is null)
+            {
+                snapshot[key] = null;
+                return;
+            }
+            try
+            {
+                var description = DescribeSettingsDiagnosticProcess(process, includeWindows);
+                snapshot[key] = description;
+                if (description["captureErrors"] is List<string> processErrors)
+                    errors.AddRange(processErrors.Select(error => $"{key}: {error}"));
+            }
+            catch (Exception error) { errors.Add($"{key}: {error}"); }
+        }
+
+        void RecordFreshSessionProcesses(string processName, string key)
+        {
+            Process[] processes;
+            try { processes = Process.GetProcessesByName(processName); }
+            catch (Exception error)
+            {
+                snapshot[key] = Array.Empty<object>();
+                errors.Add($"{key} enumeration: {error}");
+                return;
+            }
+
+            var descriptions = new List<Dictionary<string, object?>>();
+            try
+            {
+                foreach (var process in processes)
+                {
+                    try
+                    {
+                        int? candidateSession;
+                        try { candidateSession = process.SessionId; }
+                        catch (Exception error)
+                        {
+                            var unknownSession = DescribeSettingsDiagnosticProcess(process, includeWindows: false);
+                            unknownSession["sameHelperSession"] = null;
+                            descriptions.Add(unknownSession);
+                            errors.Add($"{key} sessionId unavailable: {error}");
+                            if (unknownSession["captureErrors"] is List<string> unknownErrors)
+                                errors.AddRange(unknownErrors.Select(itemError => $"{key}: {itemError}"));
+                            continue;
+                        }
+                        if (candidateSession != sessionId) continue;
+                        var description = DescribeSettingsDiagnosticProcess(process, includeWindows: true);
+                        description["sameHelperSession"] = true;
+                        descriptions.Add(description);
+                        if (description["captureErrors"] is List<string> processErrors)
+                        {
+                            var processId = description.GetValueOrDefault("pid");
+                            errors.AddRange(processErrors.Select(error => $"{key} pid={processId}: {error}"));
+                        }
+                    }
+                    catch (Exception error) { errors.Add($"{key} inspection: {error}"); }
+                }
+            }
+            finally { foreach (var process in processes) process.Dispose(); }
+            snapshot[key] = descriptions;
+        }
+
+        RecordProcess("selectedSettingsProcess", selectedSettings, includeWindows: true);
+        RecordProcess("activationProcess", activation, includeWindows: true);
+        RecordFreshSessionProcesses("SystemSettings", "freshSystemSettingsProcesses");
+        RecordFreshSessionProcesses("ApplicationFrameHost", "freshApplicationFrameHostProcesses");
+        snapshot["diagnosticErrors"] = errors;
+        return snapshot;
+    }
+
     private static void ValidateSettingsTextSizeRequest(JsonElement request)
     {
         var unexpected = request.EnumerateObject().Select(property => property.Name)
@@ -1602,13 +1718,27 @@ internal static class Program
         long ownerStart = 0;
         string? primaryError = null;
         var cleanupErrors = new List<string>();
+        var diagnosticErrors = new List<string>();
+        void CaptureActivationDiagnostics(string key)
+        {
+            try
+            {
+                var snapshot = CaptureSettingsActivationDiagnostics(sessionId, settings, activation);
+                response[key] = snapshot;
+                if (snapshot["diagnosticErrors"] is List<string> snapshotErrors)
+                    diagnosticErrors.AddRange(snapshotErrors.Select(error => $"{key}: {error}"));
+            }
+            catch (Exception error) { diagnosticErrors.Add($"{key}: {error}"); }
+        }
         try
         {
             settings = FindSettingsProcessForSession(sessionId);
             windowsBefore = settings is null ? Array.Empty<IntPtr>() : EnumerateProcessWindows(settings);
             response["settingsBefore"] = settings is null ? null : new { pid = settings.Id, windows = DescribeProcessWindows(settings) };
+            CaptureActivationDiagnostics("activationDiagnosticsBefore");
             activationAttempted = true;
             activation = Process.Start(new ProcessStartInfo(WindowsTextSizeSettingsUri) { UseShellExecute = true });
+            CaptureActivationDiagnostics("activationDiagnosticsAfterStart");
             WaitFor(() =>
             {
                 settings ??= FindSettingsProcessForSession(sessionId);
@@ -1618,6 +1748,7 @@ internal static class Program
                 if (visible.Length == 1) { window = visible[0]; return true; }
                 return false;
             }, "Settings did not expose one visible window in the helper session", seconds: 10);
+            CaptureActivationDiagnostics("activationDiagnosticsAfterWait");
             if (settings is null || window == IntPtr.Zero) throw new InvalidOperationException("Settings window unavailable after URI activation");
             ownerPid = settings.Id;
             ownerStart = settings.StartTime.ToUniversalTime().Ticks;
@@ -1687,6 +1818,7 @@ internal static class Program
             primaryError = error.ToString();
             response["ready"] = false;
             response["available"] = false;
+            CaptureActivationDiagnostics("activationDiagnosticsAtFailure");
         }
         finally
         {
@@ -1741,6 +1873,7 @@ internal static class Program
             response["ready"] = false;
             response["available"] = false;
         }
+        if (diagnosticErrors.Count > 0) response["diagnosticErrors"] = diagnosticErrors;
         response["finishedAtUtc"] = UtcTimestamp();
         Console.WriteLine(JsonSerializer.Serialize(response));
         return 0;
