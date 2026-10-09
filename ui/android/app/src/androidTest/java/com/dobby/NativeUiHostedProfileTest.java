@@ -2912,6 +2912,7 @@ public final class NativeUiHostedProfileTest {
             if ("CONNECTED".equals(value.optString("state")) && value.optLong("generation") > previous
                     && mode.equals(value.optString("active_mode"))
                     && (index < 0 || value.getJSONObject("active_profile").getInt("index") == index)) {
+                scrollControlsToTop(value.getJSONArray("profiles").length(), deadline);
                 waitForUiState("Connected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
                 return value;
             }
@@ -4084,7 +4085,10 @@ public final class NativeUiHostedProfileTest {
             disconnectThroughRenderedUI(timeout);
             return;
         }
-        waitForUiState("Disconnected", timeout);
+        JSONArray profiles = current.optJSONArray("profiles");
+        long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
+        scrollControlsToTop(profiles == null ? 0 : profiles.length(), deadline);
+        waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
     }
 
     /**
