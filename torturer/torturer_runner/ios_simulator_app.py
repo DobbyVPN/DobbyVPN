@@ -962,7 +962,40 @@ def _run_install_observations(
             add_exception_notes(failure, label, result)
         else:
             add_stream_notes(failure, label, result.stdout, result.stderr)
+            observations.append((label, result))
     return observations
+
+
+def _install_failure_sample_queries(
+    process_snapshot: str,
+) -> tuple[list[tuple[str, Sequence[str], float]], list[str]]:
+    targets = {
+        "coresimulator-service": "/CoreSimulator.framework/Versions/A/XPCServices/com.apple.CoreSimulator.CoreSimulatorService.xpc/Contents/MacOS/com.apple.CoreSimulator.CoreSimulatorService",
+        "simlaunchhost": (
+            "/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.arm64.xpc/Contents/MacOS/SimLaunchHost.arm64",
+            "/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.x86_64.xpc/Contents/MacOS/SimLaunchHost.x86_64",
+        ),
+        "simulator-installd": "/RuntimeRoot/usr/libexec/installd",
+        "simulator-mobileinstallation": "/RuntimeRoot/System/Library/PrivateFrameworks/MobileInstallation.framework/XPCServices/com.apple.MobileInstallationHelperService.xpc/com.apple.MobileInstallationHelperService",
+    }
+    queries: list[tuple[str, Sequence[str], float]] = []
+    notes: list[str] = []
+    for target, suffix in targets.items():
+        matches: dict[str, str] = {}
+        for line in process_snapshot.splitlines():
+            fields = line.strip().split(None, 4)
+            if len(fields) == 5 and fields[0].isdecimal() and fields[4].endswith(suffix):
+                matches[fields[0]] = fields[4]
+        if len(matches) != 1:
+            notes.append(f"install_failure_sample_target_{target}: expected one exact process; matches={matches!r}")
+            continue
+        pid, command = next(iter(matches.items()))
+        label = f"install_failure_sample_{target}_pid_{pid}"
+        notes.append(f"install_failure_sample_target_{target}: pid={pid} command={command}")
+        queries.append(
+            (label, ["/usr/bin/sample", pid, "1", "1", "-file", "/dev/stdout"], 5)
+        )
+    return queries, notes
 
 
 def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path, ...]:
@@ -1440,10 +1473,26 @@ def run_ios_simulator_app_contract(
                         '(process == "installd" OR process == "CoreSimulatorService" '
                         'OR process == "SimulatorTrampoline" OR process == "simctl")',
                     ]
+                    process_observations = _run_install_observations(
+                        runner,
+                        (("install_failure_processes", ["/bin/ps", "-A", "-o", "pid,ppid,state,etime,comm"], 5),),
+                        budget=budget, failure=install_error,
+                    )
+                    process_result = process_observations[0][1] if process_observations else None
+                    if isinstance(process_result, CommandResult):
+                        sample_queries, sample_notes = _install_failure_sample_queries(process_result.stdout)
+                        for note in sample_notes:
+                            install_error.add_note(note)
+                        _run_install_observations(
+                            runner, sample_queries, budget=budget, failure=install_error
+                        )
+                    else:
+                        install_error.add_note(
+                            "install_failure_process_samples: skipped because the process snapshot was unavailable"
+                        )
                     _run_install_observations(
                         runner,
-                        (("install_failure_processes", ["/bin/ps", "-A", "-o", "pid,ppid,state,etime,comm"], 5),
-                         ("install_failure_unified_logs", log_query, 10)),
+                        (("install_failure_unified_logs", log_query, 10),),
                         budget=budget, failure=install_error,
                     )
                     install_error.add_note(f"install_interval_utc={started_at.isoformat(timespec='milliseconds')}/{ended_at.isoformat(timespec='milliseconds')}")

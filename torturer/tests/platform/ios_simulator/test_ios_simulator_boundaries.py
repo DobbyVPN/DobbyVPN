@@ -344,9 +344,11 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         ]
 
         class Runner:
-            def __init__(self, clock, commands):
+            def __init__(self, clock, commands, diagnostic_mode, simlaunch_arch):
                 self.clock = clock
                 self.commands = commands
+                self.diagnostic_mode = diagnostic_mode
+                self.simlaunch_arch = simlaunch_arch
 
             def run(self, command, *, cwd=None, timeout_seconds=None):
                 del cwd
@@ -380,8 +382,37 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                     raise error
                 if arguments[:2] == ["/bin/ps", "-A"]:
                     self.clock[0] += timeout_seconds or 0
+                    if self.diagnostic_mode == "ps-failure":
+                        return ios_simulator_app.CommandResult(
+                            7, "process snapshot\x00\xff\n", "ps diagnostic stderr\n"
+                        )
+                    simulator_service = (
+                        "17145 1 S 08:18 /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/XPCServices/com.apple.CoreSimulator.CoreSimulatorService.xpc/Contents/MacOS/com.apple.CoreSimulator.CoreSimulatorService",
+                    )
+                    if self.diagnostic_mode == "ambiguous":
+                        simulator_service += (
+                            "17146 1 S 08:18 /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/XPCServices/com.apple.CoreSimulator.CoreSimulatorService.xpc/Contents/MacOS/com.apple.CoreSimulator.CoreSimulatorService",
+                        )
                     return ios_simulator_app.CommandResult(
-                        7, "process snapshot\x00\xff\n", "ps diagnostic stderr\n"
+                        0,
+                        "\n".join((
+                            "  PID PPID STAT ELAPSED COMM",
+                            *simulator_service,
+                            f"19487 1 S 07:17 /Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.{self.simlaunch_arch}.xpc/Contents/MacOS/SimLaunchHost.{self.simlaunch_arch}",
+                            "20765 19864 Ss 05:44 /Library/Developer/CoreSimulator/Volumes/iOS_23C54/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.2.simruntime/Contents/Resources/RuntimeRoot/usr/libexec/installd",
+                            "20792 19864 Ss 05:43 /Library/Developer/CoreSimulator/Volumes/iOS_23C54/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.2.simruntime/Contents/Resources/RuntimeRoot/System/Library/PrivateFrameworks/MobileInstallation.framework/XPCServices/com.apple.MobileInstallationHelperService.xpc/com.apple.MobileInstallationHelperService",
+                            "606 1 Ss 19:48 /System/Library/PrivateFrameworks/PackageKit.framework/Resources/installd",
+                        )),
+                        "ps diagnostic stderr\n",
+                    )
+                if arguments[:1] == ["/usr/bin/sample"]:
+                    self.clock[0] += timeout_seconds or 0
+                    if self.diagnostic_mode == "sample-denied" and arguments[1] == "19487":
+                        return ios_simulator_app.CommandResult(
+                            7, "sample denied stdout\x00\xff", "sample denied stderr\n"
+                        )
+                    return ios_simulator_app.CommandResult(
+                        0, f"sample stdout pid={arguments[1]}\x00\xff", "sample stderr\n"
                     )
                 if arguments[:3] == ["/usr/bin/log", "show", "--style"]:
                     self.clock[0] += timeout_seconds or 0
@@ -398,14 +429,22 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                     return ios_simulator_app.CommandResult(0, "", "")
                 raise AssertionError(f"unexpected command: {arguments}")
 
-        for lane_seconds, expected_install_timeout, diagnostics_run in (
-            (345, 180, False),
-            (600, 300, True),
+        for lane_seconds, expected_install_timeout, diagnostic_mode, simlaunch_arch in (
+            (345, 180, "budget-clamped", "arm64"),
+            (600, 300, "samples", "arm64"),
+            (600, 300, "sample-denied", "arm64"),
+            (600, 300, "ambiguous", "arm64"),
+            (600, 300, "samples", "x86_64"),
+            (600, 300, "ps-failure", "arm64"),
         ):
-            with self.subTest(lane_seconds=lane_seconds):
+            with self.subTest(
+                mode=diagnostic_mode,
+                architecture=simlaunch_arch,
+                lane_seconds=lane_seconds,
+            ):
                 clock = [0.0]
                 commands: list[tuple[list[str], float | None]] = []
-                runner = Runner(clock, commands)
+                runner = Runner(clock, commands, diagnostic_mode, simlaunch_arch)
                 with tempfile.TemporaryDirectory() as name:
                     root = Path(name)
                     work_dir = root / "work"
@@ -462,20 +501,64 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 self.assertLess(index(["/bin/df", "-Pk"]), index(["/usr/bin/du", "-sk"]))
                 self.assertLess(index(["/usr/bin/du", "-sk"]), index(["xcrun", "simctl", "list", "devices", "-j"]))
                 self.assertLess(index(["xcrun", "simctl", "list", "devices", "-j"]), index(["xcrun", "simctl", "install"]))
-                if diagnostics_run:
-                    self.assertIn("process snapshot\x00ÿ", notes)
-                    self.assertIn("ps diagnostic stderr", notes)
-                    self.assertIn("installd diagnostic log\x00", notes)
-                    self.assertIn("unified log stderr", notes)
-                    self.assertIn("install_interval_utc=", notes)
-                    self.assertIn("installd diagnostic log", report)
+                if diagnostic_mode != "budget-clamped":
                     self.assertLess(index(["xcrun", "simctl", "install"]), index(["/bin/ps", "-A"]))
                     self.assertLess(index(["/bin/ps", "-A"]), index(["/usr/bin/log", "show"]))
+                    sample_calls = [
+                        (arguments, timeout)
+                        for arguments, timeout in commands
+                        if arguments[:1] == ["/usr/bin/sample"]
+                    ]
+                    self.assertTrue(all(timeout == 5 for _, timeout in sample_calls))
+                    self.assertIn("install_interval_utc=", notes)
+                    self.assertIn("ps diagnostic stderr", notes)
+                    self.assertIn("ps diagnostic stderr", report)
+                    self.assertIn("unified log stderr", notes)
+                    self.assertIn("unified log stderr", report)
+                    self.assertIn("installd diagnostic log", report)
                     self.assertLess(index(["/usr/bin/log", "show"]), index(["xcrun", "simctl", "shutdown"]))
-                    self.assertEqual(clock[0], 360)
+                    if diagnostic_mode == "ps-failure":
+                        self.assertIn("process snapshot\x00ÿ", notes)
+                        self.assertIn("process snapshot\x00ÿ", report)
+                        self.assertIn("ps diagnostic stderr", notes)
+                        self.assertIn("install_failure_processes_error=IOSSimulatorStageError", notes)
+                        self.assertIn("exit code 7", notes)
+                        self.assertIn("process snapshot was unavailable", notes)
+                        self.assertFalse(sample_calls)
+                        self.assertEqual(clock[0], 360)
+                    else:
+                        expected_pids = {"17145", "19487", "20765", "20792"}
+                        if diagnostic_mode == "ambiguous":
+                            expected_pids.remove("17145")
+                            self.assertIn("expected one exact process; matches=", notes)
+                            self.assertIn("17145", notes)
+                            self.assertIn("17146", notes)
+                        self.assertEqual(len(sample_calls), len(expected_pids))
+                        self.assertEqual({arguments[1] for arguments, _ in sample_calls}, expected_pids)
+                        self.assertEqual(len({arguments[1] for arguments, _ in sample_calls}), len(sample_calls))
+                        self.assertTrue(all(arguments[2:] == ["1", "1", "-file", "/dev/stdout"] for arguments, _ in sample_calls))
+                        self.assertLess(index(["/bin/ps", "-A"]), index(["/usr/bin/sample"]))
+                        self.assertLess(index(["/usr/bin/sample"]), index(["/usr/bin/log", "show"]))
+                        self.assertIn(f"SimLaunchHost.{simlaunch_arch}", notes)
+                        if diagnostic_mode == "sample-denied":
+                            self.assertIn("sample denied stdout\x00ÿ", notes)
+                            self.assertIn("sample denied stderr", notes)
+                            self.assertIn("exit code 7", notes)
+                            self.assertIn("sample denied stdout\x00ÿ", report)
+                            self.assertIn("sample denied stderr", report)
+                            sampled_successfully = expected_pids - {"19487"}
+                        else:
+                            self.assertIn("sample stderr", notes)
+                            self.assertIn("install_failure_sample_target_simulator-installd: pid=20765 command=", notes)
+                            sampled_successfully = expected_pids
+                        for pid in sampled_successfully:
+                            self.assertIn(f"sample stdout pid={pid}\x00ÿ", notes)
+                            self.assertIn(f"sample stdout pid={pid}\x00ÿ", report)
+                        self.assertEqual(clock[0], 380 if diagnostic_mode != "ambiguous" else 375)
                 else:
-                    self.assertNotIn("process snapshot", notes)
+                    self.assertNotIn("sample stdout", notes)
                     self.assertFalse(any(arguments[0] == "/bin/ps" for arguments in command_arguments))
+                    self.assertFalse(any(arguments[0] == "/usr/bin/sample" for arguments in command_arguments))
                     self.assertFalse(any(arguments[0] == "/usr/bin/log" for arguments in command_arguments))
                     self.assertIn("functional budget before cleanup reserve", notes)
                     self.assertEqual(clock[0], 225)
