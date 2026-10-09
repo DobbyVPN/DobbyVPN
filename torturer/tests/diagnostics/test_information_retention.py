@@ -457,7 +457,7 @@ class InformationRetentionTests(unittest.TestCase):
 
             def subscription_phases(*phase_args):
                 phase_args[-1].update(native_checks)
-                return [], True, True
+                return [], True, True, True
 
             with (
                 mock.patch.object(native_ui, "_ensure_directory"),
@@ -875,7 +875,7 @@ class InformationRetentionTests(unittest.TestCase):
                 subprocess.Popen,
                 ["native-helper"],
                 stage="native-ui-helper",
-                deadline=110.0,
+                deadline=113.0,
             )
 
             run.call_args.kwargs["terminate"](process, 112.0)
