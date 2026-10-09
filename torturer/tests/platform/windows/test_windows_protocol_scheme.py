@@ -799,6 +799,13 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
             self.assertEqual(controller._open_link.call_count, 2)
             self.assertEqual(
+                controller._call.call_args_list,
+                [
+                    mock.call("probe"),
+                    mock.call("probe", unbound=True, settle_redirect_workers=True),
+                ],
+            )
+            self.assertEqual(
                 profile.read_text(encoding="utf-8"),
                 "https://example.invalid/subscription",
             )
@@ -840,15 +847,28 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
             controller._wait = mock.Mock(side_effect=AssertionError("pending import must not wait for load completion"))
             controller.snapshot = mock.Mock(side_effect=AssertionError("pending import must not wait for rendered profiles"))
 
-            result = controller.dispatch_import_link("https://example.invalid/subscription?pending=1")
+            link = "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fsubscription%3Fpending%3D1"
+            with mock.patch.object(smoke.time, "sleep") as sleep:
+                result = controller.dispatch_import_link(
+                    "https://example.invalid/subscription?pending=1", repeats=2
+                )
             saved_source = profile.read_text(encoding="utf-8")
 
         self.assertTrue(result["ready"])
         self.assertEqual(result["windowHandle"], "0x1234")
-        controller._open_link.assert_called_once_with(
-            "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fsubscription%3Fpending%3D1"
+        controller._open_link.assert_has_calls(
+            [mock.call(link), mock.call(link)]
         )
+        self.assertEqual(controller._open_link.call_count, 2)
         self.assertEqual(controller._call.call_count, 2)
+        self.assertEqual(
+            controller._call.call_args_list,
+            [
+                mock.call("probe"),
+                mock.call("probe", unbound=True, settle_redirect_workers=True),
+            ],
+        )
+        sleep.assert_not_called()
         controller._wait.assert_not_called()
         controller.snapshot.assert_not_called()
         self.assertEqual(saved_source, "https://example.invalid/subscription?pending=1")

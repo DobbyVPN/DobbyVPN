@@ -538,6 +538,7 @@ class NativeUIController:
             app_environment = os.environ.copy()
             # Never let a test theme leak into ordinary or diagnostic launches.
             app_environment.pop(_WINDOWS_TEST_THEME_VARIABLE, None)
+            app_environment["DOBBYVPN_TEST_LOG_SCROLL_TRACE"] = "1"
         if windows_content_root_diagnostics:
             assert app_environment is not None
             app_environment["DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH"] = str(
@@ -1094,11 +1095,15 @@ class NativeUIController:
         identity_before, pid_before = before.get("identity"), before.get("pid")
         for _ in range(repeats):
             self._open_link(link)
-        if repeats > 1:
+        if repeats > 1 and self.platform != "windows":
             time.sleep(0.25)
-        # Windows' helper rejects duplicate matching processes when it probes
-        # without a PID, then returns the existing process identity.
-        after = self._call("probe", unbound=self.platform == "windows")
+        if self.platform == "windows":
+            # Windows shell activation starts short-lived same-executable
+            # redirect workers; the helper waits for those workers to exit
+            # before enforcing the unique exact-path process identity.
+            after = self._call("probe", unbound=True, settle_redirect_workers=True)
+        else:
+            after = self._call("probe")
         if after.get("pid") != pid_before or after.get("identity") != identity_before:
             raise NativeUISmokeError("warm deep link did not reuse the existing UI process")
         if self.platform == "windows" and (

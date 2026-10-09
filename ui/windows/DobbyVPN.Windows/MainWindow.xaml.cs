@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Reflection;
 using Windows.ApplicationModel.DataTransfer;
 using System.Collections.Generic;
@@ -83,6 +84,13 @@ public sealed partial class MainWindow : Window
     private bool _updatingLogs;
     private ScrollViewer? _logScroll;
     private bool _userScrolling;
+    private readonly bool _traceLogScrolling = string.Equals(
+        Environment.GetEnvironmentVariable("DOBBYVPN_TEST_LOG_SCROLL_TRACE"), "1", StringComparison.Ordinal);
+    private long _logScrollInputSequence;
+    private long _logScrollInputTimestamp;
+    private long _tracedLogScrollViewSequence;
+    private long _tracedLogScrollRenderSequence;
+    private long _logScrollRenderRevision;
     private List<NativeDiagnostics.Entry> _latestLogs = [];
     private readonly HashSet<string> _expandedLogs = [];
     private string _renderedLogs = "";
@@ -684,22 +692,59 @@ public sealed partial class MainWindow : Window
     private void LogsText_Loaded(object sender, RoutedEventArgs e)
     {
         _logScroll = LogsScroll;
-        LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => _userScrolling = true), true);
-        LogsScroll.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => _userScrolling = true), true);
+        LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => MarkLogScrollInput("wheel")), true);
+        LogsScroll.AddHandler(UIElement.PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => MarkLogScrollInput("pointer-pressed")), true);
         LogsScroll.AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, args) =>
         {
             if (args.Key is global::Windows.System.VirtualKey.Up or global::Windows.System.VirtualKey.Down
                 or global::Windows.System.VirtualKey.PageUp or global::Windows.System.VirtualKey.PageDown
-                or global::Windows.System.VirtualKey.Home or global::Windows.System.VirtualKey.End) _userScrolling = true;
+                or global::Windows.System.VirtualKey.Home or global::Windows.System.VirtualKey.End)
+            {
+                if (_traceLogScrolling) MarkLogScrollInput($"key-{args.Key}");
+                else _userScrolling = true;
+            }
         }), true);
         LogsScroll.ViewChanged += (_, _) =>
         {
+            var inputSequence = RecentLogScrollInputSequence();
+            if (inputSequence != 0 && _tracedLogScrollViewSequence != inputSequence)
+            {
+                _tracedLogScrollViewSequence = inputSequence;
+                _diagnostics.RecordInfo("test.log-scroll.view-changed", "Observed the first log ViewChanged after user input", new
+                {
+                    input_sequence = inputSequence, log_revision = _logRevision, entry_count = _latestLogs.Count,
+                    updating_logs = _updatingLogs, user_scrolling = _userScrolling,
+                    ignored_by_updating_logs = _updatingLogs, ignored_by_user_scrolling = !_userScrolling,
+                    following_logs = _followingLogs, vertical_offset = LogsScroll.VerticalOffset,
+                    scrollable_height = LogsScroll.ScrollableHeight,
+                    input_elapsed_ms = Stopwatch.GetElapsedTime(_logScrollInputTimestamp).TotalMilliseconds,
+                });
+            }
             if (_updatingLogs || !_userScrolling) return;
             _followingLogs = LogsScroll.VerticalOffset >= LogsScroll.ScrollableHeight - 8;
             if (_followingLogs) RenderLogs();
         };
         _ = RefreshLogsAsync();
     }
+
+    private void MarkLogScrollInput(string input)
+    {
+        _userScrolling = true;
+        if (!_traceLogScrolling) return;
+        var sequence = ++_logScrollInputSequence;
+        _logScrollInputTimestamp = Stopwatch.GetTimestamp();
+        _diagnostics.RecordInfo("test.log-scroll.input", "Observed user input in the log viewer", new
+        {
+            input_sequence = sequence, input, log_revision = _logRevision, entry_count = _latestLogs.Count,
+            updating_logs = _updatingLogs, user_scrolling = _userScrolling, following_logs = _followingLogs,
+            vertical_offset = _logScroll?.VerticalOffset, scrollable_height = _logScroll?.ScrollableHeight,
+        });
+    }
+
+    private long RecentLogScrollInputSequence() =>
+        _traceLogScrolling && _logScrollInputSequence != 0 &&
+        Stopwatch.GetElapsedTime(_logScrollInputTimestamp).TotalSeconds <= 10
+            ? _logScrollInputSequence : 0;
 
     private async void ClearLogs_Click(object sender, RoutedEventArgs e)
     {
@@ -740,6 +785,17 @@ public sealed partial class MainWindow : Window
     {
         var key = string.Join("|", _latestLogs.Select(entry => entry.Id + entry.Raw));
         if (_updatingLogs || key == _renderedLogs) return;
+        var inputSequenceAtStart = RecentLogScrollInputSequence();
+        var captureRender = _traceLogScrolling;
+        var renderRevision = captureRender ? ++_logScrollRenderRevision : 0;
+        var renderStarted = captureRender ? Stopwatch.GetTimestamp() : 0;
+        var startLogRevision = captureRender ? _logRevision : 0;
+        var startEntryCount = captureRender ? _latestLogs.Count : 0;
+        var startUpdatingLogs = captureRender && _updatingLogs;
+        var startUserScrolling = captureRender && _userScrolling;
+        var startFollowingLogs = captureRender && _followingLogs;
+        var startVerticalOffset = captureRender ? _logScroll?.VerticalOffset : null;
+        var startScrollableHeight = captureRender ? _logScroll?.ScrollableHeight : null;
         _updatingLogs = true;
         _renderedLogs = key;
         LogEntries.Children.Clear();
@@ -770,8 +826,46 @@ public sealed partial class MainWindow : Window
             }
         }
         LogEntries.UpdateLayout();
-        _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { _updatingLogs = false; _userScrolling = false; });
+        double? requestedVerticalOffset = null;
+        bool? changeViewResult = null;
+        double? immediateVerticalOffset = null;
+        if (captureRender && _logScroll is not null)
+        {
+            requestedVerticalOffset = _logScroll.ScrollableHeight;
+            changeViewResult = _logScroll.ChangeView(null, requestedVerticalOffset, null, true);
+            immediateVerticalOffset = _logScroll.VerticalOffset;
+        }
+        else _logScroll?.ChangeView(null, _logScroll.ScrollableHeight, null, true);
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            var inputSequenceAtCompletion = RecentLogScrollInputSequence();
+            var inputTimestampAtCompletion = inputSequenceAtCompletion == 0 ? 0 : _logScrollInputTimestamp;
+            var traceRender = inputSequenceAtCompletion != 0 &&
+                _tracedLogScrollRenderSequence != inputSequenceAtCompletion;
+            if (traceRender) _tracedLogScrollRenderSequence = inputSequenceAtCompletion;
+            var userScrollingBeforeReset = _userScrolling;
+            _updatingLogs = false;
+            _userScrolling = false;
+            if (traceRender)
+                _diagnostics.RecordInfo("test.log-scroll.render-complete", "Completed the first log render after user input", new
+                {
+                    input_sequence_at_start = inputSequenceAtStart, input_sequence_at_completion = inputSequenceAtCompletion,
+                    render_revision = renderRevision, log_revision = startLogRevision, entry_count = startEntryCount,
+                    render_duration_ms = Stopwatch.GetElapsedTime(renderStarted).TotalMilliseconds,
+                    input_to_render_start_ms = Stopwatch.GetElapsedTime(inputTimestampAtCompletion, renderStarted).TotalMilliseconds,
+                    input_to_render_completion_ms = Stopwatch.GetElapsedTime(inputTimestampAtCompletion).TotalMilliseconds,
+                    start_updating_logs = startUpdatingLogs, start_user_scrolling = startUserScrolling,
+                    start_following_logs = startFollowingLogs, start_vertical_offset = startVerticalOffset,
+                    start_scrollable_height = startScrollableHeight,
+                    change_view_requested_offset = requestedVerticalOffset, change_view_result = changeViewResult,
+                    immediate_vertical_offset = immediateVerticalOffset,
+                    user_scrolling_before_reset = userScrollingBeforeReset, user_scrolling_after_reset = _userScrolling,
+                    completion_cleared_user_scrolling = userScrollingBeforeReset && !_userScrolling,
+                    updating_logs_after_reset = _updatingLogs, following_logs_at_completion = _followingLogs,
+                    vertical_offset_at_completion = _logScroll?.VerticalOffset,
+                    scrollable_height_at_completion = _logScroll?.ScrollableHeight,
+                });
+        });
     }
 
     private string ExportHeader =>

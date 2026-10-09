@@ -665,18 +665,15 @@ internal static class Program
 
     private static Dictionary<string, object?> ProfileSwitchAction(
         AutomationElement root, IntPtr window, Process process, string identity,
-        string targetId, string competingId, bool observeOnly = false,
-        Action? firstBaselinePairCompleted = null)
+        string targetId, string competingId, bool observeOnly = false)
     {
         if (!TryGetProfileNumber(targetId, " action", out _) ||
             !TryGetProfileNumber(competingId, " action", out _) || targetId == competingId)
             throw new ArgumentException("Profile switch action requires two distinct profile action identifiers");
 
-        var traceBaseline = firstBaselinePairCompleted is not null;
         // Reacquire dynamic control scopes for each sample; WinUI recreates profile action peers on each Snapshot.
         AutomationElement FindScope(AutomationElement scope, string automationId)
         {
-            if (!traceBaseline) return RequireAutomationId(scope, automationId);
             TracePhase($"profile-switch-find-start utc={UtcTimestamp()} automation_id={JsonSerializer.Serialize(automationId)}");
             try
             {
@@ -737,11 +734,10 @@ internal static class Program
                 var sampledConnection = default(NativeActionState);
                 try
                 {
-                    var states = ReadBaselineActionStates(sampleNumber, traceBaseline && sampleNumber == 1);
+                    var states = ReadBaselineActionStates(sampleNumber, sampleNumber == 1);
                     sampledTarget = states[targetId];
                     sampledCompeting = states[competingId];
                     sampledConnection = states["VPN connection action"];
-                    firstBaselinePairCompleted?.Invoke();
                     var ready = CanConnect(sampledTarget, sampledCompeting);
                     if (ready)
                     {
@@ -1271,6 +1267,119 @@ internal static class Program
         return EnumerateProcessWindows(process).Select(window =>
             DescribeWindow(window) +
             $" visible={IsWindowVisible(window)} minimized={IsIconic(window)}").ToArray();
+    }
+
+    private static Dictionary<string, object?> DescribeProbeCandidate(
+        Process process, int processId, string? executablePath, Exception? pathError)
+    {
+        var candidate = new Dictionary<string, object?>
+        {
+            ["pid"] = processId,
+            ["path"] = executablePath,
+        };
+        if (pathError is not null) candidate["path_error"] = pathError.ToString();
+        try
+        {
+            candidate["identity"] = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
+        }
+        catch (Exception error) { candidate["identity_error"] = error.ToString(); }
+        try
+        {
+            var mainWindow = process.MainWindowHandle;
+            candidate["main_window_handle"] = mainWindow == IntPtr.Zero
+                ? null : $"0x{mainWindow.ToInt64():X}";
+        }
+        catch (Exception error) { candidate["main_window_error"] = error.ToString(); }
+        try { candidate["top_level_windows"] = DescribeProcessWindows(process); }
+        catch (Exception error) { candidate["top_level_windows_error"] = error.ToString(); }
+        return candidate;
+    }
+
+    private static Process FindSettledProbeProcess(string expected)
+    {
+        Process? selected = null;
+        var latestInventory = "[]";
+        var previousInventory = (string?)null;
+
+        bool FindUniqueCandidate()
+        {
+            selected = null;
+            var exactMatches = new List<Process>();
+            var unknownPaths = new List<Process>();
+            var inventory = new List<Dictionary<string, object?>>();
+            var processes = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(expected));
+            try
+            {
+                foreach (var candidate in processes)
+                {
+                    var processId = candidate.Id;
+                    string? candidatePath = null;
+                    Exception? pathError = null;
+                    try
+                    {
+                        candidatePath = candidate.MainModule?.FileName;
+                        if (candidatePath is null)
+                            pathError = new InvalidOperationException("Process.MainModule.FileName returned null");
+                    }
+                    catch (Exception error)
+                    {
+                        pathError = error;
+                    }
+
+                    var exactPathMatch = pathError is null && string.Equals(
+                        candidatePath, expected, StringComparison.OrdinalIgnoreCase);
+                    var description = DescribeProbeCandidate(candidate, processId, candidatePath, pathError);
+                    description["exact_path_match"] = exactPathMatch;
+                    description["blocks_unique_probe"] = exactPathMatch || pathError is not null;
+                    inventory.Add(description);
+
+                    if (exactPathMatch)
+                        exactMatches.Add(candidate);
+                    else if (pathError is not null)
+                        unknownPaths.Add(candidate);
+                }
+
+                latestInventory = JsonSerializer.Serialize(
+                    inventory.OrderBy(candidate => (int)candidate["pid"]!));
+                if (latestInventory != previousInventory)
+                {
+                    TracePhase(
+                        $"probe-process-settle-inventory utc={UtcTimestamp()} settle_redirect_workers=true inventory={latestInventory}");
+                    previousInventory = latestInventory;
+                }
+
+                if (exactMatches.Count != 1 || unknownPaths.Count != 0)
+                    return false;
+
+                selected = exactMatches[0];
+                return true;
+            }
+            finally
+            {
+                foreach (var candidate in processes)
+                    if (!ReferenceEquals(candidate, selected)) candidate.Dispose();
+            }
+        }
+
+        try
+        {
+            WaitFor(
+                FindUniqueCandidate,
+                "Windows warm activation did not settle to one exact-path UI process within five seconds",
+                seconds: 5);
+        }
+        catch (TimeoutException error)
+        {
+            TracePhase(
+                $"probe-process-settle-timeout utc={UtcTimestamp()} settle_redirect_workers=true inventory={latestInventory} error={JsonSerializer.Serialize(error.ToString())}");
+            throw new TimeoutException(
+                "Windows warm activation did not settle to one exact-path UI process within five seconds; " +
+                $"latest candidate inventory={latestInventory}; wait exception={error}",
+                error);
+        }
+
+        return selected ?? throw new InvalidOperationException(
+            "Windows warm activation probe completed without selecting a UI process");
     }
 
     private static IntPtr[] EnumerateProcessWindows(Process process)
@@ -1931,9 +2040,6 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        CancellationTokenSource? profileSwitchWatchdogCancellation = null;
-        Task? profileSwitchWatchdog = null;
-        var profileSwitchBaselineState = 0; // 0=waiting for a complete pair, 1=disarmed, 2=watchdog capture started.
         string? mainOperation = null;
         try
         {
@@ -1966,6 +2072,19 @@ internal static class Program
             TracePhase($"main-operation-start utc={UtcTimestamp()} operation={JsonSerializer.Serialize(operation)}");
             if (operation == "cancel-profile-switch")
                 TracePhase($"profile-switch-request-parsed utc={UtcTimestamp()} target={JsonSerializer.Serialize(Text("target"))} competing={JsonSerializer.Serialize(Text("competing"))}");
+            var settleRedirectWorkers = false;
+            if (request.TryGetProperty("settle_redirect_workers", out var settleRedirectWorkersValue))
+            {
+                if (settleRedirectWorkersValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new ArgumentException("settle_redirect_workers must be a JSON boolean");
+                settleRedirectWorkers = settleRedirectWorkersValue.GetBoolean();
+            }
+            if (settleRedirectWorkers && operation != "probe")
+                throw new ArgumentException("settle_redirect_workers is only valid for an unbound probe");
+            if (settleRedirectWorkers && request.TryGetProperty("pid", out _))
+                throw new ArgumentException("settle_redirect_workers cannot be combined with a PID-bound probe");
+            if (settleRedirectWorkers && request.TryGetProperty("identity", out _))
+                throw new ArgumentException("settle_redirect_workers cannot be combined with an identity-bound probe");
             if (operation == "settings-text-size")
             {
                 ValidateSettingsTextSizeRequest(request);
@@ -1975,7 +2094,11 @@ internal static class Program
             Process? found = null;
             if (operation == "cancel-profile-switch")
                 TracePhase($"profile-switch-process-validation-start utc={UtcTimestamp()} pid={(request.TryGetProperty("pid", out var cancelPid) ? cancelPid.ToString() : "unbound")}");
-            if (request.TryGetProperty("pid", out var requestedPid))
+            if (settleRedirectWorkers)
+            {
+                found = FindSettledProbeProcess(expected);
+            }
+            else if (request.TryGetProperty("pid", out var requestedPid))
             {
                 try { found = Process.GetProcessById(requestedPid.GetInt32()); }
                 catch (ArgumentException) { Console.WriteLine("{\"ready\":false,\"alive\":false}"); return 0; }
@@ -2020,43 +2143,8 @@ internal static class Program
             if (operation == "cancel-profile-switch")
             {
                 TracePhase($"profile-switch-process-identity-verified utc={UtcTimestamp()} pid={process.Id} identity={identity}");
-                const int watchdogDelayMilliseconds = 3000;
-                profileSwitchWatchdogCancellation = new CancellationTokenSource();
-                var cancellationToken = profileSwitchWatchdogCancellation.Token;
-                var requestForDump = request.Clone();
-                var verifiedPid = process.Id;
-                var verifiedIdentity = identity;
-                TracePhase($"profile-switch-prebaseline-watchdog-armed utc={UtcTimestamp()} delay_ms={watchdogDelayMilliseconds} pid={verifiedPid} identity={verifiedIdentity}");
-                profileSwitchWatchdog = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Task.Delay(watchdogDelayMilliseconds, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
-                        return;
-                    }
-
-                    if (Interlocked.CompareExchange(ref profileSwitchBaselineState, 2, 0) != 0)
-                        return;
-
-                    var dumpStarted = Stopwatch.GetTimestamp();
-                    TracePhase($"profile-switch-prebaseline-dump-start utc={UtcTimestamp()} pid={verifiedPid} identity={verifiedIdentity} apartment={Thread.CurrentThread.GetApartmentState()}");
-                    try
-                    {
-                        using var dumpProcess = Process.GetProcessById(verifiedPid);
-                        var dump = CapturePointFailureDump(
-                            dumpProcess, verifiedIdentity, requestForDump,
-                            "cancel-profile-switch did not complete its first baseline pair within three seconds",
-                            "profile-switch-prebaseline");
-                        TracePhase($"profile-switch-prebaseline-dump-complete utc={UtcTimestamp()} duration_ms={Stopwatch.GetElapsedTime(dumpStarted).TotalMilliseconds:F3} result={JsonSerializer.Serialize(dump)}");
-                    }
-                    catch (Exception error)
-                    {
-                        TracePhase($"profile-switch-prebaseline-dump-exception utc={UtcTimestamp()} duration_ms={Stopwatch.GetElapsedTime(dumpStarted).TotalMilliseconds:F3} error={JsonSerializer.Serialize(error.ToString())}");
-                    }
-                });
+                // Preserve baseline tracing without suspending the live candidate
+                // for an invasive memory dump while UIA is still interacting.
             }
             if (operation == "probe")
             {
@@ -2315,11 +2403,7 @@ internal static class Program
                 var observeOnly = request.TryGetProperty("observe_only", out var observeOnlyValue) &&
                     observeOnlyValue.GetBoolean();
                 var result = ProfileSwitchAction(
-                    root, window, process, identity, Text("target"), Text("competing"), observeOnly: observeOnly,
-                    firstBaselinePairCompleted: () =>
-                    {
-                        Interlocked.CompareExchange(ref profileSwitchBaselineState, 1, 0);
-                    });
+                    root, window, process, identity, Text("target"), Text("competing"), observeOnly: observeOnly);
                 Console.WriteLine(JsonSerializer.Serialize(result));
                 return 0;
             }
@@ -3023,18 +3107,6 @@ internal static class Program
         finally
         {
             TracePhase($"main-finally-enter utc={UtcTimestamp()} operation={JsonSerializer.Serialize(mainOperation)}");
-            if (profileSwitchWatchdogCancellation is not null)
-            {
-                Interlocked.CompareExchange(ref profileSwitchBaselineState, 1, 0);
-                profileSwitchWatchdogCancellation.Cancel();
-                try { profileSwitchWatchdog?.GetAwaiter().GetResult(); }
-                catch (Exception error)
-                {
-                    try { TracePhase($"profile-switch-prebaseline-watchdog-cleanup-exception utc={UtcTimestamp()} error={JsonSerializer.Serialize(error.ToString())}"); }
-                    catch { /* Preserve the request's original exception if stderr is already unavailable. */ }
-                }
-                profileSwitchWatchdogCancellation.Dispose();
-            }
             TracePhase($"main-finally-exit utc={UtcTimestamp()} operation={JsonSerializer.Serialize(mainOperation)}");
         }
     }
