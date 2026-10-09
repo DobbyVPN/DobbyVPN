@@ -10,6 +10,7 @@ import plistlib
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -296,7 +297,10 @@ def _observe_simctl_timeout(
             try:
                 observations.append((label, run_finite_capture(
                     diagnostic_command, timeout_seconds=remaining - cleanup_timeout,
-                    termination_grace_seconds=0, cleanup_timeout_seconds=cleanup_timeout,
+                    termination_grace_seconds=(
+                        cleanup_timeout / 2 if label.endswith("_sample") else 0
+                    ),
+                    cleanup_timeout_seconds=cleanup_timeout,
                 )))
             except BaseException as error:
                 observations.append((label, error))
@@ -318,10 +322,7 @@ class SubprocessCommandRunner:
         if timeout <= 0:
             raise IOSSimulatorAppContractError("iOS command timeout must be positive")
         arguments = tuple(str(part) for part in command)
-        observe_before_termination = arguments[:3] in {
-            ("xcrun", "simctl", "install"),
-            ("xcrun", "simctl", "bootstatus"),
-        }
+        observe_before_termination = arguments[:3] == ("xcrun", "simctl", "install")
         failure_observations: list[
             tuple[str, subprocess.CompletedProcess[bytes] | BaseException | str]
         ] = []
@@ -941,9 +942,14 @@ _IOS_LOG_NAMES = (
     "go_app_logs.jsonl", "go_app_logs.jsonl.stderr",
     "go_tunnel_logs.jsonl", "go_tunnel_logs.jsonl.stderr",
 )
-_IOS_RETAINED_LOG_NAMES = {"app-native.log", "runner-failure.txt"} | {
-    name + suffix for name in _IOS_LOG_NAMES for suffix in ("", ".previous")
+_IOS_NATIVE_SIMULATOR_LOG_NAMES = {
+    "system.log", "mobile_installation.log.0", "AppConduit.log.0",
 }
+_IOS_RETAINED_LOG_NAMES = (
+    {"app-native.log", "runner-failure.txt"}
+    | _IOS_NATIVE_SIMULATOR_LOG_NAMES
+    | {name + suffix for name in _IOS_LOG_NAMES for suffix in ("", ".previous")}
+)
 
 
 def _collect_ios_native_log(
@@ -1017,7 +1023,7 @@ def _run_install_observations(
     budget: RunBudget,
     failure: BaseException | None = None,
 ) -> list[tuple[str, CommandResult | BaseException]]:
-    """Run read-only install diagnostics inside the functional budget."""
+    """Run read-only failure diagnostics inside the functional budget."""
     observations: list[tuple[str, CommandResult | BaseException]] = []
     for label, command, timeout in queries:
         try:
@@ -1042,36 +1048,107 @@ def _run_install_observations(
     return observations
 
 
-def _install_failure_sample_queries(
+def _failure_sample_queries(
     process_snapshot: str,
+    targets: dict[str, str | tuple[str, ...]],
+    *,
+    label_prefix: str,
+    interval_ms: int = 1,
 ) -> tuple[list[tuple[str, Sequence[str], float]], list[str]]:
-    targets = {
-        "coresimulator-service": "/CoreSimulator.framework/Versions/A/XPCServices/com.apple.CoreSimulator.CoreSimulatorService.xpc/Contents/MacOS/com.apple.CoreSimulator.CoreSimulatorService",
-        "simlaunchhost": (
-            "/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.arm64.xpc/Contents/MacOS/SimLaunchHost.arm64",
-            "/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.x86_64.xpc/Contents/MacOS/SimLaunchHost.x86_64",
-        ),
-        "simulator-installd": "/RuntimeRoot/usr/libexec/installd",
-        "simulator-mobileinstallation": "/RuntimeRoot/System/Library/PrivateFrameworks/MobileInstallation.framework/XPCServices/com.apple.MobileInstallationHelperService.xpc/com.apple.MobileInstallationHelperService",
-    }
     queries: list[tuple[str, Sequence[str], float]] = []
     notes: list[str] = []
     for target, suffix in targets.items():
+        suffixes = (suffix,) if isinstance(suffix, str) else suffix
         matches: dict[str, str] = {}
         for line in process_snapshot.splitlines():
             fields = line.strip().split(None, 4)
-            if len(fields) == 5 and fields[0].isdecimal() and fields[4].endswith(suffix):
+            if (
+                len(fields) == 5
+                and fields[0].isdecimal()
+                and any(fields[4].endswith(item) for item in suffixes)
+            ):
                 matches[fields[0]] = fields[4]
         if len(matches) != 1:
-            notes.append(f"install_failure_sample_target_{target}: expected one exact process; matches={matches!r}")
+            notes.append(
+                f"{label_prefix}_target_{target}: expected one exact process; matches={matches!r}"
+            )
             continue
         pid, command = next(iter(matches.items()))
-        label = f"install_failure_sample_{target}_pid_{pid}"
-        notes.append(f"install_failure_sample_target_{target}: pid={pid} command={command}")
+        label = f"{label_prefix}_{target}_pid_{pid}"
+        notes.append(f"{label_prefix}_target_{target}: pid={pid} command={command}")
         queries.append(
-            (label, ["/usr/bin/sample", pid, "1", "1", "-file", "/dev/stdout"], 5)
+            (
+                label,
+                ["/usr/bin/sample", pid, "1", str(interval_ms), "-file", "/dev/stdout"],
+                5,
+            )
         )
     return queries, notes
+
+
+_INSTALL_FAILURE_SAMPLE_TARGETS = {
+    "coresimulator-service": "/CoreSimulator.framework/Versions/A/XPCServices/com.apple.CoreSimulator.CoreSimulatorService.xpc/Contents/MacOS/com.apple.CoreSimulator.CoreSimulatorService",
+    "simlaunchhost": (
+        "/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.arm64.xpc/Contents/MacOS/SimLaunchHost.arm64",
+        "/CoreSimulator.framework/Versions/A/XPCServices/SimLaunchHost.x86_64.xpc/Contents/MacOS/SimLaunchHost.x86_64",
+    ),
+    "simulator-installd": "/RuntimeRoot/usr/libexec/installd",
+    "simulator-mobileinstallation": "/RuntimeRoot/System/Library/PrivateFrameworks/MobileInstallation.framework/XPCServices/com.apple.MobileInstallationHelperService.xpc/com.apple.MobileInstallationHelperService",
+}
+_BOOTSTATUS_FAILURE_SAMPLE_TARGETS = {
+    "springboard": "/System/Library/CoreServices/SpringBoard.app/SpringBoard",
+    "backboardd": "/usr/libexec/backboardd",
+}
+_BOOTSTATUS_NATIVE_LOGS = (
+    Path("system.log"),
+    Path("MobileInstallation") / "mobile_installation.log.0",
+    Path("AppConduit") / "AppConduit.log.0",
+)
+
+
+def _retain_bootstatus_native_logs(
+    simulator_udid: str,
+    work_dir: Path,
+    failure: BaseException,
+) -> None:
+    source_dir = Path.home() / "Library" / "Logs" / "CoreSimulator" / simulator_udid
+    destination_dir = _ios_diagnostics_directory(work_dir)
+    try:
+        destination_dir.mkdir(parents=True, exist_ok=True)
+    except BaseException as error:
+        add_exception_notes(failure, "bootstatus_native_logs_directory", error)
+        return
+
+    for relative_path in _BOOTSTATUS_NATIVE_LOGS:
+        source = source_dir / relative_path
+        destination = destination_dir / relative_path.name
+        label = f"bootstatus_native_log_{relative_path.name.replace('.', '_')}"
+        try:
+            mode = source.lstat().st_mode
+        except FileNotFoundError as error:
+            failure.add_note(f"{label}_missing={source}")
+            add_exception_notes(failure, label, error, include_streams=False)
+            continue
+        except BaseException as error:
+            add_exception_notes(failure, label, error)
+            continue
+
+        created_destination = False
+        copy_complete = False
+        try:
+            if not stat.S_ISREG(mode):
+                raise OSError(f"native Simulator log is not a regular file: {source}")
+            with source.open("rb") as input_stream, destination.open("xb") as output_stream:
+                created_destination = True
+                shutil.copyfileobj(input_stream, output_stream, length=64 * 1024)
+                copy_complete = True
+            destination.chmod(0o600)
+            failure.add_note(f"{label}_retained={source} -> {destination}")
+        except BaseException as error:
+            if created_destination:
+                retention = "retained" if copy_complete else "partial_retained"
+                failure.add_note(f"{label}_{retention}={destination}")
+            add_exception_notes(failure, label, error)
 
 
 def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path, ...]:
@@ -1509,33 +1586,44 @@ def run_ios_simulator_app_contract(
                 error.add_note(
                     f"bootstatus_failure_simulator_udid={simulator.udid}"
                 )
-                observations = (
-                    (
+                process_observations = _run_install_observations(
+                    runner,
+                    ((
                         "bootstatus_failure_processes",
                         ["/bin/ps", "-A", "-o", "pid,ppid,state,etime,comm"],
                         5,
-                    ),
-                    (
-                        "bootstatus_failure_backboardd",
-                        [
-                            "xcrun", "simctl", "spawn", simulator.udid,
-                            "launchctl", "print", "system/com.apple.backboardd",
-                        ],
-                        5,
-                    ),
+                    ),),
+                    budget=budget,
+                    failure=error,
                 )
-                for label, command, timeout in observations:
-                    try:
+                process_result = (
+                    process_observations[0][1] if process_observations else None
+                )
+                if isinstance(process_result, CommandResult):
+                    sample_queries, sample_notes = _failure_sample_queries(
+                        process_result.stdout,
+                        _BOOTSTATUS_FAILURE_SAMPLE_TARGETS,
+                        label_prefix="bootstatus_failure_sample",
+                        interval_ms=10,
+                    )
+                    for note in sample_notes:
+                        error.add_note(note)
+                    if sample_queries:
                         _run_install_observations(
                             runner,
-                            ((label, command, timeout),),
+                            sample_queries,
                             budget=budget,
                             failure=error,
                         )
-                    except BaseException as diagnostic_error:
-                        add_exception_notes(
-                            error, f"{label}_collection", diagnostic_error
+                    else:
+                        error.add_note(
+                            "bootstatus_failure_peer_samples: skipped because no unique System App peers were found"
                         )
+                else:
+                    error.add_note(
+                        "bootstatus_failure_peer_samples: skipped because the process snapshot was unavailable"
+                    )
+                _retain_bootstatus_native_logs(simulator.udid, work_dir, error)
                 raise
             _timed_stage(
                 "open-simulator",
@@ -1591,7 +1679,11 @@ def run_ios_simulator_app_contract(
                     )
                     process_result = process_observations[0][1] if process_observations else None
                     if isinstance(process_result, CommandResult):
-                        sample_queries, sample_notes = _install_failure_sample_queries(process_result.stdout)
+                        sample_queries, sample_notes = _failure_sample_queries(
+                            process_result.stdout,
+                            _INSTALL_FAILURE_SAMPLE_TARGETS,
+                            label_prefix="install_failure_sample",
+                        )
                         for note in sample_notes:
                             install_error.add_note(note)
                         _run_install_observations(
