@@ -499,7 +499,13 @@ public sealed partial class MainWindow : Window
     }
     private async void Paste_Click(object sender, RoutedEventArgs e)
     {
-        try { ImportSubscription((await Clipboard.GetContent().GetTextAsync()).Trim()); }
+        _diagnostics.RecordInfo("subscription.paste-click", "Started handling a Paste button click", new { session_id = _snapshot?.SessionId });
+        try
+        {
+            var pastedText = (await Clipboard.GetContent().GetTextAsync()).Trim();
+            _diagnostics.RecordInfo("subscription.paste-clipboard-text-returned", "Clipboard text returned to the Paste handler", new { session_id = _snapshot?.SessionId, text_length = pastedText.Length });
+            ImportSubscription(pastedText);
+        }
         catch (Exception error) { ShowError(error.ToString(), error.Message); }
     }
     private void ImportSubscription(string source)
@@ -544,7 +550,9 @@ public sealed partial class MainWindow : Window
         RenderActions();
         try
         {
+            _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-start", "Started the preflight Snapshot before Configure", new { source, session_id = _snapshot.SessionId });
             var current = await ReadSnapshotAsync();
+            _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-end", "Completed the preflight Snapshot before Configure", new { source, session_id = current.SessionId, sequence = current.Sequence });
             _diagnostics.RecordInfo(
                 "subscription.configure-submit",
                 "Submitting a subscription URL to the Go backend",
@@ -576,12 +584,17 @@ public sealed partial class MainWindow : Window
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
         await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-start", "Started connecting the Configure named pipe", new { method, parameters });
         await pipe.ConnectAsync(3000, timeout.Token);
+        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-end", "Connected the Configure named pipe", new { method, parameters });
         await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
         var request = JsonSerializer.Serialize(new { method, @params = parameters });
         await writer.WriteLineAsync(request.AsMemory(), timeout.Token);
-        var line = await reader.ReadLineAsync(timeout.Token) ?? throw new IOException("Go backend closed the control connection without a response.");
+        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-request-written", "Wrote the Configure request to the Go backend", new { method, parameters });
+        var line = await reader.ReadLineAsync(timeout.Token);
+        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-response-read", "Read the Configure response from the Go backend", new { method, parameters, succeeded = line is not null });
+        if (line is null) throw new IOException("Go backend closed the control connection without a response.");
         using var response = JsonDocument.Parse(line);
         if (!response.RootElement.GetProperty("ok").GetBoolean())
         {
