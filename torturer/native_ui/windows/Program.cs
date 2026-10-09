@@ -2683,21 +2683,106 @@ internal static class Program
                     if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
                     {
                         var control = (ExpandCollapsePattern)expand;
-                        var wasExpanded = control.Current.ExpandCollapseState == ExpandCollapseState.Expanded;
+                        Exception? traceFailure = null;
+                        void TraceDetails(string stage, object? observation = null, Exception? operationError = null)
+                        {
+                            try { TracePhase("logs-details " + JsonSerializer.Serialize(new { stage, utc = UtcTimestamp(), observation, operation_exception = operationError?.ToString() })); }
+                            catch (Exception error) { traceFailure = traceFailure is null ? error : new AggregateException("Windows log Details diagnostics failed.", traceFailure, error); }
+                        }
+
+                        object peer;
                         try
                         {
-                            if (!wasExpanded) control.Expand();
+                            var current = details.Current;
+                            var bounds = current.BoundingRectangle;
+                            peer = new { runtime_id = details.GetRuntimeId(), automation_id = current.AutomationId, name = current.Name,
+                                control_type = current.ControlType.ProgrammaticName, is_offscreen = current.IsOffscreen,
+                                bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null };
+                        }
+                        catch (Exception error) { peer = new { observation_exception = error.ToString() }; }
+                        object viewport;
+                        try
+                        {
+                            var bounds = PhysicalBounds(logRoot, "Backend logs");
+                            var hasScroll = logRoot.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern);
+                            var position = hasScroll ? ((ScrollPattern)scrollPattern).Current.VerticalScrollPercent : (double?)null;
+                            viewport = new { bounds = RectJson(bounds), scroll_pattern_available = hasScroll, scroll_position = position };
+                        }
+                        catch (Exception error) { viewport = new { observation_exception = error.ToString() }; }
+                        ExpandCollapseState? initialState = null;
+                        bool? wasExpanded = null;
+                        Exception? detailsFailure = null;
+                        Exception? collapseFailure = null;
+                        var activeStage = "initial-state-read";
+                        try
+                        {
+                            TraceDetails("initial-state-read-start");
+                            initialState = control.Current.ExpandCollapseState;
+                            wasExpanded = initialState == ExpandCollapseState.Expanded;
+                            TraceDetails("initial-state-read-complete", new
+                            {
+                                details_peer = peer,
+                                current_state = initialState.Value.ToString(),
+                                log_viewport = viewport,
+                            });
+                            activeStage = "expand";
+                            TraceDetails("expand-start", new { skipped = wasExpanded });
+                            if (wasExpanded == false) control.Expand();
+                            TraceDetails("expand-outcome", new { skipped = wasExpanded });
+                            activeStage = "text-extraction";
+                            TraceDetails("text-extraction-start");
                             expandedRecord = Walk(logRoot)
                                 .Where(element => element.Current.ControlType == ControlType.Text)
                                 .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
                                     ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
                                 .FirstOrDefault(value => value.TrimStart().StartsWith("{", StringComparison.Ordinal)) ?? "";
                             expansionVerified = expandedRecord.Length > 0;
+                            TraceDetails("text-extraction-outcome", new { expansionVerified, record_length = expandedRecord.Length });
+                        }
+                        catch (Exception error)
+                        {
+                            detailsFailure = error;
+                            TraceDetails($"{activeStage}-exception", new
+                            {
+                                details_peer = peer,
+                                log_viewport = viewport,
+                                current_state = initialState?.ToString(),
+                            }, error);
                         }
                         finally
                         {
-                            if (!wasExpanded) control.Collapse();
+                            if (wasExpanded == false)
+                            {
+                                TraceDetails("collapse-start");
+                                try
+                                {
+                                    control.Collapse();
+                                    TraceDetails("collapse-outcome");
+                                }
+                                catch (Exception error)
+                                {
+                                    collapseFailure = error;
+                                    TraceDetails("collapse-exception", operationError: error);
+                                }
+                            }
+                            else if (wasExpanded == true)
+                            {
+                                TraceDetails("collapse-skipped-already-expanded");
+                            }
+                            else
+                            {
+                                TraceDetails("collapse-skipped-initial-state-read-failed");
+                            }
                         }
+
+                        Exception? failure = detailsFailure;
+                        if (collapseFailure is not null)
+                            failure = failure is null ? collapseFailure
+                                : new AggregateException("Windows log Details action and Collapse cleanup both failed.", failure, collapseFailure);
+                        if (traceFailure is not null)
+                            failure = failure is null ? traceFailure
+                                : new AggregateException("Windows log Details operation and diagnostics failed.", failure, traceFailure);
+                        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
                     }
                 }
                 Console.WriteLine(JsonSerializer.Serialize(new {
