@@ -63,11 +63,9 @@ MAX_RUN_SECONDS = 30 * 60
 CLEANUP_RESERVE_SECONDS = 120
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS = 10 * 60
-# A cold Xcode 26 build on the local x86_64 VM can spend almost ten minutes
-# compiling and signing the XCTest runner before the first UI assertion runs.
-# Keep one bounded attempt, but leave enough time for the actual interaction
-# contract; RunBudget still enforces the 30-minute lane and cleanup reserve.
-IOS_UI_TEST_TIMEOUT_SECONDS = 15 * 60
+# XCTest products are built during preparation; give their no-build run the
+# lane's functional allowance and leave the cleanup reserve to RunBudget.
+IOS_UI_TEST_TIMEOUT_SECONDS = MAX_RUN_SECONDS - CLEANUP_RESERVE_SECONDS
 COMMAND_TERMINATION_GRACE_SECONDS = 15
 IOS_SUBSCRIPTION_FIXTURE_EXPECTED_GETS = 3
 # A timed-out command can use one grace window to stop its process group, then
