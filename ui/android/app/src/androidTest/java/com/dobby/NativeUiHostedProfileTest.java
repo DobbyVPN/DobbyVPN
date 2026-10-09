@@ -2143,6 +2143,8 @@ public final class NativeUiHostedProfileTest {
 
             subscriptionFixturePost("/release", new byte[0]);
             releaseNeeded = false;
+            waitForSubscriptionGets(before + 2,
+                    remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             JSONObject completed = waitForInFlightGets(0,
                     remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             JSONObject latest = waitForSessionSource(newestURL,
@@ -2152,7 +2154,12 @@ public final class NativeUiHostedProfileTest {
                     || completed.getInt("max_in_flight_gets") != 1
                     || !newestURL.equals(latest.optString("source_url"))
                     || !latest.optBoolean("configured")) {
-                throw new AssertionError("Latest typed edit did not win after the held response: " + latest);
+                throw new AssertionError("Latest typed edit did not win after the held response"
+                        + "; before=" + before
+                        + "; held=" + held
+                        + "; whileHeld=" + whileHeld
+                        + "; completed=" + completed
+                        + "; latest=" + latest);
             }
         } catch (Exception | Error failure) {
             primaryFailure = failure;
