@@ -167,7 +167,7 @@ class NativeUiInstrumentedTest {
         nativeInput.setText("invalidprofile")
         device.waitForIdle()
         check(waitForImeVisibility(expectedVisible = true, timeoutMillis = 2_000)) {
-            "ANDROID_UI_IME_SHOW_TIMEOUT"
+            "ANDROID_UI_IME_SHOW_TIMEOUT ${imeVisibilityFailureContext()}"
         }
         assertLogPaneUsable("ANDROID_LOGS_NOT_VISIBLE_WITH_KEYBOARD")
         val typingMarker = "log-update-while-typing-${System.nanoTime()}"
@@ -1659,6 +1659,48 @@ class NativeUiInstrumentedTest {
             }
         }
         return visible[0]
+    }
+
+    private fun imeVisibilityFailureContext(): String {
+        try {
+            val snapshot = JSONObject()
+            instrumentation.runOnMainSync {
+                val activity = MainActivity.current
+                val decor = activity?.window?.decorView
+                val focusedView = decor?.findFocus()
+                snapshot.put("timestamp_utc", Instant.now().toString())
+                snapshot.put(
+                    "activity_identity",
+                    activity?.let { "${it.javaClass.name}@${Integer.toHexString(System.identityHashCode(it))}" }
+                        ?: JSONObject.NULL,
+                )
+                snapshot.put("activity_finishing", activity?.isFinishing ?: JSONObject.NULL)
+                snapshot.put("activity_destroyed", activity?.isDestroyed ?: JSONObject.NULL)
+                snapshot.put("decor_window_focus", decor?.hasWindowFocus() ?: JSONObject.NULL)
+                snapshot.put("decor_visibility", decor?.visibility ?: JSONObject.NULL)
+                snapshot.put("decor_is_shown", decor?.isShown ?: JSONObject.NULL)
+                snapshot.put("decor_attached", decor?.isAttachedToWindow ?: JSONObject.NULL)
+                snapshot.put("decor_focused_view_class", focusedView?.javaClass?.name ?: JSONObject.NULL)
+                snapshot.put("decor_focused_view_has_focus", focusedView?.hasFocus() ?: JSONObject.NULL)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    val insets = decor?.rootWindowInsets
+                    snapshot.put(
+                        "root_insets_ime_visible",
+                        insets?.isVisible(WindowInsets.Type.ime()) ?: JSONObject.NULL,
+                    )
+                    snapshot.put(
+                        "root_insets_ime_bottom_inset",
+                        insets?.getInsets(WindowInsets.Type.ime())?.bottom ?: JSONObject.NULL,
+                    )
+                } else {
+                    snapshot.put("root_insets_ime_visible", JSONObject.NULL)
+                    snapshot.put("root_insets_ime_bottom_inset", JSONObject.NULL)
+                }
+            }
+            return snapshot.toString()
+        } catch (diagnosticError: Throwable) {
+            return "diagnostic_exception=${diagnosticError.stackTraceToString()}"
+        }
     }
 
     private fun sha256(file: File): String {
