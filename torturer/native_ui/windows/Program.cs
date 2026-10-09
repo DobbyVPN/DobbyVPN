@@ -2632,6 +2632,42 @@ internal static class Program
                             try { TracePhase("logs-details " + JsonSerializer.Serialize(new { stage, utc = UtcTimestamp(), observation, operation_exception = operationError?.ToString() })); }
                             catch (Exception error) { traceFailure = traceFailure is null ? error : new AggregateException("Windows log Details diagnostics failed.", traceFailure, error); }
                         }
+                        string? failureScreenshotPath = request.TryGetProperty("failure_screenshot_path", out var screenshotPathValue)
+                            && screenshotPathValue.ValueKind == JsonValueKind.String
+                                ? screenshotPathValue.GetString() : null;
+
+                        object ObserveDetailsState()
+                        {
+                            var peerObservation = new Dictionary<string, object?>();
+                            string? currentState = null;
+                            string? stateReadException = null;
+                            try { currentState = control.Current.ExpandCollapseState.ToString(); }
+                            catch (Exception error) { stateReadException = error.ToString(); }
+                            try { peerObservation["runtime_id"] = details.GetRuntimeId(); }
+                            catch (Exception error) { peerObservation["runtime_id_read_exception"] = error.ToString(); }
+                            try
+                            {
+                                var current = details.Current;
+                                peerObservation["automation_id"] = current.AutomationId;
+                                peerObservation["name"] = current.Name;
+                                peerObservation["control_type"] = current.ControlType.ProgrammaticName;
+                            }
+                            catch (Exception error) { peerObservation["identity_read_exception"] = error.ToString(); }
+                            try { peerObservation["is_offscreen"] = details.Current.IsOffscreen; }
+                            catch (Exception error) { peerObservation["offscreen_read_exception"] = error.ToString(); }
+                            try
+                            {
+                                var bounds = details.Current.BoundingRectangle;
+                                peerObservation["bounds"] = HasUsableBounds(bounds) ? RectJson(bounds) : null;
+                            }
+                            catch (Exception error) { peerObservation["bounds_read_exception"] = error.ToString(); }
+                            return new
+                            {
+                                current_state = currentState,
+                                current_state_read_exception = stateReadException,
+                                details_peer = peerObservation,
+                            };
+                        }
 
                         object peer;
                         try
@@ -2656,6 +2692,7 @@ internal static class Program
                         bool? wasExpanded = null;
                         Exception? detailsFailure = null;
                         Exception? collapseFailure = null;
+                        Exception? screenshotFailure = null;
                         var activeStage = "initial-state-read";
                         try
                         {
@@ -2671,6 +2708,7 @@ internal static class Program
                             activeStage = "expand";
                             TraceDetails("expand-start", new { skipped = wasExpanded });
                             if (wasExpanded == false) control.Expand();
+                            TraceDetails("post-expand-state", new { skipped = wasExpanded, state = ObserveDetailsState() });
                             TraceDetails("expand-outcome", new { skipped = wasExpanded });
                             activeStage = "text-extraction";
                             TraceDetails("text-extraction-start");
@@ -2681,6 +2719,17 @@ internal static class Program
                                 .FirstOrDefault(value => value.TrimStart().StartsWith("{", StringComparison.Ordinal)) ?? "";
                             expansionVerified = expandedRecord.Length > 0;
                             TraceDetails("text-extraction-outcome", new { expansionVerified, record_length = expandedRecord.Length });
+                            if (!expansionVerified)
+                            {
+                                detailsFailure = new InvalidOperationException(
+                                    "Windows log Details expansion did not expose a structured JSON record.");
+                                TraceDetails("zero-record-primary-failure", new
+                                {
+                                    expansionVerified,
+                                    record_length = expandedRecord.Length,
+                                    failure = detailsFailure.Message,
+                                });
+                            }
                         }
                         catch (Exception error)
                         {
@@ -2694,8 +2743,34 @@ internal static class Program
                         }
                         finally
                         {
+                            if (detailsFailure is not null)
+                            {
+                                if (string.IsNullOrWhiteSpace(failureScreenshotPath))
+                                {
+                                    TraceDetails("failure-screenshot-skipped", new { reason = "failure screenshot path was not supplied" });
+                                }
+                                else
+                                {
+                                    try
+                                    {
+                                        TraceDetails("failure-screenshot-start", new { path = failureScreenshotPath });
+                                        var screenshotBounds = Capture(window, process.Id, failureScreenshotPath);
+                                        TraceDetails("failure-screenshot-complete", new
+                                        {
+                                            path = failureScreenshotPath,
+                                            screen_bounds = RectJson(screenshotBounds),
+                                        });
+                                    }
+                                    catch (Exception error)
+                                    {
+                                        screenshotFailure = error;
+                                        TraceDetails("failure-screenshot-exception", new { path = failureScreenshotPath }, error);
+                                    }
+                                }
+                            }
                             if (wasExpanded == false)
                             {
+                                TraceDetails("pre-collapse-state", ObserveDetailsState());
                                 TraceDetails("collapse-start");
                                 try
                                 {
@@ -2722,6 +2797,9 @@ internal static class Program
                         if (collapseFailure is not null)
                             failure = failure is null ? collapseFailure
                                 : new AggregateException("Windows log Details action and Collapse cleanup both failed.", failure, collapseFailure);
+                        if (screenshotFailure is not null)
+                            failure = failure is null ? screenshotFailure
+                                : new AggregateException("Windows log Details failure screenshot also failed.", failure, screenshotFailure);
                         if (traceFailure is not null)
                             failure = failure is null ? traceFailure
                                 : new AggregateException("Windows log Details operation and diagnostics failed.", failure, traceFailure);

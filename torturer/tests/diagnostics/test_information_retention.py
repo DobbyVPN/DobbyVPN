@@ -695,6 +695,8 @@ class InformationRetentionTests(unittest.TestCase):
             controller = object.__new__(native_ui_smoke.NativeUIController)
             controller.platform = "windows"
             controller.profile = profile
+            controller.screenshot_dir = root / "screenshots"
+            controller.screenshot_dir.mkdir()
             controller.cleared_record = None
             structured = "2026 · INFO · Backend · ready"
             initial = structured + "\nDetails\n"
@@ -707,8 +709,8 @@ class InformationRetentionTests(unittest.TestCase):
                         "ready": True,
                         "text": next(log_texts),
                         "entries": [
-                            {"text": "2026-10-06T00:00:00Z · INFO · Backend stderr\nStderr capture initialized", "foreground": 0},
-                            {"text": structured, "foreground": 0},
+                            {"text": "2026-10-06T00:00:00Z · INFO · Backend stderr\nStderr capture initialized", "foreground": None},
+                            {"text": structured, "foreground": None},
                         ],
                         "expansion_verified": True,
                         "expanded_record": '{"message":"ready"}',
@@ -746,6 +748,8 @@ class InformationRetentionTests(unittest.TestCase):
             controller = object.__new__(native_ui_smoke.NativeUIController)
             controller.platform = "windows"
             controller.profile = profile
+            controller.screenshot_dir = root / "screenshots"
+            controller.screenshot_dir.mkdir()
             controller.cleared_record = None
             structured = "2026 · INFO · Backend · ready"
             initial = structured + "\nDetails\n"
@@ -754,17 +758,23 @@ class InformationRetentionTests(unittest.TestCase):
             positions = iter((25.0, 25.0, 25.0, 25.0))
             selected = iter((structured, structured))
             operations: list[str] = []
+            scroll_requests: list[dict[str, object]] = []
+            log_requests: list[dict[str, object]] = []
 
             def call(operation: str, **fields: object) -> dict:
                 operations.append(operation)
                 if operation == "logs":
+                    log_requests.append(fields)
                     return {
                         "ready": True,
                         "text": next(log_texts),
-                        "entries": [{"text": capture, "foreground": 1}, {"text": structured, "foreground": 1}],
+                        "entries": [{"text": capture, "foreground": None}, {"text": structured, "foreground": None}],
                         "expansion_verified": True,
                         "expanded_record": '{"message":"ready"}',
                     }
+                if operation == "scroll-logs":
+                    scroll_requests.append(fields)
+                    return {"ready": True}
                 if operation == "select-log-text":
                     return {"ready": True, "selected": next(selected)}
                 if operation == "log-position":
@@ -795,6 +805,11 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(operations.count("log-position"), 4)
             self.assertEqual(operations.count("resize-window"), 2)
             self.assertEqual(operations.count("profile-list-layout"), 1)
+            self.assertIn({"position": "bottom"}, scroll_requests)
+            self.assertEqual(
+                log_requests[1]["failure_screenshot_path"],
+                str(controller.screenshot_dir / "windows-details-expansion-failure.png"),
+            )
             self.assertTrue(controller.log_resize_verified)
             self.assertEqual(profile.read_text(encoding="utf-8"), "https://example.invalid/subscription")
 

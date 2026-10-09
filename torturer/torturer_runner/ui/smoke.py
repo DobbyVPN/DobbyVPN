@@ -41,14 +41,6 @@ _WINDOWS_PALETTE_SEVERITIES = ("DEBUG", "INFO", "WARN", "ERROR")
 _WINDOWS_TEXT_SIZE_SETTINGS_URI = "ms-settings:easeofaccess-display"
 
 
-def _windows_color_orders(color: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    """Return both channel orders accepted by the existing Windows UIA provider."""
-    return (
-        (color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF),
-        ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF),
-    )
-
-
 def _measure_windows_palette_pixels(
     screenshot: dict[str, object], row_bounds: object
 ) -> dict[str, object]:
@@ -1205,7 +1197,12 @@ class NativeUIController:
             ):
                 raise NativeUISmokeError("Windows log entries did not expose rendered structured text")
             self._call("scroll-logs", position="top")
-            initial_view = self._call("logs", verify_details=True)
+            failure_screenshot = self.screenshot_dir / "windows-details-expansion-failure.png"
+            initial_view = self._call(
+                "logs",
+                verify_details=True,
+                failure_screenshot_path=str(failure_screenshot),
+            )
             rendered = initial_view.get("entries", [])
             if not initial_view.get("expansion_verified"):
                 raise NativeUISmokeError("Windows structured log Details did not reveal the original record")
@@ -1231,34 +1228,6 @@ class NativeUIController:
             selected = self._call("select-log-text").get("selected", "")
             if " · " not in selected:
                 raise NativeUISmokeError("Windows native log text could not be selected")
-            palette: dict[str, int] = {}
-            for entry in rendered:
-                if not isinstance(entry, dict) or not isinstance(entry.get("foreground"), int):
-                    continue
-                line = entry.get("text", "").splitlines()[0]
-                fields = line.split(" · ")
-                if len(fields) >= 3 and fields[1] in {"DEBUG", "TRACE", "INFO", "WARN", "WARNING", "ERROR", "FATAL", "PANIC"}:
-                    palette.setdefault(fields[1], entry["foreground"])
-            if not palette:
-                raise NativeUISmokeError("Windows rendered log severity color was unavailable through native accessibility")
-            for severity in ("ERROR", "FATAL", "PANIC"):
-                if severity in palette:
-                    if not any(red > green and red > blue for red, green, blue in _windows_color_orders(palette[severity])):
-                        raise NativeUISmokeError(f"Windows {severity} logs are not rendered in a red severity color")
-            for severity in ("WARN", "WARNING"):
-                if severity in palette:
-                    if not any(red >= green > blue for red, green, blue in _windows_color_orders(palette[severity])):
-                        raise NativeUISmokeError(f"Windows {severity} logs are not rendered in an amber severity color")
-            if "INFO" in palette:
-                for warning in ("WARN", "WARNING"):
-                    if warning in palette and palette[warning] == palette["INFO"]:
-                        raise NativeUISmokeError("Windows warning logs use the information text color")
-                for error_level in ("ERROR", "FATAL", "PANIC"):
-                    if error_level in palette and palette[error_level] == palette["INFO"]:
-                        raise NativeUISmokeError("Windows error logs use the information text color")
-                for quiet in ("DEBUG", "TRACE"):
-                    if quiet in palette and palette[quiet] == palette["INFO"]:
-                        raise NativeUISmokeError("Windows debug/trace logs are not visually muted")
 
             frozen_position = self._call("log-position")
             frozen = self._call("logs").get("text", "")
