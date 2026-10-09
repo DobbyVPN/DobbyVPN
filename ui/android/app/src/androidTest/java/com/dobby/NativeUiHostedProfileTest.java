@@ -1849,7 +1849,6 @@ public final class NativeUiHostedProfileTest {
         if (count > 1) {
             verifyRenderedStopCancelsPendingSwitch(first, deadline);
             initial = snapshotResult("");
-            scrollControlsToTop(count, deadline);
             tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
             awaitSelection(initial.getLong("generation"), "AUTO_SELECT", -1, deadline);
             initial = snapshotResult("");
@@ -2213,6 +2212,7 @@ public final class NativeUiHostedProfileTest {
             }
         }
 
+        scrollControlsToTop(before.getJSONArray("profiles").length(), deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_SWITCH_STOP_TIMEOUT"));
         boolean vpnRemoved = awaitVpnNetwork(
                 false, remainingTimeout(deadline, "ANDROID_SWITCH_STOP_TIMEOUT")) == null;
@@ -2316,6 +2316,7 @@ public final class NativeUiHostedProfileTest {
                 || cancelled.getLong("generation") != originGeneration) {
             throw new AssertionError("Native revoke did not clear the pending switch: " + snapshotResult(""));
         }
+        scrollControlsToTop(profileCount, deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_NATIVE_REVOKE_TIMEOUT"));
         SystemClock.sleep(300L);
         JSONObject settled = snapshotResult("");
