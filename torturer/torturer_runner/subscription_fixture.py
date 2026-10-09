@@ -18,6 +18,7 @@ import ssl
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 from urllib.parse import urlsplit
 import urllib.request
@@ -37,6 +38,25 @@ class UnixHTTPServer(http.server.ThreadingHTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name = "localhost"
         self.server_port = 0
+
+    def get_request(self):
+        try:
+            return super().get_request()
+        except OSError as error:
+            try:
+                stdout, stderr = exception_output(error)
+                if stderr and not stderr.endswith(b"\n"):
+                    stderr += b"\n"
+                stderr += "".join(traceback.format_exception(error)).encode(
+                    "utf-8", errors="backslashreplace"
+                )
+                emit_streams("subscription-fixture-accept", stdout, stderr)
+            except BaseException as diagnostic_error:
+                error.add_note(
+                    "subscription-fixture-accept diagnostic forwarding failed:\n"
+                    + "".join(traceback.format_exception(diagnostic_error))
+                )
+            raise
 
 
 def command(
