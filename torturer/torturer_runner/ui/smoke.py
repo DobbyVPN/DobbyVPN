@@ -203,26 +203,28 @@ def _windows_job_capture_callbacks(deadline: float):
     return spawn, terminate, close
 
 
-def _native_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[bytes]:
+def _native_run(
+    command: list[str], *, label: str = "native-helper", **kwargs
+) -> subprocess.CompletedProcess[bytes]:
     """Deliver complete helper streams before interpreting its response."""
     try:
         result = run_finite_capture(command, **kwargs)
     except BaseException as error:
         try:
-            emit_streams("native-helper", getattr(error, "stdout", None), getattr(error, "stderr", None))
+            emit_streams(label, getattr(error, "stdout", None), getattr(error, "stderr", None))
         except BaseException as delivery:
             add_stream_notes(
                 error,
-                "native-helper",
+                label,
                 getattr(error, "stdout", None),
                 getattr(error, "stderr", None),
             )
             add_exception_notes(error, "diagnostic-delivery", delivery)
         raise
     try:
-        emit_streams("native-helper", result.stdout, result.stderr)
+        emit_streams(label, result.stdout, result.stderr)
     except BaseException as delivery:
-        add_stream_notes(delivery, "native-helper", result.stdout, result.stderr)
+        add_stream_notes(delivery, label, result.stdout, result.stderr)
         delivery.stdout = result.stdout
         delivery.stderr = result.stderr
         raise
@@ -431,6 +433,9 @@ class NativeUIController:
 
     def _call(self, operation: str, *, unbound: bool = False, **fields) -> dict:
         request = {"operation": operation, "executable": str(self.executable), **fields}
+        diagnostic_label = f"native-helper operation={operation}"
+        if "path" in fields:
+            diagnostic_label += f" path={fields['path']}"
         if self.pid is not None and not unbound:
             request["pid"] = self.pid
         if self.identity is not None and not unbound:
@@ -455,6 +460,7 @@ class NativeUIController:
             }
         result = _native_run(
             [str(self.helper)],
+            label=diagnostic_label,
             timeout_seconds=operation_timeout,
             input_bytes=json.dumps(request).encode("utf-8"),
             termination_grace_seconds=cleanup_timeout / 2,

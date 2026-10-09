@@ -850,9 +850,14 @@ class InformationRetentionTests(unittest.TestCase):
                 return_value=WindowsJobCloseResult(),
             ) as close_job,
         ):
-            response = controller._call("type", source="profile.ovpn")
+            screenshot = "D:/screenshots/001-startup.png"
+            response = controller._call("capture", path=screenshot)
 
             self.assertEqual(response, {"ready": True})
+            self.assertEqual(
+                run.call_args.kwargs["label"],
+                f"native-helper operation=capture path={screenshot}",
+            )
             self.assertIn("popen_factory", run.call_args.kwargs)
             self.assertIn("terminate", run.call_args.kwargs)
             self.assertIn("close_boundary", run.call_args.kwargs)

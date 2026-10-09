@@ -124,15 +124,38 @@ class DiagnosticPreservationTests(unittest.TestCase):
             ["native-command"], 7, stdout=stdout, stderr=stderr,
         )
         destination = BinaryStderr()
+        label = "native-helper operation=capture path=C:/screenshots/001-startup.png"
 
         with mock.patch.object(smoke, "run_finite_capture", return_value=completed):
             with redirect_stderr(destination):
-                result = smoke._native_run(["native-command"], timeout_seconds=5)
+                result = smoke._native_run(["native-command"], label=label, timeout_seconds=5)
 
         self.assertIs(result, completed)
         forwarded = destination.buffer.getvalue()
-        self.assertIn(stdout, forwarded)
-        self.assertIn(stderr, forwarded)
+        self.assertIn(f"[{label} stdout]\n".encode() + stdout, forwarded)
+        self.assertIn(f"[{label} stderr]\n".encode() + stderr, forwarded)
+
+    def test_native_ui_timeout_forwards_tagged_partial_streams(self) -> None:
+        smoke = _load_script(
+            "dobbyvpn_native_ui_smoke_timeout_streams",
+            PRODUCT_ROOT / "torturer/torturer_runner/ui/smoke.py",
+        )
+        subprocess = __import__("subprocess")
+        stdout = b'{"ready":true}\x00\xff\n'
+        stderr = b"native-ui-phase=capture-physical-start\n"
+        failure = subprocess.TimeoutExpired(("native-command",), 10, output=stdout, stderr=stderr)
+        destination = BinaryStderr()
+        label = "native-helper operation=capture path=C:/screenshots/001-startup.png"
+
+        with mock.patch.object(smoke, "run_finite_capture", side_effect=failure):
+            with redirect_stderr(destination):
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    smoke._native_run(["native-command"], label=label, timeout_seconds=10)
+
+        self.assertIs(caught.exception, failure)
+        forwarded = destination.buffer.getvalue()
+        self.assertIn(f"[{label} stdout]\n".encode() + stdout, forwarded)
+        self.assertIn(f"[{label} stderr]\n".encode() + stderr, forwarded)
 
     def test_hosted_read_failure_keeps_other_streams_and_original_error(self) -> None:
         collector = _load_script(

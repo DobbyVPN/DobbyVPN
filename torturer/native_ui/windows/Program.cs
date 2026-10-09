@@ -1934,6 +1934,7 @@ internal static class Program
         CancellationTokenSource? profileSwitchWatchdogCancellation = null;
         Task? profileSwitchWatchdog = null;
         var profileSwitchBaselineState = 0; // 0=waiting for a complete pair, 1=disarmed, 2=watchdog capture started.
+        string? mainOperation = null;
         try
         {
             if (args.Length == 0) TracePhase($"main-entry utc={UtcTimestamp()}");
@@ -1961,6 +1962,8 @@ internal static class Program
             var request = input.RootElement;
             string Text(string key) => request.GetProperty(key).GetString()!;
             var operation = Text("operation");
+            mainOperation = operation;
+            TracePhase($"main-operation-start utc={UtcTimestamp()} operation={JsonSerializer.Serialize(operation)}");
             if (operation == "cancel-profile-switch")
                 TracePhase($"profile-switch-request-parsed utc={UtcTimestamp()} target={JsonSerializer.Serialize(Text("target"))} competing={JsonSerializer.Serialize(Text("competing"))}");
             if (operation == "settings-text-size")
@@ -2968,12 +2971,21 @@ internal static class Program
                     x = capturedBounds.X, y = capturedBounds.Y,
                     width = capturedBounds.Width, height = capturedBounds.Height,
                 };
-            Console.WriteLine(JsonSerializer.Serialize(response));
+            TracePhase($"main-response-write-start utc={UtcTimestamp()} operation={JsonSerializer.Serialize(operation)}");
+            Console.Out.WriteLine(JsonSerializer.Serialize(response));
+            Console.Out.Flush();
+            TracePhase($"main-response-flush-complete utc={UtcTimestamp()} operation={JsonSerializer.Serialize(operation)}");
             return 0;
         }
-        catch (Exception error) { Console.Error.WriteLine(error); Console.Error.Flush(); return 1; }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            Console.Error.Flush();
+            return 1;
+        }
         finally
         {
+            TracePhase($"main-finally-enter utc={UtcTimestamp()} operation={JsonSerializer.Serialize(mainOperation)}");
             if (profileSwitchWatchdogCancellation is not null)
             {
                 Interlocked.CompareExchange(ref profileSwitchBaselineState, 1, 0);
@@ -2986,6 +2998,7 @@ internal static class Program
                 }
                 profileSwitchWatchdogCancellation.Dispose();
             }
+            TracePhase($"main-finally-exit utc={UtcTimestamp()} operation={JsonSerializer.Serialize(mainOperation)}");
         }
     }
 
@@ -3332,6 +3345,8 @@ internal static class Program
 
     private static Rectangle CapturePhysical(IntPtr window, int expectedPid, string path)
     {
+        var captureStarted = Stopwatch.GetTimestamp();
+        TracePhase($"capture-physical-start utc={UtcTimestamp()} pid={expectedPid} hwnd=0x{window.ToInt64():X} path={JsonSerializer.Serialize(path)}");
         GetWindowThreadProcessId(window, out var owner);
         if (owner != expectedPid) throw new InvalidOperationException("UI window ownership changed before screenshot");
         if (!GetWindowRect(window, out var r) || r.Right - r.Left < 300 || r.Bottom - r.Top < 300)
@@ -3347,7 +3362,9 @@ internal static class Program
             client.Width,
             client.Height
         );
+        TracePhase($"capture-cursor-prepare-start utc={UtcTimestamp()} path={JsonSerializer.Serialize(path)}");
         PrepareCaptureCursor(window, target, client, display.Bounds);
+        TracePhase($"capture-cursor-prepare-complete utc={UtcTimestamp()} path={JsonSerializer.Serialize(path)}");
         void RequireUnobstructed()
         {
             for (var other = GetWindow(window, 3); other != IntPtr.Zero; other = GetWindow(other, 3))
@@ -3361,6 +3378,7 @@ internal static class Program
         var clientRendered = false;
         var renderWait = Stopwatch.StartNew();
         var frameCount = 0;
+        TracePhase($"capture-render-wait-start utc={UtcTimestamp()} client={clientInBitmap} path={JsonSerializer.Serialize(path)}");
         do
         {
             if (renderWait.Elapsed.TotalSeconds >= 5) break;
@@ -3371,16 +3389,20 @@ internal static class Program
             frameCount++;
             clientRendered = HasNonuniformClientPixels(bitmap, clientInBitmap, renderWait);
         } while (!clientRendered && renderWait.Elapsed.TotalSeconds < 5);
+        TracePhase($"capture-render-wait-complete utc={UtcTimestamp()} elapsed_ms={renderWait.Elapsed.TotalMilliseconds:F3} frames={frameCount} rendered={clientRendered} path={JsonSerializer.Serialize(path)}");
         if (!clientRendered)
             throw new InvalidOperationException(
                 $"UI client area did not render within 5 seconds ({frameCount} frames captured)"
             );
+        TracePhase($"capture-image-save-start utc={UtcTimestamp()} path={JsonSerializer.Serialize(path)}");
         bitmap.Save(path, ImageFormat.Png);
+        TracePhase($"capture-image-save-complete utc={UtcTimestamp()} path={JsonSerializer.Serialize(path)}");
         RequireUnobstructed();
         GetWindowThreadProcessId(window, out var afterOwner);
         if (afterOwner != expectedPid) throw new InvalidOperationException("UI window ownership changed during screenshot");
         if (!GetWindowRect(window, out var after) || !r.Equals(after))
             throw new InvalidOperationException("Native window changed during screenshot");
+        TracePhase($"capture-physical-complete utc={UtcTimestamp()} elapsed_ms={Stopwatch.GetElapsedTime(captureStarted).TotalMilliseconds:F3} bounds={target} path={JsonSerializer.Serialize(path)}");
         return target;
     }
 }
