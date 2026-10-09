@@ -169,6 +169,11 @@ def _windows_job_capture_callbacks(deadline: float):
     timeout_stage = f"{stage}-timeout"
 
     def spawn(command: list[str], **popen_kwargs):
+        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if create_no_window:
+            popen_kwargs["creationflags"] = (
+                int(popen_kwargs.get("creationflags", 0) or 0) | create_no_window
+            )
         return popen_with_windows_job(
             subprocess.Popen,
             command,

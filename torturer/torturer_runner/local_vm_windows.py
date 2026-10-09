@@ -368,6 +368,7 @@ def _native_ui_wrapper(
         f"  $info.Arguments = {arguments}",
         f"  $info.WorkingDirectory = {_powershell_literal(str(cwd))}",
         "  $info.UseShellExecute = $false",
+        "  $info.CreateNoWindow = $true",
         "  $info.RedirectStandardOutput = $true",
         "  $info.RedirectStandardError = $true",
         "  $userEnvironment = @{}",
@@ -482,7 +483,7 @@ def _native_ui_register_script(
     """Build the SYSTEM-side registration/start operation."""
 
     action_arguments = (
-        "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "
+        "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "
         f'"{wrapper}"'
     )
     # A trigger is unnecessary for a task started with Start-ScheduledTask.
