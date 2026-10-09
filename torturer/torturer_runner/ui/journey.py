@@ -1128,7 +1128,7 @@ def _exercise_subscription_controls(
     phase: str = "all",
     phase_state: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    if phase not in {"all", "subscription", "logs"}:
+    if phase not in {"all", "subscription", "logs", "layout"}:
         raise NativeUIJourneyError(f"unknown native subscription-controls phase: {phase}")
     initial = base._snapshot(min(timeout, 30), "NATIVE_SELECTION_STATUS_FAILED")
     if len(initial.get("profiles", [])) < 2:
@@ -1261,6 +1261,94 @@ def _exercise_subscription_controls(
                 return current
             time.sleep(0.1)
         raise NativeUIJourneyError("Native selection did not reach its requested generation and profile")
+
+    def exercise_profile_layout(valid_source: str, after_http_paste: dict) -> None:
+        # A long inventory must remain bounded to its profile viewport so the
+        # independent diagnostics pane stays usable on desktop-sized windows.
+        previous_inventory = fixture.profile_bytes
+        large_inventory = b"\n\n".join(
+            (
+                b'[[Outline]]\nDescription = "' +
+                (b"" if index == 0 else f"Layout profile {index + 1}".encode("utf-8")) +
+                b'"\nServer = "127.0.0.1"\nPort = 9\nPassword = "never-connect-layout-' +
+                str(index + 1).encode("ascii") + b'"'
+            )
+            for index in range(24)
+        )
+        fixture.replace_response(large_inventory)
+        layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=24-profiles"
+        before_layout_gets = stats()["subscription_gets"]
+        ui.import_link(layout_source)
+        large_layout = wait_for_snapshot(
+            lambda value: value.get("source_url") == layout_source,
+            "the 24-profile layout fixture did not load",
+        )
+        wait_for_gets(before_layout_gets + 1, "the 24-profile layout fixture did not complete exactly one request")
+        if len(large_layout.get("profiles", [])) != 24:
+            raise NativeUIJourneyError("desktop did not load all 24 profiles in source order")
+        require_active_generation(
+            large_layout, after_http_paste,
+            "loading a long profile list changed or interrupted the active connection",
+        )
+        layout_view = ui.snapshot()
+        expected_logs_control = "Backend logs" if ui.platform == "windows" else "Connection logs"
+        if not {"Profile 1 action", "Profile 2 action", expected_logs_control}.issubset(set(layout_view.get("labels", []))):
+            raise NativeUIJourneyError("the long profile list hid the top profile actions or desktop logs pane")
+
+        def verify_long_profile_list() -> dict[str, object]:
+            _exercise_long_profile_list_viewport(ui)
+            return {"verified": True}
+
+        _native_ui_action(
+            ui, "long-profile-list", "subscription-controls", timeout,
+            verify_long_profile_list,
+        )
+        if ui.platform == "windows":
+            _exercise_windows_text_size_layout(ui, base, timeout, large_layout, checks)
+
+        fixture.replace_response(previous_inventory)
+        restore_layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=restore"
+        before_restore_layout_gets = stats()["subscription_gets"]
+        ui.import_link(restore_layout_source)
+        restored_layout = wait_for_snapshot(
+            lambda value: value.get("source_url") == restore_layout_source,
+            "the normal profile inventory did not return after long-list verification",
+        )
+        wait_for_gets(before_restore_layout_gets + 1, "restoring the normal inventory did not complete exactly one request")
+        require_active_generation(
+            restored_layout, after_http_paste,
+            "restoring the normal profile inventory changed or interrupted the active connection",
+        )
+        if restored_layout.get("digest") != after_http_paste.get("digest"):
+            raise NativeUIJourneyError("long-list verification did not restore the prior profile inventory")
+        checks["long_profile_list_keeps_logs_accessible"] = True
+
+    if phase == "layout":
+        active_profile = initial.get("active_profile")
+        digest = initial.get("digest")
+        valid_source = ui.profile.read_text(encoding="utf-8").strip()
+        if (
+            initial.get("source_kind") != "URL"
+            or not isinstance(initial.get("source_url"), str)
+            or not initial.get("source_url")
+            or initial.get("source_url") != valid_source
+            or not isinstance(digest, str)
+            or not digest
+            or initial.get("state") != "CONNECTED"
+            or initial.get("active_mode") != "PROFILE_INDEX"
+            or type(initial.get("active_index")) is not int
+            or not isinstance(active_profile, dict)
+            or active_profile.get("index") != initial.get("active_index")
+            or initial.get("active_digest") != digest
+            or initial.get("pending_target") is not None
+        ):
+            raise NativeUIJourneyError(
+                "Windows layout phase requires its accepted URL and a connected, selected normal profile"
+            )
+        require_disconnect_control(ui.wait_status("Connected"))
+        exercise_profile_layout(valid_source, initial)
+        ui.capture("subscription-controls")
+        return checks
 
     if phase in {"all", "subscription"}:
         initial_stats = stats()
@@ -1939,6 +2027,7 @@ def _exercise_subscription_controls(
     empty_logs = ui._call("logs")
     if empty_logs.get("ready") is not True or empty_logs.get("text", "").strip():
         raise NativeUIJourneyError("Clear did not leave an empty rendered log view")
+    checks["clear_logs_native"] = True
     before_clear_import = base._snapshot(min(timeout, 30), "NATIVE_CLEAR_STATUS_FAILED")
     clear_import_requests = stats()["subscription_gets"]
     clear_source = url + "?clear-follow=event"
@@ -2124,67 +2213,13 @@ def _exercise_subscription_controls(
     # Paste rejected the clipboard value and preserved the already-rendered URL.
     # Restore only the fixture file for the following native helper operations.
     ui.profile.write_text(valid_source, encoding="utf-8")
-    # A long inventory must remain bounded to its profile viewport so the
-    # independent diagnostics pane stays usable on desktop-sized windows.
-    previous_inventory = fixture.profile_bytes
-    large_inventory = b"\n\n".join(
-        (
-            b'[[Outline]]\nDescription = "' +
-            (b"" if index == 0 else f"Layout profile {index + 1}".encode("utf-8")) +
-            b'"\nServer = "127.0.0.1"\nPort = 9\nPassword = "never-connect-layout-' +
-            str(index + 1).encode("ascii") + b'"'
-        )
-        for index in range(24)
-    )
-    fixture.replace_response(large_inventory)
-    layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=24-profiles"
-    before_layout_gets = stats()["subscription_gets"]
-    ui.import_link(layout_source)
-    large_layout = wait_for_snapshot(
-        lambda value: value.get("source_url") == layout_source,
-        "the 24-profile layout fixture did not load",
-    )
-    wait_for_gets(before_layout_gets + 1, "the 24-profile layout fixture did not complete exactly one request")
-    if len(large_layout.get("profiles", [])) != 24:
-        raise NativeUIJourneyError("desktop did not load all 24 profiles in source order")
-    require_active_generation(
-        large_layout, after_http_paste,
-        "loading a long profile list changed or interrupted the active connection",
-    )
-    layout_view = ui.snapshot()
-    expected_logs_control = "Backend logs" if ui.platform == "windows" else "Connection logs"
-    if not {"Profile 1 action", "Profile 2 action", expected_logs_control}.issubset(set(layout_view.get("labels", []))):
-        raise NativeUIJourneyError("the long profile list hid the top profile actions or desktop logs pane")
-    def verify_long_profile_list() -> dict[str, object]:
-        _exercise_long_profile_list_viewport(ui)
-        return {"verified": True}
+    if phase == "logs":
+        ui.capture("subscription-controls")
+        return checks
 
-    _native_ui_action(
-        ui, "long-profile-list", "subscription-controls", timeout,
-        verify_long_profile_list,
-    )
-    if ui.platform == "windows":
-        _exercise_windows_text_size_layout(ui, base, timeout, large_layout, checks)
-
-    fixture.replace_response(previous_inventory)
-    restore_layout_source = valid_source + ("&" if "?" in valid_source else "?") + "layout=restore"
-    before_restore_layout_gets = stats()["subscription_gets"]
-    ui.import_link(restore_layout_source)
-    restored_layout = wait_for_snapshot(
-        lambda value: value.get("source_url") == restore_layout_source,
-        "the normal profile inventory did not return after long-list verification",
-    )
-    wait_for_gets(before_restore_layout_gets + 1, "restoring the normal inventory did not complete exactly one request")
-    require_active_generation(
-        restored_layout, after_http_paste,
-        "restoring the normal profile inventory changed or interrupted the active connection",
-    )
-    if restored_layout.get("digest") != after_http_paste.get("digest"):
-        raise NativeUIJourneyError("long-list verification did not restore the prior profile inventory")
-    checks["long_profile_list_keeps_logs_accessible"] = True
+    exercise_profile_layout(valid_source, after_http_paste)
 
     ui.capture("subscription-controls")
-    checks["clear_logs_native"] = True
     return checks
 
 
@@ -2404,7 +2439,7 @@ def _windows_phase_failure_group(
     failures: list[tuple[str, BaseException, str]], checks: dict[str, object],
 ) -> BaseExceptionGroup:
     group = BaseExceptionGroup(
-        "Windows native subscription and logs phases failed",
+        "Windows native subscription, logs, and layout phases failed",
         [error for _, error, _ in failures],
     )
     for name, _, details in failures:
@@ -2424,7 +2459,7 @@ def _run_windows_subscription_phases(
     original_digest: str,
     phase_state: dict[str, object],
     checks: dict[str, object],
-) -> tuple[list[tuple[str, BaseException, str]], bool, bool]:
+) -> tuple[list[tuple[str, BaseException, str]], bool, bool, bool]:
     failures: list[tuple[str, BaseException, str]] = []
     try:
         _exercise_subscription_controls(
@@ -2448,12 +2483,30 @@ def _run_windows_subscription_phases(
                 ui, base, url, fixture, timeout, check_sink=checks, phase="logs",
             )
         except BaseException as error:
-            _capture_native_phase_failure(failures, "Windows logs-layout phase", error)
+            _capture_native_phase_failure(failures, "Windows logs/Clear phase", error)
         else:
             logs_phase_succeeded = True
 
-    legacy_phase_ready = logs_phase_succeeded
-    if not logs_phase_succeeded:
+    layout_phase_succeeded = False
+    try:
+        _restore_windows_subscription_preconditions(
+            ui, base, fixture, url, original_profile, original_digest, timeout,
+            phase_state, "before-layout",
+        )
+    except BaseException as error:
+        _capture_native_phase_failure(failures, "Windows layout-phase precondition restore", error)
+    else:
+        try:
+            _exercise_subscription_controls(
+                ui, base, url, fixture, timeout, check_sink=checks, phase="layout",
+            )
+        except BaseException as error:
+            _capture_native_phase_failure(failures, "Windows profile-layout phase", error)
+        else:
+            layout_phase_succeeded = True
+
+    legacy_phase_ready = layout_phase_succeeded
+    if not layout_phase_succeeded:
         try:
             _restore_windows_subscription_preconditions(
                 ui, base, fixture, url, original_profile, original_digest, timeout,
@@ -2463,7 +2516,7 @@ def _run_windows_subscription_phases(
             _capture_native_phase_failure(failures, "Windows legacy-integration precondition restore", error)
         else:
             legacy_phase_ready = True
-    return failures, logs_phase_succeeded, legacy_phase_ready
+    return failures, logs_phase_succeeded, layout_phase_succeeded, legacy_phase_ready
 
 
 def _verify_cold_reopen_clear_boundary(ui: Any, checks: dict[str, object]) -> None:
@@ -2589,7 +2642,8 @@ def run_journey(args: argparse.Namespace) -> dict[str, object]:
             phase_state: dict[str, object] = {}
             (
                 windows_phase_failures,
-                logs_phase_succeeded,
+                _,
+                _,
                 legacy_phase_ready,
             ) = _run_windows_subscription_phases(
                 ui, base, url, subscription, request_timeout, original_profile,
