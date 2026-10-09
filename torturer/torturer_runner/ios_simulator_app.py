@@ -1040,6 +1040,7 @@ def _run_install_observations(
             observations.append((label, result))
         elif isinstance(result, BaseException):
             add_exception_notes(failure, label, result)
+            observations.append((label, result))
         else:
             add_stream_notes(failure, label, result.stdout, result.stderr)
             observations.append((label, result))
@@ -1097,6 +1098,62 @@ _BOOTSTATUS_FAILURE_SAMPLE_TARGETS = {
     "springboard": "/System/Library/CoreServices/SpringBoard.app/SpringBoard",
     "backboardd": "/usr/libexec/backboardd",
 }
+
+
+def _has_operation_not_permitted(error: BaseException) -> bool:
+    parts: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(str(current))
+        parts.extend(str(note) for note in getattr(current, "__notes__", ()))
+        for stream in (getattr(current, "stdout", None), getattr(current, "stderr", None)):
+            if stream is not None:
+                parts.append(output_text(stream))
+        current = current.__cause__
+    diagnostic = "\n".join(parts).lower()
+    return "operation not permitted" in diagnostic or re.search(r"\beperm\b", diagnostic) is not None
+
+
+def _install_sample_target(label: str) -> tuple[str, str, tuple[str, ...]] | None:
+    for target, suffix in _INSTALL_FAILURE_SAMPLE_TARGETS.items():
+        prefix = f"install_failure_sample_{target}_pid_"
+        if not label.startswith(prefix):
+            continue
+        pid = label[len(prefix):]
+        if not pid.isdecimal():
+            return None
+        suffixes = (suffix,) if isinstance(suffix, str) else suffix
+        return target, pid, suffixes
+    return None
+
+
+def _matching_install_process_record(
+    snapshot: str,
+    *,
+    pid: str,
+    suffixes: tuple[str, ...],
+) -> dict[str, str] | None:
+    for line in snapshot.splitlines():
+        fields = line.strip().split(None, 7)
+        if len(fields) != 8 or fields[0] != pid:
+            continue
+        command = fields[7]
+        if not any(command.endswith(suffix) for suffix in suffixes):
+            continue
+        return {
+            "ppid": fields[1],
+            "pgid": fields[2],
+            "uid": fields[3],
+            "euid": fields[4],
+            "state": fields[5],
+            "etime": fields[6],
+            "command": command,
+        }
+    return None
+
+
 _BOOTSTATUS_NATIVE_LOGS = (
     Path("system.log"),
     Path("MobileInstallation") / "mobile_installation.log.0",
@@ -1684,9 +1741,71 @@ def run_ios_simulator_app_contract(
                         )
                         for note in sample_notes:
                             install_error.add_note(note)
-                        _run_install_observations(
+                        sample_observations = _run_install_observations(
                             runner, sample_queries, budget=budget, failure=install_error
                         )
+                        for sample_label, sample_observation in sample_observations:
+                            if not isinstance(sample_observation, BaseException):
+                                continue
+                            if not _has_operation_not_permitted(sample_observation):
+                                continue
+                            sample_target = _install_sample_target(sample_label)
+                            if sample_target is None:
+                                continue
+                            target, pid, suffixes = sample_target
+                            identity_label = f"install_failure_sample_{target}_pid_{pid}_identity"
+                            identity_observations = _run_install_observations(
+                                runner,
+                                ((
+                                    identity_label,
+                                    ["/bin/ps", "-ww", "-p", pid, "-o", "pid,ppid,pgid,uid,euid,state,etime,command"],
+                                    2,
+                                ),),
+                                budget=budget,
+                                failure=install_error,
+                            )
+                            identity_result = (
+                                identity_observations[0][1]
+                                if identity_observations
+                                else None
+                            )
+                            if not isinstance(identity_result, CommandResult):
+                                install_error.add_note(
+                                    f"{identity_label}_sample_skipped=identity snapshot unavailable"
+                                )
+                                continue
+                            identity = _matching_install_process_record(
+                                identity_result.stdout,
+                                pid=pid,
+                                suffixes=suffixes,
+                            )
+                            if identity is None:
+                                install_error.add_note(
+                                    f"{identity_label}_sample_skipped=exact target identity was not present"
+                                )
+                                continue
+                            if identity["state"].upper().startswith("Z"):
+                                install_error.add_note(
+                                    f"{identity_label}_sample_skipped=target is not live; "
+                                    f"state={identity['state']}"
+                                )
+                                continue
+                            install_error.add_note(
+                                f"{identity_label}_matched: ppid={identity['ppid']} "
+                                f"pgid={identity['pgid']} uid={identity['uid']} "
+                                f"euid={identity['euid']} state={identity['state']} "
+                                f"etime={identity['etime']} command={identity['command']}"
+                            )
+                            _run_install_observations(
+                                runner,
+                                ((
+                                    f"install_failure_privileged_sample_{target}_pid_{pid}",
+                                    ["/usr/bin/sudo", "-n", "/usr/bin/sample", pid, "1", "1", "-file", "/dev/stdout"],
+                                    5,
+                                ),),
+                                budget=budget,
+                                failure=install_error,
+                            )
                     else:
                         install_error.add_note(
                             "install_failure_process_samples: skipped because the process snapshot was unavailable"

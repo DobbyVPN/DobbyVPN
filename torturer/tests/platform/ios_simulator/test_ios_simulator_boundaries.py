@@ -530,6 +530,27 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                     error.stdout = b"install stdout\x00\xff"
                     error.stderr = b"install stderr\n"
                     raise error
+                if arguments[:2] == ["/bin/ps", "-ww"]:
+                    self.clock[0] += timeout_seconds or 0
+                    if self.diagnostic_mode == "sample-eperm-vanished":
+                        return ios_simulator_app.CommandResult(
+                            0,
+                            "PID PPID PGID UID EUID STAT ELAPSED COMMAND\n",
+                            "fresh ps stderr\n",
+                        )
+                    process_state = "Z" if self.diagnostic_mode == "sample-eperm-zombie" else "S"
+                    process_command = (
+                        "/usr/bin/launchd"
+                        if self.diagnostic_mode == "sample-eperm-reused"
+                        else "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/"
+                        "XPCServices/SimLaunchHost.arm64.xpc/Contents/MacOS/SimLaunchHost.arm64"
+                    )
+                    return ios_simulator_app.CommandResult(
+                        0,
+                        "PID PPID PGID UID EUID STAT ELAPSED COMMAND\n"
+                        f"19487 1 19487 501 501 {process_state} 08:18 {process_command}\n",
+                        "fresh ps stderr\n",
+                    )
                 if arguments[:2] == ["/bin/ps", "-A"]:
                     self.clock[0] += timeout_seconds or 0
                     if self.diagnostic_mode == "ps-failure":
@@ -561,8 +582,27 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                         return ios_simulator_app.CommandResult(
                             7, "sample denied stdout\x00\xff", "sample denied stderr\n"
                         )
+                    if self.diagnostic_mode.startswith("sample-eperm") and arguments[1] == "19487":
+                        if self.diagnostic_mode == "sample-eperm-budget-exhausted":
+                            self.clock[0] = 480
+                        return ios_simulator_app.CommandResult(
+                            1,
+                            "sample EPERM stdout\x00\xff",
+                            "sample attach failed: Operation not permitted\n",
+                        )
                     return ios_simulator_app.CommandResult(
                         0, f"sample stdout pid={arguments[1]}\x00\xff", "sample stderr\n"
+                    )
+                if arguments[:3] == ["/usr/bin/sudo", "-n", "/usr/bin/sample"]:
+                    self.clock[0] += timeout_seconds or 0
+                    if self.diagnostic_mode == "sample-eperm-denied":
+                        return ios_simulator_app.CommandResult(
+                            1,
+                            "sudo sample denied stdout\x00\xff",
+                            "sudo: a password is required\n",
+                        )
+                    return ios_simulator_app.CommandResult(
+                        0, f"privileged sample stack pid={arguments[3]}\x00\xff", "sudo sample stderr\n"
                     )
                 if arguments[:3] == ["/usr/bin/log", "show", "--style"]:
                     self.clock[0] += timeout_seconds or 0
@@ -583,6 +623,12 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             (345, 180, "budget-clamped", "arm64"),
             (600, 300, "samples", "arm64"),
             (600, 300, "sample-denied", "arm64"),
+            (600, 300, "sample-eperm", "arm64"),
+            (600, 300, "sample-eperm-denied", "arm64"),
+            (600, 300, "sample-eperm-vanished", "arm64"),
+            (600, 300, "sample-eperm-zombie", "arm64"),
+            (600, 300, "sample-eperm-reused", "arm64"),
+            (600, 300, "sample-eperm-budget-exhausted", "arm64"),
             (600, 300, "ambiguous", "arm64"),
             (600, 300, "samples", "x86_64"),
             (600, 300, "ps-failure", "arm64"),
@@ -653,7 +699,6 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 self.assertLess(index(["xcrun", "simctl", "list", "devices", "-j"]), index(["xcrun", "simctl", "install"]))
                 if diagnostic_mode != "budget-clamped":
                     self.assertLess(index(["xcrun", "simctl", "install"]), index(["/bin/ps", "-A"]))
-                    self.assertLess(index(["/bin/ps", "-A"]), index(["/usr/bin/log", "show"]))
                     sample_calls = [
                         (arguments, timeout)
                         for arguments, timeout in commands
@@ -663,10 +708,6 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                     self.assertIn("install_interval_utc=", notes)
                     self.assertIn("ps diagnostic stderr", notes)
                     self.assertIn("ps diagnostic stderr", report)
-                    self.assertIn("unified log stderr", notes)
-                    self.assertIn("unified log stderr", report)
-                    self.assertIn("installd diagnostic log", report)
-                    self.assertLess(index(["/usr/bin/log", "show"]), index(["xcrun", "simctl", "shutdown"]))
                     if diagnostic_mode == "ps-failure":
                         self.assertIn("process snapshot\x00ÿ", notes)
                         self.assertIn("process snapshot\x00ÿ", report)
@@ -676,7 +717,24 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                         self.assertIn("process snapshot was unavailable", notes)
                         self.assertFalse(sample_calls)
                         self.assertEqual(clock[0], 360)
+                    elif diagnostic_mode == "sample-eperm-budget-exhausted":
+                        self.assertIn("sample EPERM stdout\x00ÿ", notes)
+                        self.assertIn("sample attach failed: Operation not permitted", notes)
+                        self.assertIn("sample EPERM stdout\x00ÿ", report)
+                        self.assertIn("sample attach failed: Operation not permitted", report)
+                        self.assertIn("functional budget before cleanup reserve", notes)
+                        self.assertIn("identity snapshot unavailable", notes)
+                        self.assertFalse(any(arguments[:2] == ["/bin/ps", "-ww"] for arguments in command_arguments))
+                        self.assertFalse(any(arguments[:2] == ["/usr/bin/sudo", "-n"] for arguments in command_arguments))
+                        self.assertFalse(any(arguments[:3] == ["/usr/bin/log", "show", "--style"] for arguments in command_arguments))
+                        self.assertEqual({arguments[1] for arguments, _ in sample_calls}, {"17145", "19487"})
+                        self.assertEqual(clock[0], 480)
                     else:
+                        self.assertLess(index(["/bin/ps", "-A"]), index(["/usr/bin/log", "show"]))
+                        self.assertIn("unified log stderr", notes)
+                        self.assertIn("unified log stderr", report)
+                        self.assertIn("installd diagnostic log", report)
+                        self.assertLess(index(["/usr/bin/log", "show"]), index(["xcrun", "simctl", "shutdown"]))
                         expected_pids = {"17145", "19487", "20765", "20792"}
                         if diagnostic_mode == "ambiguous":
                             expected_pids.remove("17145")
@@ -690,21 +748,81 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                         self.assertLess(index(["/bin/ps", "-A"]), index(["/usr/bin/sample"]))
                         self.assertLess(index(["/usr/bin/sample"]), index(["/usr/bin/log", "show"]))
                         self.assertIn(f"SimLaunchHost.{simlaunch_arch}", notes)
+                        sudo_calls = [
+                            (arguments, timeout)
+                            for arguments, timeout in commands
+                            if arguments[:2] == ["/usr/bin/sudo", "-n"]
+                        ]
                         if diagnostic_mode == "sample-denied":
                             self.assertIn("sample denied stdout\x00ÿ", notes)
                             self.assertIn("sample denied stderr", notes)
                             self.assertIn("exit code 7", notes)
                             self.assertIn("sample denied stdout\x00ÿ", report)
                             self.assertIn("sample denied stderr", report)
+                            self.assertFalse(sudo_calls)
+                            self.assertFalse(any(arguments[:2] == ["/bin/ps", "-ww"] for arguments in command_arguments))
+                            sampled_successfully = expected_pids - {"19487"}
+                        elif diagnostic_mode.startswith("sample-eperm"):
+                            self.assertIn("sample EPERM stdout\x00ÿ", notes)
+                            self.assertIn("sample attach failed: Operation not permitted", notes)
+                            self.assertIn("install_failure_sample_simlaunchhost_pid_19487_identity_stdout:", notes)
+                            identity_calls = [
+                                arguments for arguments, _ in commands
+                                if arguments[:2] == ["/bin/ps", "-ww"]
+                            ]
+                            self.assertEqual(len(identity_calls), 1)
+                            self.assertEqual(
+                                next(arguments for arguments, _ in commands if arguments[:2] == ["/bin/ps", "-ww"]),
+                                ["/bin/ps", "-ww", "-p", "19487", "-o", "pid,ppid,pgid,uid,euid,state,etime,command"],
+                            )
+                            if diagnostic_mode == "sample-eperm-vanished":
+                                self.assertFalse(sudo_calls)
+                                self.assertIn("sample_skipped=exact target identity was not present", notes)
+                                self.assertIn("PID PPID PGID UID EUID STAT ELAPSED COMMAND", notes)
+                            elif diagnostic_mode == "sample-eperm-zombie":
+                                self.assertFalse(sudo_calls)
+                                self.assertIn("sample_skipped=target is not live; state=Z", notes)
+                                self.assertIn("state=Z", notes)
+                            elif diagnostic_mode == "sample-eperm-reused":
+                                self.assertFalse(sudo_calls)
+                                self.assertIn("sample_skipped=exact target identity was not present", notes)
+                                self.assertIn("/usr/bin/launchd", notes)
+                            elif diagnostic_mode == "sample-eperm-denied":
+                                self.assertIn("uid=501 euid=501 state=S", notes)
+                                self.assertIn("command=/Library/Developer/PrivateFrameworks/CoreSimulator.framework/", notes)
+                                self.assertEqual(len(sudo_calls), 1)
+                                self.assertEqual(sudo_calls[0][0], [
+                                    "/usr/bin/sudo", "-n", "/usr/bin/sample", "19487", "1", "1", "-file", "/dev/stdout",
+                                ])
+                                self.assertEqual(sudo_calls[0][1], 5)
+                                self.assertIn("sudo sample denied stdout\x00ÿ", notes)
+                                self.assertIn("sudo: a password is required", notes)
+                                self.assertIn("sudo sample denied stdout\x00ÿ", report)
+                                self.assertIn("sudo: a password is required", report)
+                            else:
+                                self.assertIn("uid=501 euid=501 state=S", notes)
+                                self.assertIn("command=/Library/Developer/PrivateFrameworks/CoreSimulator.framework/", notes)
+                                self.assertEqual(len(sudo_calls), 1)
+                                self.assertIn("privileged sample stack pid=19487\x00ÿ", notes)
+                                self.assertIn("privileged sample stack pid=19487\x00ÿ", report)
                             sampled_successfully = expected_pids - {"19487"}
                         else:
                             self.assertIn("sample stderr", notes)
                             self.assertIn("install_failure_sample_target_simulator-installd: pid=20765 command=", notes)
+                            self.assertFalse(sudo_calls)
+                            self.assertFalse(any(arguments[:2] == ["/bin/ps", "-ww"] for arguments in command_arguments))
                             sampled_successfully = expected_pids
                         for pid in sampled_successfully:
                             self.assertIn(f"sample stdout pid={pid}\x00ÿ", notes)
                             self.assertIn(f"sample stdout pid={pid}\x00ÿ", report)
-                        self.assertEqual(clock[0], 380 if diagnostic_mode != "ambiguous" else 375)
+                        expected_clock = {
+                            "sample-eperm": 387,
+                            "sample-eperm-denied": 387,
+                            "sample-eperm-vanished": 382,
+                            "sample-eperm-zombie": 382,
+                            "sample-eperm-reused": 382,
+                        }.get(diagnostic_mode, 380 if diagnostic_mode != "ambiguous" else 375)
+                        self.assertEqual(clock[0], expected_clock)
                 else:
                     self.assertNotIn("sample stdout", notes)
                     self.assertFalse(any(arguments[0] == "/bin/ps" for arguments in command_arguments))
