@@ -2926,8 +2926,10 @@ public final class NativeUiHostedProfileTest {
         String digest = origin.getString("digest");
         String targetLabel = "Profile " + (targetIndex + 1) + " action";
         String competingLabel = "Profile " + (competingIndex + 1) + " action";
+        int profileCount = origin.getJSONArray("profiles").length();
         UiDevice device = uiDevice();
         boolean pendingObserved = false;
+        boolean competingScrollAttempted = false;
         boolean stopEnabled = false;
         boolean targetEnabled = false;
         boolean competingDisabled = false;
@@ -2945,6 +2947,20 @@ public final class NativeUiHostedProfileTest {
                     && state.optString("digest").equals(pending.optString("digest"));
             if (pendingMatches) {
                 pendingObserved = true;
+                if (!competingScrollAttempted && findUiObject(competingLabel) == null) {
+                    competingScrollAttempted = true;
+                    scrollControlsToProfileAction(competingIndex, profileCount, deadline);
+                    state = snapshotResult("");
+                    pending = state.optJSONObject("pending_target");
+                    if (!sameSessionAndSelection(state, origin)
+                            || pending == null || !"PROFILE_INDEX".equals(pending.optString("mode"))
+                            || pending.optInt("index", -1) != targetIndex
+                            || !digest.equals(pending.optString("digest"))) {
+                        throw new AssertionError(
+                                "Pending profile transition changed while revealing the competing action: " + state);
+                    }
+                }
+
                 UiObject2 stop = findUiObject("Stop");
                 while (stop != null && !stop.isClickable()) stop = stop.getParent();
                 stopEnabled = stop != null && stop.isEnabled();
@@ -2994,11 +3010,12 @@ public final class NativeUiHostedProfileTest {
             if (!targetEnabled) {
                 throw new AssertionError("Pending profile target did not retain its Stop action");
             }
+            if (competingBounds.isEmpty()) {
+                throw new AssertionError(
+                        "Competing profile Connect action was missing or offscreen during switching");
+            }
             if (!competingDisabled) {
                 throw new AssertionError("Competing profile Connect remained enabled during switching");
-            }
-            if (competingBounds.isEmpty()) {
-                throw new AssertionError("Could not inject a competing tap during profile switching");
             }
         }
         throw new AssertionError("Pending profile transition was not rendered before selection completed");
