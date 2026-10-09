@@ -93,7 +93,7 @@ func visibleCharacterRange(_ element: AXUIElement) throws -> (range: CFRange, ch
     )
 }
 
-func elements(_ window: AXUIElement) throws -> [AXUIElement] {
+func elements(_ window: AXUIElement, settingsContent: Bool = false) throws -> [AXUIElement] {
     var queue = [window]
     var index = 0
     while index < queue.count {
@@ -101,9 +101,25 @@ func elements(_ window: AXUIElement) throws -> [AXUIElement] {
         let element = queue[index]
         index += 1
         // Log details change during refresh; controls live outside the text view.
-        if try label(element, kAXRoleAttribute) == kAXTextAreaRole { continue }
+        let role = try label(element, kAXRoleAttribute)
+        if role == kAXTextAreaRole || (settingsContent && role == "AXToolbar") { continue }
         let children = try attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-        queue.append(contentsOf: children)
+        if settingsContent && role == "AXSplitGroup" {
+            let splitters = try attribute(element, "AXSplitters") as? [AXUIElement] ?? []
+            try require(splitters.count == 1, "Settings content must expose one splitter")
+            let navigation = try attribute(splitters[0], "AXPreviousContents") as? [AXUIElement] ?? []
+            let content = try attribute(splitters[0], "AXNextContents") as? [AXUIElement] ?? []
+            try require(navigation.count == 1 && content.count == 1 &&
+                        !CFEqual(navigation[0], content[0]) &&
+                        children.contains(where: { CFEqual($0, navigation[0]) }) &&
+                        children.contains(where: { CFEqual($0, content[0]) }),
+                        "Settings splitter did not identify distinct navigation and content children")
+            // Traverse every content child; stale sidebar peers cannot prevent
+            // inspecting Display controls or the complete Text Size sheet.
+            queue.append(contentsOf: children.filter { !CFEqual($0, navigation[0]) })
+        } else {
+            queue.append(contentsOf: children)
+        }
     }
     return queue
 }
@@ -1008,7 +1024,9 @@ func inspectMacOSTextSize(
                 }
                 try require(ownerPID == settings.processIdentifier,
                             "System Settings AX window belongs to PID \(ownerPID), expected \(settings.processIdentifier)")
-                let nodes = try elements(window)
+                // Inspect the declared content region, including complete attached sheets.
+                // Unreadable controls here still fail the observation.
+                let nodes = try elements(window, settingsContent: true)
                 return (ownerPID, try read(nodes))
             }
             return snapshot
