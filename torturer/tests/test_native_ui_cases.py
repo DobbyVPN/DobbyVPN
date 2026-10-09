@@ -1275,7 +1275,17 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         self.assertNotIn(".Invoke()", operation)
         self.assertNotIn("Walk(", operation)
         self.assertIn("windowsBefore.Contains(window)", operation)
-        self.assertIn("owner.StartTime.ToUniversalTime().Ticks != ownerStart", operation)
+        self.assertIn("VerifySettingsWindowOwner(window, candidateWindow)", operation)
+        self.assertIn("ReverifySettingsWindowAssociation(", operation)
+        owner_start = source.index("private static void VerifySettingsWindowOwner(")
+        owner_check = source[owner_start:validation]
+        for guard in (
+            "actualProcessId != expectedWindow.OwnerProcessId",
+            "owner.ProcessName != expectedWindow.OwnerProcessName",
+            "owner.SessionId != expectedWindow.OwnerSessionId",
+            "ProcessStartTimeUtcTicks(owner) != expectedWindow.OwnerStartTimeUtcTicks",
+        ):
+            self.assertIn(guard, owner_check)
         self.assertIn("else if (activationAttempted && window == IntPtr.Zero)", operation)
         self.assertIn('response["newSettingsWindowClosed"] = false', operation)
         self.assertIn("cleanup of a potentially new Settings window cannot be verified", operation)
@@ -1300,7 +1310,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
                 self.assertIn(assertion, apply_operation)
         self.assertIn("!currentApply.Current.IsEnabled", apply_operation)
 
-        close_start = operation.index("if (window != IntPtr.Zero && !windowsBefore.Contains(window))")
+        close_start = operation.index("if (window != IntPtr.Zero && selectedWindow is not null && !windowsBefore.Contains(window))")
         close_cleanup = operation[close_start:operation.index(
             "else if (activationAttempted && window == IntPtr.Zero)", close_start)]
         self.assertTrue(all(fragment in close_cleanup for fragment in (

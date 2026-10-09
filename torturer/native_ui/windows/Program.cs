@@ -70,8 +70,11 @@ internal static class Program
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int maxCount);
     private delegate bool EnumThreadWindowsCallback(IntPtr window, IntPtr parameter);
+    private delegate bool EnumChildWindowsCallback(IntPtr window, IntPtr parameter);
     [DllImport("user32.dll")]
     private static extern bool EnumThreadWindows(uint threadId, EnumThreadWindowsCallback callback, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr parent, EnumChildWindowsCallback callback, IntPtr parameter);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
@@ -107,6 +110,7 @@ internal static class Program
     private const uint SmtoErrorOnExit = 0x0020;
     private const uint GaRoot = 2;
     private const uint GaRootOwner = 3;
+    private const uint GwOwner = 4;
     private const int HtCaption = 2;
     private const uint InputMouse = 0;
     private const uint MouseEventLeftDown = 0x0002;
@@ -126,6 +130,15 @@ internal static class Program
     private const int UiaAutomationIdPropertyId = 30011;
     private const int UiaIsOffscreenPropertyId = 30022;
     private static readonly Guid CUIAutomationClassId = new("FF48DBA4-60EF-4201-AA87-54103EEF594E");
+
+    private readonly record struct SettingsWindowCandidate(
+        IntPtr Window,
+        int OwnerProcessId,
+        string OwnerProcessName,
+        int OwnerSessionId,
+        long OwnerStartTimeUtcTicks,
+        string WindowClassName,
+        bool IsApplicationFrameHost);
 
     // Only the needed methods are callable. The unused declarations preserve the COM vtable order.
     [ComImport]
@@ -1393,15 +1406,14 @@ internal static class Program
         };
         try
         {
+            process.Refresh();
             foreach (ProcessThread thread in process.Threads)
                 EnumThreadWindows(unchecked((uint)thread.Id), callback, IntPtr.Zero);
         }
-        catch (InvalidOperationException)
+        finally
         {
-            // The caller will retry on its next bounded poll if the thread
-            // list changes while the window is being created.
+            GC.KeepAlive(callback);
         }
-        GC.KeepAlive(callback);
         return windows.ToArray();
     }
 
@@ -1410,132 +1422,281 @@ internal static class Program
         Process? selected = null;
         foreach (var process in Process.GetProcessesByName("SystemSettings"))
         {
-            if (process.SessionId != sessionId) { process.Dispose(); continue; }
+            bool belongsToSession;
+            try
+            {
+                process.Refresh();
+                belongsToSession = !process.HasExited && process.SessionId == sessionId;
+            }
+            catch (InvalidOperationException)
+            {
+                process.Dispose();
+                continue;
+            }
+            if (!belongsToSession) { process.Dispose(); continue; }
             if (selected is not null)
             {
                 process.Dispose();
                 selected.Dispose();
-                throw new InvalidOperationException($"Ambiguous SystemSettings processes in helper session {sessionId}");
+                throw new InvalidOperationException(
+                    $"Ambiguous SystemSettings processes in helper session {sessionId}");
             }
             selected = process;
         }
         return selected;
     }
 
-    private static Dictionary<string, object?> DescribeSettingsDiagnosticProcess(Process process, bool includeWindows)
+    private static long ProcessStartTimeUtcTicks(Process process)
     {
-        var errors = new List<string>();
-        var result = new Dictionary<string, object?>();
-        void Read(string key, Func<object?> read)
-        {
-            result[key] = null;
-            try { result[key] = read(); }
-            catch (Exception error) { errors.Add(key + ": " + error); }
-        }
-        Read("pid", () => process.Id);
-        Read("name", () => process.ProcessName);
-        Read("sessionId", () => process.SessionId);
-        Read("startTimeUtcTicks", () => process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture));
-        Read("hasExited", () => process.HasExited);
-
-        if (includeWindows)
-        {
-            Read("currentWindows", () => DescribeProcessWindows(process));
-            Read("visibleTopLevelWindows", () => EnumerateProcessWindows(process)
-                .Where(window => IsWindowVisible(window) && !IsIconic(window))
-                .Select(window => new
-                {
-                    window = DescribeWindow(window),
-                    windowIdentity = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false),
-                    ownerWindow = DescribeWindowContext(GetWindow(window, 4), includeThreadDesktop: false, includeGeometry: false),
-                    rootOwnerWindow = DescribeWindowContext(GetAncestor(window, GaRootOwner), includeThreadDesktop: false, includeGeometry: false),
-                }).ToArray());
-        }
-
-        result["captureErrors"] = errors;
-        return result;
+        process.Refresh();
+        if (process.HasExited) throw new InvalidOperationException("Settings process exited while reading its identity");
+        return process.StartTime.ToUniversalTime().Ticks;
     }
 
-    private static Dictionary<string, object?> CaptureSettingsActivationDiagnostics(
-        int sessionId, Process? selectedSettings, Process? activation)
+    private static string GetWindowClassName(IntPtr window)
     {
-        var errors = new List<string>();
-        var snapshot = new Dictionary<string, object?>
-        {
-            ["capturedAtUtc"] = UtcTimestamp(),
-            ["helperSessionId"] = sessionId,
-        };
+        if (!IsWindow(window)) throw new InvalidOperationException("Could not inspect a vanished window class");
+        var className = new StringBuilder(256);
+        Marshal.SetLastPInvokeError(0);
+        var length = GetClassName(window, className, className.Capacity);
+        if (length == 0)
+            throw new System.ComponentModel.Win32Exception(
+                Marshal.GetLastWin32Error(), "Could not read a Settings window class name");
+        return className.ToString();
+    }
 
-        void RecordProcess(string key, Process? process, bool includeWindows)
+    private static bool IsMainRootWindow(IntPtr window)
+    {
+        return IsWindow(window) && GetWindow(window, GwOwner) == IntPtr.Zero &&
+            GetAncestor(window, GaRoot) == window;
+    }
+
+    private static bool IsApplicationFrameWindowClass(string className) =>
+        string.Equals(className, "ApplicationFrameWindow", StringComparison.Ordinal);
+
+    private static HashSet<IntPtr> CaptureSettingsWindowBaseline(int sessionId, Process? settings)
+    {
+        var windows = new HashSet<IntPtr>();
+        if (settings is not null)
         {
-            if (process is null)
+            settings.Refresh();
+            if (!settings.HasExited && settings.SessionId == sessionId)
             {
-                snapshot[key] = null;
-                return;
+                foreach (var window in EnumerateProcessWindows(settings))
+                    if (IsMainRootWindow(window)) windows.Add(window);
             }
-            try
-            {
-                var description = DescribeSettingsDiagnosticProcess(process, includeWindows);
-                snapshot[key] = description;
-                if (description["captureErrors"] is List<string> processErrors)
-                    errors.AddRange(processErrors.Select(error => $"{key}: {error}"));
-            }
-            catch (Exception error) { errors.Add($"{key}: {error}"); }
         }
 
-        void RecordFreshSessionProcesses(string processName, string key)
+        foreach (var host in Process.GetProcessesByName("ApplicationFrameHost"))
         {
-            Process[] processes;
-            try { processes = Process.GetProcessesByName(processName); }
-            catch (Exception error)
+            using (host)
             {
-                snapshot[key] = Array.Empty<object>();
-                errors.Add($"{key} enumeration: {error}");
-                return;
-            }
-
-            var descriptions = new List<Dictionary<string, object?>>();
-            try
-            {
-                foreach (var process in processes)
+                int hostSession;
+                try
                 {
-                    try
-                    {
-                        int? candidateSession;
-                        try { candidateSession = process.SessionId; }
-                        catch (Exception error)
-                        {
-                            var unknownSession = DescribeSettingsDiagnosticProcess(process, includeWindows: false);
-                            unknownSession["sameHelperSession"] = null;
-                            descriptions.Add(unknownSession);
-                            errors.Add($"{key} sessionId unavailable: {error}");
-                            if (unknownSession["captureErrors"] is List<string> unknownErrors)
-                                errors.AddRange(unknownErrors.Select(itemError => $"{key}: {itemError}"));
-                            continue;
-                        }
-                        if (candidateSession != sessionId) continue;
-                        var description = DescribeSettingsDiagnosticProcess(process, includeWindows: true);
-                        description["sameHelperSession"] = true;
-                        descriptions.Add(description);
-                        if (description["captureErrors"] is List<string> processErrors)
-                        {
-                            var processId = description.GetValueOrDefault("pid");
-                            errors.AddRange(processErrors.Select(error => $"{key} pid={processId}: {error}"));
-                        }
-                    }
-                    catch (Exception error) { errors.Add($"{key} inspection: {error}"); }
+                    host.Refresh();
+                    if (host.HasExited) continue;
+                    hostSession = host.SessionId;
+                }
+                catch (InvalidOperationException) { continue; }
+                if (hostSession == sessionId)
+                {
+                    foreach (var window in EnumerateProcessWindows(host))
+                        if (IsMainRootWindow(window)) windows.Add(window);
                 }
             }
-            finally { foreach (var process in processes) process.Dispose(); }
-            snapshot[key] = descriptions;
+        }
+        return windows;
+    }
+
+    private static bool HasSettingsOwnedDescendant(IntPtr frameWindow, int settingsProcessId)
+    {
+        var found = false;
+        EnumChildWindowsCallback callback = (child, _) =>
+        {
+            GetWindowThreadProcessId(child, out var processId);
+            if (processId == settingsProcessId) found = true;
+            return true;
+        };
+        _ = EnumChildWindows(frameWindow, callback, IntPtr.Zero);
+        GC.KeepAlive(callback);
+        return found;
+    }
+
+    private static bool IsSettingsAssociatedFrameWindow(IntPtr frameWindow, Process settings)
+    {
+        if (HasSettingsOwnedDescendant(frameWindow, settings.Id)) return true;
+        foreach (var settingsWindow in EnumerateProcessWindows(settings))
+        {
+            GetWindowThreadProcessId(settingsWindow, out var processId);
+            if (processId == settings.Id && GetWindow(settingsWindow, GwOwner) != IntPtr.Zero &&
+                GetAncestor(settingsWindow, GaRootOwner) == frameWindow)
+                return true;
+        }
+        return false;
+    }
+
+    private static SettingsWindowCandidate DescribeSettingsWindowCandidate(
+        IntPtr window, Process owner, int sessionId, bool isApplicationFrameHost)
+    {
+        owner.Refresh();
+        if (owner.HasExited || owner.SessionId != sessionId)
+            throw new InvalidOperationException("Settings window owner exited or changed session during inspection");
+        GetWindowThreadProcessId(window, out var actualProcessId);
+        if (!IsWindow(window) || actualProcessId != owner.Id)
+            throw new InvalidOperationException("Settings window ownership changed during inspection");
+        return new SettingsWindowCandidate(
+            window,
+            owner.Id,
+            owner.ProcessName,
+            owner.SessionId,
+            owner.StartTime.ToUniversalTime().Ticks,
+            GetWindowClassName(window),
+            isApplicationFrameHost);
+    }
+
+    private static List<SettingsWindowCandidate> FindSettingsWindowCandidates(
+        Process settings, int sessionId)
+    {
+        settings.Refresh();
+        if (settings.HasExited || settings.ProcessName != "SystemSettings" || settings.SessionId != sessionId)
+            throw new InvalidOperationException("Selected SystemSettings process identity changed");
+
+        var candidates = new List<SettingsWindowCandidate>();
+        foreach (var window in EnumerateProcessWindows(settings))
+        {
+            if (!IsMainRootWindow(window) || !IsWindowVisible(window) || IsIconic(window))
+                continue;
+            GetWindowThreadProcessId(window, out var ownerPid);
+            if (ownerPid == settings.Id)
+                candidates.Add(DescribeSettingsWindowCandidate(window, settings, sessionId, isApplicationFrameHost: false));
         }
 
-        RecordProcess("selectedSettingsProcess", selectedSettings, includeWindows: true);
-        RecordProcess("activationProcess", activation, includeWindows: true);
-        RecordFreshSessionProcesses("SystemSettings", "freshSystemSettingsProcesses");
-        RecordFreshSessionProcesses("ApplicationFrameHost", "freshApplicationFrameHostProcesses");
-        snapshot["diagnosticErrors"] = errors;
-        return snapshot;
+        foreach (var host in Process.GetProcessesByName("ApplicationFrameHost"))
+        {
+            using (host)
+            {
+                int hostSession;
+                try
+                {
+                    host.Refresh();
+                    if (host.HasExited) continue;
+                    hostSession = host.SessionId;
+                }
+                catch (InvalidOperationException) { continue; }
+                if (hostSession != sessionId) continue;
+                foreach (var window in EnumerateProcessWindows(host))
+                {
+                    if (!IsMainRootWindow(window) || !IsWindowVisible(window) || IsIconic(window))
+                        continue;
+                    var className = GetWindowClassName(window);
+                    if (!IsApplicationFrameWindowClass(className) ||
+                        !IsSettingsAssociatedFrameWindow(window, settings))
+                        continue;
+                    candidates.Add(DescribeSettingsWindowCandidate(
+                        window, host, sessionId, isApplicationFrameHost: true));
+                }
+            }
+        }
+        return candidates;
+    }
+
+    private static object DescribeSettingsProcess(Process process)
+    {
+        process.Refresh();
+        return new
+        {
+            processId = process.Id,
+            processName = process.ProcessName,
+            sessionId = process.SessionId,
+            startTimeUtcTicks = ProcessStartTimeUtcTicks(process).ToString(CultureInfo.InvariantCulture),
+            windows = DescribeProcessWindows(process),
+        };
+    }
+
+    private static object DescribeSettingsWindow(SettingsWindowCandidate candidate, bool existedBefore)
+    {
+        return new
+        {
+            hwnd = $"0x{candidate.Window.ToInt64():X}",
+            existedBefore,
+            description = DescribeWindow(candidate.Window),
+            owner = new
+            {
+                processId = candidate.OwnerProcessId,
+                processName = candidate.OwnerProcessName,
+                sessionId = candidate.OwnerSessionId,
+                startTimeUtcTicks = candidate.OwnerStartTimeUtcTicks.ToString(CultureInfo.InvariantCulture),
+            },
+            isApplicationFrameHost = candidate.IsApplicationFrameHost,
+        };
+    }
+
+    private static bool SameSettingsWindowOwner(
+        SettingsWindowCandidate expected, SettingsWindowCandidate actual)
+    {
+        return expected.Window == actual.Window &&
+            expected.OwnerProcessId == actual.OwnerProcessId &&
+            string.Equals(expected.OwnerProcessName, actual.OwnerProcessName, StringComparison.Ordinal) &&
+            expected.OwnerSessionId == actual.OwnerSessionId &&
+            expected.OwnerStartTimeUtcTicks == actual.OwnerStartTimeUtcTicks &&
+            string.Equals(expected.WindowClassName, actual.WindowClassName, StringComparison.Ordinal) &&
+            expected.IsApplicationFrameHost == actual.IsApplicationFrameHost;
+    }
+
+    private static bool ReverifySettingsWindowAssociation(
+        SettingsWindowCandidate expectedWindow,
+        int settingsProcessId,
+        long settingsProcessStartTimeUtcTicks,
+        int sessionId)
+    {
+        using var currentSettings = FindSettingsProcessForSession(sessionId);
+        if (currentSettings is null || currentSettings.Id != settingsProcessId ||
+            ProcessStartTimeUtcTicks(currentSettings) != settingsProcessStartTimeUtcTicks)
+            return false;
+        if (!IsMainRootWindow(expectedWindow.Window) ||
+            !string.Equals(GetWindowClassName(expectedWindow.Window), expectedWindow.WindowClassName,
+                StringComparison.Ordinal))
+            return false;
+
+        GetWindowThreadProcessId(expectedWindow.Window, out var ownerProcessId);
+        if (ownerProcessId != expectedWindow.OwnerProcessId) return false;
+        if (!expectedWindow.IsApplicationFrameHost)
+        {
+            var current = DescribeSettingsWindowCandidate(
+                expectedWindow.Window, currentSettings, sessionId, isApplicationFrameHost: false);
+            return SameSettingsWindowOwner(expectedWindow, current);
+        }
+
+        using var currentHost = Process.GetProcessById(expectedWindow.OwnerProcessId);
+        currentHost.Refresh();
+        if (currentHost.HasExited || currentHost.ProcessName != "ApplicationFrameHost" ||
+            currentHost.SessionId != sessionId ||
+            ProcessStartTimeUtcTicks(currentHost) != expectedWindow.OwnerStartTimeUtcTicks ||
+            !IsApplicationFrameWindowClass(expectedWindow.WindowClassName) ||
+            !IsSettingsAssociatedFrameWindow(expectedWindow.Window, currentSettings))
+            return false;
+        var currentFrame = DescribeSettingsWindowCandidate(
+            expectedWindow.Window, currentHost, sessionId, isApplicationFrameHost: true);
+        return SameSettingsWindowOwner(expectedWindow, currentFrame);
+    }
+
+    private static void VerifySettingsWindowOwner(
+        IntPtr window, SettingsWindowCandidate expectedWindow)
+    {
+        if (!IsWindow(window))
+            throw new InvalidOperationException("Refusing to close a Settings window that no longer exists");
+        GetWindowThreadProcessId(window, out var actualProcessId);
+        if (actualProcessId != expectedWindow.OwnerProcessId)
+            throw new InvalidOperationException("Refusing to close a Settings window whose owner PID changed");
+        using var owner = Process.GetProcessById(expectedWindow.OwnerProcessId);
+        owner.Refresh();
+        if (owner.HasExited || owner.ProcessName != expectedWindow.OwnerProcessName ||
+            owner.SessionId != expectedWindow.OwnerSessionId ||
+            ProcessStartTimeUtcTicks(owner) != expectedWindow.OwnerStartTimeUtcTicks)
+            throw new InvalidOperationException("Refusing to close a Settings window whose owner identity changed");
+        if (!string.Equals(GetWindowClassName(window), expectedWindow.WindowClassName, StringComparison.Ordinal))
+            throw new InvalidOperationException("Refusing to close a Settings window whose HWND class changed");
     }
 
     private static void ValidateSettingsTextSizeRequest(JsonElement request)
@@ -1565,8 +1726,9 @@ internal static class Program
 
     private static Dictionary<string, object?> CaptureSettingsWindowAfterClose(
         IntPtr window,
-        int expectedProcessId,
-        long expectedProcessStartTicks,
+        SettingsWindowCandidate expectedWindow,
+        int expectedSettingsProcessId,
+        long expectedSettingsProcessStartTicks,
         int expectedSessionId,
         bool closeMessagePosted)
     {
@@ -1575,14 +1737,37 @@ internal static class Program
             ["capturedAtUtc"] = UtcTimestamp(),
             ["windowHandle"] = $"0x{window.ToInt64():X}",
             ["closeMessagePosted"] = closeMessagePosted,
-            ["expectedProcessId"] = expectedProcessId,
-            ["expectedProcessStartUtcTicks"] = expectedProcessStartTicks.ToString(CultureInfo.InvariantCulture),
-            ["expectedSessionId"] = expectedSessionId,
+            ["expectedWindowOwner"] = new
+            {
+                processId = expectedWindow.OwnerProcessId,
+                processName = expectedWindow.OwnerProcessName,
+                sessionId = expectedWindow.OwnerSessionId,
+                startTimeUtcTicks = expectedWindow.OwnerStartTimeUtcTicks.ToString(CultureInfo.InvariantCulture),
+            },
+            ["expectedSettingsProcess"] = new
+            {
+                processId = expectedSettingsProcessId,
+                startTimeUtcTicks = expectedSettingsProcessStartTicks.ToString(CultureInfo.InvariantCulture),
+                sessionId = expectedSessionId,
+            },
         };
         var isWindow = IsWindow(window);
         var windowContext = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false);
         windowContext["isWindow"] = isWindow;
         windowContext["isWindowVisible"] = isWindow && IsWindowVisible(window);
+        if (isWindow)
+        {
+            GetWindowThreadProcessId(window, out var actualProcessId);
+            if (actualProcessId != 0)
+            {
+                using var owner = Process.GetProcessById(checked((int)actualProcessId));
+                owner.Refresh();
+                windowContext["ownerProcessName"] = owner.ProcessName;
+                windowContext["ownerSessionId"] = owner.SessionId;
+                windowContext["ownerStartTimeUtcTicks"] = ProcessStartTimeUtcTicks(owner)
+                    .ToString(CultureInfo.InvariantCulture);
+            }
+        }
         snapshot["window"] = windowContext;
         var rootOwner = isWindow ? GetAncestor(window, GaRootOwner) : IntPtr.Zero;
         var rootOwnerContext = DescribeWindowContext(
@@ -1712,50 +1897,58 @@ internal static class Program
         Process? settings = null;
         Process? activation = null;
         var activationAttempted = false;
-        IntPtr[] windowsBefore = Array.Empty<IntPtr>();
+        var windowsBefore = new HashSet<IntPtr>();
         IntPtr window = IntPtr.Zero;
-        int ownerPid = 0;
-        long ownerStart = 0;
+        int settingsProcessId = 0;
+        long settingsProcessStartTimeUtcTicks = 0;
+        SettingsWindowCandidate? selectedWindow = null;
         string? primaryError = null;
         var cleanupErrors = new List<string>();
-        var diagnosticErrors = new List<string>();
-        void CaptureActivationDiagnostics(string key)
-        {
-            try
-            {
-                var snapshot = CaptureSettingsActivationDiagnostics(sessionId, settings, activation);
-                response[key] = snapshot;
-                if (snapshot["diagnosticErrors"] is List<string> snapshotErrors)
-                    diagnosticErrors.AddRange(snapshotErrors.Select(error => $"{key}: {error}"));
-            }
-            catch (Exception error) { diagnosticErrors.Add($"{key}: {error}"); }
-        }
         try
         {
             settings = FindSettingsProcessForSession(sessionId);
-            windowsBefore = settings is null ? Array.Empty<IntPtr>() : EnumerateProcessWindows(settings);
-            response["settingsBefore"] = settings is null ? null : new { pid = settings.Id, windows = DescribeProcessWindows(settings) };
-            CaptureActivationDiagnostics("activationDiagnosticsBefore");
+            windowsBefore = CaptureSettingsWindowBaseline(sessionId, settings);
+            response["settingsBefore"] = settings is null ? null : DescribeSettingsProcess(settings);
+            response["baselineMainWindowsBefore"] = windowsBefore
+                .OrderBy(candidate => candidate.ToInt64())
+                .Select(candidate => DescribeWindow(candidate))
+                .ToArray();
             activationAttempted = true;
             activation = Process.Start(new ProcessStartInfo(WindowsTextSizeSettingsUri) { UseShellExecute = true });
-            CaptureActivationDiagnostics("activationDiagnosticsAfterStart");
             WaitFor(() =>
             {
-                settings ??= FindSettingsProcessForSession(sessionId);
+                var refreshedSettings = FindSettingsProcessForSession(sessionId);
+                settings?.Dispose();
+                settings = refreshedSettings;
                 if (settings is null) return false;
-                var visible = EnumerateProcessWindows(settings).Where(candidate => IsWindowVisible(candidate) && !IsIconic(candidate)).ToArray();
-                if (visible.Length > 1) throw new InvalidOperationException($"Ambiguous visible Settings windows in session {sessionId}");
-                if (visible.Length == 1) { window = visible[0]; return true; }
+                settingsProcessId = settings.Id;
+                settingsProcessStartTimeUtcTicks = ProcessStartTimeUtcTicks(settings);
+                var candidates = FindSettingsWindowCandidates(settings, sessionId);
+                if (candidates.Count > 1)
+                    throw new InvalidOperationException(
+                        $"Ambiguous visible Settings main windows in session {sessionId}: " +
+                        string.Join(", ", candidates.Select(candidate => $"0x{candidate.Window.ToInt64():X}")));
+                if (candidates.Count == 1)
+                {
+                    selectedWindow = candidates[0];
+                    window = candidates[0].Window;
+                    return true;
+                }
                 return false;
             }, "Settings did not expose one visible window in the helper session", seconds: 10);
-            CaptureActivationDiagnostics("activationDiagnosticsAfterWait");
-            if (settings is null || window == IntPtr.Zero) throw new InvalidOperationException("Settings window unavailable after URI activation");
-            ownerPid = settings.Id;
-            ownerStart = settings.StartTime.ToUniversalTime().Ticks;
+            if (settings is null || selectedWindow is null || window == IntPtr.Zero)
+                throw new InvalidOperationException("Settings window unavailable after URI activation");
+            var candidateWindow = selectedWindow.Value;
             var existedBefore = windowsBefore.Contains(window);
-            response["settingsAfter"] = new { pid = ownerPid, windows = DescribeProcessWindows(settings) };
-            response["window"] = new { hwnd = $"0x{window.ToInt64():X}", existedBefore, description = DescribeWindow(window) };
-            if (!existedBefore) TracePhase($"settings-text-size-new-window-owned session={sessionId} pid={ownerPid} hwnd=0x{window.ToInt64():X}");
+            response["settingsAfter"] = DescribeSettingsProcess(settings);
+            response["window"] = DescribeSettingsWindow(candidateWindow, existedBefore);
+            response["settingsAssociation"] = candidateWindow.IsApplicationFrameHost
+                ? "same-session ApplicationFrameHost with SystemSettings-owned descendant or validated RootOwner"
+                : "visible unowned SystemSettings root window";
+            if (!existedBefore)
+                TracePhase(
+                    $"settings-text-size-new-window-owned session={sessionId} core_pid={settingsProcessId} " +
+                    $"owner_pid={candidateWindow.OwnerProcessId} hwnd=0x{window.ToInt64():X}");
 
             var root = AutomationElement.FromHandle(window);
             var slider = FindSettingsTextSizeControl(
@@ -1818,28 +2011,35 @@ internal static class Program
             primaryError = error.ToString();
             response["ready"] = false;
             response["available"] = false;
-            CaptureActivationDiagnostics("activationDiagnosticsAtFailure");
         }
         finally
         {
-            if (window != IntPtr.Zero && !windowsBefore.Contains(window))
+            if (window != IntPtr.Zero && selectedWindow is not null && !windowsBefore.Contains(window))
             {
                 var closeMessagePosted = false;
                 try
                 {
+                    var candidateWindow = selectedWindow.Value;
                     GetWindowThreadProcessId(window, out var actualPid);
-                    if (actualPid == 0) response["newSettingsWindowClosed"] = true;
+                    if (!IsWindow(window) || actualPid == 0) response["newSettingsWindowClosed"] = true;
                     else
                     {
-                        var actualProcessId = checked((int)actualPid);
-                        using var owner = Process.GetProcessById(actualProcessId);
-                        if (actualProcessId != ownerPid || owner.ProcessName != "SystemSettings" || owner.SessionId != sessionId ||
-                            owner.StartTime.ToUniversalTime().Ticks != ownerStart)
-                            throw new InvalidOperationException("Refusing to close a Settings window whose ownership changed");
+                        VerifySettingsWindowOwner(window, candidateWindow);
+                        if (!ReverifySettingsWindowAssociation(
+                                candidateWindow, settingsProcessId, settingsProcessStartTimeUtcTicks, sessionId))
+                            throw new InvalidOperationException(
+                                "Refusing to close a Settings window whose SystemSettings association changed");
+                        VerifySettingsWindowOwner(window, candidateWindow);
                         if (!PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero))
-                            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not close new Settings window");
+                            throw new System.ComponentModel.Win32Exception(
+                                Marshal.GetLastWin32Error(), "Could not close new Settings window");
                         closeMessagePosted = true;
-                        WaitFor(() => { GetWindowThreadProcessId(window, out var pid); return pid == 0 || pid != ownerPid; }, "New Settings window did not close", seconds: 5);
+                        WaitFor(() =>
+                        {
+                            if (!IsWindow(window)) return true;
+                            GetWindowThreadProcessId(window, out var pid);
+                            return pid == 0 || pid != candidateWindow.OwnerProcessId;
+                        }, "New Settings window did not close", seconds: 5);
                         response["newSettingsWindowClosed"] = true;
                     }
                 }
@@ -1849,7 +2049,8 @@ internal static class Program
                     try
                     {
                         response["postCloseWindowSnapshot"] = CaptureSettingsWindowAfterClose(
-                            window, ownerPid, ownerStart, sessionId, closeMessagePosted);
+                            window, selectedWindow.Value, settingsProcessId,
+                            settingsProcessStartTimeUtcTicks, sessionId, closeMessagePosted);
                     }
                     catch (Exception error)
                     {
@@ -1861,7 +2062,7 @@ internal static class Program
             {
                 response["newSettingsWindowClosed"] = false;
                 cleanupErrors.Add(
-                    "Settings activation exposed no SystemSettings-owned window; cleanup of a potentially new Settings window cannot be verified");
+                    "Settings activation exposed no associated main window; cleanup of a potentially new Settings window cannot be verified");
             }
             foreach (var process in new[] { settings, activation })
                 try { process?.Dispose(); } catch (Exception error) { cleanupErrors.Add(error.ToString()); }
@@ -1873,7 +2074,6 @@ internal static class Program
             response["ready"] = false;
             response["available"] = false;
         }
-        if (diagnosticErrors.Count > 0) response["diagnosticErrors"] = diagnosticErrors;
         response["finishedAtUtc"] = UtcTimestamp();
         Console.WriteLine(JsonSerializer.Serialize(response));
         return 0;
@@ -2871,6 +3071,32 @@ internal static class Program
                     visible_viewport = RectJson(visibleViewport),
                     point = new { x = point.X, y = point.Y },
                 }));
+                bool AtRequestedEnd(double percent) => position == "top" ? percent <= 1 : percent >= 99;
+                scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
+                var actual = scroll.Current.VerticalScrollPercent;
+                TracePhase("scroll-logs-after-set " + JsonSerializer.Serialize(new
+                {
+                    utc = UtcTimestamp(), vertical_scroll_percent = actual,
+                }));
+                var lastLoggedPercent = actual;
+                // NativeUIController bounds this helper process with its existing operation watchdog.
+                while (!AtRequestedEnd(actual))
+                {
+                    Thread.Sleep(50);
+                    actual = scroll.Current.VerticalScrollPercent;
+                    if (actual.Equals(lastLoggedPercent)) continue;
+                    lastLoggedPercent = actual;
+                    TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new
+                    {
+                        utc = UtcTimestamp(), vertical_scroll_percent = actual,
+                    }));
+                }
+                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new
+                {
+                    utc = UtcTimestamp(), position, vertical_scroll_percent = actual,
+                }));
+
+                RequireForeground(window, "log scrolling at the verified endpoint");
                 var pointWindow = WindowFromPoint(point);
                 var pointRoot = pointWindow == IntPtr.Zero ? IntPtr.Zero : GetAncestor(pointWindow, GaRoot);
                 if (pointRoot != window)
@@ -2905,31 +3131,11 @@ internal static class Program
                 {
                     utc = UtcTimestamp(), vertical_scroll_percent = afterWheelPercent,
                 }));
-                scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
-                var actual = scroll.Current.VerticalScrollPercent;
-                TracePhase("scroll-logs-after-set " + JsonSerializer.Serialize(new
-                {
-                    utc = UtcTimestamp(), vertical_scroll_percent = actual,
-                }));
-                bool AtRequestedEnd(double percent) => position == "top" ? percent <= 1 : percent >= 99;
-                var lastLoggedPercent = actual;
-                // NativeUIController bounds this helper process with its existing operation watchdog.
-                while (!AtRequestedEnd(actual))
-                {
-                    Thread.Sleep(50);
-                    actual = scroll.Current.VerticalScrollPercent;
-                    if (actual.Equals(lastLoggedPercent)) continue;
-                    lastLoggedPercent = actual;
-                    TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new
-                    {
-                        utc = UtcTimestamp(), vertical_scroll_percent = actual,
-                    }));
-                }
-                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new
-                {
-                    utc = UtcTimestamp(), position, vertical_scroll_percent = actual,
-                }));
-                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, position = actual }));
+                if (!AtRequestedEnd(afterWheelPercent))
+                    throw new InvalidOperationException(
+                        $"Native log wheel input moved the viewer away from the {position} endpoint: " +
+                        $"vertical_scroll_percent={afterWheelPercent.ToString(CultureInfo.InvariantCulture)}");
+                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, position = afterWheelPercent }));
                 return 0;
             }
             if (operation == "tree")
