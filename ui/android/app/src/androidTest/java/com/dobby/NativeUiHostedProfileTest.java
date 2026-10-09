@@ -2066,7 +2066,7 @@ public final class NativeUiHostedProfileTest {
         assertOldConnectActionsDisabled(active);
         String marker = "held-load-log-" + System.nanoTime();
         NativeUiTestBridge.recordDiagnostic(context, "ui.test.held.load", marker);
-        waitForUiControl(marker, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
+        waitForUiLogMessage(marker, remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
         waitForUiState("Disconnected", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
         JSONObject stopped = snapshotResult("");
@@ -4194,6 +4194,35 @@ public final class NativeUiHostedProfileTest {
             Thread.sleep(POLL_MILLIS);
         }
         throw uiControlTimeout(label, timeout, startedAt, counters, "none");
+    }
+
+    private void waitForUiLogMessage(String message, long timeout) throws Exception {
+        long startedAt = SystemClock.uptimeMillis();
+        long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
+        UiLookupCounters counters = new UiLookupCounters();
+        int lastRenderedTextLength = -1;
+        while (System.currentTimeMillis() < deadline) {
+            counters.attempts++;
+            UiObject2 logs = findUiObject("Connection logs", counters);
+            if (logs != null) {
+                try {
+                    CharSequence rendered = logs.getText();
+                    if (rendered != null) {
+                        lastRenderedTextLength = rendered.length();
+                        if (rendered.toString().contains(message)) return;
+                    }
+                } catch (StaleObjectException ignored) {
+                    counters.staleObjects++;
+                }
+            }
+            Thread.sleep(POLL_MILLIS);
+        }
+        IllegalStateException failure = uiControlTimeout(
+                "Connection logs", timeout, startedAt, counters, "none");
+        failure.addSuppressed(new IllegalStateException(
+                "ANDROID_UI_LOG_MESSAGE_NOT_RENDERED: message=" + JSONObject.quote(message)
+                        + ", lastRenderedTextLength=" + lastRenderedTextLength));
+        throw failure;
     }
 
     private long tapUiControl(String label, long timeout) throws Exception {
