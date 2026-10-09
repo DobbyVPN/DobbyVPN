@@ -977,25 +977,17 @@ func inspectMacOSTextSize(
         return sheets.first
     }
 
-    func appName(_ popup: AXUIElement) throws -> String? {
-        var child = popup
-        for _ in 0..<8 {
-            guard let parent = try axElement(child, kAXParentAttribute) else { return nil }
-            if ["AXGroup", "AXRow", "AXCell"].contains(try label(parent, kAXRoleAttribute)) {
-                let siblings = try attribute(parent, kAXChildrenAttribute) as? [AXUIElement] ?? []
-                let controls = try siblings.filter { try label($0, kAXRoleAttribute) == "AXPopUpButton" }
-                let labels = try siblings.compactMap { item -> String? in
-                    guard try label(item, kAXRoleAttribute) == kAXStaticTextRole else { return nil }
-                    let candidates = Set(try names(item).map {
-                        $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                    }.filter { !$0.isEmpty })
-                    return candidates.count == 1 ? candidates.first : nil
-                }
-                if controls.count == 1, CFEqual(controls[0], popup), labels.count == 1 { return labels[0] }
-            }
-            child = parent
+    func appName(_ popup: AXUIElement, in sheetNodes: [AXUIElement]) throws -> String? {
+        guard let labelElement = try axElement(popup, kAXTitleUIElementAttribute),
+              sheetNodes.contains(where: { CFEqual($0, labelElement) }),
+              try label(labelElement, kAXRoleAttribute) == kAXStaticTextRole,
+              let rawName = try attribute(labelElement, kAXValueAttribute),
+              CFGetTypeID(rawName) == CFStringGetTypeID(),
+              let value = rawName as? String else {
+            return nil
         }
-        return nil
+        let displayName = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return displayName.isEmpty ? nil : displayName
     }
 
     func readSettingsTree<T>(
@@ -1212,13 +1204,14 @@ func inspectMacOSTextSize(
                     context: "Text Size complete app-row inventory", deadline: sheetDeadline,
                     read: { nodes -> (Bool, [String: Any]?) in
                         guard let sheet = try textSizeSheet(nodes) else { return (false, nil) }
-                        let popups = try elements(sheet).filter { try label($0, kAXRoleAttribute) == "AXPopUpButton" }
+                        let sheetNodes = try elements(sheet)
+                        let popups = try sheetNodes.filter { try label($0, kAXRoleAttribute) == "AXPopUpButton" }
                         var rows = [[String: Any]]()
                         var unmapped = 0
                         var targetMatches = 0
                         var targetEnabled = false
                         for popup in popups {
-                            guard let appName = try appName(popup),
+                            guard let appName = try appName(popup, in: sheetNodes),
                                   let size = try attribute(popup, kAXValueAttribute) as? String,
                                   let enabled = try attribute(popup, kAXEnabledAttribute) as? Bool else {
                                 unmapped += 1
