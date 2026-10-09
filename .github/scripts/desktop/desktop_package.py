@@ -564,6 +564,7 @@ def _build_windows_msi(
         # Keep the original WiX streams above, then inspect the exact reported
         # paths before TemporaryDirectory removes the failed build's inputs.
         _log(f"MSI failure cwd={installer} TEMP={env.get('TEMP')} TMP={env.get('TMP')}")
+        _log("Failure inspection follows WiX exit; WiX may already have removed its own scratch directory")
         output = (completed.stdout or b"") + (completed.stderr or b"")
         cabinets = re.findall(r"failed to compress cabinet: ([^\r\n]+)", output.decode("utf-8", errors="replace"))
         try:
@@ -577,7 +578,7 @@ def _build_windows_msi(
         for path in dict.fromkeys(paths):
             try:
                 attributes = path.stat()
-                _log(f"MSI failure path={path} directory={path.is_dir()} bytes={attributes.st_size}")
+                _log(f"MSI failure path={path} length={len(str(path))} directory={path.is_dir()} bytes={attributes.st_size}")
             except OSError as error:
                 _log(f"MSI failure path={path} inspection error={error}")
         _fail(f"Windows MSI build: command exited {completed.returncode}")

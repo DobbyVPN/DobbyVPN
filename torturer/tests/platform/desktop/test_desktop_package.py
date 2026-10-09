@@ -100,7 +100,7 @@ class WindowsMSIFailureTests(unittest.TestCase):
                 with self.assertRaisesRegex(desktop_package.DesktopPlatformError, "Windows MSI build: command exited 1"):
                     desktop_package._build_windows_msi(archive, service, "1.5.4", "0" * 40, root, {})
             self.assertIn(f"path={cabinet.parent} inspection error=", output_capture.text.getvalue())
-            self.assertIn("dobbyvpn-backend.exe directory=False", output_capture.text.getvalue())
+            self.assertIn("dobbyvpn-backend.exe length=", output_capture.text.getvalue())
             self.assertEqual(output_capture.buffer.getvalue(), original_stdout)
             self.assertEqual(error_capture.buffer.getvalue(), original_stderr)
             verify.assert_not_called()
