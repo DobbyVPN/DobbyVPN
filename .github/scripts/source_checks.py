@@ -569,7 +569,7 @@ def trufflehog_scan(tools: Tools, git_repository: Path | None) -> None:
     trufflehog = tools.get("trufflehog")
     repository = resolve_git_repository(git_repository)
     run(
-        [str(trufflehog), "git", f"file://{repository}", "--only-verified", "--results=verified,unknown"],
+        [str(trufflehog), "--no-update", "git", f"file://{repository}", "--only-verified", "--results=verified,unknown"],
         cwd=repository,
     )
 
