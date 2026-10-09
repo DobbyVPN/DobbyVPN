@@ -140,6 +140,7 @@ private data class ProfileData(val index: Int, val description: String, val prot
     val name: String get() = description.ifBlank { "Profile ${index + 1}" }
 }
 private data class SelectionData(val digest: String, val mode: String, val index: Int)
+private data class PermissionTarget(val session: SessionData, val index: Int?, val sourceRevision: Int)
 private data class SessionData(
     val sessionId: String = "",
     val sequence: Long = 0,
@@ -196,10 +197,10 @@ private class SessionController(
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var visible = false
     @Volatile private var latest = SessionData()
-    private var permissionTarget: Pair<SessionData, Int?>? = null
+    private var permissionTarget: PermissionTarget? = null
     private val loadWorker = Executors.newSingleThreadExecutor()
     private var loadInFlight = false
-    private var loadRevision = 0
+    @Volatile private var loadRevision = 0
     private var pendingLoad: String? = null
     private var scheduledSource: String? = null
     private var inFlightSource: String? = null
@@ -241,6 +242,7 @@ private class SessionController(
             !uri.host.isNullOrEmpty() && latest.configured && latest.sourceUrl == source &&
             !loadInFlight && inFlightSource == null
         if (alreadyAccepted) {
+            if (permissionTarget != null) state = state.copy(busy = false)
             permissionTarget = null
             state = state.copy(
                 source = source,
@@ -382,7 +384,7 @@ private class SessionController(
         if (isStopTarget(index)) { stop(); return }
         val current = latest
         state = state.copy(busy = true, error = "")
-        permissionTarget = current to index
+        permissionTarget = PermissionTarget(current, index, loadRevision)
         worker.execute {
             when (NativeVpnBridge.prepare(activity)) {
                 1 -> main.post { continuePermission(true) }
@@ -427,16 +429,43 @@ private class SessionController(
         val target = permissionTarget ?: return
         permissionTarget = null
         if (!granted) { report("VPN permission was not granted"); return }
-        val (selected, index) = target
+        val selected = target.session
+        val index = target.index
         val current = latest
-        if (state.sourceDirty || current.sessionId != selected.sessionId || current.digest != selected.digest) {
-            state = state.copy(busy = false)
+        if (state.sourceDirty || loadRevision != target.sourceRevision ||
+            current.sessionId != selected.sessionId || current.digest != selected.digest || current.generation != selected.generation
+        ) {
+            worker.execute { refreshSnapshot(clearBusy = true) }
             return
         }
         state = state.copy(busy = true, error = "")
         worker.execute {
-            runCatching { NativeGoSession.startSelection(current.sessionId, current.sequence, if (index == null) "AUTO_SELECT" else "PROFILE_INDEX", index ?: 0, selected.digest) }
-                .onSuccess { consumeSnapshotCommand(it, "Connect failed") }
+            val mode = if (index == null) "AUTO_SELECT" else "PROFILE_INDEX"
+            val selectedIndex = index ?: 0
+            val command = runCatching {
+                val response = JSONObject(NativeGoSession.snapshot(selected.sessionId))
+                requireOK(response)
+                val snapshot = response.getJSONObject("result")
+                val sessionId = snapshot.getString("session_id")
+                val sequence = snapshot.getLong("sequence")
+                val generation = snapshot.getLong("generation")
+                val digest = snapshot.getString("digest")
+                val primaryAction = snapshot.optString("primary_action", "NONE")
+                val canSwitch = snapshot.optBoolean("can_switch")
+                val hasPendingTarget = snapshot.optJSONObject("pending_target") != null
+                if (loadRevision != target.sourceRevision || sessionId != selected.sessionId ||
+                    digest != selected.digest || generation != selected.generation || hasPendingTarget ||
+                    (primaryAction != "START" && !canSwitch)
+                ) {
+                    null
+                } else {
+                    NativeGoSession.startSelection(sessionId, sequence, mode, selectedIndex, selected.digest)
+                }
+            }
+            command.onSuccess { encoded ->
+                if (encoded == null) refreshSnapshot(clearBusy = true)
+                else consumeSnapshotCommand(encoded, "Connect failed")
+            }
                 .onFailure { report(it.message ?: "Connect failed", it) }
         }
     }
