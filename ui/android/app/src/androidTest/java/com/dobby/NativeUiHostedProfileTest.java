@@ -1984,6 +1984,9 @@ public final class NativeUiHostedProfileTest {
         }
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_UI_REOPEN_STATE_INVALID"));
         waitForUiControl("Profile 1 action", remainingTimeout(deadline, "ANDROID_UI_REOPEN_STATE_INVALID"));
+        // The surface is rendered in a new Activity after finishAndRemoveTask.
+        // Refresh the test's reader reference before inspecting Compose semantics.
+        foregroundActivity = ensureForegroundActivity();
         assertRenderedSourceRetained(remainingTimeout(deadline, "ANDROID_UI_REOPEN_STATE_INVALID"));
         SystemClock.sleep(1_100L); // Covers multiple foreground Snapshot polls.
         JSONObject after = snapshotResult("");
@@ -3024,19 +3027,139 @@ public final class NativeUiHostedProfileTest {
             }
             SystemClock.sleep(POLL_MILLIS);
         }
-        throw new IllegalStateException("ANDROID_UI_ACCEPTED_SOURCE_NOT_VISIBLE");
+        IllegalStateException failure =
+                new IllegalStateException("ANDROID_UI_ACCEPTED_SOURCE_NOT_VISIBLE");
+        try {
+            System.err.println("DOBBY_ACCEPTED_SOURCE_DIAGNOSTICS_BEGIN");
+            System.err.println(describeRenderedSourceFailure(failure));
+            System.err.println("DOBBY_ACCEPTED_SOURCE_DIAGNOSTICS_END");
+            System.err.flush();
+        } catch (Throwable diagnosticFailure) {
+            failure.addSuppressed(new IllegalStateException(
+                    "ANDROID_UI_ACCEPTED_SOURCE_DIAGNOSTICS_FAILED", diagnosticFailure));
+        }
+        throw failure;
     }
 
     // Compose truncates accessibility text to 100,000 characters. Read the
     // editor's complete semantics value instead of accepting a partial match.
     private String readComposeEditableText() {
+        return readComposeEditableText(foregroundActivity);
+    }
+
+    private String readComposeEditableText(Activity activity) {
         AtomicReference<String> renderedText = new AtomicReference<>();
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
-            if (foregroundActivity == null) return;
-            View content = foregroundActivity.findViewById(android.R.id.content);
+            if (activity == null) return;
+            View content = activity.findViewById(android.R.id.content);
             if (content != null) renderedText.set(findComposeEditableText(content));
         });
         return renderedText.get();
+    }
+
+    private String describeRenderedSourceFailure(IllegalStateException failure) {
+        StringBuilder details = new StringBuilder()
+                .append("expectedFullURL=").append(expectedRenderedSource).append('\n');
+        UiObject2 input = null;
+        UiObject2 label = null;
+        try {
+            input = findNativeInput();
+            details.append("nativeInputLookup=ok\n");
+        } catch (Throwable lookupFailure) {
+            details.append("nativeInputLookupError=").append(lookupFailure).append('\n');
+            failure.addSuppressed(lookupFailure);
+        }
+        try {
+            label = findUiObject("Subscription URL");
+            details.append("subscriptionLabelLookup=ok\n");
+        } catch (Throwable lookupFailure) {
+            details.append("subscriptionLabelLookupError=").append(lookupFailure).append('\n');
+            failure.addSuppressed(lookupFailure);
+        }
+        String nativeInputText = appendSourceUiNodeDetails(details, "nativeInput", input, failure);
+        appendSourceUiNodeDetails(details, "subscriptionLabel", label, failure);
+        details.append("nativeInputTextNonempty=")
+                .append(nativeInputText != null && !nativeInputText.isEmpty()).append('\n');
+
+        Activity cachedActivity = foregroundActivity;
+        AtomicReference<Activity> currentActivity = new AtomicReference<>();
+        AtomicReference<String> activityDetails = new AtomicReference<>();
+        try {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                Activity current = MainActivity.current;
+                currentActivity.set(current);
+                activityDetails.set("cachedIsCurrent=" + (cachedActivity == current) + '\n'
+                        + describeActivity("cachedActivity", cachedActivity, current) + '\n'
+                        + describeActivity("currentActivity", current, current));
+            });
+            details.append(activityDetails.get()).append('\n');
+        } catch (Throwable activityFailure) {
+            details.append("activityDetailsError=").append(activityFailure).append('\n');
+            failure.addSuppressed(activityFailure);
+        }
+        String cachedComposeText = appendSourceComposeText(
+                details, "cachedComposeEditor", cachedActivity, failure);
+        String currentComposeText = appendSourceComposeText(
+                details, "currentComposeEditor", currentActivity.get(), failure);
+        details.append("cachedComposeMatchesExpected=")
+                .append(expectedRenderedSource.equals(cachedComposeText)).append('\n');
+        details.append("currentComposeMatchesExpected=")
+                .append(expectedRenderedSource.equals(currentComposeText)).append('\n');
+        return details.toString();
+    }
+
+    private String appendSourceUiNodeDetails(
+            StringBuilder details, String name, UiObject2 node, IllegalStateException failure) {
+        details.append(name).append("Found=").append(node != null).append('\n');
+        if (node == null) return null;
+        String text = null;
+        try {
+            text = node.getText();
+            details.append(name).append("Text=").append(text).append('\n');
+        } catch (Throwable textFailure) {
+            details.append(name).append("TextError=").append(textFailure).append('\n');
+            failure.addSuppressed(textFailure);
+        }
+        try {
+            Rect bounds = node.getVisibleBounds();
+            details.append(name).append("VisibleBounds=").append(bounds)
+                    .append(";empty=").append(bounds.isEmpty()).append('\n');
+        } catch (Throwable boundsFailure) {
+            details.append(name).append("VisibleBoundsError=").append(boundsFailure).append('\n');
+            failure.addSuppressed(boundsFailure);
+        }
+        return text;
+    }
+
+    private String appendSourceComposeText(
+            StringBuilder details, String name, Activity activity, IllegalStateException failure) {
+        try {
+            String text = readComposeEditableText(activity);
+            details.append(name).append('=').append(text).append('\n');
+            return text;
+        } catch (Throwable readFailure) {
+            details.append(name).append("Error=").append(readFailure).append('\n');
+            failure.addSuppressed(readFailure);
+            return null;
+        }
+    }
+
+    private String describeActivity(String name, Activity activity, Activity current) {
+        if (activity == null) return name + "=null";
+        String lifecycleState = "not-lifecycle-owner";
+        if (activity instanceof androidx.lifecycle.LifecycleOwner) {
+            lifecycleState = ((androidx.lifecycle.LifecycleOwner) activity)
+                    .getLifecycle().getCurrentState().toString();
+        }
+        return name + "={identity=" + activity.getClass().getName() + '@'
+                + Integer.toHexString(System.identityHashCode(activity))
+                + ",isCurrent=" + (activity == current)
+                + ",package=" + activity.getPackageName()
+                + ",isTarget=" + context.getPackageName().equals(activity.getPackageName())
+                + ",lifecycle=" + lifecycleState
+                + ",isFinishing=" + activity.isFinishing()
+                + ",isDestroyed=" + activity.isDestroyed()
+                + ",windowFocused=" + activity.hasWindowFocus() + '}';
     }
 
     private static String findComposeEditableText(View view) {
