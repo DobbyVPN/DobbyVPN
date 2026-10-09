@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 import json
 import plistlib
 from pathlib import Path
@@ -24,6 +25,7 @@ from torturer_runner.diagnostics import (
     output_text,
 )
 from torturer_runner.process_capture import exception_output, run_finite_capture
+from bounded_process import terminate_process_group
 from torturer_runner.ios_simulator import (
     IOSSimulatorContractError,
     SimulatorApp,
@@ -257,6 +259,51 @@ class CommandRunner(Protocol):
         """Run shell-free and forward each captured stream exactly once."""
 
 
+def _observe_simctl_timeout(
+    process: subprocess.Popen[bytes],
+    termination_deadline: float,
+    *,
+    command: Sequence[str],
+    operation_deadline: float,
+    observations: list[tuple[str, subprocess.CompletedProcess[bytes] | BaseException | str]],
+) -> None:
+    try:
+        if process.poll() is not None or time.monotonic() + 0.1 < operation_deadline:
+            observations.append(("failure_time_caller_skipped", "process exited or failure preceded timeout"))
+            return
+
+        pid = process.pid
+        observations.append(("failure_time_caller", f"command={' '.join(command[:3])} pid={pid}"))
+        started = time.monotonic()
+        diagnostic_deadline = min(started + 5.0, termination_deadline - 10.0)
+        available = diagnostic_deadline - started
+        if available < 3.5:
+            observations.append((
+                "failure_time_caller_skipped",
+                f"insufficient termination time for both observations; available={max(available, 0.0):.3f}s",
+            ))
+            return
+
+        for label, diagnostic_command, wall_limit in (
+            ("failure_time_process_snapshot", ("/bin/ps", "-p", str(pid), "-o", "pid,ppid,pgid,state,etime,command"), min(1.5, available - 2.0)),
+            ("failure_time_caller_sample", ("/usr/bin/sample", str(pid), "1", "1", "-file", "/dev/stdout"), 5.0),
+        ):
+            remaining = min(wall_limit, diagnostic_deadline - time.monotonic())
+            if remaining <= 0:
+                observations.append((f"{label}_skipped", "diagnostic deadline expired"))
+                continue
+            cleanup_timeout = min(0.25, remaining / 4)
+            try:
+                observations.append((label, run_finite_capture(
+                    diagnostic_command, timeout_seconds=remaining - cleanup_timeout,
+                    termination_grace_seconds=0, cleanup_timeout_seconds=cleanup_timeout,
+                )))
+            except BaseException as error:
+                observations.append((label, error))
+    finally:
+        terminate_process_group(process, max(termination_deadline - time.monotonic(), 0.0))
+
+
 class SubprocessCommandRunner:
     """Run shell-free commands with timeouts and process-group cleanup."""
 
@@ -270,14 +317,43 @@ class SubprocessCommandRunner:
         timeout = timeout_seconds if timeout_seconds is not None else DEFAULT_COMMAND_TIMEOUT_SECONDS
         if timeout <= 0:
             raise IOSSimulatorAppContractError("iOS command timeout must be positive")
+        arguments = tuple(str(part) for part in command)
+        observe_before_termination = arguments[:3] in {
+            ("xcrun", "simctl", "install"),
+            ("xcrun", "simctl", "bootstatus"),
+        }
+        failure_observations: list[
+            tuple[str, subprocess.CompletedProcess[bytes] | BaseException | str]
+        ] = []
+        operation_deadline = time.monotonic() + timeout
+        terminator = partial(
+            _observe_simctl_timeout,
+            command=arguments,
+            operation_deadline=operation_deadline,
+            observations=failure_observations,
+        ) if observe_before_termination else None
+
         try:
-            completed = run_finite_capture(
-                command,
-                cwd=cwd,
-                timeout_seconds=timeout,
-                termination_grace_seconds=COMMAND_TERMINATION_GRACE_SECONDS,
-                cleanup_timeout_seconds=COMMAND_TERMINATION_RESERVE_SECONDS,
-            )
+            try:
+                completed = run_finite_capture(
+                    command,
+                    cwd=cwd,
+                    timeout_seconds=timeout,
+                    terminate=terminator,
+                    termination_grace_seconds=COMMAND_TERMINATION_GRACE_SECONDS,
+                    cleanup_timeout_seconds=COMMAND_TERMINATION_RESERVE_SECONDS,
+                )
+            except BaseException as error:
+                for label, observation in failure_observations:
+                    if isinstance(observation, BaseException):
+                        add_exception_notes(error, label, observation)
+                    elif isinstance(observation, subprocess.CompletedProcess):
+                        add_stream_notes(error, label, observation.stdout, observation.stderr)
+                        if observation.returncode != 0:
+                            error.add_note(f"{label}_exit_code={observation.returncode}")
+                    else:
+                        error.add_note(f"{label}={observation}")
+                raise
         except OSError as error:
             stdout, stderr = exception_output(error)
             failure = IOSSimulatorAppContractError(

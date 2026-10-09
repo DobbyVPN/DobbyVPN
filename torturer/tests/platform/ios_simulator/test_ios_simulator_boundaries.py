@@ -8,6 +8,7 @@ import contextlib
 import sys
 import subprocess
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -945,6 +946,174 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         self.assertIn("pipes remained open", notes)
         process.stdout.close.assert_called_once()
         process.stderr.close.assert_called_once()
+
+    def _run_simctl_timeout(self, command, diagnostics, *, termination_window=15.0):
+        process = mock.Mock(pid=4321, terminated=False)
+        process.poll.return_value = None
+        original = subprocess.TimeoutExpired(
+            command, 0.01, output=b"original stdout\x00\xff", stderr=b"original stderr\n"
+        )
+        events = []
+
+        def capture(arguments, **kwargs):
+            argv = tuple(arguments)
+            if argv == tuple(command):
+                time.sleep(0.02)
+                kwargs["terminate"](process, time.monotonic() + termination_window)
+                raise original
+            self.assertIsNone(process.poll())
+            self.assertFalse(process.terminated)
+            events.append(argv[0])
+            if argv[0] == "/bin/ps":
+                self.assertEqual(argv, ("/bin/ps", "-p", "4321", "-o", "pid,ppid,pgid,state,etime,command"))
+            else:
+                self.assertEqual(argv, ("/usr/bin/sample", "4321", "1", "1", "-file", "/dev/stdout"))
+            result = diagnostics[argv[0]]
+            if isinstance(result, BaseException):
+                raise result
+            return result
+
+        def terminate(live_process, grace_seconds):
+            events.append(("terminate-group", grace_seconds))
+            live_process.terminated = True
+
+        with (
+            mock.patch.object(ios_simulator_app, "run_finite_capture", side_effect=capture),
+            mock.patch.object(ios_simulator_app, "terminate_process_group", side_effect=terminate),
+            self.assertRaises(ios_simulator_app.IOSSimulatorAppContractError) as caught,
+        ):
+            ios_simulator_app.SubprocessCommandRunner().run(command, timeout_seconds=0.01)
+        self.assertIs(caught.exception.__cause__, original)
+        return original, process, events
+
+    def test_simctl_timeout_observes_live_caller_before_group_termination(self) -> None:
+        for operation in ("install", "bootstatus"):
+            with self.subTest(operation=operation):
+                command = ["xcrun", "simctl", operation, "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"]
+                command += ["/tmp/app"] if operation == "install" else ["-b"]
+                diagnostics = {
+                    "/bin/ps": subprocess.CompletedProcess(
+                        ["ps"], 0, b"caller ps stdout\x00\xff", b"caller ps stderr\n"
+                    ),
+                    "/usr/bin/sample": subprocess.CompletedProcess(
+                        ["sample"], 0, b"caller sample stdout\x00\xff", b"caller sample stderr\n"
+                    ),
+                }
+                original, process, events = self._run_simctl_timeout(command, diagnostics)
+                self.assertEqual(events[:2], ["/bin/ps", "/usr/bin/sample"])
+                self.assertEqual(events[2][0], "terminate-group")
+                self.assertGreaterEqual(events[2][1], 10.0)
+                self.assertTrue(process.terminated)
+                self.assertEqual(original.stdout, b"original stdout\x00\xff")
+                self.assertEqual(original.stderr, b"original stderr\n")
+                notes = "\n".join(original.__notes__)
+                self.assertIn(f"failure_time_caller=command=xcrun simctl {operation} pid=4321", notes)
+                self.assertIn("failure_time_process_snapshot_stdout:\ncaller ps stdout\x00\\xff", notes)
+                self.assertIn("failure_time_process_snapshot_stderr:\ncaller ps stderr\n", notes)
+                self.assertIn("failure_time_caller_sample_stdout:\ncaller sample stdout\x00\\xff", notes)
+                self.assertIn("failure_time_caller_sample_stderr:\ncaller sample stderr\n", notes)
+
+    def test_simctl_timeout_keeps_collection_errors_and_skips_with_short_window(self) -> None:
+        command = ["xcrun", "simctl", "install", "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "/tmp/app"]
+        diagnostics = {
+            "/bin/ps": subprocess.TimeoutExpired(
+                ["ps"], 1, output=b"partial ps stdout\x00\xff", stderr=b"partial ps stderr\n"
+            ),
+            "/usr/bin/sample": subprocess.CompletedProcess(
+                ["sample"], 0, b"sample stdout", b"sample stderr"
+            ),
+        }
+        original, process, events = self._run_simctl_timeout(command, diagnostics)
+        self.assertEqual(events[:2], ["/bin/ps", "/usr/bin/sample"])
+        self.assertEqual(events[2][0], "terminate-group")
+        self.assertTrue(process.terminated)
+        notes = "\n".join(original.__notes__)
+        self.assertIn("failure_time_process_snapshot_error=TimeoutExpired:", notes)
+        self.assertIn("failure_time_process_snapshot_stdout:\npartial ps stdout\x00\\xff", notes)
+        self.assertIn("failure_time_process_snapshot_stderr:\npartial ps stderr\n", notes)
+        self.assertIn("failure_time_caller_sample_stdout:\nsample stdout", notes)
+
+        original, process, events = self._run_simctl_timeout(command, {}, termination_window=9.0)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][0], "terminate-group")
+        self.assertLess(events[0][1], 10.0)
+        self.assertTrue(process.terminated)
+        self.assertIn("available=0.000s", "\n".join(original.__notes__))
+
+    def test_simctl_termination_error_stays_secondary_to_original_timeout(self) -> None:
+        command = ["xcrun", "simctl", "install", "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "/tmp/app"]
+        original = subprocess.TimeoutExpired(
+            command, 0.01, output=b"primary stdout", stderr=b"primary stderr"
+        )
+        process = mock.Mock(pid=5678)
+        process.poll.return_value = None
+        communicate_calls = 0
+
+        def communicate(*args, **kwargs):
+            nonlocal communicate_calls
+            communicate_calls += 1
+            if communicate_calls == 1:
+                time.sleep(0.02)
+                raise original
+            return b"", b""
+
+        process.communicate.side_effect = communicate
+        real_capture = ios_simulator_app.run_finite_capture
+        events = []
+
+        def capture(arguments, **kwargs):
+            argv = tuple(arguments)
+            if argv == tuple(command):
+                return real_capture(
+                    arguments,
+                    popen_factory=lambda *args, **options: process,
+                    **kwargs,
+                )
+            events.append(argv[0])
+            return subprocess.CompletedProcess(argv, 0, b"diagnostic", b"")
+
+        def fail_termination(live_process, grace_seconds):
+            self.assertIs(live_process, process)
+            self.assertGreaterEqual(grace_seconds, 10.0)
+            events.append("terminate-group")
+            raise RuntimeError("group stop failed")
+
+        with (
+            mock.patch.object(ios_simulator_app, "run_finite_capture", side_effect=capture),
+            mock.patch.object(ios_simulator_app, "terminate_process_group", side_effect=fail_termination),
+            self.assertRaises(ios_simulator_app.IOSSimulatorAppContractError) as caught,
+        ):
+            ios_simulator_app.SubprocessCommandRunner().run(command, timeout_seconds=0.01)
+
+        self.assertIs(caught.exception.__cause__, original)
+        self.assertEqual(original.stdout, b"primary stdout")
+        self.assertEqual(original.stderr, b"primary stderr")
+        self.assertEqual(events, ["/bin/ps", "/usr/bin/sample", "terminate-group"])
+        self.assertIn(
+            "process cleanup failed: RuntimeError: group stop failed",
+            "\n".join(original.__notes__),
+        )
+
+    def test_simctl_success_does_not_collect_failure_observations(self) -> None:
+        process = mock.Mock()
+        process.pid = 12345
+        process.returncode = 0
+        process.communicate.return_value = (b"install complete\n", b"")
+        command = ["xcrun", "simctl", "install", "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "/tmp/app"]
+
+        with (
+            mock.patch.object(ios_simulator_app.subprocess, "Popen", return_value=process),
+            mock.patch.object(ios_simulator_app, "terminate_process_group") as terminate,
+        ):
+            result = ios_simulator_app.SubprocessCommandRunner().run(
+                command,
+                timeout_seconds=1,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "install complete\n")
+        process.communicate.assert_called_once()
+        terminate.assert_not_called()
 
 
 if __name__ == "__main__":
