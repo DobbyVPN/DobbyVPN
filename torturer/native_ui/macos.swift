@@ -1563,10 +1563,11 @@ func run() throws -> [String: Any] {
         }
     } catch {
         if operation == "tree", let readError = error as? AccessibilityReadError,
-           isTransientAccessibilityRead(readError) {
-            // SwiftUI can invalidate a node between children enumeration and
-            // AXRole reads when loading/error controls change. Rediscover the
-            // read-only tree within Python's existing action deadline.
+           isTransientAccessibilityRead(readError) ||
+                (readError.code == .illegalArgument && readError.attribute == kAXChildrenAttribute) {
+            // SwiftUI can invalidate an AX node during children enumeration or
+            // later role reads when loading/error controls change. Rediscover
+            // the read-only tree within Python's existing action deadline.
             FileHandle.standardError.write(Data("\(readError) during tree discovery; retrying\n".utf8))
             return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity]
         }

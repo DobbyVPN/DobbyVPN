@@ -2767,7 +2767,10 @@ internal static class Program
                         ? markerValue.GetString() : null;
                 System.Windows.Rect? logViewport = string.IsNullOrEmpty(paletteMarker)
                     ? null : PhysicalBounds(logRoot, "Backend logs");
-                var initialLogElements = Walk(logRoot).ToArray();
+                // Reuse peers for frozen Details; live reads traverse as they consume elements.
+                IEnumerable<AutomationElement> initialLogElements = verifyDetails
+                    ? Walk(logRoot).ToArray()
+                    : Walk(logRoot);
                 var entries = initialLogElements
                     .Where(element => element.Current.ControlType == ControlType.Text)
                     .Select(element =>
