@@ -1018,6 +1018,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = app/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
 				MARKETING_VERSION = 1.5.4;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "Dobby-Vpn-Simulator";
@@ -1041,6 +1042,7 @@
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = app/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
 				MARKETING_VERSION = 1.5.4;
 				PRODUCT_BUNDLE_IDENTIFIER = vpn.dobby.app;
 				PRODUCT_NAME = "Dobby-Vpn-Simulator";
