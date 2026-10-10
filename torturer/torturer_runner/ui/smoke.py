@@ -1233,12 +1233,14 @@ class NativeUIController:
             ):
                 raise NativeUISmokeError("Windows log entries did not expose rendered structured text")
             self._call("scroll-logs", position="top")
+            self._call("log-position")
             failure_screenshot = self.screenshot_dir / "windows-details-expansion-failure.png"
             initial_view = self._call(
                 "logs",
                 verify_details=True,
                 failure_screenshot_path=str(failure_screenshot),
             )
+            self._call("log-position")
             rendered = initial_view.get("entries", [])
             if not initial_view.get("expansion_verified"):
                 raise NativeUISmokeError("Windows structured log Details did not reveal the original record")

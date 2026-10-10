@@ -2750,6 +2750,13 @@ internal static class Program
                 Console.WriteLine(JsonSerializer.Serialize(ScrollProfileList(root, window, Text("position"))));
                 return 0;
             }
+            bool VisibleInLogViewport(AutomationElement element, System.Windows.Rect viewport)
+            {
+                var current = element.Current;
+                var bounds = current.BoundingRectangle;
+                return !current.IsOffscreen && HasUsableBounds(bounds) &&
+                    HasUsableBounds(System.Windows.Rect.Intersect(bounds, viewport));
+            }
             if (operation == "logs")
             {
                 var logRoot = Find("Backend logs");
@@ -2798,9 +2805,10 @@ internal static class Program
                 var expansionVerified = false;
                 if (verifyDetails)
                 {
-                    var details = Walk(logRoot).FirstOrDefault(element =>
-                        element.Current.Name == "Details" &&
-                        element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _));
+                    var detailsViewport = PhysicalBounds(logRoot, "Backend logs");
+                    var details = Walk(logRoot).FirstOrDefault(element => element.Current.Name == "Details" &&
+                        element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _) &&
+                        VisibleInLogViewport(element, detailsViewport));
                     if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
                     {
                         var control = (ExpandCollapsePattern)expand;
@@ -2997,10 +3005,12 @@ internal static class Program
             }
             if (operation == "select-log-text")
             {
-                var entry = Walk(Find("Backend logs"))
-                    .Where(element => element.Current.ControlType == ControlType.Text && !element.Current.IsOffscreen)
-                    .FirstOrDefault(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) &&
-                        ((TextPattern)pattern).DocumentRange.GetText(-1).Contains(" · ", StringComparison.Ordinal));
+                var logRoot = Find("Backend logs");
+                var logViewport = PhysicalBounds(logRoot, "Backend logs");
+                var entry = Walk(logRoot).FirstOrDefault(element =>
+                    element.Current.ControlType == ControlType.Text && VisibleInLogViewport(element, logViewport) &&
+                    element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) &&
+                    ((TextPattern)pattern).DocumentRange.GetText(-1).Contains(" · ", StringComparison.Ordinal));
                 if (entry is null || !entry.TryGetCurrentPattern(TextPattern.Pattern, out var entryPattern))
                     throw new InvalidOperationException("No structured log entry is available for text selection");
                 var range = ((TextPattern)entryPattern).DocumentRange;
@@ -3021,13 +3031,20 @@ internal static class Program
                 var position = scroll.Current.VerticalScrollPercent;
                 if (position < 0)
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll position");
-                var firstVisibleRecord = Walk(logRoot)
-                    .Where(element => element.Current.ControlType == ControlType.Text && !element.Current.IsOffscreen)
-                    .Select(element => element.Current.Name)
-                    .FirstOrDefault(text => text.Contains(" · ", StringComparison.Ordinal)) ?? "";
+                var logViewport = PhysicalBounds(logRoot, "Backend logs");
+                var firstVisibleElement = Walk(logRoot).FirstOrDefault(element =>
+                    element.Current.ControlType == ControlType.Text &&
+                    element.Current.Name.Contains(" · ", StringComparison.Ordinal) &&
+                    VisibleInLogViewport(element, logViewport));
+                if (firstVisibleElement is null)
+                    throw new InvalidOperationException(
+                        $"Native log viewer has no visible structured record: vertical_scroll_percent={position.ToString(CultureInfo.InvariantCulture)} " +
+                        $"logs_viewport={JsonSerializer.Serialize(RectJson(logViewport))}");
                 Console.WriteLine(JsonSerializer.Serialize(new {
                     ready = true, vertical_scroll_percent = position,
-                    visible_first_record = firstVisibleRecord
+                    logs_viewport = RectJson(logViewport),
+                    visible_first_record = firstVisibleElement.Current.Name,
+                    visible_first_record_bounds = RectJson(firstVisibleElement.Current.BoundingRectangle),
                 }));
                 return 0;
             }
@@ -3071,71 +3088,107 @@ internal static class Program
                     visible_viewport = RectJson(visibleViewport),
                     point = new { x = point.X, y = point.Y },
                 }));
-                bool AtRequestedEnd(double percent) => position == "top" ? percent <= 1 : percent >= 99;
-                scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
-                var actual = scroll.Current.VerticalScrollPercent;
-                TracePhase("scroll-logs-after-set " + JsonSerializer.Serialize(new
+                bool AtRequestedEnd(double percent) => percent >= 0 && (position == "top" ? percent <= 1 : percent >= 99);
+                var actual = initialPercent;
+                var beforeWheelPercent = initialPercent;
+                void SendWheel()
                 {
-                    utc = UtcTimestamp(), vertical_scroll_percent = actual,
-                }));
+                    RequireForeground(window, "log scrolling before native wheel input");
+                    var pointWindow = WindowFromPoint(point);
+                    var pointRoot = pointWindow == IntPtr.Zero ? IntPtr.Zero : GetAncestor(pointWindow, GaRoot);
+                    if (pointRoot != window)
+                        throw new InvalidOperationException(
+                            $"Refusing log wheel input at ({point.X},{point.Y}): WindowFromPoint root " +
+                            $"0x{pointRoot.ToInt64():X} does not match candidate 0x{window.ToInt64():X}");
+                    Marshal.SetLastPInvokeError(0);
+                    if (!SetCursorPos(point.X, point.Y))
+                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
+                            $"Could not move the pointer to the visible log viewport at ({point.X},{point.Y})");
+                    Marshal.SetLastPInvokeError(0);
+                    if (!GetCursorPos(out var cursor))
+                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
+                            "Could not verify the pointer position before log wheel input");
+                    if (cursor.X != point.X || cursor.Y != point.Y)
+                        throw new InvalidOperationException(
+                            $"Pointer did not reach the visible log viewport: expected=({point.X},{point.Y}) " +
+                            $"actual=({cursor.X},{cursor.Y})");
+                    if (GetForegroundWindow() != window)
+                        throw new InvalidOperationException("Native window lost foreground before log wheel input");
+
+                    beforeWheelPercent = scroll.Current.VerticalScrollPercent;
+                    var wheelDelta = position == "top" ? WheelDelta : -WheelDelta;
+                    var wheelInput = CreateMouseInput(MouseEventWheel, unchecked((uint)wheelDelta));
+                    Marshal.SetLastPInvokeError(0);
+                    var inserted = SendInput(1, new[] { wheelInput }, Marshal.SizeOf<NativeInput>());
+                    var sendInputError = Marshal.GetLastPInvokeError();
+                    if (inserted != 1)
+                        throw new InvalidOperationException(
+                            $"SendInput inserted {inserted} of 1 log wheel events; lastError={sendInputError}");
+                    actual = scroll.Current.VerticalScrollPercent;
+                    TracePhase("scroll-logs-after-wheel " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, wheel_delta = wheelDelta, before_vertical_scroll_percent = beforeWheelPercent, vertical_scroll_percent = actual }));
+                }
+
+                if (position == "top")
+                {
+                    SendWheel();
+                    if (beforeWheelPercent > 0)
+                    {
+                        // NativeUIController enforces this operation's existing watchdog.
+                        while (!(actual >= 0 && actual < beforeWheelPercent))
+                        {
+                            Thread.Sleep(50);
+                            RequireForeground(window, "log scrolling while awaiting upward wheel movement");
+                            actual = scroll.Current.VerticalScrollPercent;
+                        }
+                        TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = "await-upward-wheel", vertical_scroll_percent = actual }));
+                    }
+                }
+
+                RequireForeground(window, "log scrolling before setting the endpoint");
+                scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
+                actual = scroll.Current.VerticalScrollPercent;
+                TracePhase("scroll-logs-after-set " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, vertical_scroll_percent = actual }));
                 var lastLoggedPercent = actual;
-                // NativeUIController bounds this helper process with its existing operation watchdog.
+                // NativeUIController enforces this operation's existing watchdog.
                 while (!AtRequestedEnd(actual))
                 {
                     Thread.Sleep(50);
                     actual = scroll.Current.VerticalScrollPercent;
                     if (actual.Equals(lastLoggedPercent)) continue;
                     lastLoggedPercent = actual;
-                    TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new
-                    {
-                        utc = UtcTimestamp(), vertical_scroll_percent = actual,
-                    }));
+                    TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = "await-endpoint", vertical_scroll_percent = actual }));
                 }
-                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new
+                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = position == "bottom" ? "before-downward-wheel" : "after-upward-wheel-set", vertical_scroll_percent = actual }));
+                if (position == "bottom")
                 {
-                    utc = UtcTimestamp(), position, vertical_scroll_percent = actual,
-                }));
+                    SendWheel();
+                    if (!AtRequestedEnd(actual))
+                        throw new InvalidOperationException(
+                            $"Native log wheel input moved the viewer away from the {position} endpoint: " +
+                            $"vertical_scroll_percent={actual.ToString(CultureInfo.InvariantCulture)}");
+                }
 
-                RequireForeground(window, "log scrolling at the verified endpoint");
-                var pointWindow = WindowFromPoint(point);
-                var pointRoot = pointWindow == IntPtr.Zero ? IntPtr.Zero : GetAncestor(pointWindow, GaRoot);
-                if (pointRoot != window)
-                    throw new InvalidOperationException(
-                        $"Refusing log wheel input at ({point.X},{point.Y}): WindowFromPoint root " +
-                        $"0x{pointRoot.ToInt64():X} does not match candidate 0x{window.ToInt64():X}");
-                Marshal.SetLastPInvokeError(0);
-                if (!SetCursorPos(point.X, point.Y))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
-                        $"Could not move the pointer to the visible log viewport at ({point.X},{point.Y})");
-                Marshal.SetLastPInvokeError(0);
-                if (!GetCursorPos(out var cursor))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
-                        "Could not verify the pointer position before log wheel input");
-                if (cursor.X != point.X || cursor.Y != point.Y)
-                    throw new InvalidOperationException(
-                        $"Pointer did not reach the visible log viewport: expected=({point.X},{point.Y}) " +
-                        $"actual=({cursor.X},{cursor.Y})");
-                if (GetForegroundWindow() != window)
-                    throw new InvalidOperationException("Native window lost foreground before log wheel input");
-
-                var wheelDelta = position == "top" ? WheelDelta : -WheelDelta;
-                var wheelInput = CreateMouseInput(MouseEventWheel, unchecked((uint)wheelDelta));
-                Marshal.SetLastPInvokeError(0);
-                var inserted = SendInput(1, new[] { wheelInput }, Marshal.SizeOf<NativeInput>());
-                var sendInputError = Marshal.GetLastPInvokeError();
-                if (inserted != 1)
-                    throw new InvalidOperationException(
-                        $"SendInput inserted {inserted} of 1 log wheel events; lastError={sendInputError}");
-                var afterWheelPercent = scroll.Current.VerticalScrollPercent;
-                TracePhase("scroll-logs-after-wheel " + JsonSerializer.Serialize(new
+                var lastObservedPercent = actual;
+                var wasAtEndpoint = AtRequestedEnd(actual);
+                var stableSince = Stopwatch.GetTimestamp();
+                while (!wasAtEndpoint ||
+                    Stopwatch.GetElapsedTime(stableSince).TotalMilliseconds < 750)
                 {
-                    utc = UtcTimestamp(), vertical_scroll_percent = afterWheelPercent,
-                }));
-                if (!AtRequestedEnd(afterWheelPercent))
-                    throw new InvalidOperationException(
-                        $"Native log wheel input moved the viewer away from the {position} endpoint: " +
-                        $"vertical_scroll_percent={afterWheelPercent.ToString(CultureInfo.InvariantCulture)}");
-                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, position = afterWheelPercent }));
+                    Thread.Sleep(50);
+                    RequireForeground(window, "log scrolling through the foreground refresh window");
+                    actual = scroll.Current.VerticalScrollPercent;
+                    var atEndpoint = AtRequestedEnd(actual);
+                    if (!atEndpoint || !wasAtEndpoint)
+                        stableSince = Stopwatch.GetTimestamp();
+                    if (!actual.Equals(lastObservedPercent))
+                    {
+                        lastObservedPercent = actual;
+                        TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = "settle-endpoint", vertical_scroll_percent = actual }));
+                    }
+                    wasAtEndpoint = atEndpoint;
+                }
+                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, vertical_scroll_percent = actual, stable_ms = Stopwatch.GetElapsedTime(stableSince).TotalMilliseconds }));
+                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, position = actual }));
                 return 0;
             }
             if (operation == "tree")
