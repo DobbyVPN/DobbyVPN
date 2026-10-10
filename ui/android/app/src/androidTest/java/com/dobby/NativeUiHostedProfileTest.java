@@ -2878,7 +2878,6 @@ public final class NativeUiHostedProfileTest {
                         enumeratedTarget, enumeratedTargetAncestor);
             }
             swipes++;
-            waitForIdleBounded(device, deadline);
             SystemClock.sleep(POLL_MILLIS);
         }
         AssertionError failure = profileActionVisibilityFailure(
