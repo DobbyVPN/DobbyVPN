@@ -193,7 +193,9 @@ class SubscriptionFixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             profile = root / 'profile'
-            profile.write_bytes(b'synthetic profile\n')
+            original = b'synthetic profile\n'
+            replacement = b'replaced synthetic profile\n'
+            profile.write_bytes(original)
             fixture = SubscriptionFixture(profile, root / 'fixture', 'android')
             from torturer_runner.subscription_fixture import command as real_command
 
@@ -210,15 +212,21 @@ class SubscriptionFixtureTests(unittest.TestCase):
                 try:
                     fixture.start()
                     context = ssl.create_default_context(cafile=str(fixture.certificate))
-                    with socket.socket(socket.AF_UNIX) as connection:
-                        connection.connect(fixture.socket_path)
-                        with context.wrap_socket(connection, server_hostname='127.0.0.1') as secured:
-                            secured.sendall(b'GET /subscription HTTP/1.0\r\nHost: localhost\r\n\r\n')
-                            with secured.makefile('rb') as response:
-                                self.assertTrue(response.read().endswith(profile.read_bytes()))
+                    def fetch_body():
+                        with socket.socket(socket.AF_UNIX) as connection:
+                            connection.connect(fixture.socket_path)
+                            with context.wrap_socket(connection, server_hostname='127.0.0.1') as secured:
+                                secured.sendall(b'GET /subscription HTTP/1.0\r\nHost: localhost\r\n\r\n')
+                                with secured.makefile('rb') as response:
+                                    return response.read().split(b'\r\n\r\n', 1)[1]
+
+                    self.assertEqual(original, fetch_body())
+                    fixture.replace_response(replacement)
+                    self.assertEqual(replacement, fetch_body())
+                    self.assertEqual(original, profile.read_bytes())
                     stats = fixture.control_stats()
                     self.assertEqual(
-                        {"subscription_gets": 1, "in_flight_gets": 0, "max_in_flight_gets": 1},
+                        {"subscription_gets": 2, "in_flight_gets": 0, "max_in_flight_gets": 1},
                         {name: stats[name] for name in ("subscription_gets", "in_flight_gets", "max_in_flight_gets")},
                     )
                     self.assertGreater(stats["last_subscription_get_started_at_unix_ms"], 0)
@@ -227,6 +235,8 @@ class SubscriptionFixtureTests(unittest.TestCase):
                     fixture.close()
                 with self.assertRaisesRegex(RuntimeError, "subscription fixture is not running"):
                     fixture.control_stats()
+                with self.assertRaisesRegex(RuntimeError, "subscription fixture is not running"):
+                    fixture.replace_response(replacement)
                 calls.assert_any_call(['adb', 'reverse', '--no-rebind', f'tcp:{fixture.port}', f'localfilesystem:{fixture.socket_path}'])
                 calls.assert_any_call(['adb', 'reverse', '--remove', f'tcp:{fixture.port}'])
             self.assertFalse(Path(fixture.socket_path).exists())

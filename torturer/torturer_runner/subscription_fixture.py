@@ -345,6 +345,12 @@ class SubscriptionFixture:
     def replace_response(self, content: bytes) -> None:
         if not content or len(content) > 1 << 20:
             raise ValueError("fixture response must contain 1 byte through 1 MiB")
+        if self.platform == "android":
+            with self.control_condition:
+                if self.thread is None or not self.thread.is_alive():
+                    raise RuntimeError("subscription fixture is not running")
+                self.profile_bytes = content
+            return
         self._control_request("/profile", body=content)
 
     def hold_responses(self) -> None:
