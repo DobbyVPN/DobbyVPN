@@ -405,6 +405,9 @@ jobs:
     name: Build selected Android candidate
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'android-mini' || inputs.platform == 'fdroid-preflight') }}
     needs: [ci_selected_version]
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/android_build.yml
     with:
       source_sha: ${{ github.sha }}
