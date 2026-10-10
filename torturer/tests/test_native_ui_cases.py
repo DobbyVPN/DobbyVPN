@@ -1402,7 +1402,8 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         ):
             with self.subTest(assertion=assertion):
                 self.assertIn(assertion, apply_operation)
-        self.assertIn("!currentApply.Current.IsEnabled", apply_operation)
+        self.assertIn("var applyAfterApply = currentApply.Current;", apply_operation)
+        self.assertIn("applyAfterApply.IsEnabled || !sliderAfterApply.IsEnabled", apply_operation)
 
         close_start = operation.index("if (window != IntPtr.Zero && selectedWindow is not null && !windowsBefore.Contains(window))")
         close_cleanup = operation[close_start:operation.index(
