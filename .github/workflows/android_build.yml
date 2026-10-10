@@ -77,8 +77,8 @@ jobs:
           python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-test-companion-unsigned.apk "$selected/companion"
           python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-build-metadata "$selected/metadata"
           mkdir -p runtime/android-selected
-          cp "$selected/app/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk" runtime/android-selected/original.apk
-          cp "$selected/companion/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-android-test-companion-unsigned.apk" runtime/android-selected/test-companion.apk
+          cp "$selected/app/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk" "runtime/android-selected/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk"
+          cp "$selected/companion/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-android-test-companion-unsigned.apk" "runtime/android-selected/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-android-test-companion-unsigned.apk"
           cp "$selected/metadata/android-build-driver-manifest.json" runtime/android-selected/build-driver-manifest.json
 
       # setup-go consults the job-level GOPATH. Create the reproducible
@@ -242,8 +242,8 @@ jobs:
         run: |
           set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          original="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/original.apk"
-          companion="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/test-companion.apk"
+          original="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/DobbyVPN-v${version}-unsign.apk"
+          companion="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/DobbyVPN-v${version}-android-test-companion-unsigned.apk"
           reference="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference/DobbyVPN-v${version}-reference-unsign.apk"
           mkdir -p "$(dirname "$reference")"
           "$GITHUB_WORKSPACE/.github/scripts/android/android_build_driver.sh" \
