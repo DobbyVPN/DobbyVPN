@@ -8,10 +8,74 @@ import tempfile
 import unittest
 from unittest import mock
 
-from torturer_runner import diagnostics, local_vm
+from torturer_runner import diagnostics, local_vm, local_vm_windows
 
 
 class LocalVMLifecycleTests(unittest.TestCase):
+    def test_windows_second_start_persists_cleanup_owner_before_discovery_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            logs = run_dir / "logs"
+            binary = run_dir / "DobbyVPN.exe"
+            binary.write_bytes(b"synthetic candidate")
+            pid_file = run_dir / "service.pid"
+            identity_file = run_dir / "service.identity"
+            pid = 45678
+            identity = f"{pid}|638999999999999999"
+            pid_bytes = f"{pid}\n".encode("ascii")
+            identity_bytes = f"{identity}\n".encode("ascii")
+            pid_file.write_bytes(pid_bytes)
+            identity_file.write_bytes(identity_bytes)
+            user = r"EXAMPLE\InteractiveUser"
+            local_vm._write_json(run_dir / "platform.json", {
+                "platform": "windows",
+                "status": "running",
+                "runtime": {
+                    "pid": pid,
+                    "identity": identity,
+                    "binary": str(binary),
+                    "pid_file": str(pid_file),
+                    "identity_file": str(identity_file),
+                    "environment": {"DOBBYVPN_CONTROL_PIPE_USER": user},
+                },
+            })
+            discovery_error = local_vm.LocalVMError("original network discovery failure")
+
+            with (
+                mock.patch.dict(local_vm_windows.os.environ, {
+                    "DOBBYVPN_CONTROL_PIPE_USER": user,
+                }),
+                mock.patch.object(
+                    local_vm_windows, "_discover_network_interface", side_effect=discovery_error,
+                ),
+            ):
+                with self.assertRaises(local_vm.LocalVMError) as raised:
+                    local_vm_windows.start(run_dir, {"service": str(binary)}, logs, 30)
+
+            self.assertIs(raised.exception, discovery_error)
+            state = json.loads((run_dir / "platform.json").read_text(encoding="utf-8"))
+            runtime = state["runtime"]
+            self.assertIsNone(runtime["network_interface"])
+            self.assertEqual(runtime["environment"]["DOBBYVPN_CONTROL_PIPE_USER"], user)
+            self.assertEqual(runtime["environment"]["PROGRAMDATA"], str(run_dir / "ProgramData"))
+            self.assertEqual(pid_file.read_bytes(), pid_bytes)
+            self.assertEqual(identity_file.read_bytes(), identity_bytes)
+
+            with mock.patch.object(local_vm_windows, "_powershell") as powershell:
+                local_vm_windows.cleanup(run_dir, runtime, logs, 30)
+
+            self.assertEqual(
+                [call.kwargs["label"] for call in powershell.call_args_list],
+                ["cleanup-service", "cleanup-routing"],
+            )
+            stop_call = powershell.call_args_list[0]
+            self.assertEqual(stop_call.args[0], local_vm_windows._STOP_SCRIPT)
+            cleanup_environment = stop_call.kwargs["environment"]
+            self.assertEqual(cleanup_environment["DOBBYVPN_SERVICE_INTERACTIVE_OWNER"], user)
+            self.assertEqual(cleanup_environment["DOBBYVPN_SERVICE_PID"], str(pid))
+            self.assertEqual(cleanup_environment["DOBBYVPN_SERVICE_IDENTITY"], identity)
+            self.assertEqual(cleanup_environment["DOBBYVPN_SERVICE_BINARY"], str(binary.resolve()))
+
     def test_windows_temp_failure_stops_before_source_checks_and_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

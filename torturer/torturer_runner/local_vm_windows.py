@@ -1155,24 +1155,6 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
     service_stderr = logs / "service.stderr.log"
     pid_file = run_dir / "service.pid"
     identity_file = run_dir / "service.identity"
-    runtime: dict[str, Any] = {
-        "binary": str(binary),
-        "pipe": _CONTROL_PIPE,
-        "pid_file": str(pid_file),
-        "identity_file": str(identity_file),
-        "service_log": str(service_log),
-        "network_interface": None,
-    }
-    # Persist ownership before probing, opening, or launching anything.
-    _save_state(run_dir, "windows", runtime)
-    logs.mkdir(parents=True, exist_ok=True)
-    for path in (service_log, service_stdout, service_stderr):
-        path.touch(exist_ok=True)
-
-    interface = _discover_network_interface(run_dir, logs, timeout)
-    runtime["network_interface"] = interface
-    _save_state(run_dir, "windows", runtime)
-
     environment = os.environ.copy()
     environment.update({
         "PROGRAMDATA": str(run_dir / "ProgramData"),
@@ -1187,16 +1169,32 @@ def start(run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float)
         environment.get("DOBBYVPN_CONTROL_PIPE_USER"),
         context="Windows control-pipe user",
     )
-    # The functional CLI is launched by the same local-VM command and needs
-    # the same pipe identity and PROGRAMDATA settings. Keep a
-    # small allow-list in state instead of serializing the whole guest env.
-    runtime["environment"] = {
-        key: environment[key]
-        for key in (
-            "PROGRAMDATA", "DOBBYVPN_CONTROL_PIPE_USER",
-            "DOBBY_LOG_PATH", "DOBBY_LOG_ROOT", "DOBBY_LOG_PRECREATED", "GODEBUG",
-        )
+    runtime: dict[str, Any] = {
+        "binary": str(binary),
+        "pipe": _CONTROL_PIPE,
+        "pid_file": str(pid_file),
+        "identity_file": str(identity_file),
+        "service_log": str(service_log),
+        "network_interface": None,
+        # The functional CLI is launched by the same local-VM command and needs
+        # the same pipe identity and PROGRAMDATA settings. Keep a small allow-list
+        # in state instead of serializing the whole guest environment.
+        "environment": {
+            key: environment[key]
+            for key in (
+                "PROGRAMDATA", "DOBBYVPN_CONTROL_PIPE_USER",
+                "DOBBY_LOG_PATH", "DOBBY_LOG_ROOT", "DOBBY_LOG_PRECREATED", "GODEBUG",
+            )
+        },
     }
+    # Persist ownership before probing, opening, or launching anything.
+    _save_state(run_dir, "windows", runtime)
+    logs.mkdir(parents=True, exist_ok=True)
+    for path in (service_log, service_stdout, service_stderr):
+        path.touch(exist_ok=True)
+
+    interface = _discover_network_interface(run_dir, logs, timeout)
+    runtime["network_interface"] = interface
     _save_state(run_dir, "windows", runtime)
 
     try:
