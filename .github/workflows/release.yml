@@ -1,8 +1,13 @@
 name: Release
 
-# Release builds and qualifies packages without publishing.
+# Release normally qualifies packages; build_only skips all QA jobs.
 on:
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: Build packages without CI, tests, analysis or qualification.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -11,7 +16,7 @@ permissions:
 jobs:
   verification:
     needs: prepare_version
-    if: github.run_attempt == 1
+    if: ${{ github.run_attempt == 1 && !inputs.build_only }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -74,15 +79,18 @@ jobs:
           echo "Marketing version $version_name; Android versionCode $android_version_code"
 
   ios_libraries_build:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version]
     uses: ./.github/workflows/ios_runtime_framework.yml
     with:
       source_sha: ${{ github.sha }}
 
   android_build:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version]
     uses: ./.github/workflows/android_build.yml
     with:
+      build_only: ${{ inputs.build_only }}
       source_sha: ${{ github.sha }}
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
@@ -90,6 +98,7 @@ jobs:
       android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
   fdroid_preflight:
+    if: ${{ !inputs.build_only }}
     needs: [verification, prepare_version, android_build]
     uses: ./.github/workflows/fdroid_preflight.yml
     with:
@@ -98,15 +107,18 @@ jobs:
       version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
   ios_build:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && needs.ios_libraries_build.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version, ios_libraries_build]
     uses: ./.github/workflows/ios_build.yml
     with:
+      build_only: ${{ inputs.build_only }}
       source_sha: ${{ github.sha }}
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
       android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
   build_linux:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version]
     uses: ./.github/workflows/desktop_package.yml
     with:
@@ -116,6 +128,7 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
   build_windows:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version]
     uses: ./.github/workflows/desktop_package.yml
     with:
@@ -125,6 +138,7 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
   build_macos_arm:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version]
     uses: ./.github/workflows/desktop_package.yml
     with:
@@ -134,6 +148,7 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
   build_macos_intel:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version]
     uses: ./.github/workflows/desktop_package.yml
     with:
@@ -143,6 +158,7 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
   debug_packages:
+    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
     needs: [verification, prepare_version]
     uses: ./.github/workflows/debug_packages.yml
     with:
@@ -154,6 +170,7 @@ jobs:
       build_number: ${{ needs.prepare_version.outputs.android_version_code }}
 
   migrate_windows:
+    if: ${{ !inputs.build_only }}
     needs: [prepare_version, build_windows]
     uses: ./.github/workflows/installer_migration.yml
     with:
@@ -162,6 +179,7 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
   migrate_macos_arm:
+    if: ${{ !inputs.build_only }}
     needs: [prepare_version, build_macos_arm]
     uses: ./.github/workflows/installer_migration.yml
     with:
@@ -170,6 +188,7 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
   migrate_macos_intel:
+    if: ${{ !inputs.build_only }}
     needs: [prepare_version, build_macos_intel]
     uses: ./.github/workflows/installer_migration.yml
     with:
@@ -178,6 +197,7 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
 
   render_start:
+    if: ${{ !inputs.build_only }}
     needs: verification
     uses: ./.github/workflows/render_start.yml
     permissions:
@@ -186,6 +206,7 @@ jobs:
     secrets: inherit
 
   qualify_linux:
+    if: ${{ !inputs.build_only }}
     needs: [build_linux, render_start]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
@@ -196,6 +217,7 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_windows:
+    if: ${{ !inputs.build_only }}
     needs: [build_windows, render_start]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
@@ -206,6 +228,7 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_macos:
+    if: ${{ !inputs.build_only }}
     needs: [build_macos_arm, build_macos_intel, render_start]
     strategy:
       matrix:
@@ -220,6 +243,7 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_android:
+    if: ${{ !inputs.build_only }}
     needs: [android_build, render_start]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
@@ -230,7 +254,7 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   render_cleanup:
-    if: always()
+    if: ${{ always() && !inputs.build_only }}
     needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android]
     uses: ./.github/workflows/render_cleanup.yml
     permissions:
@@ -239,7 +263,7 @@ jobs:
 
   qualification_result:
     name: Require hosted mini and Render cleanup
-    if: always()
+    if: ${{ always() && !inputs.build_only }}
     needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_build, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight, debug_packages]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

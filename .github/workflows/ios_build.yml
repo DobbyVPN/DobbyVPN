@@ -3,6 +3,9 @@ name: iOS Build
 on:
   workflow_call:
     inputs:
+      build_only:
+        type: boolean
+        default: false
       app_major_version:
         type: string
         required: true
@@ -59,7 +62,7 @@ jobs:
           python3 .github/scripts/release/download_artifact.py \
             "$GITHUB_RUN_ID" "DobbyVPNRuntime$DEBUG_SUFFIX.xcframework" ui/apple/DobbyVPNRuntime.xcframework
 
-      - if: ${{ !inputs.debug }}
+      - if: ${{ !inputs.debug && !inputs.build_only }}
         name: Analyze production iOS app and tunnel without signing
         run: |
           set -euo pipefail
