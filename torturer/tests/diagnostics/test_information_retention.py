@@ -707,7 +707,7 @@ class InformationRetentionTests(unittest.TestCase):
             structured = "2026 · INFO · Backend · ready"
             initial = structured + "\nDetails\n"
             log_texts = iter((initial, initial, initial, initial))
-            positions = iter((0.0, 25.0))
+            positions = iter((0.0, 0.0, 0.0, 25.0))
 
             def call(operation: str, **fields: object) -> dict:
                 if operation == "logs":
@@ -761,7 +761,7 @@ class InformationRetentionTests(unittest.TestCase):
             initial = structured + "\nDetails\n"
             capture = "2026-10-06T00:00:00Z · INFO · Backend stderr\nStderr capture initialized"
             log_texts = iter((initial, initial, initial, initial, initial, initial, initial + "new record\n", ""))
-            positions = iter((25.0, 25.0, 25.0, 25.0))
+            positions = iter((25.0, 25.0, 25.0, 25.0, 25.0, 25.0))
             selected = iter((structured, structured))
             operations: list[str] = []
             scroll_requests: list[dict[str, object]] = []
@@ -808,7 +808,7 @@ class InformationRetentionTests(unittest.TestCase):
             self.assertEqual(result, {"status": "Disconnected"})
             self.assertEqual(controller.cleared_record, structured)
             self.assertEqual(operations.count("select-log-text"), 2)
-            self.assertEqual(operations.count("log-position"), 4)
+            self.assertEqual(operations.count("log-position"), 6)
             self.assertEqual(operations.count("resize-window"), 2)
             self.assertEqual(operations.count("profile-list-layout"), 1)
             self.assertIn({"position": "bottom"}, scroll_requests)
