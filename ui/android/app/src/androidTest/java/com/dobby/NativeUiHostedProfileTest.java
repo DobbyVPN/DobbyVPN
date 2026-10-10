@@ -84,6 +84,8 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import javax.net.ssl.HttpsURLConnection;
@@ -2683,6 +2685,8 @@ public final class NativeUiHostedProfileTest {
         int firstVisible = -1;
         int lastVisible = -1;
         int swipes = 0;
+        Rect lastViewportBounds = null;
+        Pattern profileActionPattern = Pattern.compile("^Profile ([1-9][0-9]*) action$");
         UiLookupCounters firstTargetLookup = new UiLookupCounters();
         String firstTargetNodeDiagnostics = null;
         List<Throwable> firstTargetDiagnosticFailures = new ArrayList<>();
@@ -2696,6 +2700,7 @@ public final class NativeUiHostedProfileTest {
                 SystemClock.sleep(POLL_MILLIS);
                 continue;
             }
+            lastViewportBounds = new Rect(viewportBounds);
             UiLookupCounters targetLookup = new UiLookupCounters();
             targetLookup.attempts++;
             UiObject2 target = findUiObject(targetLabel, targetLookup);
@@ -2722,22 +2727,38 @@ public final class NativeUiHostedProfileTest {
             lastVisible = -1;
             enumeratedTarget = null;
             enumeratedTargetAncestor = null;
-            for (int index = 0; index < profileCount; index++) {
-                UiObject2 visibleAction = findUiObject("Profile " + (index + 1) + " action");
-                if (index == targetIndex) {
-                    enumeratedTarget = visibleAction;
-                    enumeratedTargetAncestor = visibleAction;
-                    while (enumeratedTargetAncestor != null
-                            && !enumeratedTargetAncestor.isClickable()) {
-                        enumeratedTargetAncestor = enumeratedTargetAncestor.getParent();
+            List<UiObject2> profileActions;
+            try {
+                profileActions = viewport.findObjects(
+                        By.desc(profileActionPattern).pkg(context.getPackageName()));
+            } catch (StaleObjectException ignored) {
+                SystemClock.sleep(POLL_MILLIS);
+                continue;
+            }
+            for (UiObject2 visibleAction : profileActions) {
+                try {
+                    String contentDescription = visibleAction.getContentDescription();
+                    if (contentDescription == null) continue;
+                    Matcher description = profileActionPattern.matcher(contentDescription);
+                    if (!description.matches()) continue;
+                    int index = Integer.parseInt(description.group(1)) - 1;
+                    Rect actionBounds = visibleAction.getVisibleBounds();
+                    if (!Rect.intersects(viewportBounds, actionBounds)) continue;
+                    if (index < 0 || index >= profileCount) continue;
+                    UiObject2 clickableAncestor = null;
+                    if (index == targetIndex) {
+                        clickableAncestor = visibleAction;
+                        while (clickableAncestor != null && !clickableAncestor.isClickable()) {
+                            clickableAncestor = clickableAncestor.getParent();
+                        }
+                        enumeratedTarget = visibleAction;
+                        enumeratedTargetAncestor = clickableAncestor;
                     }
+                    if (firstVisible < 0 || index < firstVisible) firstVisible = index;
+                    if (lastVisible < 0 || index > lastVisible) lastVisible = index;
+                } catch (StaleObjectException ignored) {
+                    // A row may be replaced while Compose updates the viewport; query again next iteration.
                 }
-                if (visibleAction == null
-                        || !Rect.intersects(viewportBounds, visibleAction.getVisibleBounds())) {
-                    continue;
-                }
-                if (firstVisible < 0) firstVisible = index;
-                lastVisible = index;
             }
             boolean targetCandidateVisible = enumeratedTarget != null
                     && Rect.intersects(viewportBounds, enumeratedTarget.getVisibleBounds());
@@ -2748,7 +2769,8 @@ public final class NativeUiHostedProfileTest {
                     return;
                 }
                 throw profileActionLookupFailure(
-                        "visible target candidate has no intersecting clickable action",
+                        "visible target candidate has no intersecting clickable action, swipe_count="
+                                + swipes,
                         targetIndex, viewportBounds, firstVisible, lastVisible,
                         firstTargetLookup, firstTargetNodeDiagnostics,
                         firstTargetDiagnosticFailures,
@@ -2765,7 +2787,8 @@ public final class NativeUiHostedProfileTest {
             if (swipes == profileCount + 2
                     || !swipeControlsViewport(device, viewportBounds, towardLaterProfiles)) {
                 throw profileActionLookupFailure(
-                        "bounded controls-viewport swipe could not reveal the target row",
+                        "bounded controls-viewport swipe could not reveal the target row, swipe_count="
+                                + swipes,
                         targetIndex, viewportBounds, firstVisible, lastVisible,
                         firstTargetLookup, firstTargetNodeDiagnostics,
                         firstTargetDiagnosticFailures,
@@ -2778,8 +2801,9 @@ public final class NativeUiHostedProfileTest {
         AssertionError failure = profileActionVisibilityFailure(
                 "target action did not become visible before the existing deadline\n"
                         + firstTargetLookupDiagnostics(
-                                firstTargetLookup, firstTargetNodeDiagnostics),
-                targetIndex, new Rect(), firstVisible, lastVisible);
+                                firstTargetLookup, firstTargetNodeDiagnostics)
+                        + "swipe_count=" + swipes + '\n',
+                targetIndex, lastViewportBounds, firstVisible, lastVisible);
         for (Throwable diagnosticFailure : firstTargetDiagnosticFailures) {
             failure.addSuppressed(new IllegalStateException(
                     "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
@@ -2892,7 +2916,8 @@ public final class NativeUiHostedProfileTest {
         String targetLabel = targetIndex < 0 ? "none" : "Profile " + (targetIndex + 1) + " action";
         String message = "ANDROID_PROFILE_ACTION_VISIBILITY_FAILED: " + reason
                 + ", target=" + targetLabel
-                + ", viewport=" + viewportBounds.toShortString()
+                + ", viewport=" + (viewportBounds == null
+                        ? "not-observed" : viewportBounds.toShortString())
                 + ", visible_profile_range=" + minimumVisibleIndex + ".." + maximumVisibleIndex;
         try {
             return new AssertionError(message + "\nui_hierarchy_xml:\n" + dumpUiHierarchy());
