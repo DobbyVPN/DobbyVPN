@@ -156,7 +156,13 @@ struct DobbyLogView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = DobbyLogTextView()
+        let view: DobbyLogTextView
+        if #available(iOS 16.0, *) {
+            // Reading-position anchoring below uses NSLayoutManager; select TextKit 1 before layout.
+            view = DobbyLogTextView(usingTextLayoutManager: false)
+        } else {
+            view = DobbyLogTextView()
+        }
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = .secondarySystemBackground

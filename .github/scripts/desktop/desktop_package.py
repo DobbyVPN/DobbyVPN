@@ -40,13 +40,21 @@ public static extern uint GetTempPathW(uint length, System.Text.StringBuilder pa
 [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetTempPath2W", ExactSpelling=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
 public static extern uint GetTempPath2W(uint length, System.Text.StringBuilder path);
 '@
+[Console]::Out.WriteLine("Windows temp preflight phase=Add-Type start utc=$([DateTime]::UtcNow.ToString('o'))")
+[Console]::Out.Flush()
 Add-Type -Namespace DobbyVpn -Name TempPaths -MemberDefinition $memberDefinition -ErrorAction Stop
+[Console]::Out.WriteLine("Windows temp preflight phase=Add-Type complete utc=$([DateTime]::UtcNow.ToString('o'))")
+[Console]::Out.Flush()
 function Read-TempPath([bool]$modern) {
   $buffer = [System.Text.StringBuilder]::new(32768)
   if ($modern) {
     $length = [DobbyVpn.TempPaths]::GetTempPath2W([uint32]$buffer.Capacity, $buffer)
   } else {
+    [Console]::Out.WriteLine("Windows temp preflight phase=GetTempPathW start utc=$([DateTime]::UtcNow.ToString('o'))")
+    [Console]::Out.Flush()
     $length = [DobbyVpn.TempPaths]::GetTempPathW([uint32]$buffer.Capacity, $buffer)
+    [Console]::Out.WriteLine("Windows temp preflight phase=GetTempPathW complete utc=$([DateTime]::UtcNow.ToString('o'))")
+    [Console]::Out.Flush()
   }
   if ($length -eq 0) { throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
   if ($length -ge $buffer.Capacity) { throw "Native temp path exceeds buffer capacity $($buffer.Capacity): $length" }
