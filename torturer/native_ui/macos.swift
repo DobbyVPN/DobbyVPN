@@ -161,6 +161,12 @@ func names(_ element: AXUIElement) throws -> [String] {
         do {
             rereadRole = try label(element, kAXRoleAttribute)
             rereadIdentifier = try identifier(element)
+        } catch let readError as AccessibilityReadError where isTransientAccessibilityRead(readError) {
+            FileHandle.standardError.write(Data((
+                "AXTitle illegalArgument could not verify AX element stability; " +
+                    "initial role=\(role) identifier=\(axIdentifier); reread failed: \(readError)\n"
+            ).utf8))
+            throw readError
         } catch {
             throw HelperError(
                 "AXTitle illegalArgument could not verify AX element stability; " +
