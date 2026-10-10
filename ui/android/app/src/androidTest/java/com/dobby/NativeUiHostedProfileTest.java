@@ -1877,6 +1877,8 @@ public final class NativeUiHostedProfileTest {
 
     private boolean verifySubscriptionControls(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + timeout;
+        long startedAt = SystemClock.elapsedRealtime();
+        logProfileScrollTiming("subscription-controls-start", startedAt, deadline, "timeout_ms=" + timeout);
         JSONObject initial = snapshotResult("");
         verifyAcceptedInventoryAfterActivityReopen(subscriptionURL, deadline);
         initial = snapshotResult("");
@@ -2472,6 +2474,8 @@ public final class NativeUiHostedProfileTest {
     }
 
     private void verifyLongListAndValidPaste(String subscriptionURL, long deadline) throws Exception {
+        long startedAt = SystemClock.elapsedRealtime();
+        logProfileScrollTiming("long-list-start", startedAt, deadline, "");
         markProgress("configure", "long-list-valid-paste", "started");
         byte[] longList = syntheticOutlineInventory(24, "long-list");
         subscriptionFixturePost("/profile", longList);
@@ -2501,9 +2505,18 @@ public final class NativeUiHostedProfileTest {
                     || !"Profile 24 long-list".equals(profiles.getJSONObject(23).optString("description"))) {
                 throw new AssertionError("Ordered profile description, protocol, or fallback inventory was not retained");
             }
+            long inventoryStartedAt = SystemClock.elapsedRealtime();
+            logProfileScrollTiming("inventory-start", inventoryStartedAt, deadline, "");
             assertRenderedProfileInventory(profiles, deadline);
+            logProfileScrollTiming("inventory-end", inventoryStartedAt, deadline, "");
+            long bareLinkStartedAt = SystemClock.elapsedRealtime();
+            logProfileScrollTiming("bare-link-start", bareLinkStartedAt, deadline, "");
             verifyBareLinkPreservesSource(deadline);
+            logProfileScrollTiming("bare-link-end", bareLinkStartedAt, deadline, "");
+            long lastProfileScrollStartedAt = SystemClock.elapsedRealtime();
+            logProfileScrollTiming("last-profile-scroll-start", lastProfileScrollStartedAt, deadline, "target=Profile 24 action");
             scrollControlsToLastProfile(deadline);
+            logProfileScrollTiming("last-profile-scroll-end", lastProfileScrollStartedAt, deadline, "target=Profile 24 action");
             waitForUiControl("Profile 24 long-list", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
             waitForEnabledControl("Profile 24 action", deadline);
             assertLongListLeavesLogsUsable(deadline);
@@ -2711,6 +2724,16 @@ public final class NativeUiHostedProfileTest {
         return hierarchy.toString(StandardCharsets.UTF_8.name());
     }
 
+    private void logProfileScrollTiming(String event, long startedAt, long deadline, String details) {
+        long observedElapsedRealtime = SystemClock.elapsedRealtime();
+        System.out.println("ANDROID_PROFILE_SCROLL_TIMING event=" + event
+                + " observed_elapsed_realtime_ms=" + observedElapsedRealtime
+                + " elapsed_ms=" + (observedElapsedRealtime - startedAt)
+                + " remaining_ms=" + (deadline - System.currentTimeMillis())
+                + (details.isEmpty() ? "" : " " + details));
+        System.out.flush();
+    }
+
     private void scrollControlsToLastProfile(long deadline) throws Exception {
         scrollControlsToProfileAction(23, 24, deadline);
     }
@@ -2735,14 +2758,28 @@ public final class NativeUiHostedProfileTest {
         UiObject2 enumeratedTarget = null;
         UiObject2 enumeratedTargetAncestor = null;
         String targetLabel = "Profile " + (targetIndex + 1) + " action";
+        long scrollStartedAt = SystemClock.elapsedRealtime();
+        int iterations = 0;
         while (swipes <= profileCount + 2 && System.currentTimeMillis() < deadline) {
+            int iteration = ++iterations;
+            String iterationDetails = "target=" + targetLabel + " iteration=" + iteration + " swipes=" + swipes;
+            long viewportLookupStartedAt = SystemClock.elapsedRealtime();
+            logProfileScrollTiming("viewport-start", viewportLookupStartedAt, deadline, iterationDetails);
             UiObject2 viewport = findUiObject("Connection controls");
             Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
+            logProfileScrollTiming("viewport-end", viewportLookupStartedAt, deadline,
+                    iterationDetails + " viewport=" + viewportBounds.toShortString());
             if (viewportBounds.isEmpty()) {
+                long sleepStartedAt = SystemClock.elapsedRealtime();
+                logProfileScrollTiming("sleep-start", sleepStartedAt, deadline, iterationDetails + " reason=empty-viewport");
                 SystemClock.sleep(POLL_MILLIS);
+                logProfileScrollTiming("sleep-end", sleepStartedAt, deadline, iterationDetails + " reason=empty-viewport");
                 continue;
             }
             lastViewportBounds = new Rect(viewportBounds);
+            long targetLookupStartedAt = SystemClock.elapsedRealtime();
+            logProfileScrollTiming("target-lookup-start", targetLookupStartedAt, deadline,
+                    iterationDetails + " viewport=" + viewportBounds.toShortString());
             UiObject2 requiredDescription = requiredVisibleDescription == null
                     ? null : findUiObject(requiredVisibleDescription);
             Rect requiredDescriptionBounds = new Rect();
@@ -2774,10 +2811,19 @@ public final class NativeUiHostedProfileTest {
                         firstTargetDiagnosticFailures);
                 firstTargetNodeDiagnostics = firstNodes.toString();
             }
-            if (target != null && targetButton != null
-                    && Rect.intersects(viewportBounds, targetBounds)
-                    && Rect.intersects(viewportBounds, targetButton.getVisibleBounds())
-                    && requiredDescriptionVisible) {
+            Rect targetButtonBounds = new Rect();
+            boolean targetAndAncestorVisible = false;
+            if (target != null && targetButton != null && Rect.intersects(viewportBounds, targetBounds)) {
+                targetButtonBounds = targetButton.getVisibleBounds();
+                targetAndAncestorVisible = Rect.intersects(viewportBounds, targetButtonBounds);
+            }
+            logProfileScrollTiming("target-lookup-end", targetLookupStartedAt, deadline, iterationDetails
+                    + " required=" + JSONObject.quote(String.valueOf(requiredVisibleDescription))
+                    + " required_bounds=" + requiredDescriptionBounds.toShortString()
+                    + " target_found=" + (target != null) + " target_bounds=" + targetBounds.toShortString()
+                    + " ancestor_found=" + (targetButton != null)
+                    + " ancestor_bounds=" + targetButtonBounds.toShortString());
+            if (targetAndAncestorVisible && requiredDescriptionVisible) {
                 if (requiredVisibleDescription != null) {
                     reportRequiredVisibleProfileAction(
                             requiredVisibleDescription, viewportBounds, targetBounds,
@@ -2791,11 +2837,19 @@ public final class NativeUiHostedProfileTest {
             enumeratedTarget = null;
             enumeratedTargetAncestor = null;
             List<UiObject2> profileActions;
+            long enumerationStartedAt = SystemClock.elapsedRealtime();
+            logProfileScrollTiming("enumeration-start", enumerationStartedAt, deadline,
+                    iterationDetails + " viewport=" + viewportBounds.toShortString());
             try {
                 profileActions = viewport.findObjects(
                         By.desc(profileActionPattern).pkg(context.getPackageName()));
             } catch (StaleObjectException ignored) {
+                logProfileScrollTiming("enumeration-end", enumerationStartedAt, deadline,
+                        iterationDetails + " outcome=stale");
+                long sleepStartedAt = SystemClock.elapsedRealtime();
+                logProfileScrollTiming("sleep-start", sleepStartedAt, deadline, iterationDetails + " reason=stale-enumeration");
                 SystemClock.sleep(POLL_MILLIS);
+                logProfileScrollTiming("sleep-end", sleepStartedAt, deadline, iterationDetails + " reason=stale-enumeration");
                 continue;
             }
             Rect enumeratedTargetBounds = new Rect();
@@ -2827,10 +2881,22 @@ public final class NativeUiHostedProfileTest {
             }
             boolean targetCandidateVisible = enumeratedTarget != null
                     && Rect.intersects(viewportBounds, enumeratedTargetBounds);
+            Rect enumeratedTargetAncestorBounds = new Rect();
+            boolean enumeratedTargetAncestorVisible = false;
+            if (targetCandidateVisible && enumeratedTargetAncestor != null) {
+                enumeratedTargetAncestorBounds = enumeratedTargetAncestor.getVisibleBounds();
+                enumeratedTargetAncestorVisible = Rect.intersects(
+                        viewportBounds, enumeratedTargetAncestorBounds);
+            }
+            logProfileScrollTiming("enumeration-end", enumerationStartedAt, deadline,
+                    iterationDetails + " visible_range=" + firstVisible + ".." + lastVisible
+                            + " action_nodes=" + profileActions.size() + " target_candidate=" + targetCandidateVisible
+                            + " target_bounds=" + enumeratedTargetBounds.toShortString()
+                            + " ancestor_found=" + (enumeratedTargetAncestor != null)
+                            + " ancestor_bounds=" + enumeratedTargetAncestorBounds.toShortString()
+                            + " ancestor_visible=" + enumeratedTargetAncestorVisible);
             if (targetCandidateVisible) {
-                if (enumeratedTargetAncestor != null
-                        && Rect.intersects(
-                                viewportBounds, enumeratedTargetAncestor.getVisibleBounds())) {
+                if (enumeratedTargetAncestor != null && enumeratedTargetAncestorVisible) {
                     if (requiredDescriptionVisible) {
                         if (requiredVisibleDescription != null) {
                             reportRequiredVisibleProfileAction(
@@ -2852,8 +2918,18 @@ public final class NativeUiHostedProfileTest {
             boolean targetWithinVisibleRange = firstVisible >= 0
                     && targetIndex >= firstVisible && targetIndex <= lastVisible;
             if (targetWithinVisibleRange && requiredDescriptionVisible) {
+                long idleStartedAt = SystemClock.elapsedRealtime();
+                logProfileScrollTiming("wait-for-idle-start", idleStartedAt, deadline,
+                        iterationDetails + " visible_range=" + firstVisible + ".." + lastVisible);
                 waitForIdleBounded(device, deadline);
+                logProfileScrollTiming("wait-for-idle-end", idleStartedAt, deadline,
+                        iterationDetails + " visible_range=" + firstVisible + ".." + lastVisible);
+                long sleepStartedAt = SystemClock.elapsedRealtime();
+                logProfileScrollTiming("sleep-start", sleepStartedAt, deadline,
+                        iterationDetails + " reason=target-in-visible-range");
                 SystemClock.sleep(POLL_MILLIS);
+                logProfileScrollTiming("sleep-end", sleepStartedAt, deadline,
+                        iterationDetails + " reason=target-in-visible-range");
                 continue;
             }
             boolean towardLaterProfiles = firstVisible < 0 || targetIndex > lastVisible;
@@ -2865,8 +2941,19 @@ public final class NativeUiHostedProfileTest {
                     towardLaterProfiles = revealBounds.centerY() >= viewportBounds.centerY();
                 }
             }
-            if (swipes == profileCount + 2
-                    || !swipeControlsViewport(device, viewportBounds, towardLaterProfiles)) {
+            boolean swipeAllowed = swipes != profileCount + 2;
+            boolean swipeSucceeded = false;
+            if (swipeAllowed) {
+                long swipeStartedAt = SystemClock.elapsedRealtime();
+                logProfileScrollTiming("swipe-start", swipeStartedAt, deadline,
+                        iterationDetails + " toward_later=" + towardLaterProfiles + " visible_range="
+                                + firstVisible + ".." + lastVisible + " viewport=" + viewportBounds.toShortString());
+                swipeSucceeded = swipeControlsViewport(device, viewportBounds, towardLaterProfiles);
+                logProfileScrollTiming("swipe-end", swipeStartedAt, deadline,
+                        iterationDetails + " succeeded=" + swipeSucceeded
+                                + " visible_range=" + firstVisible + ".." + lastVisible);
+            }
+            if (!swipeAllowed || !swipeSucceeded) {
                 throw profileActionLookupFailure(
                         "bounded controls-viewport swipe could not reveal the target row"
                                 + (requiredVisibleDescription == null ? "" : ", required_description="
@@ -2878,8 +2965,16 @@ public final class NativeUiHostedProfileTest {
                         enumeratedTarget, enumeratedTargetAncestor);
             }
             swipes++;
+            long sleepStartedAt = SystemClock.elapsedRealtime();
+            logProfileScrollTiming("sleep-start", sleepStartedAt, deadline, iterationDetails + " reason=post-swipe");
             SystemClock.sleep(POLL_MILLIS);
+            logProfileScrollTiming("sleep-end", sleepStartedAt, deadline,
+                    iterationDetails + " reason=post-swipe swipes=" + swipes);
         }
+        long failureHierarchyStartedAt = SystemClock.elapsedRealtime();
+        logProfileScrollTiming("failure-hierarchy-start", failureHierarchyStartedAt, deadline,
+                "target=" + targetLabel + " swipes=" + swipes
+                        + " scroll_elapsed_ms=" + (failureHierarchyStartedAt - scrollStartedAt));
         AssertionError failure = profileActionVisibilityFailure(
                 "target action did not become visible before the existing deadline"
                         + (requiredVisibleDescription == null ? "" : "; required_description="
@@ -2889,6 +2984,8 @@ public final class NativeUiHostedProfileTest {
                                 firstTargetLookup, firstTargetNodeDiagnostics)
                         + "swipe_count=" + swipes + '\n',
                 targetIndex, lastViewportBounds, firstVisible, lastVisible);
+        logProfileScrollTiming("failure-hierarchy-end", failureHierarchyStartedAt, deadline,
+                "target=" + targetLabel + " swipes=" + swipes);
         for (Throwable diagnosticFailure : firstTargetDiagnosticFailures) {
             failure.addSuppressed(new IllegalStateException(
                     "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
