@@ -226,15 +226,26 @@ def command_adapter(root: Path) -> AndroidAdapter:
     adapter.download_url = "https://download.example.test/?bytes=1024"
     adapter.upload_url = "https://upload.example.test"
     adapter._process_cold_import_queued = False
+    adapter.profile = root / "owner-profile.toml"
+    adapter.profile.write_bytes(b"immutable owner profile bytes")
     certificate = root / "fixture-ca.pem"
     certificate.write_text("synthetic run-owned fixture CA\n", encoding="ascii")
-    adapter._subscription_fixture = SimpleNamespace(
+    fixture = SimpleNamespace(
         url="https://127.0.0.1:54432/subscription",
         control_url="https://127.0.0.1:54432/control",
         control_key="fixture-key",
         certificate=certificate,
+        profile_bytes=b"synthetic fixture response",
+        replacement_calls=[],
         control_stats=lambda: {"subscription_gets": 3},
     )
+
+    def replace_response(content: bytes) -> None:
+        fixture.profile_bytes = content
+        fixture.replacement_calls.append(content)
+
+    fixture.replace_response = replace_response
+    adapter._subscription_fixture = fixture
     return adapter
 
 
