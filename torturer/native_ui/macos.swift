@@ -1366,14 +1366,30 @@ func run() throws -> [String: Any] {
     }
     let expected = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
     let requestedPID = request["pid"] as? Int
-    let matches = NSWorkspace.shared.runningApplications.filter { app in
+    let matchesRequestedApplication: (NSRunningApplication) -> Bool = { app in
         app.executableURL?.resolvingSymlinksInPath().path == expected &&
         (requestedPID == nil || Int(app.processIdentifier) == requestedPID)
     }
+    let matches = NSWorkspace.shared.runningApplications.filter(matchesRequestedApplication)
     if matches.isEmpty { return ["ready": false, "alive": false] }
     try require(matches.count == 1, "UI executable has \(matches.count) matching processes")
     let app = matches[0]
-    guard let launched = app.launchDate else { throw HelperError("UI process creation time unavailable") }
+    if operation == "probe", app.isTerminated {
+        return ["ready": false, "alive": false]
+    }
+    guard let launched = app.launchDate else {
+        if operation == "probe" {
+            // The process can disappear while NSWorkspace is returning its
+            // application record. Only report it absent after a fresh check
+            // finds no matching live process; a live, unidentifiable process
+            // keeps the original error.
+            let stillRunning = NSWorkspace.shared.runningApplications.contains {
+                matchesRequestedApplication($0) && !$0.isTerminated
+            }
+            if !stillRunning { return ["ready": false, "alive": false] }
+        }
+        throw HelperError("UI process creation time unavailable")
+    }
     let identity = String(launched.timeIntervalSince1970)
     if let prior = request["identity"] as? String { try require(prior == identity, "UI process creation time changed") }
     let pid = app.processIdentifier
