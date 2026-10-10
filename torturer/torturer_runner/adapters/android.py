@@ -2821,6 +2821,8 @@ class AndroidAdapter:
                 from torturer_runner.subscription_fixture import SubscriptionFixture
                 self._subscription_fixture = SubscriptionFixture(self.profile, self.profile.parent / "android-subscription-fixture", "android", adb=[str(self.adb)])
                 self._subscription_fixture.start()
+            elif any(operation["operation"] == "configure" for operation in operations):
+                self._subscription_fixture.replace_response(self.profile.read_bytes())
             subscription_url = self._subscription_fixture.url
             subscription_control_url = self._subscription_fixture.control_url
             subscription_control_key = self._subscription_fixture.control_key

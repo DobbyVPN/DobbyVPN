@@ -27,16 +27,27 @@ from torturer_runner.adapters.android import (
 FIXTURE_CA_PEM = "synthetic run-owned fixture CA\n"
 
 
-def fixture_stub(root: Path, subscription_gets: int) -> SimpleNamespace:
+def fixture_stub(
+    root: Path, subscription_gets: int, profile_bytes: bytes = b"owner profile bytes"
+) -> SimpleNamespace:
     certificate = root / "fixture-ca.pem"
     certificate.write_text(FIXTURE_CA_PEM, encoding="ascii")
-    return SimpleNamespace(
+    fixture = SimpleNamespace(
         url="https://127.0.0.1:54432/subscription",
         control_url="https://127.0.0.1:54432/control",
         control_key="fixture-key",
         certificate=certificate,
+        profile_bytes=profile_bytes,
+        replacement_calls=[],
         control_stats=lambda: {"subscription_gets": subscription_gets},
     )
+
+    def replace_response(content: bytes) -> None:
+        fixture.profile_bytes = content
+        fixture.replacement_calls.append(content)
+
+    fixture.replace_response = replace_response
+    return fixture
 
 
 def phase_adapter(root: Path) -> AndroidAdapter:
@@ -55,7 +66,11 @@ def phase_adapter(root: Path) -> AndroidAdapter:
     adapter.upload_url = None
     adapter._process_cold_import_queued = False
     adapter._saved_source_restore_preverified = False
-    adapter._subscription_fixture = fixture_stub(root, 0)
+    adapter.profile = root / "owner-profile.toml"
+    adapter.profile.write_bytes(b"immutable owner profile bytes")
+    adapter._subscription_fixture = fixture_stub(
+        root, 0, adapter.profile.read_bytes()
+    )
     return adapter
 
 
@@ -146,7 +161,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
 
         self.assertIsNone(_duplicate_single_android_profile(source))
 
-    def test_first_rendered_configure_records_one_process_cold_import_baseline(self) -> None:
+    def test_reused_fixture_restores_only_for_configure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             adapter = object.__new__(AndroidAdapter)
@@ -161,7 +176,12 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             adapter.download_url = None
             adapter.upload_url = None
             adapter._process_cold_import_queued = False
-            adapter._subscription_fixture = fixture_stub(root, 3)
+            adapter.profile = root / "owner-profile.toml"
+            owner_profile = b"immutable owner profile bytes"
+            synthetic_profile = b"synthetic long-list profile bytes"
+            adapter.profile.write_bytes(owner_profile)
+            fixture = fixture_stub(root, 3, synthetic_profile)
+            adapter._subscription_fixture = fixture
             configure = SimpleNamespace(
                 id="functional-configure", operation="configure", timeout_seconds=30
             )
@@ -169,6 +189,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             first, _, _ = adapter._write_command(
                 SimpleNamespace(), steps=(configure,)
             )
+            fixture.profile_bytes = synthetic_profile
             second, _, _ = adapter._write_command(
                 SimpleNamespace(), steps=(configure,)
             )
@@ -179,6 +200,16 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertEqual(first_command["process_cold_import_request_count"], 3)
             self.assertEqual(first_command["subscription_control_ca_pem"], FIXTURE_CA_PEM)
             self.assertNotIn("process_cold_import", second_command)
+            self.assertEqual(fixture.profile_bytes, owner_profile)
+            self.assertEqual(fixture.replacement_calls, [owner_profile, owner_profile])
+
+            fixture.profile_bytes = synthetic_profile
+            disconnect = SimpleNamespace(
+                id="disconnect", operation="disconnect", timeout_seconds=10
+            )
+            adapter._write_command(SimpleNamespace(), steps=(disconnect,))
+            self.assertEqual(fixture.profile_bytes, synthetic_profile)
+            self.assertEqual(fixture.replacement_calls, [owner_profile, owner_profile])
 
     def test_consent_n11_command_dispatches_rendered_selection_after_configure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -195,6 +226,8 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             adapter.download_url = None
             adapter.upload_url = None
             adapter._process_cold_import_queued = False
+            adapter.profile = root / "owner-profile.toml"
+            adapter.profile.write_bytes(b"immutable owner profile bytes")
             adapter._subscription_fixture = fixture_stub(root, 0)
             steps = (
                 SimpleNamespace(id="configure", operation="configure", timeout_seconds=90),
