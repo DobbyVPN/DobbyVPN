@@ -684,7 +684,7 @@ class InformationRetentionTests(unittest.TestCase):
 
             result = controller.clear_logs()
 
-            self.assertEqual(result, {"status": "Disconnected"})
+            self.assertEqual(result, {"ready": True, "text": ""})
             self.assertEqual(controller.cleared_record, "2026 · INFO · Backend")
             self.assertIn("select-log-text", operations)
             self.assertIn("log-position", operations)
@@ -760,7 +760,8 @@ class InformationRetentionTests(unittest.TestCase):
             structured = "2026 · INFO · Backend · ready"
             initial = structured + "\nDetails\n"
             capture = "2026-10-06T00:00:00Z · INFO · Backend stderr\nStderr capture initialized"
-            log_texts = iter((initial, initial, initial, initial, initial, initial, initial + "new record\n", ""))
+            post_clear_record = "2026 · DEBUG · Backend · new probe record\n"
+            log_texts = iter((initial, initial, initial, initial, initial, initial, initial + "new record\n", "", post_clear_record))
             positions = iter((25.0, 25.0, 25.0, 25.0, 25.0, 25.0))
             selected = iter((structured, structured))
             operations: list[str] = []
@@ -771,9 +772,12 @@ class InformationRetentionTests(unittest.TestCase):
                 operations.append(operation)
                 if operation == "logs":
                     log_requests.append(fields)
+                    text = next(log_texts)
+                    if not text:
+                        return {"ready": True, "text": ""}
                     return {
                         "ready": True,
-                        "text": next(log_texts),
+                        "text": text,
                         "entries": [{"text": capture, "foreground": None}, {"text": structured, "foreground": None}],
                         "expansion_verified": True,
                         "expanded_record": '{"message":"ready"}',
@@ -805,7 +809,8 @@ class InformationRetentionTests(unittest.TestCase):
 
             result = controller.clear_logs()
 
-            self.assertEqual(result, {"status": "Disconnected"})
+            self.assertEqual(result, {"ready": True, "text": ""})
+            self.assertEqual(controller._call("logs").get("text"), post_clear_record)
             self.assertEqual(controller.cleared_record, structured)
             self.assertEqual(operations.count("select-log-text"), 2)
             self.assertEqual(operations.count("log-position"), 6)

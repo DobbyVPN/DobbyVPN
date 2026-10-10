@@ -2018,13 +2018,12 @@ def _exercise_subscription_controls(
         require_disconnect_control(ui.wait_status("Connected"))
         switched = initial
 
-    ui.clear_logs()
+    empty_logs = ui.clear_logs()
     if not getattr(ui, "log_resize_verified", False):
         raise NativeUIJourneyError("desktop logs did not verify frozen reading position across window resize")
     checks["logs_freeze_resize_preserves_reading_position"] = True
     if ui.platform == "windows":
         checks["rendered_stderr_capture_label"] = True
-    empty_logs = ui._call("logs")
     if empty_logs.get("ready") is not True or empty_logs.get("text", "").strip():
         raise NativeUIJourneyError("Clear did not leave an empty rendered log view")
     checks["clear_logs_native"] = True

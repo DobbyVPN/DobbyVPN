@@ -1371,15 +1371,17 @@ class NativeUIController:
             )
 
         self._click("Clear")
+        cleared_view: dict = {}
         def cleared():
-            view = self._call("logs")
-            if view.get("ready") is not True:
+            nonlocal cleared_view
+            cleared_view = self._call("logs")
+            if cleared_view.get("ready") is not True:
                 return False
-            text = view.get("text", "")
+            text = cleared_view.get("text", "")
             return not text.strip() if self.platform == "windows" else previous not in text
         self._wait(cleared, "Clear did not empty the Windows log view" if self.platform == "windows" else "Clear left the previous records visible")
         self.cleared_record = previous
-        return self.snapshot()
+        return cleared_view
 
     def wait_status(self, expected: str, *, allow_errors: bool = False) -> dict:
         state = {}

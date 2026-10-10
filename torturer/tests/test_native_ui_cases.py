@@ -388,6 +388,7 @@ class NativeUICaseFixtureTests(unittest.TestCase):
             "status": "Connected", "enabled_controls": ["Disconnect"],
         }
         ui._call.return_value = {"ready": True, "text": ""}
+        ui.clear_logs.return_value = {"ready": True, "text": ""}
         clear_follow_failure = journey.NativeUIJourneyError("Clear follow snapshot failed")
         base = Mock()
         base._snapshot.side_effect = [
