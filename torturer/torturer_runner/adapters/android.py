@@ -2812,20 +2812,28 @@ class AndroidAdapter:
                     (control_file, step.operation, float(step.timeout_seconds))
                 )
             operations.append(item)
+        configure_requested = any(
+            operation["operation"] == "configure" for operation in operations
+        )
         subscription_url = None
         subscription_control_url = None
         subscription_control_key = None
         subscription_control_ca_pem = None
+        subscription_request_count_before_launch = None
         if self.ui_mode == "gui-auto":
             if self._subscription_fixture is None:
                 from torturer_runner.subscription_fixture import SubscriptionFixture
                 self._subscription_fixture = SubscriptionFixture(self.profile, self.profile.parent / "android-subscription-fixture", "android", adb=[str(self.adb)])
                 self._subscription_fixture.start()
-            elif any(operation["operation"] == "configure" for operation in operations):
+            elif configure_requested:
                 self._subscription_fixture.replace_response(self.profile.read_bytes())
             subscription_url = self._subscription_fixture.url
             subscription_control_url = self._subscription_fixture.control_url
             subscription_control_key = self._subscription_fixture.control_key
+            if configure_requested:
+                subscription_request_count_before_launch = (
+                    self._subscription_fixture.control_stats()["subscription_gets"]
+                )
             try:
                 subscription_control_ca_pem = self._subscription_fixture.certificate.read_text(
                     encoding="ascii"
@@ -2851,6 +2859,10 @@ class AndroidAdapter:
             },
             "operations": operations,
         }
+        if subscription_request_count_before_launch is not None:
+            command["subscription_request_count_before_launch"] = (
+                subscription_request_count_before_launch
+            )
         if test_case is not None:
             command["test_case"] = test_case
         if saved_source_restore_only:
@@ -2862,15 +2874,10 @@ class AndroidAdapter:
             and test_case is None
             and not saved_source_restore_only
             and not self._process_cold_import_queued
-            and any(operation.get("operation") == "configure" for operation in operations)
+            and configure_requested
         )
         if process_cold_import:
             command["process_cold_import"] = True
-            if self._subscription_fixture is None:
-                raise ScenarioExecutionError("ANDROID_SUBSCRIPTION_FIXTURE_UNAVAILABLE")
-            command["process_cold_import_request_count"] = (
-                self._subscription_fixture.control_stats()["subscription_gets"]
-            )
         if self.ui_mode == "protocol-matrix":
             command["profile_file"] = profile_name
         if self.ui_mode == "protocol-matrix" and self._selected_connection is not None:

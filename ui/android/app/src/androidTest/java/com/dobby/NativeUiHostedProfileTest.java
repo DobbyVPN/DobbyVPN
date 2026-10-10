@@ -274,11 +274,12 @@ public final class NativeUiHostedProfileTest {
     private String subscriptionControlKey = "";
     private String subscriptionControlCAPem = "";
     private SSLSocketFactory subscriptionControlSocketFactory;
+    private int subscriptionRequestCountBeforeLaunch = -1;
     private int savedSourceInitialGets = -1;
     private boolean savedSourceRestoreStarted;
     private boolean savedSourceRestoreAttempted;
+    private boolean savedSourceRestorePreverified;
     private boolean processColdImportPending;
-    private int processColdImportInitialGets = -1;
     private final File screenshotDirectory = new File(
             // Instrumentation executes in the target application's UID. The
             // instrumentation APK's files directory is a different sandbox and
@@ -367,14 +368,15 @@ public final class NativeUiHostedProfileTest {
         String testCase = command.optString("test_case", "");
         boolean autoRecoveryStopCase = AUTO_RECOVERY_STOP_TEST_CASE.equals(testCase);
         boolean savedSourceRestoreOnly = command.optBoolean("saved_source_restore_only", false);
-        boolean savedSourceRestorePreverified = command.optBoolean(
+        savedSourceRestorePreverified = guiAuto && command.optBoolean(
                 "saved_source_restore_preverified", false);
         launchSubscriptionURL = guiAuto ? command.getString("subscription_url") : "";
         subscriptionControlURL = guiAuto ? command.getString("subscription_control_url") : "";
         subscriptionControlKey = guiAuto ? command.getString("subscription_control_key") : "";
         subscriptionControlCAPem = guiAuto ? command.getString("subscription_control_ca_pem") : "";
         processColdImportPending = guiAuto && command.optBoolean("process_cold_import", false);
-        processColdImportInitialGets = command.optInt("process_cold_import_request_count", -1);
+        subscriptionRequestCountBeforeLaunch = guiAuto
+                ? command.optInt("subscription_request_count_before_launch", -1) : -1;
         if (guiAuto && (subscriptionControlURL.isEmpty() || subscriptionControlKey.isEmpty()
                 || subscriptionControlCAPem.isEmpty())) {
             throw new IllegalArgumentException("ANDROID_SUBSCRIPTION_CONTROL_MISSING");
@@ -843,7 +845,19 @@ public final class NativeUiHostedProfileTest {
             processColdImportPending = false;
         }
         int recoveryImportInitialGets = skipColdSavedSourceRestore && !processColdImportVerified
-                ? subscriptionFixtureState().getInt("subscription_gets") : -1;
+                ? subscriptionRequestCountBeforeLaunch : -1;
+        if (skipColdSavedSourceRestore && !processColdImportVerified
+                && recoveryImportInitialGets < 0) {
+            throw new IllegalStateException(
+                    "ANDROID_SUBSCRIPTION_REQUEST_BASELINE_MISSING: "
+                            + "subscription_request_count_before_launch="
+                            + subscriptionRequestCountBeforeLaunch
+                            + " process_cold_import_verified=" + processColdImportVerified
+                            + " saved_source_restore_preverified="
+                            + savedSourceRestorePreverified
+                            + " process_cold_import_pending=" + processColdImportPending
+                            + " skip_cold_saved_source_restore=" + skipColdSavedSourceRestore);
+        }
         int expectedNavigationGets = -1;
         // Keep the restore GET distinct so it cannot satisfy the separate
         // successful cold deep-link import assertion below.
@@ -902,7 +916,16 @@ public final class NativeUiHostedProfileTest {
                         || imported.optJSONObject("pending_target") != null
                         || !"CONFIGURED".equals(imported.optString("state"))) {
                     throw new AssertionError("Rendered cold import did not load one disconnected inventory: "
-                            + imported);
+                            + "expected_subscription_gets=" + (recoveryImportInitialGets + 1)
+                            + " subscription_request_count_before_launch="
+                            + recoveryImportInitialGets
+                            + " observed_fixture_stats=" + importedGets
+                            + " process_cold_import_verified=" + processColdImportVerified
+                            + " saved_source_restore_preverified="
+                            + savedSourceRestorePreverified
+                            + " process_cold_import_pending=" + processColdImportPending
+                            + " skip_cold_saved_source_restore=" + skipColdSavedSourceRestore
+                            + " configured_snapshot=" + imported);
                 }
                 expectedNavigationGets = importedGets.getInt("subscription_gets");
             }
@@ -946,8 +969,13 @@ public final class NativeUiHostedProfileTest {
 
     private void verifyProcessColdImport(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
-        if (processColdImportInitialGets < 0) {
-            throw new IllegalStateException("ANDROID_PROCESS_COLD_IMPORT_BASELINE_MISSING");
+        if (subscriptionRequestCountBeforeLaunch < 0) {
+            throw new IllegalStateException("ANDROID_PROCESS_COLD_IMPORT_BASELINE_MISSING: "
+                    + "subscription_request_count_before_launch="
+                    + subscriptionRequestCountBeforeLaunch
+                    + " process_cold_import_pending=" + processColdImportPending
+                    + " saved_source_restore_preverified="
+                    + savedSourceRestorePreverified);
         }
         ensureUiSurface(remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
         Activity activity = MainActivity.current;
@@ -966,13 +994,13 @@ public final class NativeUiHostedProfileTest {
         expectedRenderedSource = subscriptionURL;
         waitForUiControl("Profile 1 action",
                 remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
-        JSONObject requested = waitForSubscriptionGets(processColdImportInitialGets + 1,
+        JSONObject requested = waitForSubscriptionGets(subscriptionRequestCountBeforeLaunch + 1,
                 remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
         requested = waitForInFlightGets(0,
                 remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
         JSONObject imported = waitForSessionSource(subscriptionURL,
                 remainingTimeout(deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT"));
-        if (requested.getInt("subscription_gets") != processColdImportInitialGets + 1
+        if (requested.getInt("subscription_gets") != subscriptionRequestCountBeforeLaunch + 1
                 || !imported.optBoolean("configured")
                 || !subscriptionURL.equals(imported.optString("source_url"))
                 || imported.optJSONArray("profiles") == null
@@ -981,7 +1009,14 @@ public final class NativeUiHostedProfileTest {
                 || imported.optJSONObject("active_profile") != null
                 || imported.optJSONObject("pending_target") != null) {
             throw new AssertionError("Process-cold deep link did not load exactly one disconnected inventory: "
-                    + imported);
+                    + "expected_subscription_gets=" + (subscriptionRequestCountBeforeLaunch + 1)
+                    + " subscription_request_count_before_launch="
+                    + subscriptionRequestCountBeforeLaunch
+                    + " observed_fixture_stats=" + requested
+                    + " process_cold_import_pending=" + processColdImportPending
+                    + " saved_source_restore_preverified="
+                    + savedSourceRestorePreverified
+                    + " skip_cold_saved_source_restore=false configured_snapshot=" + imported);
         }
         if (awaitVpnNetwork(false, remainingTimeout(
                 deadline, "ANDROID_PROCESS_COLD_IMPORT_TIMEOUT")) != null) {

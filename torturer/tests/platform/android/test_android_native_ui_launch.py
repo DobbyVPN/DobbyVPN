@@ -197,9 +197,10 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             first_command = json.loads(first.read_text(encoding="utf-8"))
             second_command = json.loads(second.read_text(encoding="utf-8"))
             self.assertTrue(first_command["process_cold_import"])
-            self.assertEqual(first_command["process_cold_import_request_count"], 3)
+            self.assertEqual(first_command["subscription_request_count_before_launch"], 3)
             self.assertEqual(first_command["subscription_control_ca_pem"], FIXTURE_CA_PEM)
             self.assertNotIn("process_cold_import", second_command)
+            self.assertEqual(second_command["subscription_request_count_before_launch"], 3)
             self.assertEqual(fixture.profile_bytes, owner_profile)
             self.assertEqual(fixture.replacement_calls, [owner_profile, owner_profile])
 
@@ -207,7 +208,15 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             disconnect = SimpleNamespace(
                 id="disconnect", operation="disconnect", timeout_seconds=10
             )
-            adapter._write_command(SimpleNamespace(), steps=(disconnect,))
+            disconnect_command_file, _, _ = adapter._write_command(
+                SimpleNamespace(), steps=(disconnect,)
+            )
+            disconnect_command = json.loads(
+                disconnect_command_file.read_text(encoding="utf-8")
+            )
+            self.assertNotIn(
+                "subscription_request_count_before_launch", disconnect_command
+            )
             self.assertEqual(fixture.profile_bytes, synthetic_profile)
             self.assertEqual(fixture.replacement_calls, [owner_profile, owner_profile])
 
@@ -246,7 +255,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                 ["configure", "consent_grant_selection"],
             )
             self.assertTrue(command["process_cold_import"])
-            self.assertEqual(command["process_cold_import_request_count"], 0)
+            self.assertEqual(command["subscription_request_count_before_launch"], 0)
             self.assertEqual(command["subscription_control_ca_pem"], FIXTURE_CA_PEM)
 
     def test_saved_source_phase_precedes_n11_and_full_lane_imports(self) -> None:
@@ -271,12 +280,25 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                 command = json.loads((root / command_name).read_text(encoding="utf-8"))
                 commands.append(command)
                 if command.get("saved_source_restore_only"):
+                    self.assertEqual(
+                        command["subscription_request_count_before_launch"], 0
+                    )
                     fixture_stats["subscription_gets"] = 2
                 elif command.get("process_cold_import"):
                     self.assertEqual(
-                        command["process_cold_import_request_count"],
+                        command["subscription_request_count_before_launch"],
                         fixture_stats["subscription_gets"],
                     )
+                    fixture_stats["subscription_gets"] += 1
+                elif _kwargs.get("preserve_active"):
+                    self.assertEqual(
+                        command["subscription_request_count_before_launch"],
+                        fixture_stats["subscription_gets"],
+                    )
+                    self.assertNotIn("process_cold_import", command)
+                    # The preserved Activity is started by the host before
+                    # instrumentation; restoring its saved source consumes a
+                    # GET after the command baseline has been captured.
                     fixture_stats["subscription_gets"] += 1
                 return SimpleNamespace(returncode=0, stdout=b"", stderr=b"", timed_out=False)
 
@@ -302,7 +324,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertNotIn("process_cold_import", commands[0])
             self.assertTrue(commands[1]["saved_source_restore_preverified"])
             self.assertTrue(commands[1]["process_cold_import"])
-            self.assertEqual(commands[1]["process_cold_import_request_count"], 2)
+            self.assertEqual(commands[1]["subscription_request_count_before_launch"], 2)
 
             # N11's exact APK reinstall invalidates its first-process import
             # queue. Keep only the successful restore observation so the full
@@ -336,8 +358,31 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertEqual(len(commands), 3)
             self.assertTrue(commands[2]["saved_source_restore_preverified"])
             self.assertTrue(commands[2]["process_cold_import"])
-            self.assertEqual(commands[2]["process_cold_import_request_count"], 3)
+            self.assertEqual(commands[2]["subscription_request_count_before_launch"], 3)
             self.assertEqual(fixture_stats["subscription_gets"], 4)
+
+            process_loss = select_scenarios(
+                scenario_ids=["functional.product-process-loss"]
+            )[0]
+            with mock.patch(
+                "torturer_runner.adapters.android._instrumentation_succeeded",
+                return_value=True,
+            ):
+                observation = adapter._execute_phase(
+                    process_loss,
+                    (configure,),
+                    time.monotonic() + 120,
+                    [],
+                    preserve_active=True,
+                )
+            self.assertTrue(observation.configured)
+            self.assertEqual(len(commands), 4)
+            self.assertEqual(
+                commands[3]["subscription_request_count_before_launch"], 4
+            )
+            self.assertTrue(commands[3]["saved_source_restore_preverified"])
+            self.assertNotIn("process_cold_import", commands[3])
+            self.assertEqual(fixture_stats["subscription_gets"], 5)
 
     def test_failed_saved_source_phase_blocks_process_cold_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
