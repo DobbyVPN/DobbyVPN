@@ -128,30 +128,62 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         ui.base = base
         return ui, base, events, clock
 
-    def phase_restore_fakes(self, *, fail_first_request=False, stale_active_digest=False):
+    def phase_restore_fakes(
+        self, *, fail_first_request=False, stale_active_digest=False,
+        active_mode="PROFILE_INDEX", disconnect_cleanup_complete=True,
+    ):
+        events = []
         state = {"gets": 10, "in_flight": 0, "retry": False, "restore_url": None}
         digest = "normal-digest"
 
         def snapshot(source_url):
             return {
-                "state": "CONNECTED", "active_mode": "PROFILE_INDEX",
+                "state": "CONNECTED", "active_mode": active_mode,
                 "active_profile": {"index": 0}, "active_index": 0,
                 "active_digest": "stale-active-digest" if stale_active_digest else digest,
                 "digest": digest,
                 "source_kind": "URL", "source_url": source_url,
                 "pending_target": None,
                 "profiles": [{"index": 0}, {"index": 1}],
+                "recovering": False,
+                "cleanup_complete": False,
             }
 
         state["snapshot"] = snapshot("https://example.invalid/old")
         ui = Mock(platform="windows", process=None)
         ui._alive.return_value = True
-        ui.wait_status.return_value = {
-            "status": "Connected", "enabled_controls": ["Disconnect"],
-        }
-        ui.snapshot.side_effect = lambda: {
-            "labels": ["Retry"] if state["retry"] else ["Profile 1 action"],
-        }
+
+        def wait_status(expected):
+            state_name = state["snapshot"].get("state")
+            status = "Connected" if state_name == "CONNECTED" else "Disconnected"
+            events.append(f"status:{expected}")
+            if status != expected:
+                raise AssertionError(f"requested {expected} while fake backend was {state_name}")
+            return {
+                "status": status,
+                "enabled_controls": ["Disconnect"] if status == "Connected" else ["Auto connect"],
+            }
+
+        def disconnect():
+            events.append("disconnect")
+            state["snapshot"].update({
+                "state": "IDLE", "active_mode": None, "active_profile": None,
+                "active_index": None, "active_digest": None, "pending_target": None,
+                "recovering": False,
+                "cleanup_complete": disconnect_cleanup_complete,
+            })
+            return wait_status("Disconnected")
+
+        def ui_snapshot():
+            if state["retry"]:
+                return {"labels": ["Retry"], "enabled_controls": ["Retry"]}
+            if state["snapshot"].get("state") == "CONNECTED":
+                return {"labels": ["Disconnect"], "enabled_controls": ["Disconnect"]}
+            return {"labels": ["Auto connect"], "enabled_controls": ["Auto connect"]}
+
+        ui.wait_status.side_effect = wait_status
+        ui.disconnect.side_effect = disconnect
+        ui.snapshot.side_effect = ui_snapshot
 
         def type_source(source):
             state["gets"] += 1
@@ -172,10 +204,25 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         ui.retry.side_effect = retry
         ui.activate_profile.side_effect = lambda _index: state["snapshot"].update(
             {"active_digest": digest, "active_mode": "PROFILE_INDEX", "active_index": 0,
-            "active_profile": {"index": 0}, "state": "CONNECTED"}
+            "active_profile": {"index": 0}, "state": "CONNECTED", "cleanup_complete": False}
         )
         base = Mock()
         base._snapshot.side_effect = lambda *_args: dict(state["snapshot"])
+
+        def prepare_native_connect(_timeout):
+            events.append("prepare-connect")
+            current = state["snapshot"]
+            if not (
+                current.get("state") in {"IDLE", "CONFIGURED"}
+                and current.get("cleanup_complete") is True
+                and current.get("recovering") is False
+                and current.get("pending_target") is None
+                and current.get("active_profile") is None
+            ):
+                raise AssertionError("routing preparation started before tunnel cleanup")
+
+        base.prepare_native_connect.side_effect = prepare_native_connect
+        state["events"] = events
         fixture = Mock()
         fixture.control_stats.side_effect = lambda: {
             "subscription_gets": state["gets"],
@@ -675,6 +722,8 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         self.assertEqual(restored["source_url"], state["restore_url"])
         self.assertEqual(state["gets"], 12)
         ui.retry.assert_called_once_with()
+        ui.disconnect.assert_not_called()
+        base.prepare_native_connect.assert_not_called()
         fixture.release_responses.assert_called_once_with()
         fixture.replace_response.assert_called_once_with(b"normal subscription")
         self.assertEqual(phase_state, {})
@@ -707,6 +756,50 @@ class NativeUICaseFixtureTests(unittest.TestCase):
         self.assertEqual(restored["active_digest"], digest)
         base.prepare_native_connect.assert_called_once_with(1.0)
         ui.activate_profile.assert_called_once_with(0)
+        ui.disconnect.assert_called_once_with()
+        self.assertLess(state["events"].index("disconnect"), state["events"].index("prepare-connect"))
+
+    def test_windows_phase_restore_disconnects_auto_before_routing_preparation(self):
+        ui, base, fixture, state, digest = self.phase_restore_fakes(active_mode="AUTO_SELECT")
+        self.assertEqual(state["snapshot"]["active_digest"], digest)
+        self.assertEqual(state["snapshot"]["active_mode"], "AUTO_SELECT")
+
+        def run_action(_controller, _operation, _stage, _timeout, action, **_kwargs):
+            return action()
+
+        with patch.object(journey, "_native_ui_action", side_effect=run_action):
+            restored = journey._restore_windows_subscription_preconditions(
+                ui, base, fixture, "https://example.invalid/subscription",
+                b"normal subscription", digest, 1.0, {}, "before-logs",
+            )
+
+        self.assertEqual(restored["active_mode"], "PROFILE_INDEX")
+        self.assertEqual(restored["active_digest"], digest)
+        ui.disconnect.assert_called_once_with()
+        base.prepare_native_connect.assert_called_once_with(1.0)
+        self.assertLess(state["events"].index("disconnect"), state["events"].index("prepare-connect"))
+
+    def test_windows_phase_restore_does_not_connect_after_incomplete_stop_cleanup(self):
+        ui, base, fixture, state, digest = self.phase_restore_fakes(
+            stale_active_digest=True, disconnect_cleanup_complete=False,
+        )
+
+        def run_action(_controller, _operation, _stage, _timeout, action, **_kwargs):
+            return action()
+
+        with patch.object(journey, "_native_ui_action", side_effect=run_action):
+            with self.assertRaisesRegex(
+                journey.NativeUIJourneyError,
+                "did not finish disconnect cleanup before routing preparation",
+            ):
+                journey._restore_windows_subscription_preconditions(
+                    ui, base, fixture, "https://example.invalid/subscription",
+                    b"normal subscription", digest, 0.01, {}, "before-logs",
+                )
+
+        ui.disconnect.assert_called_once_with()
+        base.prepare_native_connect.assert_not_called()
+        ui.activate_profile.assert_not_called()
 
     def test_cold_clear_boundary_stays_unreached_when_clear_phase_failed(self):
         ui = Mock()

@@ -2383,6 +2383,60 @@ def _restore_windows_subscription_preconditions(
         and active_profile.get("index") == active_index
     )
     if not already_normal_manual:
+        def is_cleanly_disconnected(snapshot: dict[str, Any]) -> bool:
+            return (
+                snapshot.get("state") in {"IDLE", "CONFIGURED"}
+                and snapshot.get("cleanup_complete") is True
+                and snapshot.get("recovering") is False
+                and snapshot.get("pending_target") is None
+                and snapshot.get("active_profile") is None
+            )
+
+        if not is_cleanly_disconnected(restored):
+            stop_deadline = time.monotonic() + timeout
+            has_existing_session = (
+                restored.get("state") != "STOPPING"
+                and (
+                    restored.get("state") not in {"IDLE", "CONFIGURED", "FAILED"}
+                    or restored.get("active_profile") is not None
+                    or restored.get("pending_target") is not None
+                    or restored.get("recovering") is True
+                )
+            )
+            if has_existing_session:
+                view = ui.snapshot()
+                labels = set(view.get("labels", []))
+                enabled = set(view.get("enabled_controls", []))
+                if "Stop" in labels and "Stop" in enabled:
+                    def stop_rendered_session() -> dict[str, object]:
+                        ui._click("Stop")
+                        ui.wait_status("Disconnected")
+                        return {"stopped": True}
+
+                    stop_action = stop_rendered_session
+                else:
+                    stop_action = ui.disconnect
+                _native_ui_action(
+                    ui, f"windows-{purpose}-disconnect-unmatched-session",
+                    "windows-phase-restore-disconnect", timeout, stop_action,
+                )
+
+            disconnected = restored
+            while time.monotonic() < stop_deadline:
+                disconnected = base._snapshot(
+                    min(30.0, max(0.1, stop_deadline - time.monotonic())),
+                    "NATIVE_WINDOWS_PHASE_DISCONNECT_STATUS_FAILED",
+                )
+                if is_cleanly_disconnected(disconnected):
+                    restored = disconnected
+                    break
+                time.sleep(0.05)
+            else:
+                raise NativeUIJourneyError(
+                    f"Windows {purpose} restore did not finish disconnect cleanup before routing preparation: "
+                    f"snapshot={disconnected}"
+                )
+
         prepare = getattr(base, "prepare_native_connect", None)
         if not callable(prepare):
             raise NativeUIJourneyError(
