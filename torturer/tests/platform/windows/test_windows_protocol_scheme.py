@@ -697,6 +697,11 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
         controller._click = mock.Mock()
         controller.snapshot = mock.Mock(side_effect=(
             {
+                "status": "Unknown",
+                "labels": [],
+                "enabled_controls": [],
+            },
+            {
                 "status": "Connected",
                 "labels": ["Auto connect"],
                 "enabled_controls": ["VPN connection action", "Auto connect"],
@@ -721,7 +726,7 @@ class WindowsProtocolSchemeTests(unittest.TestCase):
 
     def test_auto_selection_requires_the_enabled_auto_action_before_click(self) -> None:
         controller = object.__new__(smoke.NativeUIController)
-        controller._timeout = 10.0
+        controller._timeout = 0.01
         controller._deadline = None
         controller._click = mock.Mock()
         controller.snapshot = mock.Mock(return_value={
