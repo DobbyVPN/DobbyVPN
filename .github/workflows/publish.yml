@@ -3,12 +3,16 @@ name: Publish
 on:
   workflow_dispatch:
     inputs:
-      release_run_id:
-        description: Successful Release workflow run ID whose artifacts should be published.
+      build_run_id:
+        description: Successful Build workflow run whose packages should be published.
+        required: true
+        type: string
+      test_run_id:
+        description: Successful Test workflow run that qualified the selected Build.
         required: true
         type: string
       release_notes:
-        description: English What's New text for the selected release.
+        description: English release notes for the GitHub Release and App Store submission.
         required: true
         type: string
 
@@ -17,164 +21,121 @@ permissions:
   contents: read
 
 jobs:
-  resolve_release:
-    name: Select successful Release artifacts
+  resolve_inputs:
+    name: Validate selected Build and Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       actions: read
       contents: read
     outputs:
-      source_sha: ${{ steps.run.outputs.source_sha }}
-      release_run_number: ${{ steps.run.outputs.release_run_number }}
-      version_name: ${{ steps.version.outputs.version_name }}
-      android_version_code: ${{ steps.version.outputs.android_version_code }}
+      source_sha: ${{ steps.selection.outputs.source_sha }}
+      build_run_number: ${{ steps.selection.outputs.build_run_number }}
+      test_run_number: ${{ steps.selection.outputs.test_run_number }}
+      version_name: ${{ steps.selection.outputs.version_name }}
+      android_version_code: ${{ steps.selection.outputs.android_version_code }}
+      apple_build_number: ${{ steps.selection.outputs.apple_build_number }}
+      build_manifest_sha256: ${{ steps.selection.outputs.build_manifest_sha256 }}
+      test_result_sha256: ${{ steps.selection.outputs.test_result_sha256 }}
     steps:
-      - name: Validate selected Release run
-        id: run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      - name: Require production branch
         run: |
           set -euo pipefail
-          capture_gh() {
-            local label=$1 status
-            shift
-            CAPTURED_GH_STDOUT="$RUNNER_TEMP/$label.stdout"
-            local stderr_file="$RUNNER_TEMP/$label.stderr"
-            set +e
-            gh "$@" >"$CAPTURED_GH_STDOUT" 2>"$stderr_file"
-            status=$?
-            set -e
-            printf '[gh %s stdout begin]\n' "$label" >&2
-            cat "$CAPTURED_GH_STDOUT" >&2
-            printf '[gh %s stdout end]\n' "$label" >&2
-            printf '[gh %s stderr begin]\n' "$label" >&2
-            cat "$stderr_file" >&2
-            printf '[gh %s stderr end]\n' "$label" >&2
-            return "$status"
-          }
-          [[ "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]]
           test "$GITHUB_REF" = refs/heads/main
-          capture_gh release-run api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID"
-          run_file=$CAPTURED_GH_STDOUT
-          capture_gh release-workflow api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml"
-          release_workflow_file=$CAPTURED_GH_STDOUT
-          release_workflow_id="$(jq -r .id "$release_workflow_file")"
-          test "$(jq -r .workflow_id "$run_file")" = "$release_workflow_id"
-          test "$(jq -r .head_branch "$run_file")" = main
-          test "$(jq -r .event "$run_file")" = workflow_dispatch
-          test "$(jq -r .status "$run_file")" = completed
-          test "$(jq -r .conclusion "$run_file")" = success
-          capture_gh completed-runs api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/runs?status=completed&per_page=100"
-          # Publishing-tool CI does not invalidate retained Release artifacts.
-          # A newer completed Release still supersedes this selection.
-          completed_runs="$(jq -sr '.[] | .workflow_runs[] |
-            select(.path == ".github/workflows/release.yml") |
-            .id' "$CAPTURED_GH_STDOUT")"
-          latest_completed_run="${completed_runs%%$'\n'*}"
-          test "$latest_completed_run" = "$RELEASE_RUN_ID"
-          if [[ "$(jq -r .run_attempt "$run_file")" != "1" ]]; then
-            echo "Release run $RELEASE_RUN_ID was retried; dispatch and qualify a fresh Release run before publishing." >&2
-            exit 1
-          fi
-          source_sha="$(jq -r .head_sha "$run_file")"
-          release_run_number="$(jq -r .run_number "$run_file")"
-          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
-
-          capture_gh release-artifacts api --paginate \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100"
-          artifact_names="$(jq -sr '.[] | .artifacts[] | select(.expired == false) | .name' \
-            "$CAPTURED_GH_STDOUT" | sort -u)"
-          for name in \
-            DobbyVPN.xcarchive.tar.gz \
-            dobbyVPN-linux-debug.deb \
-            dobbyVPN-windows-amd64-debug.msi \
-            dobbyVPN-macos-aarch64-debug.pkg \
-            dobbyVPN-macos-amd64-debug.pkg \
-            DobbyVPN.xcarchive-debug.tar.gz \
-            dobbyvpn-android-debug.apk \
-            dobbyVPN-linux.deb \
-            dobbyVPN-windows-amd64.msi \
-            dobbyVPN-macos-aarch64.pkg \
-            dobbyVPN-macos-amd64.pkg \
-            dobbyvpn-android-unsign.apk \
-            dobbyvpn-android-test-companion-unsigned.apk \
-            dobbyvpn-android-provenance; do
-            if ! grep -Fxq "$name" <<<"$artifact_names"; then
-              echo "Release run $RELEASE_RUN_ID is missing unexpired artifact: $name" >&2
-              exit 1
-            fi
-          done
-          {
-            echo "source_sha=$source_sha"
-            echo "release_run_number=$release_run_number"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Check out selected Release source
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve and verify the selected Build manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release/build_manifest.py resolve \
+            --require-main --repository "$GITHUB_REPOSITORY" \
+            --run-id "${{ inputs.build_run_id }}" \
+            --download-dir "$RUNNER_TEMP/selected-build-manifest" \
+            --output "$RUNNER_TEMP/build.json"
+      - name: Resolve the successful Test result for that exact Build
+        id: selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          TEST_RUN_ID: ${{ inputs.test_run_id }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release/test_manifest.py \
+            --repository "$GITHUB_REPOSITORY" --run-id "$TEST_RUN_ID" \
+            --build-manifest "$RUNNER_TEMP/build.json" \
+            --download-dir "$RUNNER_TEMP/selected-test-result" \
+            --output "$RUNNER_TEMP/test.json"
+          python3 - "$RUNNER_TEMP/build.json" "$RUNNER_TEMP/test.json" "$GITHUB_OUTPUT" <<'PYTHON'
+          import json, sys
+          build = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          test = json.loads(open(sys.argv[2], encoding="utf-8").read())
+          values = {
+              "source_sha": build["source_sha"],
+              "build_run_number": build["run_number"],
+              "test_run_number": test["run_number"],
+              "version_name": build["version"],
+              "android_version_code": build["android_version_code"],
+              "apple_build_number": build["apple_build_number"],
+              "build_manifest_sha256": build["manifest_sha256"],
+              "test_result_sha256": test["manifest_sha256"],
+          }
+          with open(sys.argv[3], "a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          PYTHON
+      - name: Check selected source version and stable tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ steps.run.outputs.source_sha }}
+          ref: ${{ steps.selection.outputs.source_sha }}
+          path: selected-source
           persist-credentials: false
-
-      - name: Read selected version and check tag
-        id: version
+      - name: Match selected source version and check the stable tag
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.run.outputs.source_sha }}
+          SOURCE_SHA: ${{ steps.selection.outputs.source_sha }}
+          VERSION_NAME: ${{ steps.selection.outputs.version_name }}
+          ANDROID_VERSION_CODE: ${{ steps.selection.outputs.android_version_code }}
+          APPLE_BUILD_NUMBER: ${{ steps.selection.outputs.apple_build_number }}
         run: |
           set -euo pipefail
-          capture_gh() {
-            local label=$1 status
-            shift
-            CAPTURED_GH_STDOUT="$RUNNER_TEMP/$label.stdout"
-            local stderr_file="$RUNNER_TEMP/$label.stderr"
-            set +e
-            gh "$@" >"$CAPTURED_GH_STDOUT" 2>"$stderr_file"
-            status=$?
-            set -e
-            printf '[gh %s stdout begin]\n' "$label" >&2
-            cat "$CAPTURED_GH_STDOUT" >&2
-            printf '[gh %s stdout end]\n' "$label" >&2
-            printf '[gh %s stderr begin]\n' "$label" >&2
-            cat "$stderr_file" >&2
-            printf '[gh %s stderr end]\n' "$label" >&2
-            return "$status"
-          }
-          test "$(git rev-parse HEAD | tee /dev/stderr)" = "$SOURCE_SHA"
-          python3 .github/scripts/release/version_metadata.py --version-file VERSION --github-output "$GITHUB_OUTPUT"
-          version_name="$(python3 .github/scripts/release/version_metadata.py \
-            --version-file VERSION --field version_name | tee /dev/stderr)"
-          tag="v$version_name"
-          tag_ref="refs/tags/$tag"
-          capture_gh matching-tag-refs api --paginate \
-            "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag"
-          tag_record="$(jq -sc --arg ref "$tag_ref" '
-              [.[][] | select(.ref == $ref)] |
-              if length == 0 then empty
-              elif length == 1 then .[0]
-              else error("duplicate exact tag refs")
-              end' "$CAPTURED_GH_STDOUT")"
-          if [[ -n "$tag_record" ]]; then
-            object_type="$(jq -r .object.type <<<"$tag_record")"
-            object_sha="$(jq -r .object.sha <<<"$tag_record")"
-            while [[ "$object_type" == tag ]]; do
-              capture_gh "tag-object-$object_sha" api \
-                "repos/$GITHUB_REPOSITORY/git/tags/$object_sha"
-              object_type="$(jq -r .object.type "$CAPTURED_GH_STDOUT")"
-              object_sha="$(jq -r .object.sha "$CAPTURED_GH_STDOUT")"
-            done
-            test "$object_type" = commit
-            if [[ "$object_sha" != "$SOURCE_SHA" ]]; then
-              echo "release tag $tag points to $object_sha, not selected source $SOURCE_SHA" >&2
-              exit 1
-            fi
-          fi
-
-  submit_testflight:
-    name: Submit selected iOS build to Apple
-    needs: resolve_release
+          test "$(git -C selected-source rev-parse HEAD | tee /dev/stderr)" = "$SOURCE_SHA"
+          actual_version="$(python3 .github/scripts/release/version_metadata.py --version-file selected-source/VERSION --field version_name)"
+          actual_android_code="$(python3 .github/scripts/release/version_metadata.py --version-file selected-source/VERSION --field android_version_code)"
+          test "$actual_version" = "$VERSION_NAME"
+          test "$actual_android_code" = "$ANDROID_VERSION_CODE"
+          python3 - "$SOURCE_SHA" "v$VERSION_NAME" <<'PYTHON'
+          import json, subprocess, sys
+          source_sha, tag = sys.argv[1:]
+          def api(endpoint):
+              return json.loads(subprocess.run(
+                  ["gh", "api", endpoint], check=True, stdout=subprocess.PIPE,
+              ).stdout)
+          refs = api(f"repos/{__import__('os').environ['GITHUB_REPOSITORY']}/git/matching-refs/tags/{tag}")
+          matches = [item for item in refs if item.get("ref") == f"refs/tags/{tag}"]
+          if len(matches) > 1:
+              raise SystemExit("GitHub returned duplicate exact stable tag refs")
+          if not matches:
+              raise SystemExit(0)
+          target = matches[0].get("object")
+          seen = set()
+          while isinstance(target, dict) and target.get("type") == "tag":
+              object_sha = target.get("sha")
+              if not isinstance(object_sha, str) or object_sha in seen:
+                  raise SystemExit("stable tag contains an invalid or cyclic annotated tag")
+              seen.add(object_sha)
+              target = api(f"repos/{__import__('os').environ['GITHUB_REPOSITORY']}/git/tags/{object_sha}").get("object")
+          if not isinstance(target, dict) or target.get("type") != "commit":
+              raise SystemExit("stable tag does not resolve to a commit")
+          if target.get("sha") != source_sha:
+              raise SystemExit(f"release tag {tag} points to {target.get('sha')}, not selected source {source_sha}")
+          PYTHON
+  upload_testflight:
+    name: Upload selected iOS build to internal TestFlight
+    needs: resolve_inputs
     runs-on: macos-15
     timeout-minutes: 30
     environment: release
@@ -189,7 +150,7 @@ jobs:
       - name: Check out selected source entitlements
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.resolve_release.outputs.source_sha }}
+          ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           path: selected-source
           persist-credentials: false
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
@@ -201,19 +162,19 @@ jobs:
       - name: Set release metadata
         run: |
           set -euo pipefail
-          echo "APP_STORE_VERSION=${{ needs.resolve_release.outputs.version_name }}" >> "$GITHUB_ENV"
-          echo "APP_STORE_BUILD_NUMBER=${{ needs.resolve_release.outputs.android_version_code }}" >> "$GITHUB_ENV"
-          echo "VERSION_NAME=${{ needs.resolve_release.outputs.version_name }}" >> "$GITHUB_ENV"
-          echo "APP_BUILD=${{ needs.resolve_release.outputs.android_version_code }}" >> "$GITHUB_ENV"
-          echo "SOURCE_COMMIT=${{ needs.resolve_release.outputs.source_sha }}" >> "$GITHUB_ENV"
+          echo "APP_STORE_VERSION=${{ needs.resolve_inputs.outputs.version_name }}" >> "$GITHUB_ENV"
+          echo "APP_STORE_BUILD_NUMBER=${{ needs.resolve_inputs.outputs.apple_build_number }}" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=${{ needs.resolve_inputs.outputs.version_name }}" >> "$GITHUB_ENV"
+          echo "APP_BUILD=${{ needs.resolve_inputs.outputs.apple_build_number }}" >> "$GITHUB_ENV"
+          echo "SOURCE_COMMIT=${{ needs.resolve_inputs.outputs.source_sha }}" >> "$GITHUB_ENV"
       - name: Download selected unsigned archive
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
         run: |
           python3 .github/scripts/release/download_artifact.py \
-            "$RELEASE_RUN_ID" DobbyVPN.xcarchive.tar.gz selected-release
+            "$BUILD_RUN_ID" DobbyVPN.xcarchive.tar.gz selected-release
       - name: Prepare Apple signing identity and profiles
         env:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
@@ -229,7 +190,7 @@ jobs:
           IOS_ENTITLEMENTS_DIR: ${{ github.workspace }}/selected-source/ui/apple/ios
         run: |
           set -euo pipefail
-          bash core/scripts/package_ios_app.sh iosexport \
+          bash selected-source/core/scripts/package_ios_app.sh iosexport \
             selected-release/DobbyVPN.ipa \
             selected-release/DobbyVPN.xcarchive.tar.gz
       - name: Verify signed IPA entitlements and profile binding
@@ -351,7 +312,7 @@ jobs:
               state = build.processing_state
               abort "Apple build processing failed: #{state}" if %w[FAILED INVALID].include?(state)
               if state == "VALID"
-                puts "Build #{version} (#{number}) is ready for App Review"
+                puts "Build #{version} (#{number}) is ready for internal TestFlight testing"
                 break
               end
             end
@@ -360,17 +321,9 @@ jobs:
             sleep 30
           end
           RUBY
-      - name: Submit exact build to App Review
-        env:
-          APP_STORE_RELEASE_NOTES: ${{ inputs.release_notes }}
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-        run: cd publishing && bundle exec fastlane ios submit_app_store_review
-
-  promote:
-    name: Publish selected Release packages
-    needs: resolve_release
+  publish_github_release:
+    name: Sign and publish selected Build packages
+    needs: [resolve_inputs, upload_testflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: release
@@ -379,21 +332,28 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_SOURCE_SHA: ${{ needs.resolve_release.outputs.source_sha }}
-      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
-      RELEASE_RUN_NUMBER: ${{ needs.resolve_release.outputs.release_run_number }}
+      RELEASE_SOURCE_SHA: ${{ needs.resolve_inputs.outputs.source_sha }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      BUILD_RUN_NUMBER: ${{ needs.resolve_inputs.outputs.build_run_number }}
+      TEST_RUN_ID: ${{ inputs.test_run_id }}
+      TEST_RUN_NUMBER: ${{ needs.resolve_inputs.outputs.test_run_number }}
+      BUILD_MANIFEST_SHA256: ${{ needs.resolve_inputs.outputs.build_manifest_sha256 }}
+      TEST_RESULT_SHA256: ${{ needs.resolve_inputs.outputs.test_result_sha256 }}
+      PUBLISH_RUN_ID: ${{ github.run_id }}
+      PUBLISH_RUN_NUMBER: ${{ github.run_number }}
+      RELEASE_NOTES: ${{ inputs.release_notes }}
       EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.resolve_release.outputs.source_sha }}
+          ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: true
       - name: Read release metadata
         id: metadata
         env:
-          RELEASE_VERSION: ${{ needs.resolve_release.outputs.version_name }}
-          ANDROID_VERSION_CODE: ${{ needs.resolve_release.outputs.android_version_code }}
+          RELEASE_VERSION: ${{ needs.resolve_inputs.outputs.version_name }}
+          ANDROID_VERSION_CODE: ${{ needs.resolve_inputs.outputs.android_version_code }}
         run: |
           set -euo pipefail
           {
@@ -402,9 +362,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       # Artifact names are deliberately exact; broad matching could include
       # build intermediates.
-      - name: Download selected Release packages
+      - name: Download selected Build packages and Test Android provenance
         shell: bash
         run: |
+          set -euo pipefail
           for artifact in \
             dobbyVPN-linux-debug.deb \
             dobbyVPN-windows-amd64-debug.msi \
@@ -417,11 +378,12 @@ jobs:
             dobbyVPN-macos-aarch64.pkg \
             dobbyVPN-macos-amd64.pkg \
             dobbyvpn-android-unsign.apk \
-            dobbyvpn-android-test-companion-unsigned.apk \
-            dobbyvpn-android-provenance; do
+            dobbyvpn-android-test-companion-unsigned.apk; do
             python3 .github/scripts/release/download_artifact.py \
-              "$RELEASE_RUN_ID" "$artifact" release
+              "$BUILD_RUN_ID" "$artifact" release
           done
+          python3 .github/scripts/release/download_artifact.py \
+            "$TEST_RUN_ID" dobbyvpn-android-provenance release
       - name: Read Android dependency versions
         id: pins
         run: |
@@ -488,18 +450,28 @@ jobs:
             --version-code "$ANDROID_VERSION_CODE" \
             --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
           rm -- "$companion"
-      - name: Create release provenance
+      - name: Create Build/Test/Publish provenance
+        id: provenance
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
           ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+          APPLE_BUILD_NUMBER: ${{ needs.resolve_inputs.outputs.apple_build_number }}
         run: |
           set -euo pipefail
           python3 .github/scripts/release/version_metadata.py \
             --version "$RELEASE_VERSION" --update-file release/version.txt
-          python3 .github/scripts/release/release_provenance.py create \
+          printf '%s' "$RELEASE_NOTES" > "$RUNNER_TEMP/release-notes.md"
+          notes_sha256="$(sha256sum "$RUNNER_TEMP/release-notes.md" | cut -d' ' -f1)"
+          echo "release_notes_sha256=$notes_sha256" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/release/release_provenance.py create-published \
             --directory release --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
-            --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
-            --release-run-number "$RELEASE_RUN_NUMBER" --android-version-code "$ANDROID_VERSION_CODE" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --build-run-id "$BUILD_RUN_ID" --build-run-number "$BUILD_RUN_NUMBER" \
+            --test-run-id "$TEST_RUN_ID" --test-run-number "$TEST_RUN_NUMBER" \
+            --publish-run-id "$PUBLISH_RUN_ID" --publish-run-number "$PUBLISH_RUN_NUMBER" \
+            --android-version-code "$ANDROID_VERSION_CODE" --apple-build-number "$APPLE_BUILD_NUMBER" \
+            --build-manifest-sha256 "$BUILD_MANIFEST_SHA256" \
+            --test-result-sha256 "$TEST_RESULT_SHA256" --release-notes-sha256 "$notes_sha256" \
             --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
@@ -511,6 +483,7 @@ jobs:
       - name: Create tag and GitHub Release
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+          RELEASE_NOTES_SHA256: ${{ steps.provenance.outputs.release_notes_sha256 }}
         run: |
           set -euo pipefail
           tag="v$RELEASE_VERSION"
@@ -520,14 +493,19 @@ jobs:
           set -e
           printf '%s\n' "$release_view"
           if [ "$release_view_status" -eq 0 ]; then
-            echo "GitHub Release $tag already exists; checking it against the selected Release run."
+            echo "GitHub Release $tag already exists; checking its Build/Test/Publish provenance."
             mkdir "$RUNNER_TEMP/existing-release"
             gh release download "$tag" --dir "$RUNNER_TEMP/existing-release"
-            python3 .github/scripts/release/release_provenance.py verify \
+            python3 .github/scripts/release/release_provenance.py verify-published \
               --directory "$RUNNER_TEMP/existing-release" --tag "$tag" --version "$RELEASE_VERSION" \
-              --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
-              --release-run-number "$RELEASE_RUN_NUMBER" \
-              --android-version-code "${{ needs.resolve_release.outputs.android_version_code }}" \
+              --source-sha "$RELEASE_SOURCE_SHA" \
+              --build-run-id "$BUILD_RUN_ID" --build-run-number "$BUILD_RUN_NUMBER" \
+              --test-run-id "$TEST_RUN_ID" --test-run-number "$TEST_RUN_NUMBER" \
+              --publish-run-id "$PUBLISH_RUN_ID" --publish-run-number "$PUBLISH_RUN_NUMBER" \
+              --android-version-code "${{ needs.resolve_inputs.outputs.android_version_code }}" \
+              --apple-build-number "${{ needs.resolve_inputs.outputs.apple_build_number }}" \
+              --build-manifest-sha256 "$BUILD_MANIFEST_SHA256" \
+              --test-result-sha256 "$TEST_RESULT_SHA256" --release-notes-sha256 "$RELEASE_NOTES_SHA256" \
               --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
               --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
               --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
@@ -536,34 +514,51 @@ jobs:
               --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
               --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
               --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
-            exit 0
-          fi
-          set +e
-          tag_record="$(git show-ref --verify "refs/tags/$tag" 2>&1)"
-          tag_status=$?
-          set -e
-          printf '%s\n' "$tag_record"
-          if [ "$tag_status" -eq 0 ]; then
-            test "$(git rev-list -n1 "$tag^{commit}")" = "$RELEASE_SOURCE_SHA"
           else
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git tag --annotate "$tag" "$RELEASE_SOURCE_SHA" --message "DobbyVPN $tag"
-            git push origin "refs/tags/$tag"
+            tag_record="$(git show-ref --verify "refs/tags/$tag" 2>&1)"
+            tag_status=$?
+            printf '%s\n' "$tag_record"
+            if [ "$tag_status" -eq 0 ]; then
+              test "$(git rev-list -n1 "$tag^{commit}")" = "$RELEASE_SOURCE_SHA"
+            else
+              git config user.name github-actions[bot]
+              git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+              git tag --annotate "$tag" "$RELEASE_SOURCE_SHA" --message "DobbyVPN $tag"
+              git push origin "refs/tags/$tag"
+            fi
+            gh release create "$tag" --verify-tag --title "$tag" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" release/*
           fi
-          gh release create "$tag" --verify-tag --title "$tag" --notes "DobbyVPN $tag" release/*
-      - name: Verify published assets
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > "$RUNNER_TEMP/release.json"
+          python3 - "$RUNNER_TEMP/release.json" <<'PYTHON'
+          import hashlib, json, os, sys
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          body = release.get("body")
+          if not isinstance(body, str):
+              raise SystemExit("GitHub Release body is missing or invalid")
+          actual = hashlib.sha256(body.encode("utf-8")).hexdigest()
+          if actual != os.environ["RELEASE_NOTES_SHA256"]:
+              raise SystemExit("GitHub Release notes do not match the reviewed Publish input")
+          PYTHON
+      - name: Verify published GitHub Release assets
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
           ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+          APPLE_BUILD_NUMBER: ${{ needs.resolve_inputs.outputs.apple_build_number }}
+          RELEASE_NOTES_SHA256: ${{ steps.provenance.outputs.release_notes_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p published
           gh release download "v$RELEASE_VERSION" --dir published --pattern '*'
-          python3 .github/scripts/release/release_provenance.py verify \
+          python3 .github/scripts/release/release_provenance.py verify-published \
             --directory published --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
-            --source-sha "$RELEASE_SOURCE_SHA" --release-run-id "$RELEASE_RUN_ID" \
-            --release-run-number "$RELEASE_RUN_NUMBER" --android-version-code "$ANDROID_VERSION_CODE" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --build-run-id "$BUILD_RUN_ID" --build-run-number "$BUILD_RUN_NUMBER" \
+            --test-run-id "$TEST_RUN_ID" --test-run-number "$TEST_RUN_NUMBER" \
+            --publish-run-id "$PUBLISH_RUN_ID" --publish-run-number "$PUBLISH_RUN_NUMBER" \
+            --android-version-code "$ANDROID_VERSION_CODE" --apple-build-number "$APPLE_BUILD_NUMBER" \
+            --build-manifest-sha256 "$BUILD_MANIFEST_SHA256" \
+            --test-result-sha256 "$TEST_RESULT_SHA256" --release-notes-sha256 "$RELEASE_NOTES_SHA256" \
             --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
             --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
             --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
@@ -572,23 +567,19 @@ jobs:
             --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
             --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
             --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
-
-  fdroid:
-    name: Publish F-Droid catalog
-    needs: [resolve_release, promote]
-    permissions:
-      actions: read
-      contents: read
-      deployments: read
-      pages: write
-      id-token: write
-    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@eafb866d5d1457c305bfb6f4cbdcf4450a771dee
-    secrets:
-      FDROID_REPO_KEYSTORE: ${{ secrets.FDROID_REPO_KEYSTORE }}
-      FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
-      FDROID_KEY_PASSWORD: ${{ secrets.FDROID_KEY_PASSWORD }}
-    with:
-      source_sha: ${{ needs.resolve_release.outputs.source_sha }}
-      tag: v${{ needs.resolve_release.outputs.version_name }}
-      release_run_id: ${{ inputs.release_run_id }}
-      release_run_number: ${{ needs.resolve_release.outputs.release_run_number }}
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$RELEASE_VERSION" > "$RUNNER_TEMP/release.json"
+          python3 - "$RUNNER_TEMP/release.json" <<'PYTHON'
+          import hashlib, json, os, sys
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          body = release.get("body")
+          if not isinstance(body, str) or hashlib.sha256(body.encode("utf-8")).hexdigest() != os.environ["RELEASE_NOTES_SHA256"]:
+              raise SystemExit("published GitHub Release notes do not match the reviewed Publish input")
+          PYTHON
+      - name: Record the successful Publish identity for Release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: publish-result
+          path: published/release-provenance.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true

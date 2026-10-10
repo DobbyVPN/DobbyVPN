@@ -1,303 +1,160 @@
 name: Release
 
-# Release normally qualifies packages; build_only skips all QA jobs.
 on:
   workflow_dispatch:
     inputs:
-      build_only:
-        description: Build packages without CI, tests, analysis or qualification.
-        type: boolean
-        default: false
+      publish_run_id:
+        description: Successful Publish workflow run whose verified release should be submitted to stores.
+        required: true
+        type: string
 
 permissions:
-  contents: read
   actions: read
+  contents: read
 
 jobs:
-  verification:
-    needs: prepare_version
-    if: ${{ github.run_attempt == 1 && !inputs.build_only }}
+  resolve_publish:
+    name: Verify selected Publish lineage and release assets
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
-      contents: read
       actions: read
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Require CI success for the exact Release commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/release/require_ci.py --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA"
-
-  # Marketing version (x.y.z) is manual via the repo VERSION file.
-  prepare_version:
-    runs-on: ubuntu-latest
-    permissions:
       contents: read
     outputs:
-      major: ${{ steps.version.outputs.major }}
-      minor: ${{ steps.version.outputs.minor }}
-      maintenance: ${{ steps.version.outputs.maintenance }}
-      version_name: ${{ steps.version.outputs.version_name }}
-      android_version_code: ${{ steps.version.outputs.android_version_code }}
+      source_sha: ${{ steps.selection.outputs.source_sha }}
+      tag: ${{ steps.selection.outputs.tag }}
+      version_name: ${{ steps.selection.outputs.version_name }}
+      android_version_code: ${{ steps.selection.outputs.android_version_code }}
+      apple_build_number: ${{ steps.selection.outputs.apple_build_number }}
+      build_run_id: ${{ steps.selection.outputs.build_run_id }}
+      build_run_number: ${{ steps.selection.outputs.build_run_number }}
+      test_run_id: ${{ steps.selection.outputs.test_run_id }}
+      test_run_number: ${{ steps.selection.outputs.test_run_number }}
+      publish_run_id: ${{ steps.selection.outputs.publish_run_id }}
+      publish_run_number: ${{ steps.selection.outputs.publish_run_number }}
+      build_manifest_sha256: ${{ steps.selection.outputs.build_manifest_sha256 }}
+      test_result_sha256: ${{ steps.selection.outputs.test_result_sha256 }}
+      release_notes_sha256: ${{ steps.selection.outputs.release_notes_sha256 }}
+      release_notes_b64: ${{ steps.selection.outputs.release_notes_b64 }}
     steps:
-      - name: Reject Release reruns
-        shell: bash
-        run: |
-          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo "Release reruns are unsupported; dispatch a fresh Release workflow." >&2
-            exit 1
-          fi
-
+      - name: Require the production branch
+        run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
           persist-credentials: false
-
-      - name: Read VERSION
-        id: version
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          python3 .github/scripts/release/version_metadata.py \
-            --version-file VERSION \
-            --github-output "$GITHUB_OUTPUT"
-          version_name="$(
-            python3 .github/scripts/release/version_metadata.py \
-              --version-file VERSION \
-              --field version_name
-          )"
-          android_version_code="$(
-            python3 .github/scripts/release/version_metadata.py \
-              --version-file VERSION \
-              --field android_version_code
-          )"
-          echo "Marketing version $version_name; Android versionCode $android_version_code"
-
-  ios_libraries_build:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/ios_runtime_framework.yml
-    with:
-      source_sha: ${{ github.sha }}
-
-  android_build:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/android_build.yml
-    with:
-      build_only: ${{ inputs.build_only }}
-      source_sha: ${{ github.sha }}
-      app_major_version: ${{ needs.prepare_version.outputs.major }}
-      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
-      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
-      android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
-
-  fdroid_preflight:
-    if: ${{ !inputs.build_only }}
-    needs: [verification, prepare_version, android_build]
-    uses: ./.github/workflows/fdroid_preflight.yml
-    with:
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-      version_code: ${{ needs.prepare_version.outputs.android_version_code }}
-
-  ios_build:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && needs.ios_libraries_build.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version, ios_libraries_build]
-    uses: ./.github/workflows/ios_build.yml
-    with:
-      build_only: ${{ inputs.build_only }}
-      source_sha: ${{ github.sha }}
-      app_major_version: ${{ needs.prepare_version.outputs.major }}
-      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
-      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
-      android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
-  build_linux:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_package.yml
-    with:
-      platform: linux
-      architecture: amd64
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-
-  build_windows:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_package.yml
-    with:
-      platform: windows
-      architecture: amd64
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-
-  build_macos_arm:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_package.yml
-    with:
-      platform: macos
-      architecture: arm64
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-
-  build_macos_intel:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/desktop_package.yml
-    with:
-      platform: macos
-      architecture: amd64
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-
-  debug_packages:
-    if: ${{ !cancelled() && needs.prepare_version.result == 'success' && (inputs.build_only || needs.verification.result == 'success') }}
-    needs: [verification, prepare_version]
-    uses: ./.github/workflows/debug_packages.yml
-    with:
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-      major: ${{ needs.prepare_version.outputs.major }}
-      minor: ${{ needs.prepare_version.outputs.minor }}
-      maintenance: ${{ needs.prepare_version.outputs.maintenance }}
-      build_number: ${{ needs.prepare_version.outputs.android_version_code }}
-
-  migrate_windows:
-    if: ${{ !inputs.build_only }}
-    needs: [prepare_version, build_windows]
-    uses: ./.github/workflows/installer_migration.yml
-    with:
-      platform: windows
-      architecture: amd64
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-
-  migrate_macos_arm:
-    if: ${{ !inputs.build_only }}
-    needs: [prepare_version, build_macos_arm]
-    uses: ./.github/workflows/installer_migration.yml
-    with:
-      platform: macos
-      architecture: arm64
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-
-  migrate_macos_intel:
-    if: ${{ !inputs.build_only }}
-    needs: [prepare_version, build_macos_intel]
-    uses: ./.github/workflows/installer_migration.yml
-    with:
-      platform: macos
-      architecture: amd64
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-
-  render_start:
-    if: ${{ !inputs.build_only }}
-    needs: verification
-    uses: ./.github/workflows/render_start.yml
-    permissions:
-      contents: read
-      actions: read
-    secrets: inherit
-
-  qualify_linux:
-    if: ${{ !inputs.build_only }}
-    needs: [build_linux, render_start]
-    uses: ./.github/workflows/qualification_platform.yml
-    permissions:
-      contents: read
-      actions: read
-    with:
-      platform: linux
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
-
-  qualify_windows:
-    if: ${{ !inputs.build_only }}
-    needs: [build_windows, render_start]
-    uses: ./.github/workflows/qualification_platform.yml
-    permissions:
-      contents: read
-      actions: read
-    with:
-      platform: windows
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
-
-  qualify_macos:
-    if: ${{ !inputs.build_only }}
-    needs: [build_macos_arm, build_macos_intel, render_start]
-    strategy:
-      matrix:
-        architecture: [arm64, amd64]
-    uses: ./.github/workflows/qualification_platform.yml
-    permissions:
-      contents: read
-      actions: read
-    with:
-      platform: macos
-      architecture: ${{ matrix.architecture }}
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
-
-  qualify_android:
-    if: ${{ !inputs.build_only }}
-    needs: [android_build, render_start]
-    uses: ./.github/workflows/qualification_platform.yml
-    permissions:
-      contents: read
-      actions: read
-    with:
-      platform: android
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
-
-  render_cleanup:
-    if: ${{ always() && !inputs.build_only }}
-    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android]
-    uses: ./.github/workflows/render_cleanup.yml
-    permissions:
-      contents: read
-    secrets: inherit
-
-  qualification_result:
-    name: Require hosted mini and Render cleanup
-    if: ${{ always() && !inputs.build_only }}
-    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_build, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight, debug_packages]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Check Render and platform jobs
+      - name: Resolve and verify selected Publish run
+        id: selection
         env:
-          RENDER_START_RESULT: ${{ needs.render_start.result }}
-          LINUX_RESULT: ${{ needs.qualify_linux.result }}
-          WINDOWS_RESULT: ${{ needs.qualify_windows.result }}
-          MACOS_RESULT: ${{ needs.qualify_macos.result }}
-          ANDROID_RESULT: ${{ needs.qualify_android.result }}
-          RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
-          IOS_BUILD_RESULT: ${{ needs.ios_build.result }}
-          DEBUG_RESULT: ${{ needs.debug_packages.result }}
-          FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
-          WINDOWS_MIGRATION_RESULT: ${{ needs.migrate_windows.result }}
-          MACOS_ARM_MIGRATION_RESULT: ${{ needs.migrate_macos_arm.result }}
-          MACOS_INTEL_MIGRATION_RESULT: ${{ needs.migrate_macos_intel.result }}
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_RUN_ID: ${{ inputs.publish_run_id }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo "Release attempt $GITHUB_RUN_ATTEMPT cannot qualify or publish; dispatch a fresh Release workflow." >&2
-            exit 1
-          fi
-          test "$RENDER_START_RESULT" = success
-          test "$LINUX_RESULT" = success
-          test "$WINDOWS_RESULT" = success
-          test "$MACOS_RESULT" = success
-          test "$ANDROID_RESULT" = success
-          test "$RENDER_CLEANUP_RESULT" = success
-          test "$IOS_BUILD_RESULT" = success
-          test "$FDROID_RESULT" = success
-          test "$DEBUG_RESULT" = success
-          test "$WINDOWS_MIGRATION_RESULT" = success
-          test "$MACOS_ARM_MIGRATION_RESULT" = success
-          test "$MACOS_INTEL_MIGRATION_RESULT" = success
-          echo "Release hosted mini qualification passed"
+          python3 .github/scripts/release/publish_selection.py \
+            --repository "$GITHUB_REPOSITORY" --run-id "$PUBLISH_RUN_ID" \
+            --download-dir "$RUNNER_TEMP/selected-publish" \
+            --output "$RUNNER_TEMP/publish.json"
+          python3 - "$RUNNER_TEMP/publish.json" "$GITHUB_OUTPUT" <<'PYTHON'
+          import base64, json, sys
+          selected = json.load(open(sys.argv[1], encoding="utf-8"))
+          values = {
+              "source_sha": selected["source_sha"],
+              "tag": selected["tag"],
+              "version_name": selected["version"],
+              "android_version_code": selected["android_version_code"],
+              "apple_build_number": selected["apple_build_number"],
+              "build_run_id": selected["build_run_id"],
+              "build_run_number": selected["build_run_number"],
+              "test_run_id": selected["test_run_id"],
+              "test_run_number": selected["test_run_number"],
+              "publish_run_id": selected["publish_run_id"],
+              "publish_run_number": selected["publish_run_number"],
+              "build_manifest_sha256": selected["build_manifest_sha256"],
+              "test_result_sha256": selected["test_result_sha256"],
+              "release_notes_sha256": selected["release_notes_sha256"],
+              "release_notes_b64": base64.b64encode(selected["release_notes"].encode("utf-8")).decode("ascii"),
+          }
+          with open(sys.argv[2], "a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          PYTHON
+
+  app_store:
+    name: Submit the selected TestFlight build to App Review
+    needs: resolve_publish
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: false
+      - name: Install Ruby dependencies
+        run: cd publishing && bundle install --jobs 4 --retry 3
+      - name: Set selected release metadata and exact notes
+        env:
+          VERSION_NAME: ${{ needs.resolve_publish.outputs.version_name }}
+          APPLE_BUILD_NUMBER: ${{ needs.resolve_publish.outputs.apple_build_number }}
+          SOURCE_SHA: ${{ needs.resolve_publish.outputs.source_sha }}
+          RELEASE_NOTES_B64: ${{ needs.resolve_publish.outputs.release_notes_b64 }}
+        run: |
+          set -euo pipefail
+          IFS='.' read -r version_major version_minor version_maintenance <<< "$VERSION_NAME"
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          printf '%s' "$RELEASE_NOTES_B64" | base64 --decode > "$notes_file"
+          {
+            echo "APP_STORE_VERSION=$VERSION_NAME"
+            echo "APP_STORE_BUILD_NUMBER=$APPLE_BUILD_NUMBER"
+            echo "APP_MAJOR_VERSION=$version_major"
+            echo "APP_MINOR_VERSION=$version_minor"
+            echo "APP_MAINTENANCE_VERSION=$version_maintenance"
+            echo "ANDROID_VERSION_CODE=${{ needs.resolve_publish.outputs.android_version_code }}"
+            echo "APP_SOURCE_SHA=$SOURCE_SHA"
+            echo "SOURCE_COMMIT=$SOURCE_SHA"
+            echo "VERSION_NAME=$VERSION_NAME"
+            echo "APP_BUILD=$APPLE_BUILD_NUMBER"
+            echo "APP_STORE_RELEASE_NOTES_FILE=$notes_file"
+          } >> "$GITHUB_ENV"
+      - name: Submit exact build to App Review
+        env:
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: cd publishing && bundle exec fastlane ios submit_app_store_review
+
+  fdroid:
+    name: Publish F-Droid catalog
+    needs: resolve_publish
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      pages: write
+      id-token: write
+    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@8c19e1ede8e9376c9200b3984a4430019f65143a
+    secrets:
+      FDROID_REPO_KEYSTORE: ${{ secrets.FDROID_REPO_KEYSTORE }}
+      FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
+      FDROID_KEY_PASSWORD: ${{ secrets.FDROID_KEY_PASSWORD }}
+    with:
+      source_sha: ${{ needs.resolve_publish.outputs.source_sha }}
+      tag: ${{ needs.resolve_publish.outputs.tag }}
+      build_run_id: ${{ needs.resolve_publish.outputs.build_run_id }}
+      build_run_number: ${{ needs.resolve_publish.outputs.build_run_number }}
+      test_run_id: ${{ needs.resolve_publish.outputs.test_run_id }}
+      test_run_number: ${{ needs.resolve_publish.outputs.test_run_number }}
+      publish_run_id: ${{ needs.resolve_publish.outputs.publish_run_id }}
+      publish_run_number: ${{ needs.resolve_publish.outputs.publish_run_number }}
+      android_version_code: ${{ needs.resolve_publish.outputs.android_version_code }}
+      apple_build_number: ${{ needs.resolve_publish.outputs.apple_build_number }}
+      build_manifest_sha256: ${{ needs.resolve_publish.outputs.build_manifest_sha256 }}
+      test_result_sha256: ${{ needs.resolve_publish.outputs.test_result_sha256 }}
+      release_notes_sha256: ${{ needs.resolve_publish.outputs.release_notes_sha256 }}

@@ -16,6 +16,19 @@ on:
         description: Artifact containing the shared Render VPN profile.
         required: true
         type: string
+      build_run_id:
+        description: Successful Build run containing the packages to install.
+        required: false
+        default: ''
+        type: string
+      source_sha:
+        description: Product revision selected by the Build run.
+        required: false
+        default: ''
+        type: string
+      retention_days:
+        default: 1
+        type: number
 
 jobs:
   qualification:
@@ -28,7 +41,8 @@ jobs:
     env:
       PLATFORM: ${{ inputs.platform }}
       ARCHITECTURE: ${{ inputs.architecture }}
-      DOBBYVPN_COMMIT_SHA: ${{ github.sha }}
+      DOBBYVPN_COMMIT_SHA: ${{ inputs.source_sha || github.sha }}
+      SELECTED_BUILD_RUN_ID: ${{ inputs.build_run_id || github.run_id }}
     steps:
       - name: Reject hosted mini reruns before package qualification
         shell: bash
@@ -41,7 +55,7 @@ jobs:
       - name: Check out selected source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Download qualification artifacts
@@ -65,7 +79,7 @@ jobs:
           esac
           for artifact in "${artifacts[@]}"; do
             python3 .github/scripts/release/download_artifact.py \
-              "$GITHUB_RUN_ID" "$artifact" release-packages
+              "$SELECTED_BUILD_RUN_ID" "$artifact" release-packages
           done
           python3 .github/scripts/release/download_artifact.py \
             "$GITHUB_RUN_ID" "$RENDER_ARTIFACT_NAME" render
@@ -845,7 +859,7 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}
           if-no-files-found: error
           include-hidden-files: true
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}
 
       - name: Remove disposable qualification scratch
         if: always()

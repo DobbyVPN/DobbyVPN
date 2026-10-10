@@ -2,7 +2,8 @@
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 
-# One Android builder: cached local iteration or reproducible release output.
+# One Android builder: cached local iteration, one immutable package build, or
+# the established two-build reproducibility check.
 
 source_root=''
 source_sha=''
@@ -13,8 +14,10 @@ first_output=''
 test_companion_output=''
 reproducibility=''
 dependency_manifest=''
+metadata_output=''
 source_repository='DobbyVPN/DobbyVPN'
 local_build=0
+single_build=0
 test_seams=0
 trusted_archive_source=0
 release_provenance_requested=0
@@ -36,10 +39,12 @@ while (($#)); do
     --test-companion-output) test_companion_output=${2:?missing --test-companion-output value}; shift 2 ;;
     --reproducibility) reproducibility=${2:?missing --reproducibility value}; release_provenance_requested=1; shift 2 ;;
     --dependency-manifest) dependency_manifest=${2:?missing --dependency-manifest value}; release_provenance_requested=1; shift 2 ;;
+    --metadata-output) metadata_output=${2:?missing --metadata-output value}; shift 2 ;;
     --gradle-archive) gradle_archive=$2; shift 2 ;;
     --gradle-root) gradle_root=$2; shift 2 ;;
     --go-binary) go_binary=$2; shift 2 ;;
     --local) local_build=1; shift ;;
+    --single-build) single_build=1; shift ;;
     --test-seams) test_seams=1; shift ;;
     --trusted-archive-source) trusted_archive_source=1; shift ;;
     --source-repository) source_repository=$2; release_provenance_requested=1; shift 2 ;;
@@ -77,13 +82,22 @@ fi
 
 [[ -n "$output" ]] || { echo '--output is required' >&2; exit 2; }
 if [[ "$local_build" == 0 ]]; then
-  [[ -n "$manifest" ]] || {
-  echo '--manifest is required for a release build' >&2
-  exit 2
-  }
-  first_output=${first_output:-"$source_root/.android-build/first.apk"}
-  reproducibility=${reproducibility:-"$source_root/runtime/android-reproducibility.json"}
-  dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
+  if [[ "$single_build" == 0 ]]; then
+    [[ -n "$manifest" ]] || {
+      echo '--manifest is required for a reproducible build' >&2
+      exit 2
+    }
+    first_output=${first_output:-"$source_root/.android-build/first.apk"}
+    reproducibility=${reproducibility:-"$source_root/runtime/android-reproducibility.json"}
+    dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
+  else
+    [[ -n "$metadata_output" ]] || metadata_output="$source_root/runtime/android-build-driver-manifest.json"
+    dependency_manifest=${dependency_manifest:-"$source_root/runtime/android-dependency-provenance.json"}
+    if [[ -n "$manifest" || -n "$first_output" || -n "$reproducibility" || "$trusted_archive_source" == 1 ]]; then
+      echo '--single-build cannot create verified-release provenance or use an archived source tree' >&2
+      exit 2
+    fi
+  fi
 fi
 dependency_spec="$source_root/.github/scripts/android/dependency-spec.json"
 dependency_helper="$source_root/.github/scripts/android/android_dependency_provenance.py"
@@ -273,8 +287,13 @@ build_tmp=${DOBBYVPN_ANDROID_GO_TMPDIR:-"$source_root/.android-build/go-tmp"}
 build_mod_cache="$go_path/pkg/mod"
 mkdir -p "$build_cache" "$build_tmp" "$build_mod_cache" "$(dirname -- "$output")"
 if [[ "$local_build" == 0 ]]; then
-  mkdir -p "$(dirname -- "$first_output")" "$(dirname -- "$manifest")" \
-    "$(dirname -- "$reproducibility")" "$(dirname -- "$dependency_manifest")"
+  mkdir -p "$(dirname -- "$dependency_manifest")"
+  if [[ "$single_build" == 0 ]]; then
+    mkdir -p "$(dirname -- "$first_output")" "$(dirname -- "$manifest")" \
+      "$(dirname -- "$reproducibility")"
+  else
+    mkdir -p "$(dirname -- "$metadata_output")"
+  fi
 fi
 export GOMODCACHE="$build_mod_cache"
 if [[ -n "$test_companion_output" ]]; then
@@ -371,6 +390,67 @@ if [[ "$local_build" == 1 ]]; then
     verify_source_integrity_after_build
   fi
   echo "android_build_driver mode=local artifact=$output"
+  exit 0
+fi
+
+if [[ "$single_build" == 1 ]]; then
+  run_unsigned_build "$build_cache/single" "$build_tmp/single" "$output"
+  if [[ -n "$test_companion_output" ]]; then
+    run_test_companion_build "$test_companion_output"
+  fi
+  verify_source_integrity_after_build
+  write_dependency_manifest
+  SOURCE_ROOT="$source_root" OUTPUT="$output" METADATA_OUTPUT="$metadata_output" \
+    TEST_COMPANION_OUTPUT="$test_companion_output" DEPENDENCY_MANIFEST="$dependency_manifest" \
+    SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" SOURCE_REPOSITORY="$source_repository" \
+    VERSION_NAME="$version_name" VERSION_CODE="$version_code" \
+    python3 - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+source_root = Path(os.environ["SOURCE_ROOT"])
+
+def descriptor(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        raise SystemExit(f"build output is missing: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "name": path.name,
+        "path": path.relative_to(source_root).as_posix(),
+        "sha256": digest.hexdigest(),
+        "bytes": path.stat().st_size,
+    }
+
+companion_value = os.environ.get("TEST_COMPANION_OUTPUT", "")
+document = {
+    "schema": 2,
+    "repository": os.environ["SOURCE_REPOSITORY"],
+    "source_sha": os.environ["SOURCE_COMMIT"],
+    "source_tree": os.environ["SOURCE_TREE"],
+    "version_name": os.environ["VERSION_NAME"],
+    "version_code": int(os.environ["VERSION_CODE"]),
+    "package": "com.dobby.vpn",
+    "signing_classification": "unsigned",
+    "signer_certificate_sha256": None,
+    "artifact": {"package": "com.dobby.vpn", **descriptor(Path(os.environ["OUTPUT"]))},
+    "test_companion": None if not companion_value else {
+        "signing_classification": "unsigned",
+        **descriptor(Path(companion_value)),
+    },
+    "dependency_provenance": {
+        "classification": "tracked_dependency_spec",
+        **descriptor(Path(os.environ["DEPENDENCY_MANIFEST"])),
+    },
+}
+manifest = Path(os.environ["METADATA_OUTPUT"])
+manifest.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+  echo "android_build_driver mode=single-build source_commit=$source_commit source_tree=$source_tree artifact=$output"
   exit 0
 fi
 

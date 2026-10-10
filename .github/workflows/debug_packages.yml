@@ -21,6 +21,13 @@ on:
       build_number:
         type: string
         required: true
+      apple_build_number:
+        type: string
+        required: false
+        default: ''
+      retention_days:
+        default: 1
+        type: number
 
 permissions:
   contents: read
@@ -47,12 +54,14 @@ jobs:
       architecture: ${{ matrix.architecture }}
       source_sha: ${{ inputs.source_sha }}
       version_name: ${{ inputs.version_name }}
+      retention_days: ${{ inputs.retention_days }}
 
   ios_runtime:
     uses: ./.github/workflows/ios_runtime_framework.yml
     with:
       debug: true
       source_sha: ${{ inputs.source_sha }}
+      retention_days: ${{ inputs.retention_days }}
 
   ios_archive:
     needs: ios_runtime
@@ -64,3 +73,5 @@ jobs:
       app_minor_version: ${{ inputs.minor }}
       app_maintenance_version: ${{ inputs.maintenance }}
       android_version_code: ${{ inputs.build_number }}
+      apple_build_number: ${{ inputs.apple_build_number }}
+      retention_days: ${{ inputs.retention_days }}

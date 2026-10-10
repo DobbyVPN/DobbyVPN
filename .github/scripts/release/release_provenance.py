@@ -20,6 +20,7 @@ from version_metadata import parse_version
 
 MANIFEST_NAME = "release-provenance.json"
 SCHEMA = 1
+PUBLISHED_SCHEMA = 2
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 SOURCE_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 TAG_RE = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\Z")
@@ -36,6 +37,12 @@ MANIFEST_KEYS = frozenset(
     }
 )
 ASSET_KEYS = frozenset({"name", "sha256", "size"})
+PUBLISHED_MANIFEST_KEYS = frozenset({
+    "android_version_code", "apple_build_number", "assets", "build_manifest_sha256",
+    "build_run_id", "build_run_number", "release_notes_sha256", "publish_run_id",
+    "publish_run_number", "schema", "source_sha", "tag", "test_result_sha256",
+    "test_run_id", "test_run_number", "version",
+})
 
 
 class ProvenanceError(ValueError):
@@ -238,6 +245,109 @@ def verify_manifest(
     return manifest
 
 
+def _validate_published_metadata(**values: Any) -> dict[str, Any]:
+    tag, version, source_sha = values["tag"], values["version"], values["source_sha"]
+    if not isinstance(tag, str) or not TAG_RE.fullmatch(tag):
+        raise ProvenanceError("tag must be canonical vMAJOR.MINOR.PATCH without leading zeroes")
+    if not isinstance(version, str) or version != tag[1:]:
+        raise ProvenanceError("version must exactly match the canonical tag without its v prefix")
+    if not isinstance(source_sha, str) or not SOURCE_SHA_RE.fullmatch(source_sha):
+        raise ProvenanceError("source_sha must be exactly 40 lowercase hexadecimal characters")
+    checked: dict[str, Any] = {"tag": tag, "version": version, "source_sha": source_sha}
+    for key in (
+        "build_run_id", "build_run_number", "test_run_id", "test_run_number", "publish_run_id",
+        "publish_run_number", "android_version_code", "apple_build_number",
+    ):
+        checked[key] = _positive_int(values[key], key)
+    for key in ("build_manifest_sha256", "test_result_sha256", "release_notes_sha256"):
+        value = values[key]
+        if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+            raise ProvenanceError(f"{key} must be exactly 64 lowercase hexadecimal characters")
+        checked[key] = value
+    return checked
+
+
+def _validate_published_payload(
+    payload: Any, metadata: dict[str, Any], asset_names: list[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict) or set(payload) != PUBLISHED_MANIFEST_KEYS:
+        raise ProvenanceError("published provenance has unexpected or missing fields")
+    if payload["schema"] != PUBLISHED_SCHEMA:
+        raise ProvenanceError(f"published provenance schema must be {PUBLISHED_SCHEMA}")
+    checked = _validate_published_metadata(**{
+        key: payload[key] for key in PUBLISHED_MANIFEST_KEYS if key != "assets" and key != "schema"
+    })
+    if checked != metadata:
+        raise ProvenanceError("published provenance does not match the selected Build, Test and Publish")
+    records = payload["assets"]
+    if not isinstance(records, list) or len(records) != len(asset_names):
+        raise ProvenanceError("published asset records do not match the asserted allowlist")
+    names: list[str] = []
+    for record in records:
+        if not isinstance(record, dict) or set(record) != ASSET_KEYS:
+            raise ProvenanceError("published asset record has unexpected fields")
+        name, size, sha256 = record["name"], record["size"], record["sha256"]
+        if not isinstance(name, str) or not isinstance(sha256, str) or not SHA256_RE.fullmatch(sha256):
+            raise ProvenanceError("published asset record has invalid name or sha256")
+        _nonnegative_int(size, "asset size")
+        names.append(name)
+    if len(set(names)) != len(names) or set(names) != set(asset_names):
+        raise ProvenanceError("published assets must exactly match the asserted allowlist")
+    return records
+
+
+def create_published_manifest(
+    directory: Path, *, tag: str, version: str, source_sha: str,
+    build_run_id: int, build_run_number: int, test_run_id: int, test_run_number: int,
+    publish_run_id: int, publish_run_number: int, android_version_code: int,
+    apple_build_number: int, build_manifest_sha256: str, test_result_sha256: str,
+    release_notes_sha256: str, assets: Iterable[str],
+) -> Path:
+    """Write public provenance linking one published package set to Build and Test."""
+    directory = Path(directory)
+    asset_names = _validate_asset_names(assets)
+    metadata = _validate_published_metadata(
+        tag=tag, version=version, source_sha=source_sha, build_run_id=build_run_id,
+        build_run_number=build_run_number, test_run_id=test_run_id, test_run_number=test_run_number,
+        publish_run_id=publish_run_id, publish_run_number=publish_run_number,
+        android_version_code=android_version_code, apple_build_number=apple_build_number,
+        build_manifest_sha256=build_manifest_sha256, test_result_sha256=test_result_sha256,
+        release_notes_sha256=release_notes_sha256,
+    )
+    _validate_version_document(directory, metadata, asset_names)
+    records = [_file_record(directory / name, name) for name in asset_names]
+    manifest = directory / MANIFEST_NAME
+    manifest.write_bytes(_json_bytes({"schema": PUBLISHED_SCHEMA, **metadata, "assets": records}))
+    return manifest
+
+
+def verify_published_manifest(
+    directory: Path, *, tag: str, version: str, source_sha: str,
+    build_run_id: int, build_run_number: int, test_run_id: int, test_run_number: int,
+    publish_run_id: int, publish_run_number: int, android_version_code: int,
+    apple_build_number: int, build_manifest_sha256: str, test_result_sha256: str,
+    release_notes_sha256: str, assets: Iterable[str],
+) -> Path:
+    """Verify the published assets and their Build/Test/Publish identities."""
+    directory = Path(directory)
+    asset_names = _validate_asset_names(assets)
+    metadata = _validate_published_metadata(
+        tag=tag, version=version, source_sha=source_sha, build_run_id=build_run_id,
+        build_run_number=build_run_number, test_run_id=test_run_id, test_run_number=test_run_number,
+        publish_run_id=publish_run_id, publish_run_number=publish_run_number,
+        android_version_code=android_version_code, apple_build_number=apple_build_number,
+        build_manifest_sha256=build_manifest_sha256, test_result_sha256=test_result_sha256,
+        release_notes_sha256=release_notes_sha256,
+    )
+    _validate_version_document(directory, metadata, asset_names)
+    manifest = directory / MANIFEST_NAME
+    records = _validate_published_payload(_load_manifest(manifest), metadata, asset_names)
+    for record in records:
+        if _file_record(directory / record["name"], record["name"]) != record:
+            raise ProvenanceError(f"asset digest or metadata does not match manifest: {record['name']}")
+    return manifest
+
+
 def _positive_argument(value: str) -> int:
     try:
         result = int(value)
@@ -259,29 +369,51 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--asset", action="append", required=True, help="exact public asset filename; repeat as needed")
 
 
+def _add_published_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--tag", required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--source-sha", required=True)
+    for name in ("build-run-id", "build-run-number", "test-run-id", "test-run-number", "publish-run-id", "publish-run-number",
+                 "android-version-code", "apple-build-number"):
+        parser.add_argument(f"--{name}", type=_positive_argument, required=True)
+    for name in ("build-manifest-sha256", "test-result-sha256", "release-notes-sha256"):
+        parser.add_argument(f"--{name}", required=True)
+    parser.add_argument("--asset", action="append", required=True, help="exact public asset filename; repeat as needed")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create", help="create release-provenance.json")
     verify = commands.add_parser("verify", help="verify release-provenance.json")
+    create_published = commands.add_parser("create-published", help="create Build/Test/Publish provenance")
+    verify_published = commands.add_parser("verify-published", help="verify Build/Test/Publish provenance")
     _add_common_arguments(create)
     _add_common_arguments(verify)
+    _add_published_arguments(create_published)
+    _add_published_arguments(verify_published)
     args = parser.parse_args(argv)
-    if args.command == "create":
-        operation = create_manifest
-    else:
-        operation = verify_manifest
     try:
-        manifest = operation(
-            args.directory,
-            tag=args.tag,
-            version=args.version,
-            source_sha=args.source_sha,
-            release_run_id=args.release_run_id,
-            release_run_number=args.release_run_number,
-            android_version_code=args.android_version_code,
-            assets=args.asset,
-        )
+        if args.command in {"create", "verify"}:
+            operation = create_manifest if args.command == "create" else verify_manifest
+            manifest = operation(
+                args.directory, tag=args.tag, version=args.version, source_sha=args.source_sha,
+                release_run_id=args.release_run_id, release_run_number=args.release_run_number,
+                android_version_code=args.android_version_code, assets=args.asset,
+            )
+        else:
+            operation = create_published_manifest if args.command == "create-published" else verify_published_manifest
+            manifest = operation(
+                args.directory, tag=args.tag, version=args.version, source_sha=args.source_sha,
+                build_run_id=args.build_run_id, build_run_number=args.build_run_number,
+                test_run_id=args.test_run_id, test_run_number=args.test_run_number,
+                publish_run_id=args.publish_run_id,
+                publish_run_number=args.publish_run_number, android_version_code=args.android_version_code,
+                apple_build_number=args.apple_build_number, build_manifest_sha256=args.build_manifest_sha256,
+                test_result_sha256=args.test_result_sha256, release_notes_sha256=args.release_notes_sha256,
+                assets=args.asset,
+            )
     except (OSError, ProvenanceError) as error:
         print(f"release provenance error: {error}", file=sys.stderr)
         return 1

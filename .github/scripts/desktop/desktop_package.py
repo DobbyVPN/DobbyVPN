@@ -496,7 +496,7 @@ def _build(args: argparse.Namespace) -> int:
 
 
 def _describe(args: argparse.Namespace) -> int:
-    """Record identity for a package downloaded from the current Release run."""
+    """Record identity for a package downloaded from the selected Build run."""
     platform, architecture = _select_host(args.platform, args.arch)
     version = _version(args.version)
     source_sha = _source_sha(args.source_sha)
@@ -522,7 +522,7 @@ def _describe(args: argparse.Namespace) -> int:
         observed_architecture = (architecture_result.stdout or b"").decode("utf-8", errors="replace").strip()
         if observed_version != version or observed_architecture != architecture:
             _fail(
-                "Linux package metadata differs from the Release checkout: "
+                "Linux package metadata differs from the selected Build checkout: "
                 f"version={observed_version!r}, architecture={observed_architecture!r}"
             )
         with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-check-") as temporary:
@@ -575,7 +575,7 @@ def _verify_macos_package_source(package: Path, source_sha: str, architecture: s
     with info_plists[0].open("rb") as stream:
         info = plistlib.load(stream)
     if info.get("DobbySourceCommit") != source_sha:
-        _fail("macOS package source commit does not match the Release checkout")
+        _fail("macOS package source commit does not match the selected Build checkout")
     backend = next(expanded.rglob("dobbyvpn-backend"), None)
     if backend is None:
         _fail("macOS package does not contain its VPN backend")
@@ -986,7 +986,7 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--output-dir", type=Path, required=True)
     build.add_argument("--debug", action="store_true")
     build.add_argument("--skip-deps", action="store_true")
-    describe = commands.add_parser("describe", help="validate and record a downloaded Release package")
+    describe = commands.add_parser("describe", help="validate and record a downloaded Build package")
     describe.add_argument("--platform", choices=PLATFORMS, required=True)
     describe.add_argument("--arch", choices=("amd64", "arm64"))
     describe.add_argument("--version", required=True)

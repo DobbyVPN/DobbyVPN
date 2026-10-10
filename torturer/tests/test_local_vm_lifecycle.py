@@ -129,7 +129,7 @@ class LocalVMLifecycleTests(unittest.TestCase):
     def test_recovery_seams_cannot_replace_qualification_packages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for mode in ("installed-package", "release-package"):
+            for mode in ("installed-package", "build-package"):
                 with self.subTest(mode=mode), mock.patch.object(local_vm, "_run_logged") as build:
                     with self.assertRaisesRegex(local_vm.LocalVMError, "cannot replace"):
                         local_vm._prepare_recovery_stop_service(
@@ -157,21 +157,21 @@ class LocalVMLifecycleTests(unittest.TestCase):
                             local_vm.run(local_vm.build_parser().parse_args(command))
                         launch.assert_not_called()
 
-    def test_exact_release_preparation_validates_staged_source_before_install(self) -> None:
+    def test_exact_build_preparation_validates_staged_source_before_install(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
             source = run_dir / "source"
             source.mkdir()
-            manifest = run_dir / "release.json"
+            manifest = run_dir / "build.json"
             logs = run_dir / "logs"
             with (
-                mock.patch.object(local_vm, "_validate_release_inputs", return_value=({}, {})) as validate,
-                mock.patch.object(local_vm, "_install_macos_release", return_value=({"service": "candidate"}, {})) as install,
+                mock.patch.object(local_vm, "_validate_build_inputs", return_value=({}, {})) as validate,
+                mock.patch.object(local_vm, "_install_macos_build", return_value=({"service": "candidate"}, {})) as install,
             ):
-                result = local_vm._prepare_release_candidate(run_dir, "macos", manifest, logs, 30)
+                result = local_vm._prepare_build_candidate(run_dir, "macos", manifest, logs, 30)
             validate.assert_called_once_with(run_dir, source, manifest, logs=logs)
             install.assert_called_once()
-            self.assertEqual(result, {"service": "candidate", "mode": "release-package"})
+            self.assertEqual(result, {"service": "candidate", "mode": "build-package"})
 
     def test_installed_backend_collection_retains_generations_and_reports_failures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -10,7 +10,7 @@ from unittest import mock
 from torturer_runner import local_vm, local_vm_windows
 
 
-class WindowsReleaseInstallTests(unittest.TestCase):
+class WindowsBuildInstallTests(unittest.TestCase):
     def test_control_sid_resolves_configured_account_without_interpolating_it(self) -> None:
         command = ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "script"]
         with tempfile.TemporaryDirectory() as directory, \
@@ -61,11 +61,11 @@ class WindowsReleaseInstallTests(unittest.TestCase):
                 "_windows_control_pipe_sid",
                 return_value="S-1-5-21-123-456-789-1001",
             ), mock.patch.object(local_vm, "_run_logged", side_effect=run_logged):
-                local_vm._install_windows_release(
+                local_vm._install_windows_build(
                     root,
                     {
                         "repository": "DobbyVPN/DobbyVPN",
-                        "workflow": ".github/workflows/release.yml",
+                        "workflow": ".github/workflows/build.yml",
                         "run_id": "123456",
                         "source_sha": "a" * 40,
                         "platform": "windows",

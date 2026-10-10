@@ -56,7 +56,7 @@ def _bundle_info(
     if app_info.get("CFBundleShortVersionString") != version:
         raise ArchiveError("iOS app marketing version does not match Release metadata")
     if str(app_info.get("CFBundleVersion", "")) != build_number:
-        raise ArchiveError("iOS app build number does not match Release metadata")
+        raise ArchiveError("iOS app build number does not match the selected Build metadata")
     if app_info.get("DobbySourceCommit") != source_sha:
         raise ArchiveError("iOS app source commit does not match selected source")
     executable_name = app_info.get("CFBundleExecutable")
@@ -348,7 +348,7 @@ def verify_ipa(
             if app_info.get("CFBundleShortVersionString") != version:
                 raise ArchiveError("signed iOS app marketing version does not match Release metadata")
             if str(app_info.get("CFBundleVersion", "")) != build_number:
-                raise ArchiveError("signed iOS app build number does not match Release metadata")
+                raise ArchiveError("signed iOS app build number does not match the selected Build metadata")
             if app_info.get("DobbySourceCommit") != source_sha:
                 raise ArchiveError("signed iOS app source commit does not match selected source")
             tunnel_info_names = [
@@ -505,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"Verified and packed unsigned iOS archive: {args.output}")
             else:
-                print("Unsigned iOS archive content matches Release metadata")
+                print("Unsigned iOS archive content matches selected Build metadata")
         return 0
     except (
         OSError,

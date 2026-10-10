@@ -10,6 +10,9 @@ on:
         description: Lowercase full source commit SHA to build.
         type: string
         required: true
+      retention_days:
+        default: 1
+        type: number
 
 env:
   GOTOOLCHAIN: local
@@ -94,4 +97,4 @@ jobs:
           name: DobbyVPNRuntime${{ inputs.debug && '-debug' || '' }}.xcframework
           path: core/DobbyVPNRuntime.xcframework
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}

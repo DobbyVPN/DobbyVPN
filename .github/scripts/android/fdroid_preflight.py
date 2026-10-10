@@ -155,7 +155,7 @@ def preflight(args: argparse.Namespace, work: Path) -> None:
     # This existing comparison ignores only signing records; it also compares
     # the complete payload of two unsigned APKs before publication.
     verify_signed_payload(args.reference_apk, apk)
-    print("F-Droid updater, recipe, build, scanner, APK identity and Release payload comparison passed", flush=True)
+    print("F-Droid updater, recipe, build, scanner, APK identity and production payload comparison passed", flush=True)
 
 
 def main() -> int:
@@ -190,7 +190,7 @@ def main() -> int:
                 if primary_error is None:
                     raise
     if args.work_root is not None:
-        # The container owns disposal. Matching Release's build paths keeps
+        # The container owns disposal. Matching the production APK's build paths keeps
         # the F-Droid source-built Go toolchain and native payload reproducible.
         work = args.work_root.resolve()
         work.mkdir(parents=True, exist_ok=True)

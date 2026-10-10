@@ -2,6 +2,10 @@ name: Start disposable functional VPN
 
 on:
   workflow_call:
+    inputs:
+      retention_days:
+        default: 1
+        type: number
 
 jobs:
   start:
@@ -61,4 +65,4 @@ jobs:
             ${{ runner.temp }}/render/profile.toml
             ${{ runner.temp }}/render/deadline_epoch.txt
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}

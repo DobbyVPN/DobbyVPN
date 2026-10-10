@@ -121,7 +121,12 @@ platform :ios do
   lane :submit_app_store_review do
     version = ENV.fetch("APP_STORE_VERSION")
     selected_build = ENV.fetch("APP_STORE_BUILD_NUMBER")
-    release_notes = ENV["APP_STORE_RELEASE_NOTES"].to_s.strip
+    notes_file = ENV["APP_STORE_RELEASE_NOTES_FILE"]
+    release_notes = if notes_file && !notes_file.empty?
+      File.read(notes_file, encoding: "UTF-8")
+    else
+      ENV["APP_STORE_RELEASE_NOTES"].to_s
+    end
 
     unless version.match?(/\A\d+\.\d+\.\d+\z/)
       UI.user_error!("APP_STORE_VERSION must use X.Y.Z format")

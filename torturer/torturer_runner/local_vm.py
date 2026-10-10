@@ -56,8 +56,8 @@ _PID = re.compile(r"^[1-9][0-9]*$")
 _IDENTITY = re.compile(r"^[A-Za-z0-9._-]+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
-_RELEASE_REPOSITORY = "DobbyVPN/DobbyVPN"
-_RELEASE_WORKFLOW = ".github/workflows/release.yml"
+_PRODUCT_REPOSITORY = "DobbyVPN/DobbyVPN"
+_BUILD_WORKFLOW = ".github/workflows/build.yml"
 
 # A desktop full lane is supervised by the VM worker's task deadline.  Give
 # the hosted journey an inner deadline so it can emit its failure JSON and
@@ -227,8 +227,8 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--source-tree")
             command.add_argument("--network-interface")
             command.add_argument(
-                "--release-manifest", type=_absolute_path,
-                help="owner-verified exact Release package manifest",
+                "--build-manifest", type=_absolute_path,
+                help="owner-verified exact Build package manifest",
             )
     return parser
 
@@ -347,7 +347,7 @@ def _record_failure(run_dir: Path, state: dict[str, Any], error: Exception) -> N
     except LocalVMError:
         persisted = None
     if persisted is not None:
-        for key in ("candidate", "runtime", "release"):
+        for key in ("candidate", "runtime", "build"):
             if key in persisted:
                 state[key] = persisted[key]
     state["status"] = "failed"
@@ -727,11 +727,11 @@ def _file_sha256(path: Path) -> str:
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
     except OSError as error:
-        raise LocalVMError(f"cannot read Release artifact: {path}") from error
+        raise LocalVMError(f"cannot read Build artifact: {path}") from error
     return digest.hexdigest()
 
 
-def _release_document(path: Path, *, label: str) -> dict[str, Any]:
+def _build_document(path: Path, *, label: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
@@ -741,34 +741,38 @@ def _release_document(path: Path, *, label: str) -> dict[str, Any]:
     return value
 
 
-def _release_artifact_map(run_dir: Path, manifest: dict[str, Any], platform: str) -> dict[tuple[str, str], Path]:
+def _build_artifact_map(run_dir: Path, manifest: dict[str, Any], platform: str) -> dict[tuple[str, str], Path]:
     """Validate the owner manifest and every staged artifact before install."""
-    if manifest.get("schema") != 1 or manifest.get("mode") != "release-package":
-        raise LocalVMError("Release manifest schema or mode is invalid")
-    if manifest.get("repository") != _RELEASE_REPOSITORY:
-        raise LocalVMError("Release manifest repository is invalid")
-    if manifest.get("workflow") != "Release" or manifest.get("workflow_path") != _RELEASE_WORKFLOW:
-        raise LocalVMError("Release manifest workflow is invalid")
-    if manifest.get("run_attempt") != 1 or manifest.get("branch") != "main":
-        raise LocalVMError("Release manifest is not a first-attempt main-branch run")
+    if type(manifest.get("schema")) is not int or manifest.get("schema") != 1 or manifest.get("mode") != "build-package":
+        raise LocalVMError("Build manifest schema or mode is invalid")
+    if manifest.get("repository") != _PRODUCT_REPOSITORY:
+        raise LocalVMError("Build manifest repository is invalid")
+    if manifest.get("workflow") != "Build" or manifest.get("workflow_path") != _BUILD_WORKFLOW:
+        raise LocalVMError("Build manifest workflow is invalid")
+    if type(manifest.get("run_attempt")) is not int or manifest.get("run_attempt") != 1 or manifest.get("branch") != "main":
+        raise LocalVMError("Build manifest is not a first-attempt main-branch run")
     run_id = manifest.get("run_id")
     source_sha = manifest.get("source_sha")
     if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
-        raise LocalVMError("Release manifest run ID is invalid")
+        raise LocalVMError("Build manifest run ID is invalid")
     if not isinstance(source_sha, str) or _SOURCE_SHA.fullmatch(source_sha) is None:
-        raise LocalVMError("Release manifest source SHA is invalid")
+        raise LocalVMError("Build manifest source SHA is invalid")
+    if type(manifest.get("run_number")) is not int or manifest["run_number"] <= 0:
+        raise LocalVMError("Build manifest run number is invalid")
+    if not isinstance(manifest.get("manifest_sha256"), str) or _SHA256.fullmatch(manifest["manifest_sha256"]) is None:
+        raise LocalVMError("Build manifest inventory hash is invalid")
     if manifest.get("platform") != platform:
-        raise LocalVMError("Release manifest platform does not match this guest")
+        raise LocalVMError("Build manifest platform does not match this guest")
     raw_artifacts = manifest.get("artifacts")
     if not isinstance(raw_artifacts, list) or not raw_artifacts:
-        raise LocalVMError("Release manifest artifact list is invalid")
+        raise LocalVMError("Build manifest artifact list is invalid")
     expected: dict[tuple[str, str], tuple[str, str, str]]
     if platform == "windows":
         expected = {
             ("package", "amd64"): (
                 "dobbyVPN-windows-amd64.msi",
                 "dobbyVPN-windows-amd64.msi",
-                "release/windows/dobbyVPN-windows-amd64.msi",
+                "build/windows/dobbyVPN-windows-amd64.msi",
             ),
         }
     elif platform == "macos":
@@ -776,52 +780,52 @@ def _release_artifact_map(run_dir: Path, manifest: dict[str, Any], platform: str
             ("package", "arm64"): (
                 "dobbyVPN-macos-aarch64.pkg",
                 "dobbyVPN-macos-aarch64.pkg",
-                "release/arm64/dobbyVPN-macos-aarch64.pkg",
+                "build/arm64/dobbyVPN-macos-aarch64.pkg",
             ),
             ("package", "amd64"): (
                 "dobbyVPN-macos-amd64.pkg",
                 "dobbyVPN-macos-amd64.pkg",
-                "release/amd64/dobbyVPN-macos-amd64.pkg",
+                "build/amd64/dobbyVPN-macos-amd64.pkg",
             ),
         }
     else:
-        raise LocalVMError("exact Release packages are supported only on Windows/macOS")
+        raise LocalVMError("exact Build packages are supported only on Windows/macOS")
     observed: dict[tuple[str, str], Path] = {}
     for item in raw_artifacts:
         if not isinstance(item, dict):
-            raise LocalVMError("Release manifest artifact entry is invalid")
+            raise LocalVMError("Build manifest artifact entry is invalid")
         role = item.get("role")
         architecture = item.get("architecture")
         key = (role, architecture)
         if key not in expected or key in observed:
-            raise LocalVMError("Release manifest artifact set is missing, extra, or ambiguous")
+            raise LocalVMError("Build manifest artifact set is missing, extra, or ambiguous")
         artifact_name, file_name, expected_relative = expected[key]
         if (
             item.get("artifact_name") != artifact_name
             or item.get("file_name") != file_name
         ):
-            raise LocalVMError("Release manifest artifact identity is invalid")
+            raise LocalVMError("Build manifest artifact identity is invalid")
         relative = item.get("relative_path")
         digest = item.get("sha256")
         if relative != expected_relative:
-            raise LocalVMError("Release artifact staging path is invalid")
+            raise LocalVMError("Build artifact staging path is invalid")
         if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
-            raise LocalVMError("Release artifact hash is invalid")
+            raise LocalVMError("Build artifact hash is invalid")
         staged = run_dir / relative
         if staged.is_symlink():
-            raise LocalVMError(f"staged Release artifact is a symlink: {relative}")
+            raise LocalVMError(f"staged Build artifact is a symlink: {relative}")
         path = _inside(staged, run_dir)
         if path.name != file_name or not path.is_file():
-            raise LocalVMError(f"staged Release artifact is invalid: {relative}")
+            raise LocalVMError(f"staged Build artifact is invalid: {relative}")
         if _file_sha256(path) != digest:
-            raise LocalVMError(f"Release artifact hash mismatch: {file_name}")
+            raise LocalVMError(f"Build artifact hash mismatch: {file_name}")
         observed[key] = path
     if set(observed) != set(expected):
-        raise LocalVMError("Release manifest artifact set is incomplete")
+        raise LocalVMError("Build manifest artifact set is incomplete")
     return observed
 
 
-def _validate_release_inputs(
+def _validate_build_inputs(
     run_dir: Path,
     source: Path,
     manifest_path: Path,
@@ -829,18 +833,21 @@ def _validate_release_inputs(
     logs: Path,
 ) -> tuple[dict[str, Any], dict[tuple[str, str], Path]]:
     if manifest_path.is_symlink():
-        raise LocalVMError("Release manifest must be a regular file")
+        raise LocalVMError("Build manifest must be a regular file")
     manifest_path = _inside(manifest_path, run_dir)
-    manifest = _release_document(manifest_path, label="Release manifest")
-    identity = _release_document(_required_input(run_dir, "source-identity.json"), label="source identity")
-    if identity.get("schema") != 1 or identity.get("repository") != _RELEASE_REPOSITORY:
+    manifest = _build_document(manifest_path, label="Build manifest")
+    identity = _build_document(_required_input(run_dir, "source-identity.json"), label="source identity")
+    if identity.get("schema") != 1 or identity.get("repository") != _PRODUCT_REPOSITORY:
         raise LocalVMError("source identity is invalid")
     if identity.get("source_sha") != manifest.get("source_sha"):
-        raise LocalVMError("source identity and Release manifest source SHA differ")
-    if identity.get("release_run_id") != manifest.get("run_id"):
-        raise LocalVMError("source identity and Release manifest run ID differ")
+        raise LocalVMError("source identity and Build manifest source SHA differ")
+    if (
+        type(identity.get("build_run_id")) is not int
+        or identity.get("build_run_id") != manifest.get("run_id")
+    ):
+        raise LocalVMError("source identity and Build manifest run ID differ")
     if identity.get("platform") != manifest.get("platform"):
-        raise LocalVMError("source identity and Release manifest platform differ")
+        raise LocalVMError("source identity and Build manifest platform differ")
     git_dir = source / ".git"
     if git_dir.exists():
         try:
@@ -848,7 +855,7 @@ def _validate_release_inputs(
                 ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
                 cwd=source,
                 logs=logs,
-                label="release-source-revision",
+                label="build-source-revision",
                 timeout=30,
             )
         except LocalVMError as error:
@@ -865,21 +872,21 @@ def _validate_release_inputs(
             failure = LocalVMError("could not verify staged source revision")
             _add_command_stream_notes(
                 failure,
-                "release-source-revision",
+                "build-source-revision",
                 result.stdout,
                 result.stderr,
             )
             raise failure
         if observed != manifest["source_sha"]:
-            failure = LocalVMError("staged source revision does not match Release manifest")
+            failure = LocalVMError("staged source revision does not match Build manifest")
             _add_command_stream_notes(
                 failure,
-                "release-source-revision",
+                "build-source-revision",
                 result.stdout,
                 result.stderr,
             )
             raise failure
-    return manifest, _release_artifact_map(run_dir, manifest, str(manifest.get("platform")))
+    return manifest, _build_artifact_map(run_dir, manifest, str(manifest.get("platform")))
 
 
 def _prepare_candidate(
@@ -923,7 +930,7 @@ def _prepare_recovery_stop_service(
 ) -> None:
     """Replace only a disposable standalone backend with the explicitly tagged build."""
     if _candidate_mode(candidate) != "local-build":
-        raise LocalVMError("recovery Stop test seams cannot replace installed or Release packages")
+        raise LocalVMError("recovery Stop test seams cannot replace installed or Build packages")
     service = _candidate_path(candidate, "service")
     if service is None:
         raise LocalVMError("recovery Stop requires the standalone candidate backend")
@@ -950,7 +957,7 @@ def _prepare_recovery_stop_service(
 def _candidate_mode(descriptor: dict[str, Any]) -> str:
     mode = descriptor.get("mode")
     if not isinstance(mode, str) or mode not in {
-        "local-build", "installed-package", "release-package", "ios-simulator",
+        "local-build", "installed-package", "build-package", "ios-simulator",
     }:
         raise LocalVMError("prepared candidate mode is invalid")
     return mode
@@ -981,7 +988,7 @@ def _prepare_desktop_package(
     run_dir: Path, platform: str, source_sha: str, logs: Path,
     timeout: float, *, architecture: str | None, skip_deps: bool,
 ) -> dict[str, Any]:
-    """Build and install the same native package used by hosted Release."""
+    """Build and install the same native package used by hosted Build."""
     source = run_dir / "source"
     script = source / ".github" / "scripts" / "desktop" / "desktop_package.py"
     output = run_dir / "output" / "desktop-package"
@@ -1072,7 +1079,7 @@ def _prepare_desktop_package(
     if control_pipe_sid is not None:
         install.extend(("--control-pipe-sid", control_pipe_sid))
     _run_logged(install, cwd=source, logs=logs, label="desktop-package-install", timeout=timeout)
-    descriptor = _release_document(run_dir / "installed.json", label="installed package")
+    descriptor = _build_document(run_dir / "installed.json", label="installed package")
     return descriptor
 
 
@@ -1334,14 +1341,14 @@ def _start_macos(
     }
 
 
-def _start_macos_release(
+def _start_macos_build(
     run_dir: Path, descriptor: dict[str, Any], logs: Path, timeout: float,
     network_interface: str,
 ) -> dict[str, Any]:
-    """Observe the launchd service installed by the exact Release package."""
+    """Observe the launchd service installed by the exact Build package."""
     service = _candidate_path(descriptor, "service")
     if service is None or not service.is_file():
-        raise LocalVMError("installed macOS Release service is missing")
+        raise LocalVMError("installed macOS Build service is missing")
     result = _run_logged(
         ["launchctl", "print", "system/com.dobby.vpnservice"],
         cwd=run_dir, logs=logs, label="service-probe", timeout=timeout,
@@ -1366,10 +1373,10 @@ def _start_macos_release(
     }
 
 
-def _release_state(run_dir: Path, manifest: dict[str, Any], package: Path, architecture: str) -> dict[str, Any]:
+def _build_state(run_dir: Path, manifest: dict[str, Any], package: Path, architecture: str) -> dict[str, Any]:
     state = _read_state(run_dir) or {"platform": manifest.get("platform"), "suite": "full"}
-    release = {
-        "mode": "release-package",
+    build = {
+        "mode": "build-package",
         "repository": manifest["repository"],
         "workflow": manifest["workflow"],
         "run_id": manifest["run_id"],
@@ -1381,10 +1388,10 @@ def _release_state(run_dir: Path, manifest: dict[str, Any], package: Path, archi
         "install_attempted": False,
         "installed": False,
     }
-    state["release"] = release
+    state["build"] = build
     state["status"] = "install-pending"
     _write_json(run_dir / "platform.json", state)
-    return release
+    return build
 
 
 def _windows_control_pipe_sid(run_dir: Path, logs: Path, timeout: float) -> str:
@@ -1409,7 +1416,7 @@ try {
         ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
         cwd=run_dir,
         logs=logs,
-        label="release-control-user-sid",
+        label="build-control-user-sid",
         timeout=timeout,
         environment=environment,
         check=False,
@@ -1424,15 +1431,15 @@ try {
     return sid
 
 
-def _install_windows_release(
+def _install_windows_build(
     run_dir: Path, manifest: dict[str, Any], artifacts: dict[tuple[str, str], Path],
     logs: Path, timeout: float,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     package = artifacts[("package", "amd64")]
-    release = _release_state(run_dir, manifest, package, "amd64")
+    build = _build_state(run_dir, manifest, package, "amd64")
     state = _read_state(run_dir) or {}
-    release["install_attempted"] = True
-    state["release"] = release
+    build["install_attempted"] = True
+    state["build"] = build
     state["status"] = "installing"
     _write_json(run_dir / "platform.json", state)
     package_log = run_dir / "logs" / "windows-install.log"
@@ -1444,16 +1451,16 @@ def _install_windows_release(
                 f"DOBBYVPN_CONTROL_PIPE_SID={control_pipe_sid}",
                 "/L*v", str(package_log),
             ],
-            cwd=run_dir, logs=logs, label="release-install", timeout=timeout,
+            cwd=run_dir, logs=logs, label="build-install", timeout=timeout,
             check=False,
         )
-        release["install_returncode"] = result.returncode
+        build["install_returncode"] = result.returncode
         if result.returncode != 0:
-            state["release"] = release
+            state["build"] = build
             _write_json(run_dir / "platform.json", state)
             raise LocalVMError(f"exact Windows MSI install exited {result.returncode}")
-        release["installed"] = True
-        state["release"] = release
+        build["installed"] = True
+        state["build"] = build
         _write_json(run_dir / "platform.json", state)
         query = r'''$ErrorActionPreference = "Stop"
 $root = Join-Path $env:ProgramFiles "DobbyVPN"
@@ -1461,36 +1468,36 @@ $cli = @(Get-ChildItem $root -Filter "dobby-cli.exe" -Recurse -File)
 $service = @(Get-ChildItem $root -Filter "dobbyvpn-backend.exe" -Recurse -File)
 $ui = Join-Path $root "bin\DobbyVPN.exe"
 if ($cli.Count -ne 1 -or $service.Count -ne 1 -or -not (Test-Path -LiteralPath $ui -PathType Leaf)) {
-  throw "installed Release closure is ambiguous"
+  throw "installed Build closure is ambiguous"
 }
 Write-Output ("$($cli[0].FullName)|$($service[0].FullName)|$ui")
 '''
         paths = _run_logged(
             ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", query],
-            cwd=run_dir, logs=logs, label="release-installed-paths", timeout=timeout,
+            cwd=run_dir, logs=logs, label="build-installed-paths", timeout=timeout,
         ).stdout.decode("utf-8", errors="strict").strip().split("|")
         if len(paths) != 3 or any(not value for value in paths):
-            raise LocalVMError("installed Windows Release paths are invalid")
+            raise LocalVMError("installed Windows Build paths are invalid")
         descriptor = {
             "service": paths[1], "cli": paths[0], "ui": paths[2],
             "network": str(run_dir / ".dobbyvpn-run" / "s"),
         }
-        release["installed_paths"] = {
+        build["installed_paths"] = {
             "service": paths[1], "cli": paths[0], "ui": paths[2],
         }
-        state["release"] = release
+        state["build"] = build
         state["candidate"] = descriptor
         state["status"] = "candidate-prepared"
         _write_json(run_dir / "platform.json", state)
-        return descriptor, release
+        return descriptor, build
     except Exception as error:
-        release["install_error"] = f"{type(error).__name__}: {error}"
-        state["release"] = release
+        build["install_error"] = f"{type(error).__name__}: {error}"
+        state["build"] = build
         _write_json(run_dir / "platform.json", state)
         raise
 
 
-def _install_macos_release(
+def _install_macos_build(
     run_dir: Path, manifest: dict[str, Any], artifacts: dict[tuple[str, str], Path],
     logs: Path, timeout: float,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1499,10 +1506,10 @@ def _install_macos_release(
     if not architecture:
         raise LocalVMError(f"unsupported macOS guest architecture: {machine}")
     package = artifacts[("package", architecture)]
-    release = _release_state(run_dir, manifest, package, architecture)
+    build = _build_state(run_dir, manifest, package, architecture)
     state = _read_state(run_dir) or {}
-    release["install_attempted"] = True
-    state["release"] = release
+    build["install_attempted"] = True
+    state["build"] = build
     state["status"] = "installing"
     _write_json(run_dir / "platform.json", state)
     try:
@@ -1513,16 +1520,16 @@ def _install_macos_release(
                 f"DOBBY_LOG_PATH={run_dir / 'logs' / 'service.log'}",
                 "installer", "-pkg", str(package), "-target", "/",
             ],
-            cwd=run_dir, logs=logs, label="release-install", timeout=timeout,
+            cwd=run_dir, logs=logs, label="build-install", timeout=timeout,
             check=False,
         )
-        release["install_returncode"] = result.returncode
+        build["install_returncode"] = result.returncode
         if result.returncode != 0:
-            state["release"] = release
+            state["build"] = build
             _write_json(run_dir / "platform.json", state)
             raise LocalVMError(f"exact macOS package install exited {result.returncode}")
-        release["installed"] = True
-        state["release"] = release
+        build["installed"] = True
+        state["build"] = build
         _write_json(run_dir / "platform.json", state)
         paths = {
             "service": Path("/Applications/Dobby VPN.app/Contents/Resources/dobbyvpn-backend"),
@@ -1530,42 +1537,42 @@ def _install_macos_release(
             "ui": Path("/Applications/Dobby VPN.app"),
         }
         if any(not paths[name].is_file() for name in ("service", "cli")) or not paths["ui"].is_dir():
-            raise LocalVMError("installed macOS Release closure is incomplete")
+            raise LocalVMError("installed macOS Build closure is incomplete")
         descriptor = {
             "service": str(paths["service"]), "cli": str(paths["cli"]),
             "ui": str(paths["ui"]),
             "network": str(run_dir / ".dobbyvpn-run" / "s"),
         }
-        release["installed_paths"] = {key: str(value) for key, value in paths.items()}
-        state["release"] = release
+        build["installed_paths"] = {key: str(value) for key, value in paths.items()}
+        state["build"] = build
         state["candidate"] = descriptor
         state["status"] = "candidate-prepared"
         _write_json(run_dir / "platform.json", state)
-        return descriptor, release
+        return descriptor, build
     except Exception as error:
-        release["install_error"] = f"{type(error).__name__}: {error}"
-        state["release"] = release
+        build["install_error"] = f"{type(error).__name__}: {error}"
+        state["build"] = build
         _write_json(run_dir / "platform.json", state)
         raise
 
 
-def _prepare_release_candidate(
+def _prepare_build_candidate(
     run_dir: Path, platform: str, manifest_path: Path, logs: Path, timeout: float,
 ) -> dict[str, Any]:
     source = _required_input(run_dir, "source", directory=True)
-    manifest, artifacts = _validate_release_inputs(
+    manifest, artifacts = _validate_build_inputs(
         run_dir,
         source,
         manifest_path,
         logs=logs,
     )
     if platform == "windows":
-        descriptor, _ = _install_windows_release(run_dir, manifest, artifacts, logs, timeout)
+        descriptor, _ = _install_windows_build(run_dir, manifest, artifacts, logs, timeout)
     elif platform == "macos":
-        descriptor, _ = _install_macos_release(run_dir, manifest, artifacts, logs, timeout)
+        descriptor, _ = _install_macos_build(run_dir, manifest, artifacts, logs, timeout)
     else:
-        raise LocalVMError("exact Release packages are supported only on Windows/macOS")
-    descriptor["mode"] = "release-package"
+        raise LocalVMError("exact Build packages are supported only on Windows/macOS")
+    descriptor["mode"] = "build-package"
     return descriptor
 
 
@@ -1863,12 +1870,12 @@ def prepare(args: argparse.Namespace) -> int:
     # validates the platform and suite selected for the eventual run.
     _validate_suite(args.platform, args.suite, None, getattr(args, "native_cases", None))
     recovery_stop = getattr(args, "native_cases", None) == [AUTO_RECOVERY_STOP_CASE]
-    if recovery_stop and (args.release_manifest is not None or args.source_sha is not None):
+    if recovery_stop and (args.build_manifest is not None or args.source_sha is not None):
         raise LocalVMError("recovery Stop uses build-local seams, not qualification packages")
-    if args.release_manifest is not None and (
+    if args.build_manifest is not None and (
         args.suite != "full" or args.platform not in {"windows", "macos"}
     ):
-        raise LocalVMError("exact Release packages require full Windows/macOS coverage")
+        raise LocalVMError("exact Build packages require full Windows/macOS coverage")
     if args.platform != "ios-simulator":
         _required_input(run_dir, "profile")
 
@@ -1940,18 +1947,18 @@ def prepare(args: argparse.Namespace) -> int:
                 ),
                 platform=args.platform,
             )
-        elif args.release_manifest is not None:
+        elif args.build_manifest is not None:
             candidate = _timed_call(
-                "release-package-prepare-install",
-                lambda: _prepare_release_candidate(
-                    run_dir, args.platform, args.release_manifest, logs, args.timeout,
+                "build-package-prepare-install",
+                lambda: _prepare_build_candidate(
+                    run_dir, args.platform, args.build_manifest, logs, args.timeout,
                 ),
                 platform=args.platform,
             )
             persisted = _read_state(run_dir)
             if persisted is not None:
                 state.update(persisted)
-            candidate["mode"] = "release-package"
+            candidate["mode"] = "build-package"
         elif args.source_sha and args.platform in {"linux", "windows", "macos"}:
             candidate = _timed_call(
                 "desktop-package-build-install",
@@ -2144,8 +2151,8 @@ def run(args: argparse.Namespace) -> int:
             )
         elif args.platform == "macos":
             start_macos = (
-                _start_macos_release
-                if mode in {"release-package", "installed-package"}
+                _start_macos_build
+                if mode in {"build-package", "installed-package"}
                 else _start_macos
             )
             runtime = _timed_call(
@@ -2157,27 +2164,27 @@ def run(args: argparse.Namespace) -> int:
                 platform=args.platform,
             )
         elif args.platform == "windows":
-            if mode in {"release-package", "installed-package"}:
+            if mode in {"build-package", "installed-package"}:
                 from .local_vm_windows import stop_installed_service
 
-                release_state = state.get("release")
-                if mode == "release-package" and not isinstance(release_state, dict):
-                    raise LocalVMError("exact Windows Release install state is missing")
-                if isinstance(release_state, dict):
-                    release_state["msi_service_stop_attempted"] = True
-                    state["release"] = release_state
+                build_state = state.get("build")
+                if mode == "build-package" and not isinstance(build_state, dict):
+                    raise LocalVMError("exact Windows Build install state is missing")
+                if isinstance(build_state, dict):
+                    build_state["msi_service_stop_attempted"] = True
+                    state["build"] = build_state
                 _write_json(run_dir / "platform.json", state)
                 try:
                     stop_installed_service(run_dir, logs, args.timeout)
                 except Exception as error:
-                    if isinstance(release_state, dict):
-                        release_state["msi_service_stop_error"] = f"{type(error).__name__}: {error}"
-                        state["release"] = release_state
+                    if isinstance(build_state, dict):
+                        build_state["msi_service_stop_error"] = f"{type(error).__name__}: {error}"
+                        state["build"] = build_state
                         _write_json(run_dir / "platform.json", state)
                     raise
-                if isinstance(release_state, dict):
-                    release_state["msi_service_stopped"] = True
-                    state["release"] = release_state
+                if isinstance(build_state, dict):
+                    build_state["msi_service_stopped"] = True
+                    state["build"] = build_state
                     _write_json(run_dir / "platform.json", state)
             runtime = _timed_call(
                 "service-start",
@@ -2581,9 +2588,9 @@ def _cleanup_launchd(
             errors.append(f"cleanup-service: command exited {result.returncode}")
 
 
-def _windows_release_package(run_dir: Path, release: dict[str, Any]) -> Path:
+def _windows_build_package(run_dir: Path, build: dict[str, Any]) -> Path:
     """Return the one exact staged MSI, rejecting mutable path substitutions."""
-    package = release.get("package_path")
+    package = build.get("package_path")
     if not isinstance(package, str) or not package:
         raise LocalVMError("recorded MSI path is invalid")
     candidate = Path(package)
@@ -2592,12 +2599,12 @@ def _windows_release_package(run_dir: Path, release: dict[str, Any]) -> Path:
     try:
         resolved = _inside(candidate, run_dir)
     except LocalVMError as error:
-        raise LocalVMError("recorded MSI path is outside the exact Release staging path") from error
+        raise LocalVMError("recorded MSI path is outside the exact Build staging path") from error
     except OSError as error:
         raise LocalVMError("recorded MSI path is unavailable") from error
-    expected = (run_dir / "release" / "windows" / "dobbyVPN-windows-amd64.msi").resolve()
+    expected = (run_dir / "build" / "windows" / "dobbyVPN-windows-amd64.msi").resolve()
     if resolved != expected or not resolved.is_file():
-        raise LocalVMError("recorded MSI path is outside the exact Release staging path")
+        raise LocalVMError("recorded MSI path is outside the exact Build staging path")
     return resolved
 
 
@@ -2610,7 +2617,7 @@ def cleanup(args: argparse.Namespace) -> int:
         raise LocalVMError("cleanup platform does not match platform state")
     logs = run_dir / "logs"
     runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
-    release = state.get("release") if isinstance(state.get("release"), dict) else None
+    build = state.get("build") if isinstance(state.get("build"), dict) else None
     installed_descriptor = run_dir / "installed.json"
     errors: list[str] = []
     from .subscription_fixture import SubscriptionFixture
@@ -2664,7 +2671,7 @@ def cleanup(args: argparse.Namespace) -> int:
     elif args.platform == "macos":
         helper = ROUTING_HELPERS / "macos.sh"
         _cleanup_logged(["sudo", "-n", str(helper), "routing-remove"], cwd=run_dir, logs=logs, label="cleanup-routing", timeout=args.timeout, errors=errors)
-        if release is not None:
+        if build is not None:
             # The package's fixed uninstaller owns launchd, its plist/socket,
             # receipt, app bundle, and uninstaller path.  Do not reproduce its
             # root-side deletion logic or accept paths from test state.
@@ -2689,10 +2696,10 @@ def cleanup(args: argparse.Namespace) -> int:
             cleanup_windows(run_dir, runtime, logs, args.timeout)
         except Exception as error:
             errors.append(f"cleanup-windows: {type(error).__name__}: {error}")
-        if release is not None:
-            installed = release.get("installed") is True
+        if build is not None:
+            installed = build.get("installed") is True
             try:
-                package = _windows_release_package(run_dir, release)
+                package = _windows_build_package(run_dir, build)
             except Exception as error:
                 errors.append(f"cleanup-package: {type(error).__name__}: {error}")
             else:

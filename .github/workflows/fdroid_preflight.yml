@@ -12,6 +12,13 @@ on:
       version_code:
         type: string
         required: true
+      build_run_id:
+        default: ''
+        required: false
+        type: string
+      retention_days:
+        default: 1
+        type: number
 
 permissions:
   contents: read
@@ -34,10 +41,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Download the candidate unsigned Android APK
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: dobbyvpn-android-unsign.apk
-          path: ${{ runner.temp }}/fdroid-reference
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id || github.run_id }}
+        run: |
+          python3 .github/scripts/release/download_artifact.py \
+            "$BUILD_RUN_ID" dobbyvpn-android-unsign.apk "$RUNNER_TEMP/fdroid-reference"
       - name: Fetch current official F-Droid tools and shared build resources
         run: |
           set -euo pipefail
@@ -98,4 +107,4 @@ jobs:
           name: dobbyvpn-fdroid-rebuild.apk
           path: ${{ runner.temp }}/fdroid-build/com.dobby.vpn_${{ env.VERSION_CODE }}.apk
           if-no-files-found: ignore
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}

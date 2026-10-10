@@ -3,9 +3,15 @@ name: Android Build
 on:
   workflow_call:
     inputs:
-      build_only:
+      single_build:
+        description: Build one immutable APK without claiming reproducibility.
         type: boolean
         default: false
+      reference_build_run_id:
+        description: Build run whose original APK is independently checked by this Test job.
+        type: string
+        required: false
+        default: ''
       app_major_version:
         type: string
         required: true
@@ -21,11 +27,17 @@ on:
       source_sha:
         type: string
         required: true
+      retention_days:
+        default: 1
+        type: number
 
 jobs:
   android_build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
     env:
       APP_MAJOR_VERSION: ${{ inputs.app_major_version }}
       APP_MINOR_VERSION: ${{ inputs.app_minor_version }}
@@ -52,6 +64,22 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Download selected Build Android outputs
+        if: ${{ inputs.reference_build_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.reference_build_run_id }}
+        run: |
+          set -euo pipefail
+          selected="$RUNNER_TEMP/dobbyvpn-selected-android"
+          python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-unsign.apk "$selected/app"
+          python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-test-companion-unsigned.apk "$selected/companion"
+          python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-build-metadata "$selected/metadata"
+          mkdir -p runtime/android-selected
+          cp "$selected/app/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk" runtime/android-selected/original.apk
+          cp "$selected/companion/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-android-test-companion-unsigned.apk" runtime/android-selected/test-companion.apk
+          cp "$selected/metadata/android-build-driver-manifest.json" runtime/android-selected/build-driver-manifest.json
 
       # setup-go consults the job-level GOPATH. Create the reproducible
       # owner-controlled build paths before the action attempts to use them.
@@ -165,7 +193,7 @@ jobs:
           rsync -a --delete "$GITHUB_WORKSPACE/" "$ANDROID_REPRO_SOURCE_ROOT/"
 
       - name: Build and verify isolated unsigned APKs through the public driver
-        if: ${{ !inputs.build_only }}
+        if: ${{ !inputs.single_build && inputs.reference_build_run_id == '' }}
         working-directory: /home/vagrant/build/com.dobby.vpn
         env:
           DOBBYVPN_ANDROID_GO_CACHE: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-cache
@@ -186,27 +214,74 @@ jobs:
             --go-binary "$GOROOT/bin/go" \
             --source-repository "$APP_SOURCE_REPOSITORY"
 
-      - name: Build release and Debug APKs without checks
-        if: ${{ inputs.build_only }}
+      - name: Build the immutable unsigned APK once
+        if: ${{ inputs.single_build && inputs.reference_build_run_id == '' }}
         working-directory: /home/vagrant/build/com.dobby.vpn
+        env:
+          DOBBYVPN_ANDROID_GO_CACHE: ${{ runner.temp }}/dobbyvpn-android-build/single/go-cache
+          DOBBYVPN_ANDROID_GO_TMPDIR: ${{ runner.temp }}/dobbyvpn-android-build/single/go-tmp
         run: |
           set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          "$GRADLE_ROOT/bin/gradle" -p ui/android :app:assembleRelease :app:assembleDebug \
-            --no-daemon --console=plain --stacktrace \
-            -PdobbyGoBinary="$GOROOT/bin/go" \
-            -PprojectRepositoryCommit="$APP_SOURCE_SHA" \
-            -PprojectRepositoryCommitLink="https://github.com/$APP_SOURCE_REPOSITORY/commit/$APP_SOURCE_SHA" \
-            -Pandroid.injected.version.code="$ANDROID_VERSION_CODE" \
-            -Pandroid.injected.version.name="$version"
-          mkdir -p runtime/android-release
-          cp ui/android/app/build/outputs/apk/release/app-release-unsigned.apk \
-            "runtime/android-release/DobbyVPN-v${version}-unsign.apk"
-          cp ui/android/app/build/outputs/apk/debug/app-debug.apk \
-            "runtime/android-release/DobbyVPN-v${version}-debug.apk"
+          "$GITHUB_WORKSPACE/.github/scripts/android/android_build_driver.sh" \
+            --single-build --source-root "$ANDROID_REPRO_SOURCE_ROOT" \
+            --source-sha "$APP_SOURCE_SHA" \
+            --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-unsign.apk" \
+            --test-companion-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
+            --metadata-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
+            --dependency-manifest "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-dependency-provenance.json" \
+            --gradle-archive "$GRADLE_ARCHIVE" --gradle-root "$GRADLE_ROOT" \
+            --go-binary "$GOROOT/bin/go"
+
+      - name: Build and verify a fresh Android reference against the selected Build APK
+        if: ${{ inputs.reference_build_run_id != '' }}
+        working-directory: /home/vagrant/build/com.dobby.vpn
+        env:
+          DOBBYVPN_ANDROID_GO_CACHE: ${{ runner.temp }}/dobbyvpn-android-reference/single/go-cache
+          DOBBYVPN_ANDROID_GO_TMPDIR: ${{ runner.temp }}/dobbyvpn-android-reference/single/go-tmp
+        run: |
+          set -euo pipefail
+          version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
+          original="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/original.apk"
+          companion="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/test-companion.apk"
+          reference="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference/DobbyVPN-v${version}-reference-unsign.apk"
+          mkdir -p "$(dirname "$reference")"
+          "$GITHUB_WORKSPACE/.github/scripts/android/android_build_driver.sh" \
+            --single-build --source-root "$ANDROID_REPRO_SOURCE_ROOT" \
+            --source-sha "$APP_SOURCE_SHA" --output "$reference" \
+            --metadata-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference-driver-manifest.json" \
+            --gradle-archive "$GRADLE_ARCHIVE" --gradle-root "$GRADLE_ROOT" \
+            --go-binary "$GOROOT/bin/go"
+          python3 .github/scripts/android/verify_android_reproducibility.py create \
+            --first-apk "$original" --second-apk "$reference" \
+            --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference-reproducibility.json" \
+            --source-sha "$APP_SOURCE_SHA" --version-name "$version" --version-code "$ANDROID_VERSION_CODE"
+          apkanalyzer="$(command -v apkanalyzer || true)"
+          if [[ -z "$apkanalyzer" ]]; then
+            apkanalyzer="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools" -type f -name apkanalyzer -perm -u+x -print -quit)"
+          fi
+          test -n "$apkanalyzer" && test -x "$apkanalyzer"
+          python3 .github/scripts/android/verify_android_apk_source.py \
+            --apk "$original" --apk "$reference" --source-sha "$APP_SOURCE_SHA" \
+            --repository "$APP_SOURCE_REPOSITORY" --version-name "$version" \
+            --version-code "$ANDROID_VERSION_CODE" --apkanalyzer "$apkanalyzer" \
+            --test-companion "$companion"
+          readelf="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -type f -name llvm-readelf -perm -u+x -print -quit)"
+          test -n "$readelf" && test -x "$readelf"
+          python3 .github/scripts/android/verify_android_native_payloads.py --apk "$original" --readelf "$readelf"
+          python3 .github/scripts/android/verify_android_native_payloads.py --apk "$reference" --readelf "$readelf"
+          source_tree="$(git -C "$ANDROID_REPRO_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
+          python3 .github/scripts/android/android_apk_signing.py create-provenance \
+            --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-provenance.json" \
+            --unsigned-apk "$original" --test-companion "$companion" \
+            --build-driver-manifest "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/build-driver-manifest.json" \
+            --reproducibility "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference-reproducibility.json" \
+            --source-sha "$APP_SOURCE_SHA" --source-tree "$source_tree" \
+            --source-repository "$APP_SOURCE_REPOSITORY" \
+            --version-name "$version" --version-code "$ANDROID_VERSION_CODE"
 
       - name: Create Android source and digest provenance
-        if: ${{ !inputs.build_only }}
+        if: ${{ !inputs.single_build && inputs.reference_build_run_id == '' }}
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           VERSION_NAME: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
@@ -235,33 +310,45 @@ jobs:
             --version-code "$VERSION_CODE"
 
       - name: Upload unsigned APK
+        if: ${{ inputs.reference_build_run_id == '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}
 
       - name: Upload Android test companion
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.reference_build_run_id == '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-test-companion-unsigned.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload Android Build metadata
+        if: ${{ inputs.single_build && inputs.reference_build_run_id == '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-android-build-metadata
+          path: |
+            ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-build-driver-manifest.json
+            ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-dependency-provenance.json
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
 
       - name: Upload Android provenance
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.reference_build_run_id != '' || !inputs.single_build }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-provenance
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}
 
       - name: Build and inspect native Debug APK
-        if: ${{ !inputs.build_only }}
+        if: ${{ inputs.reference_build_run_id == '' }}
         working-directory: /home/vagrant/build/com.dobby.vpn
         run: |
           python3 .github/scripts/android/android_debug_build.py \
@@ -269,9 +356,10 @@ jobs:
             --output "runtime/android-release/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-debug.apk"
 
       - name: Upload Debug APK
+        if: ${{ inputs.reference_build_run_id == '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dobbyvpn-android-debug.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-debug.apk
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}

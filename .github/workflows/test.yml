@@ -1,0 +1,269 @@
+name: Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Build run whose packages should be qualified.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  resolve_build:
+    name: Resolve selected Build
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      version_name: ${{ steps.resolve.outputs.version_name }}
+      major: ${{ steps.resolve.outputs.major }}
+      minor: ${{ steps.resolve.outputs.minor }}
+      maintenance: ${{ steps.resolve.outputs.maintenance }}
+      android_version_code: ${{ steps.resolve.outputs.android_version_code }}
+      apple_build_number: ${{ steps.resolve.outputs.apple_build_number }}
+      manifest_sha256: ${{ steps.resolve.outputs.manifest_sha256 }}
+    steps:
+      - name: Reject Test reruns
+        run: test "$GITHUB_RUN_ATTEMPT" = 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify selected Build and artifact hashes
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release/build_manifest.py resolve \
+            --repository "$GITHUB_REPOSITORY" --run-id "${{ inputs.build_run_id }}" \
+            --download-dir "$RUNNER_TEMP/dobbyvpn-selected-build-manifest" \
+            --output "$RUNNER_TEMP/build.json"
+          python3 - "$RUNNER_TEMP/build.json" "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          major, minor, maintenance = manifest["version"].split(".")
+          with open(sys.argv[2], "a", encoding="utf-8") as output:
+              for key, value in {
+                  "source_sha": manifest["source_sha"],
+                  "version_name": manifest["version"],
+                  "major": major,
+                  "minor": minor,
+                  "maintenance": maintenance,
+                  "android_version_code": manifest["android_version_code"],
+                  "apple_build_number": manifest["apple_build_number"],
+                  "manifest_sha256": manifest["manifest_sha256"],
+              }.items():
+                  output.write(f"{key}={value}\n")
+          PY
+
+  ios_analysis:
+    needs: resolve_build
+    uses: ./.github/workflows/ios_analysis.yml
+    with:
+      build_run_id: ${{ inputs.build_run_id }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+
+  android_reproducibility:
+    needs: resolve_build
+    uses: ./.github/workflows/android_build.yml
+    with:
+      single_build: true
+      reference_build_run_id: ${{ inputs.build_run_id }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      app_major_version: ${{ needs.resolve_build.outputs.major }}
+      app_minor_version: ${{ needs.resolve_build.outputs.minor }}
+      app_maintenance_version: ${{ needs.resolve_build.outputs.maintenance }}
+      android_version_code: ${{ needs.resolve_build.outputs.android_version_code }}
+      retention_days: 7
+
+  fdroid_preflight:
+    needs: resolve_build
+    uses: ./.github/workflows/fdroid_preflight.yml
+    with:
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      version_name: ${{ needs.resolve_build.outputs.version_name }}
+      version_code: ${{ needs.resolve_build.outputs.android_version_code }}
+      build_run_id: ${{ inputs.build_run_id }}
+      retention_days: 7
+
+  migrate_windows:
+    needs: resolve_build
+    uses: ./.github/workflows/installer_migration.yml
+    with:
+      platform: windows
+      architecture: amd64
+      version_name: ${{ needs.resolve_build.outputs.version_name }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      build_run_id: ${{ inputs.build_run_id }}
+
+  migrate_macos_arm:
+    needs: resolve_build
+    uses: ./.github/workflows/installer_migration.yml
+    with:
+      platform: macos
+      architecture: arm64
+      version_name: ${{ needs.resolve_build.outputs.version_name }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      build_run_id: ${{ inputs.build_run_id }}
+
+  migrate_macos_intel:
+    needs: resolve_build
+    uses: ./.github/workflows/installer_migration.yml
+    with:
+      platform: macos
+      architecture: amd64
+      version_name: ${{ needs.resolve_build.outputs.version_name }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      build_run_id: ${{ inputs.build_run_id }}
+
+  render_start:
+    needs: resolve_build
+    uses: ./.github/workflows/render_start.yml
+    permissions:
+      contents: read
+      actions: read
+    secrets: inherit
+    with:
+      retention_days: 7
+
+  qualify_linux:
+    needs: [resolve_build, render_start]
+    uses: ./.github/workflows/qualification_platform.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      platform: linux
+      build_run_id: ${{ inputs.build_run_id }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      retention_days: 7
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+
+  qualify_windows:
+    needs: [resolve_build, render_start]
+    uses: ./.github/workflows/qualification_platform.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      platform: windows
+      build_run_id: ${{ inputs.build_run_id }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      retention_days: 7
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+
+  qualify_macos:
+    needs: [resolve_build, render_start]
+    strategy:
+      matrix:
+        architecture: [arm64, amd64]
+    uses: ./.github/workflows/qualification_platform.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      platform: macos
+      architecture: ${{ matrix.architecture }}
+      build_run_id: ${{ inputs.build_run_id }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      retention_days: 7
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+
+  qualify_android:
+    needs: [resolve_build, render_start]
+    uses: ./.github/workflows/qualification_platform.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      platform: android
+      build_run_id: ${{ inputs.build_run_id }}
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      retention_days: 7
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+
+  render_cleanup:
+    if: ${{ always() }}
+    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android]
+    uses: ./.github/workflows/render_cleanup.yml
+    permissions:
+      contents: read
+    secrets: inherit
+
+  qualification_result:
+    name: Require hosted mini and Render cleanup
+    if: ${{ always() }}
+    needs: [resolve_build, render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_analysis, android_reproducibility, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check Render and platform jobs
+        env:
+          RENDER_START_RESULT: ${{ needs.render_start.result }}
+          LINUX_RESULT: ${{ needs.qualify_linux.result }}
+          WINDOWS_RESULT: ${{ needs.qualify_windows.result }}
+          MACOS_RESULT: ${{ needs.qualify_macos.result }}
+          ANDROID_RESULT: ${{ needs.qualify_android.result }}
+          RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
+          IOS_ANALYSIS_RESULT: ${{ needs.ios_analysis.result }}
+          ANDROID_REPRODUCIBILITY_RESULT: ${{ needs.android_reproducibility.result }}
+          FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
+          WINDOWS_MIGRATION_RESULT: ${{ needs.migrate_windows.result }}
+          MACOS_ARM_MIGRATION_RESULT: ${{ needs.migrate_macos_arm.result }}
+          MACOS_INTEL_MIGRATION_RESULT: ${{ needs.migrate_macos_intel.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
+            echo "Test attempt $GITHUB_RUN_ATTEMPT cannot qualify; dispatch a fresh Test workflow." >&2
+            exit 1
+          fi
+          test "$RENDER_START_RESULT" = success
+          test "$LINUX_RESULT" = success
+          test "$WINDOWS_RESULT" = success
+          test "$MACOS_RESULT" = success
+          test "$ANDROID_RESULT" = success
+          test "$RENDER_CLEANUP_RESULT" = success
+          test "$IOS_ANALYSIS_RESULT" = success
+          test "$ANDROID_REPRODUCIBILITY_RESULT" = success
+          test "$FDROID_RESULT" = success
+          test "$WINDOWS_MIGRATION_RESULT" = success
+          test "$MACOS_ARM_MIGRATION_RESULT" = success
+          test "$MACOS_INTEL_MIGRATION_RESULT" = success
+          echo "Selected Build package qualification passed"
+      - name: Write Test result
+        if: always()
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          SOURCE_SHA: ${{ needs.resolve_build.outputs.source_sha }}
+          BUILD_MANIFEST_SHA256: ${{ needs.resolve_build.outputs.manifest_sha256 }}
+          RESULT_PATH: ${{ runner.temp }}/test-result.json
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          result = {
+              "schema": 1,
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_path": ".github/workflows/test.yml",
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "build_run_id": int(os.environ["BUILD_RUN_ID"]),
+              "source_sha": os.environ.get("SOURCE_SHA", ""),
+              "build_manifest_sha256": os.environ.get("BUILD_MANIFEST_SHA256", ""),
+              "checks": {name: item.get("result") for name, item in needs.items()},
+          }
+          Path(os.environ["RESULT_PATH"]).write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
+          PY
+      - name: Upload Test result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-result
+          path: ${{ runner.temp }}/test-result.json
+          if-no-files-found: error
+          retention-days: 7

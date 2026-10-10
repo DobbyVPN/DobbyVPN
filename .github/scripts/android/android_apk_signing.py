@@ -341,35 +341,47 @@ def create_provenance(
     )
     if not test_companion.is_file():
         raise SigningError("unsigned Android test companion is missing")
-    expected_source_identity_mode = {
-        "release": "git_checkout",
-        "local-complete": "harness_verified_archive",
-    }.get(profile)
-    if expected_source_identity_mode is None:
-        raise SigningError(f"unsupported Android provenance profile: {profile}")
-
-    expected_driver_fields = {
-        "schema": 1,
-        "repository": source_repository,
-        "source_sha": source_sha,
-        "source_tree": source_tree,
-        "version_name": version_name,
-        "version_code": version_code,
-        "package": "com.dobby.vpn",
-        "signing_classification": "unsigned",
-        "signer_certificate_sha256": None,
-    }
-    if any(driver.get(key) != value for key, value in expected_driver_fields.items()):
-        raise SigningError("Android build-driver manifest does not match the selected Release")
-    if driver.get("source_identity_mode") != expected_source_identity_mode:
-        raise SigningError("Android build-driver source identity mode does not match the build profile")
+    if profile == "release" and driver.get("schema") == 2:
+        expected_driver_fields = {
+            "repository": source_repository,
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "version_name": version_name,
+            "version_code": version_code,
+            "package": "com.dobby.vpn",
+            "signing_classification": "unsigned",
+            "signer_certificate_sha256": None,
+        }
+        if any(driver.get(key) != value for key, value in expected_driver_fields.items()):
+            raise SigningError("Android single-build metadata does not match the selected Build")
+        if driver.get("test_companion") is None:
+            raise SigningError("Android Build metadata does not include its test companion")
+    else:
+        expected_source_identity_mode = {
+            "release": "git_checkout",
+            "local-complete": "harness_verified_archive",
+        }.get(profile)
+        if expected_source_identity_mode is None:
+            raise SigningError(f"unsupported Android provenance profile: {profile}")
+        expected_driver_fields = {
+            "schema": 1,
+            "repository": source_repository,
+            "source_sha": source_sha,
+            "source_tree": source_tree,
+            "version_name": version_name,
+            "version_code": version_code,
+            "package": "com.dobby.vpn",
+            "signing_classification": "unsigned",
+            "signer_certificate_sha256": None,
+        }
+        if any(driver.get(key) != value for key, value in expected_driver_fields.items()):
+            raise SigningError("Android build-driver manifest does not match the selected Build")
+        if driver.get("source_identity_mode") != expected_source_identity_mode:
+            raise SigningError("Android build-driver source identity mode does not match the build profile")
     _verify_driver_artifact(driver.get("artifact"), unsigned_apk, label="application")
     driver_companion = driver.get("test_companion")
     _verify_driver_artifact(driver_companion, test_companion, label="test companion")
-    if (
-        not isinstance(driver_companion, dict)
-        or driver_companion.get("signing_classification") != "unsigned"
-    ):
+    if not isinstance(driver_companion, dict) or driver_companion.get("signing_classification") != "unsigned":
         raise SigningError("Android build-driver test companion is not recorded as unsigned")
 
     companion_record = {
@@ -432,7 +444,7 @@ def finalize_provenance(
         or document.get("version_code") != version_code
         or document.get("application_id") != "com.dobby.vpn"
     ):
-        raise SigningError("Android build provenance metadata does not match the selected Release")
+        raise SigningError("Android build provenance metadata does not match the selected Build")
 
     verify_document(
         document.get("reproducibility"),
@@ -486,7 +498,7 @@ def finalize_provenance(
             "signer_certificate_sha256": None,
         }.items()
     ):
-        raise SigningError("Android build-driver metadata does not match the selected Release")
+        raise SigningError("Android build-driver metadata does not match the selected Build")
     driver_artifact = driver.get("artifact")
     driver_companion = driver.get("test_companion")
     for actual, expected_record, label in (

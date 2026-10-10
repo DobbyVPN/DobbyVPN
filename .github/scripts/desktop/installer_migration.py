@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Qualify desktop installer migration and rollback transitions.
 
-The current package is supplied by the Release workflow.  The previous
+The current package is supplied by the selected Build workflow.  The previous
 published package is downloaded into a temporary directory and verified
 against ``installer_rollback_manifest.json`` before it is used.  The temporary
 directory is removed on every outcome, so a migration run never leaves a
@@ -624,7 +624,7 @@ def qualify(
             raise _error("installer migration temporary parent is not a directory")
     current_package = Path(current_package)
     if not current_package.is_file():
-        raise _error(f"current release package is missing: {current_package}")
+        raise _error(f"selected Build package is missing: {current_package}")
     manifest = load_manifest(manifest_path)
     asset_key = platform
     if platform == "macos":
@@ -697,7 +697,7 @@ def qualify(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
-    parser.add_argument("--package", type=Path, required=True, help="exact package from this Release run")
+    parser.add_argument("--package", type=Path, required=True, help="exact package from the selected Build run")
     parser.add_argument("--current-version", default=CURRENT_VERSION)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--log-dir", type=Path, help="optional diagnostic log directory")

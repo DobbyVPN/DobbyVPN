@@ -3,9 +3,6 @@ name: iOS Build
 on:
   workflow_call:
     inputs:
-      build_only:
-        type: boolean
-        default: false
       app_major_version:
         type: string
         required: true
@@ -19,6 +16,13 @@ on:
         description: Stable build number shared with the product version metadata.
         type: string
         required: true
+      apple_build_number:
+        type: string
+        required: false
+        default: ''
+      retention_days:
+        default: 1
+        type: number
       debug:
         type: boolean
         default: false
@@ -33,7 +37,7 @@ jobs:
     timeout-minutes: 40
     env:
       VERSION_NAME: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
-      APP_BUILD: ${{ inputs.android_version_code }}
+      APP_BUILD: ${{ inputs.apple_build_number || inputs.android_version_code }}
       DOBBY_BUILD_CONFIGURATION: ${{ inputs.debug && 'Debug' || 'Release' }}
       DEBUG_SUFFIX: ${{ inputs.debug && '-debug' || '' }}
       SOURCE_COMMIT: ${{ inputs.source_sha }}
@@ -62,14 +66,6 @@ jobs:
           python3 .github/scripts/release/download_artifact.py \
             "$GITHUB_RUN_ID" "DobbyVPNRuntime$DEBUG_SUFFIX.xcframework" ui/apple/DobbyVPNRuntime.xcframework
 
-      - if: ${{ !inputs.debug && !inputs.build_only }}
-        name: Analyze production iOS app and tunnel without signing
-        run: |
-          set -euo pipefail
-          bash core/scripts/package_ios_app.sh \
-            iosanalyze "$RUNNER_TEMP/dobbyvpn-ios-analysis" \
-            ui/apple/DobbyVPNRuntime.xcframework
-
       - name: Archive production iOS app and tunnel without signing
         run: |
           set -euo pipefail
@@ -84,4 +80,4 @@ jobs:
           name: DobbyVPN.xcarchive${{ env.DEBUG_SUFFIX }}.tar.gz
           path: ui/apple/build/release/DobbyVPN.xcarchive${{ env.DEBUG_SUFFIX }}.tar.gz
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}

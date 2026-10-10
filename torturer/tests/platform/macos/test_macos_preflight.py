@@ -248,18 +248,18 @@ class MacOSPreflightTests(unittest.TestCase):
         self.assertIn("FileNotFoundError", str(caught.exception))
         run.assert_not_called()
 
-    def test_source_and_release_macos_start_wait_for_service_readiness(self) -> None:
+    def test_source_and_build_macos_start_wait_for_service_readiness(self) -> None:
         completed = subprocess.CompletedProcess(
             ["launchctl", "print"], 0, b"pid = 418\n", b"",
         )
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
-            for release in (False, True):
-                run_dir = root / ("release" if release else "source")
+            for build in (False, True):
+                run_dir = root / ("build" if build else "source")
                 logs = run_dir / "logs"
                 service = run_dir / "candidate" / "dobbyvpn-backend"
                 service.parent.mkdir(parents=True)
-                if release:
+                if build:
                     service.touch()
                 else:
                     plist = run_dir / "source" / "ui/apple/macos/installer/vpnservice.plist"
@@ -269,7 +269,7 @@ class MacOSPreflightTests(unittest.TestCase):
                     "service": str(service),
                     "network": str(run_dir / "candidate" / "network"),
                 }
-                start = local_vm._start_macos_release if release else local_vm._start_macos
+                start = local_vm._start_macos_build if build else local_vm._start_macos
                 with (
                     mock.patch.object(local_vm, "_run_logged", return_value=completed),
                     mock.patch.object(local_vm, "_wait_macos_service") as wait,

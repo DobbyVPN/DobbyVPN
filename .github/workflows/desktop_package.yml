@@ -18,6 +18,9 @@ on:
       source_sha:
         required: true
         type: string
+      retention_days:
+        default: 1
+        type: number
 
 permissions:
   contents: read
@@ -74,4 +77,4 @@ jobs:
           name: ${{ steps.build.outputs.artifact }}
           path: ${{ steps.build.outputs.package }}
           if-no-files-found: error
-          retention-days: ${{ github.workflow == 'Release' && 7 || 1 }}
+          retention-days: ${{ inputs.retention_days }}

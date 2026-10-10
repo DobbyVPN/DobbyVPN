@@ -1,0 +1,43 @@
+name: Analyze selected iOS build
+
+on:
+  workflow_call:
+    inputs:
+      build_run_id:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  analysis:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Reject Test reruns
+        run: test "$GITHUB_RUN_ATTEMPT" = 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Verify selected source
+        run: test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Download selected iOS runtime framework
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/release/download_artifact.py \
+            "${{ inputs.build_run_id }}" DobbyVPNRuntime.xcframework ui/apple/DobbyVPNRuntime.xcframework
+      - name: Analyze production iOS app and tunnel without signing
+        run: |
+          set -euo pipefail
+          bash core/scripts/package_ios_app.sh \
+            iosanalyze "$RUNNER_TEMP/dobbyvpn-ios-analysis" \
+            ui/apple/DobbyVPNRuntime.xcframework

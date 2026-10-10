@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require a successful first-attempt CI run for the selected Release commit."""
+"""Require a successful first-attempt CI run for the selected product commit."""
 
 from __future__ import annotations
 

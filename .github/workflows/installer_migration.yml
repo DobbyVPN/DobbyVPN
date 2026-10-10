@@ -1,4 +1,4 @@
-name: Release installer migration qualification
+name: Test installer migration qualification
 
 on:
   workflow_call:
@@ -12,6 +12,12 @@ on:
       version_name:
         required: true
         type: string
+      source_sha:
+        required: true
+        type: string
+      build_run_id:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -23,13 +29,13 @@ jobs:
     runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 20
     steps:
-      - name: Reject Release reruns
+      - name: Reject Test reruns
         shell: bash
         run: test "$GITHUB_RUN_ATTEMPT" = 1
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
       - name: Download installer
@@ -40,7 +46,7 @@ jobs:
           DOWNLOAD_DIR: ${{ runner.temp }}/dobbyvpn-installer-migration/package
         run: |
           python3 .github/scripts/release/download_artifact.py \
-            "$GITHUB_RUN_ID" "$ARTIFACT_NAME" "$DOWNLOAD_DIR"
+            "${{ inputs.build_run_id }}" "$ARTIFACT_NAME" "$DOWNLOAD_DIR"
 
       - name: Qualify fresh install, upgrade, rollback, and final uninstall
         shell: bash
