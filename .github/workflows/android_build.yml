@@ -266,7 +266,7 @@ jobs:
             --repository "$APP_SOURCE_REPOSITORY" --version-name "$version" \
             --version-code "$ANDROID_VERSION_CODE" --apkanalyzer "$apkanalyzer" \
             --test-companion "$companion"
-          readelf="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -type f -name llvm-readelf -perm -u+x -print -quit)"
+          readelf="$(find -L "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -type f -name llvm-readelf -perm -u+x -print -quit)"
           test -n "$readelf" && test -x "$readelf"
           python3 .github/scripts/android/verify_android_native_payloads.py --apk "$original" --readelf "$readelf"
           python3 .github/scripts/android/verify_android_native_payloads.py --apk "$reference" --readelf "$readelf"
