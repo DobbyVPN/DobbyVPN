@@ -235,7 +235,7 @@ jobs:
             --version-code "$VERSION_CODE"
 
       - name: Upload unsigned APK
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
@@ -244,7 +244,7 @@ jobs:
 
       - name: Upload Android test companion
         if: ${{ !inputs.build_only }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dobbyvpn-android-test-companion-unsigned.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
@@ -253,7 +253,7 @@ jobs:
 
       - name: Upload Android provenance
         if: ${{ !inputs.build_only }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dobbyvpn-android-provenance
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
@@ -269,7 +269,7 @@ jobs:
             --output "runtime/android-release/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-debug.apk"
 
       - name: Upload Debug APK
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: dobbyvpn-android-debug.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-debug.apk
