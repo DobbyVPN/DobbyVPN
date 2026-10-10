@@ -252,6 +252,76 @@ class LocalVMLifecycleTests(unittest.TestCase):
             self.assertIn("original I/O failure", diagnostic.getvalue())
             self.assertEqual(json.loads((run_dir / "platform.json").read_text())["status"], "cleanup-failed")
 
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            local_vm._write_json(run_dir / "platform.json", {
+                "platform": "windows", "source_checks_attempted": True,
+            })
+            # A completed package build can create ProgramData logs before
+            # migration or installation fails and installed.json is written.
+            package = run_dir / "output/desktop-package/desktop-package.json"
+            package.parent.mkdir(parents=True)
+            package.write_text("{}", encoding="utf-8")
+            program_data_logs = run_dir / "ProgramData/DobbyVPN/Logs"
+            program_data_logs.mkdir(parents=True)
+            backend = b"backend bytes\x00\xff\r\n"
+            stdout = b"service stdout\xfe\n"
+            stderr = b"service stderr\xfd\n"
+            (program_data_logs / "backend.jsonl").write_bytes(backend)
+            (program_data_logs / "backend.jsonl.stdout").write_bytes(stdout)
+            (program_data_logs / "backend.jsonl.stderr").write_bytes(stderr)
+
+            labels: list[str] = []
+            collect = local_vm.collect_installed_backend_logs
+            copy = diagnostics.shutil.copyfileobj
+
+            def collect_and_record(directory, logs, errors):
+                labels.append("collect-installed-backend")
+                collect(directory, logs, errors)
+
+            def fail_stderr(source_file, destination_file, **kwargs):
+                if Path(source_file.name).name == "backend.jsonl.stderr":
+                    raise OSError("original backend copy failure")
+                return copy(source_file, destination_file, **kwargs)
+
+            def windows_cleanup(*_args):
+                labels.append("cleanup-windows")
+
+            def command(*_args, **kwargs):
+                labels.append(kwargs["label"])
+
+            args = local_vm.build_parser().parse_args([
+                "cleanup", "--platform", "windows", "--run-dir", str(run_dir),
+                "--timeout", "30",
+            ])
+            diagnostic = io.StringIO()
+            with (
+                mock.patch.dict(local_vm.os.environ, {"PROGRAMDATA": str(run_dir / "ProgramData")}),
+                mock.patch.object(local_vm_windows, "cleanup", side_effect=windows_cleanup),
+                mock.patch.object(local_vm, "_cleanup_logged", side_effect=command),
+                mock.patch.object(
+                    local_vm, "collect_installed_backend_logs", side_effect=collect_and_record
+                ),
+                mock.patch.object(diagnostics.shutil, "copyfileobj", side_effect=fail_stderr),
+                redirect_stderr(diagnostic),
+            ):
+                self.assertEqual(local_vm.cleanup(args), 1)
+
+            retained = run_dir / "logs/installed-backend"
+            self.assertEqual((retained / "backend.jsonl").read_bytes(), backend)
+            self.assertEqual((retained / "backend.jsonl.stdout").read_bytes(), stdout)
+            self.assertEqual(
+                labels,
+                ["cleanup-windows", "collect-installed-backend", "cleanup-source-caches"],
+            )
+            self.assertFalse((run_dir / "installed.json").exists())
+            self.assertIn("original backend copy failure", diagnostic.getvalue())
+            state = json.loads((run_dir / "platform.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "cleanup-failed")
+            self.assertTrue(
+                any("original backend copy failure" in error for error in state["cleanup_errors"])
+            )
+
     def test_ios_cleanup_retains_nested_exception_details(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

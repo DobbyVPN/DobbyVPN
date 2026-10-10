@@ -2729,14 +2729,17 @@ def cleanup(args: argparse.Namespace) -> int:
             cwd=source, logs=logs, label="cleanup-installed-package",
             timeout=args.timeout, errors=errors,
         )
-        # Installed packages use the OS's fixed log directory. The private
-        # service used by focused checks already writes inside this run.
-        if args.platform in {"macos", "windows"}:
-            directory = (
-                Path("/Library/Logs/DobbyVPN") if args.platform == "macos"
-                else Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "DobbyVPN" / "Logs"
-            )
-            collect_installed_backend_logs(directory, logs, errors)
+    if args.platform in {"macos", "windows"} and (
+        installed_descriptor.is_file()
+        or (run_dir / "output" / "desktop-package" / "desktop-package.json").is_file()
+    ):
+        # Built packages may already have created the fixed OS log directory
+        # before migration or installation fails.
+        directory = (
+            Path("/Library/Logs/DobbyVPN") if args.platform == "macos"
+            else Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "DobbyVPN" / "Logs"
+        )
+        collect_installed_backend_logs(directory, logs, errors)
     if state.get("source_checks_attempted") is True:
         source = run_dir / "source"
         _cleanup_logged(
