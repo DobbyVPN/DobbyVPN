@@ -3089,6 +3089,7 @@ internal static class Program
                     point = new { x = point.X, y = point.Y },
                 }));
                 bool AtRequestedEnd(double percent) => percent >= 0 && (position == "top" ? percent <= 1 : percent >= 99);
+                const double ScrollSettleMilliseconds = 750;
                 var actual = initialPercent;
                 var beforeWheelPercent = initialPercent;
                 void SendWheel()
@@ -3142,6 +3143,33 @@ internal static class Program
                         }
                         TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = "await-upward-wheel", vertical_scroll_percent = actual }));
                     }
+
+                    var lastWheelPercent = actual;
+                    var wheelStableSince = Stopwatch.GetTimestamp();
+                    while (Stopwatch.GetElapsedTime(wheelStableSince).TotalMilliseconds < ScrollSettleMilliseconds)
+                    {
+                        Thread.Sleep(50);
+                        RequireForeground(window, "log scrolling while settling upward wheel movement");
+                        actual = scroll.Current.VerticalScrollPercent;
+                        if (!(actual >= 0))
+                            throw new InvalidOperationException(
+                                "Native log viewer stopped exposing its vertical scroll position while settling upward wheel movement");
+                        if (!actual.Equals(lastWheelPercent))
+                        {
+                            lastWheelPercent = actual;
+                            wheelStableSince = Stopwatch.GetTimestamp();
+                            TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new
+                            {
+                                utc = UtcTimestamp(), position, stage = "settle-upward-wheel",
+                                vertical_scroll_percent = actual,
+                            }));
+                        }
+                    }
+                    TracePhase("scroll-logs-wheel-settled " + JsonSerializer.Serialize(new
+                    {
+                        utc = UtcTimestamp(), position, vertical_scroll_percent = actual,
+                        stable_ms = Stopwatch.GetElapsedTime(wheelStableSince).TotalMilliseconds,
+                    }));
                 }
 
                 RequireForeground(window, "log scrolling before setting the endpoint");
@@ -3172,7 +3200,7 @@ internal static class Program
                 var wasAtEndpoint = AtRequestedEnd(actual);
                 var stableSince = Stopwatch.GetTimestamp();
                 while (!wasAtEndpoint ||
-                    Stopwatch.GetElapsedTime(stableSince).TotalMilliseconds < 750)
+                    Stopwatch.GetElapsedTime(stableSince).TotalMilliseconds < ScrollSettleMilliseconds)
                 {
                     Thread.Sleep(50);
                     RequireForeground(window, "log scrolling through the foreground refresh window");
