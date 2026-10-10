@@ -2750,12 +2750,28 @@ internal static class Program
                 Console.WriteLine(JsonSerializer.Serialize(ScrollProfileList(root, window, Text("position"))));
                 return 0;
             }
-            bool VisibleInLogViewport(AutomationElement element, System.Windows.Rect viewport)
+            bool VisibleInLogViewport(AutomationElement element, System.Windows.Rect viewport,
+                List<object>? observations = null, string? name = null)
             {
                 var current = element.Current;
                 var bounds = current.BoundingRectangle;
-                return !current.IsOffscreen && HasUsableBounds(bounds) &&
-                    HasUsableBounds(System.Windows.Rect.Intersect(bounds, viewport));
+                var isOffscreen = current.IsOffscreen;
+                var intersection = new System.Windows.Rect();
+                var intersectionObserved = false;
+                var visible = false;
+                if (!isOffscreen && HasUsableBounds(bounds))
+                {
+                    intersection = System.Windows.Rect.Intersect(bounds, viewport);
+                    intersectionObserved = true;
+                    visible = HasUsableBounds(intersection);
+                }
+                observations?.Add(new { control_type = "Text", name,
+                    name_has_separator = name?.Contains(" · ", StringComparison.Ordinal) ?? false,
+                    is_offscreen = isOffscreen, bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null,
+                    viewport_overlap_observed = intersectionObserved,
+                    viewport_overlap = intersectionObserved && HasUsableBounds(intersection)
+                        ? RectJson(intersection) : null, visible_in_viewport = visible });
+                return visible;
             }
             if (operation == "logs")
             {
@@ -3032,14 +3048,35 @@ internal static class Program
                 if (position < 0)
                     throw new InvalidOperationException("Native log viewer does not expose a vertical scroll position");
                 var logViewport = PhysicalBounds(logRoot, "Backend logs");
+                var candidateObservations = new List<object>();
                 var firstVisibleElement = Walk(logRoot).FirstOrDefault(element =>
-                    element.Current.ControlType == ControlType.Text &&
-                    element.Current.Name.Contains(" · ", StringComparison.Ordinal) &&
-                    VisibleInLogViewport(element, logViewport));
+                {
+                    if (element.Current.ControlType != ControlType.Text) return false;
+                    var name = element.Current.Name;
+                    return name.Contains(" · ", StringComparison.Ordinal) &&
+                        VisibleInLogViewport(element, logViewport, candidateObservations, name);
+                });
                 if (firstVisibleElement is null)
-                    throw new InvalidOperationException(
-                        $"Native log viewer has no visible structured record: vertical_scroll_percent={position.ToString(CultureInfo.InvariantCulture)} " +
-                        $"logs_viewport={JsonSerializer.Serialize(RectJson(logViewport))}");
+                {
+                    var reason = "Native log viewer has no visible structured record: vertical_scroll_percent=" +
+                        position.ToString(CultureInfo.InvariantCulture) +
+                        $" logs_viewport={JsonSerializer.Serialize(RectJson(logViewport))}";
+                    string observations;
+                    try
+                    {
+                        observations = JsonSerializer.Serialize(new {
+                            captured_at_utc = UtcTimestamp(), vertical_scroll_percent = position,
+                            logs_viewport = RectJson(logViewport), structured_candidates = candidateObservations.Count,
+                            candidates = candidateObservations });
+                    }
+                    catch (Exception diagnosticsError)
+                    {
+                        throw new AggregateException(
+                            "Native log-position assertion and candidate diagnostics both failed.",
+                            new InvalidOperationException(reason), diagnosticsError);
+                    }
+                    throw new InvalidOperationException($"{reason}; candidate_observations={observations}");
+                }
                 Console.WriteLine(JsonSerializer.Serialize(new {
                     ready = true, vertical_scroll_percent = position,
                     logs_viewport = RectJson(logViewport),
