@@ -1852,25 +1852,45 @@ internal static class Program
                 root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size");
             var currentApply = FindSettingsTextSizeControl(
                 root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply");
-            return currentSlider is not null && currentApply is not null &&
-                currentSlider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var currentPattern) &&
-                Math.Abs(((RangeValuePattern)currentPattern).Current.Value - target) <= 0.01 &&
-                !currentApply.Current.IsEnabled;
-        }, "Text size Apply did not settle at the requested value", seconds: 10);
+            if (currentSlider is null || currentApply is null ||
+                !currentSlider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var currentPattern))
+                return false;
 
-        var finalSlider = FindSettingsTextSizeControl(
-            root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size")
-            ?? throw new InvalidOperationException("Text size Slider disappeared after Apply");
-        var finalApply = FindSettingsTextSizeControl(
-            root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply")
-            ?? throw new InvalidOperationException("Text size Apply button disappeared after Apply");
-        if (!finalSlider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var finalPattern))
-            throw new InvalidOperationException("Text size Slider lost RangeValuePattern after Apply");
-        response["valueAfterApply"] = ((RangeValuePattern)finalPattern).Current.Value;
-        response["applyEnabledAfterApply"] = finalApply.Current.IsEnabled;
-        if (Math.Abs(Convert.ToDouble(response["valueAfterApply"], CultureInfo.InvariantCulture) - target) > 0.01 ||
-            finalApply.Current.IsEnabled)
-            throw new InvalidOperationException("Text size setting did not apply at the requested value");
+            var rangeAfterApply = ((RangeValuePattern)currentPattern).Current;
+            var sliderAfterApply = currentSlider.Current;
+            var applyAfterApply = currentApply.Current;
+            var sliderBounds = sliderAfterApply.BoundingRectangle;
+            var applyBounds = applyAfterApply.BoundingRectangle;
+            if (Math.Abs(rangeAfterApply.Value - target) > 0.01 || rangeAfterApply.IsReadOnly ||
+                applyAfterApply.IsEnabled || !sliderAfterApply.IsEnabled || sliderAfterApply.IsOffscreen ||
+                !HasUsableBounds(sliderBounds) || applyAfterApply.IsOffscreen || !HasUsableBounds(applyBounds))
+                return false;
+
+            var sliderIdentity = DescribeElement(currentSlider);
+            var applyIdentity = DescribeElement(currentApply);
+            var sliderObservation = new
+            {
+                identity = sliderIdentity, enabled = sliderAfterApply.IsEnabled, offscreen = sliderAfterApply.IsOffscreen,
+                bounds = RectJson(sliderBounds),
+                range = new
+                {
+                    value = rangeAfterApply.Value, minimum = rangeAfterApply.Minimum, maximum = rangeAfterApply.Maximum,
+                    smallChange = rangeAfterApply.SmallChange, largeChange = rangeAfterApply.LargeChange,
+                    isReadOnly = rangeAfterApply.IsReadOnly,
+                },
+                rangeError = (string?)null,
+            };
+            var applyObservation = new
+            {
+                identity = applyIdentity, enabled = applyAfterApply.IsEnabled, offscreen = applyAfterApply.IsOffscreen,
+                bounds = RectJson(applyBounds),
+            };
+            response["valueAfterApply"] = rangeAfterApply.Value;
+            response["applyEnabledAfterApply"] = applyAfterApply.IsEnabled;
+            response["slider"] = sliderObservation;
+            response["apply"] = applyObservation;
+            return true;
+        }, "Text size Apply did not settle at the requested value", seconds: 10);
     }
 
     private static int OperateWindowsTextSizeSettings(JsonElement request)
@@ -1976,30 +1996,14 @@ internal static class Program
                 offscreen = current.IsOffscreen, bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null, range, rangeError };
             response["apply"] = apply is null ? null : new { identity = DescribeElement(apply), enabled = apply.Current.IsEnabled,
                 offscreen = apply.Current.IsOffscreen, bounds = HasUsableBounds(apply.Current.BoundingRectangle) ? RectJson(apply.Current.BoundingRectangle) : null };
+            var ready = !current.IsOffscreen && HasUsableBounds(bounds) && range is not null && apply is not null;
             if (action == "apply")
             {
                 if (range is null || apply is null)
                     throw new InvalidOperationException("Text size apply requires RangeValue data and the exact Apply control");
                 ApplyWindowsTextSize(root, slider, apply, target!.Value, expectedCurrent!.Value, response);
-                slider = FindSettingsTextSizeControl(
-                    root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size")
-                    ?? throw new InvalidOperationException("Text size Slider disappeared after Apply");
-                current = slider.Current;
-                if (slider.TryGetCurrentPattern(RangeValuePattern.Pattern, out var refreshedPattern))
-                {
-                    var refreshed = ((RangeValuePattern)refreshedPattern).Current;
-                    range = new { value = refreshed.Value, minimum = refreshed.Minimum, maximum = refreshed.Maximum,
-                        smallChange = refreshed.SmallChange, largeChange = refreshed.LargeChange, isReadOnly = refreshed.IsReadOnly };
-                }
-                apply = FindSettingsTextSizeControl(
-                    root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply");
-                bounds = current.BoundingRectangle;
-                response["slider"] = new { identity = DescribeElement(slider), enabled = current.IsEnabled,
-                    offscreen = current.IsOffscreen, bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null, range, rangeError };
-                response["apply"] = apply is null ? null : new { identity = DescribeElement(apply), enabled = apply.Current.IsEnabled,
-                    offscreen = apply.Current.IsOffscreen, bounds = HasUsableBounds(apply.Current.BoundingRectangle) ? RectJson(apply.Current.BoundingRectangle) : null };
+                ready = true;
             }
-            var ready = !current.IsOffscreen && HasUsableBounds(bounds) && range is not null && apply is not null;
             response["ready"] = ready;
             response["available"] = ready;
             if (!ready) response["reason"] = "Text size slider, RangeValue data, or Apply control was unavailable or not visible";
