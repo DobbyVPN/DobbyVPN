@@ -174,14 +174,18 @@ class WindowsTempPreflightTests(unittest.TestCase):
     def test_cli_preflight_forwards_failed_probe_output_bytes(self) -> None:
         stdout = b"identity and temp candidates \xff\n"
         stderr = b"temp probe failure \x00\n"
-        completed = subprocess.CompletedProcess(
-            ["powershell.exe"], 1, stdout=stdout, stderr=stderr
-        )
         output_capture = BinaryCapture()
         error_capture = BinaryCapture()
 
+        def fail_probe(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            sys.stdout.buffer.write(stdout)
+            sys.stderr.buffer.write(stderr)
+            return subprocess.CompletedProcess(command, 1)
+
         with mock.patch.object(desktop_package, "_select_host", return_value=("windows", "amd64")), \
-                mock.patch.object(desktop_package.subprocess, "run", return_value=completed) as run:
+                mock.patch.object(desktop_package.subprocess, "run", side_effect=fail_probe) as run:
             with redirect_stdout(output_capture), redirect_stderr(error_capture):
                 with self.assertRaisesRegex(desktop_package.DesktopPlatformError, "command exited 1"):
                     desktop_package.main(["preflight-windows-temp"])
@@ -189,8 +193,8 @@ class WindowsTempPreflightTests(unittest.TestCase):
         self.assertEqual(output_capture.buffer.getvalue(), stdout)
         self.assertEqual(error_capture.buffer.getvalue(), stderr)
         self.assertEqual(run.call_args.kwargs["timeout"], desktop_package.WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS)
-        self.assertEqual(run.call_args.kwargs["stdout"], subprocess.PIPE)
-        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.PIPE)
+        self.assertIsNone(run.call_args.kwargs["stdout"])
+        self.assertIsNone(run.call_args.kwargs["stderr"])
 
 
 if __name__ == "__main__":

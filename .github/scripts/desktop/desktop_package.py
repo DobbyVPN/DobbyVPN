@@ -524,7 +524,6 @@ def _windows_temp_preflight(env: dict[str, str] | None = None) -> None:
             "-Command", WINDOWS_TEMP_PREFLIGHT_SCRIPT,
         ],
         env=env,
-        capture=True,
         timeout_seconds=WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS,
     )
 
