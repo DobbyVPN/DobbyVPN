@@ -1157,39 +1157,124 @@ func inspectMacOSTextSize(
             try require(urlFinished, "Accessibility Display URL open timed out")
             if let urlError { throw HelperError("Accessibility Display URL open failed: \(urlError)") }
 
+            let displayDeadline = min(Date().addingTimeInterval(10), inspectionDeadline)
+            let displaySearchStarted = ProcessInfo.processInfo.systemUptime
+            var displaySearchAttempts = 0
+            var displayTreeObserved = false
+            var displayTreeRows: [[String: Any]]?
+            var displayTreeOwnerPID: pid_t?
             var button: AXUIElement?
             var buttonDescription = ""
             var buttonEnabled = false
             var textSizeSheetVisible = false
-            let displayDeadline = min(Date().addingTimeInterval(10), inspectionDeadline)
             repeat {
-                if let snapshot = try readSettingsTree(
+                displaySearchAttempts += 1
+                let snapshot = try readSettingsTree(
                     context: "Accessibility Display Text Size control read", deadline: displayDeadline,
-                    read: { nodes -> (Bool, AXUIElement?, String, Bool) in
-                        if try textSizeSheet(nodes) != nil { return (true, nil, "", false) }
-                        let buttons = try nodes.filter {
-                            try label($0, kAXRoleAttribute) == kAXButtonRole &&
-                                label($0, kAXDescriptionAttribute).lowercased().hasPrefix("text size") &&
-                                label($0, kAXDescriptionAttribute).lowercased().contains("preferred reading size") &&
-                                label($0, kAXDescriptionAttribute).lowercased().contains("supported apps")
+                    read: { nodes -> (
+                        sheetVisible: Bool, button: AXUIElement?, description: String,
+                        enabled: Bool, rows: [[String: Any]]
+                    ) in
+                        if try textSizeSheet(nodes) != nil { return (true, nil, "", false, []) }
+                        var rows = [[String: Any]]()
+                        rows.reserveCapacity(nodes.count)
+                        var buttons = [(element: AXUIElement, description: String, rowIndex: Int)]()
+                        for (index, node) in nodes.enumerated() {
+                            let role = try label(node, kAXRoleAttribute)
+                            var row: [String: Any] = ["index": index, "role": role]
+                            if role == kAXButtonRole {
+                                let description = try label(node, kAXDescriptionAttribute)
+                                row["description"] = description
+                                let normalized = description.lowercased()
+                                if normalized.hasPrefix("text size") &&
+                                    normalized.contains("preferred reading size") &&
+                                    normalized.contains("supported apps") {
+                                    buttons.append((node, description, index))
+                                }
+                            }
+                            rows.append(row)
                         }
                         try require(buttons.count <= 1, "Found \(buttons.count) Text size settings buttons")
-                        guard let found = buttons.first else { return (false, nil, "", false) }
-                        let enabled = (try attribute(found, kAXEnabledAttribute)) as? Bool == true
-                        return (false, found, try label(found, kAXDescriptionAttribute), enabled)
+                        guard let found = buttons.first else { return (false, nil, "", false, rows) }
+                        let rawEnabled = try attribute(found.element, kAXEnabledAttribute) as? Bool
+                        if let rawEnabled {
+                            rows[found.rowIndex]["enabled"] = rawEnabled
+                        } else {
+                            rows[found.rowIndex]["enabled"] = NSNull()
+                        }
+                        return (false, found.element, found.description, rawEnabled == true, rows)
                     }
-                ) {
-                    textSizeSheetVisible = snapshot.value.0
-                    button = snapshot.value.1
-                    buttonDescription = snapshot.value.2
-                    buttonEnabled = snapshot.value.3
+                )
+                if let snapshot {
+                    displayTreeObserved = true
+                    displayTreeOwnerPID = snapshot.ownerPID
+                    textSizeSheetVisible = snapshot.value.sheetVisible
+                    displayTreeRows = snapshot.value.rows
+                    button = snapshot.value.button
+                    buttonDescription = snapshot.value.description
+                    buttonEnabled = snapshot.value.enabled
                     if textSizeSheetVisible || button != nil { break }
+                } else {
+                    displayTreeObserved = true
+                    displayTreeRows = nil
+                    displayTreeOwnerPID = nil
                 }
                 if Date() < displayDeadline { Thread.sleep(forTimeInterval: 0.1) }
             } while Date() < displayDeadline
 
+            let displaySearchElapsedMs = (ProcessInfo.processInfo.systemUptime - displaySearchStarted) * 1000
+            let inspectionElapsedBeforeCollectionMs = (20 - inspectionDeadline.timeIntervalSinceNow) * 1000
             if !textSizeSheetVisible {
                 guard let button, buttonEnabled else {
+                    let settings = settingsApp
+                    let frontmost = NSWorkspace.shared.frontmostApplication
+                    let windowList = CGWindowListCopyWindowInfo(
+                        [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+                    ) as? [[String: Any]]
+                    let settingsWindowMetadata: Any
+                    let settingsWindowMetadataError: String?
+                    if let windowList, let settings {
+                        settingsWindowMetadata = windowList.filter {
+                            ($0[kCGWindowOwnerPID as String] as? Int) == Int(settings.processIdentifier)
+                        }
+                        settingsWindowMetadataError = nil
+                    } else if windowList == nil {
+                        settingsWindowMetadata = NSNull()
+                        settingsWindowMetadataError = "CGWindowListCopyWindowInfo returned no window metadata"
+                    } else {
+                        settingsWindowMetadata = NSNull()
+                        settingsWindowMetadataError = "System Settings process identifier unavailable for filtering"
+                    }
+                    let diagnostics: [String: Any] = [
+                        "scope": "roles and button descriptions observed by original search",
+                        "settings_pid": settings.map { Int($0.processIdentifier) } as Any? ?? NSNull(),
+                        "settings_opened_by_helper": settingsOpenedByHelper,
+                        "settings_window_owner_pid": displayTreeOwnerPID.map { Int($0) } as Any? ?? NSNull(),
+                        "settings_window_metadata": settingsWindowMetadata,
+                        "settings_window_metadata_error": settingsWindowMetadataError as Any? ?? NSNull(),
+                        "frontmost_pid": frontmost.map { Int($0.processIdentifier) } as Any? ?? NSNull(),
+                        "last_tree_observed": displayTreeObserved,
+                        "last_tree_available": displayTreeRows != nil,
+                        "last_tree_node_count": displayTreeRows?.count ?? 0,
+                        "last_tree_rows": displayTreeRows as Any? ?? NSNull(),
+                        "display_search_attempts": displaySearchAttempts,
+                        "display_search_elapsed_ms": displaySearchElapsedMs,
+                        "inspection_elapsed_before_collection_ms": inspectionElapsedBeforeCollectionMs,
+                        "text_size_button_found": button != nil,
+                        "text_size_button_enabled": button != nil ? buttonEnabled as Any : NSNull(),
+                        "text_size_button_description": button != nil ? buttonDescription as Any : NSNull(),
+                    ]
+                    do {
+                        let data = try JSONSerialization.data(withJSONObject: diagnostics, options: [.sortedKeys])
+                        var line = Data("[macos-text-size-diagnostics] ".utf8)
+                        line.append(data)
+                        line.append(10)
+                        FileHandle.standardError.write(line)
+                    } catch {
+                        FileHandle.standardError.write(
+                            Data("[macos-text-size-diagnostics] collection failed; original failure preserved: \(error)\n".utf8)
+                        )
+                    }
                     throw HelperError("Display settings did not expose an enabled Text size button")
                 }
                 buttonPressed = true

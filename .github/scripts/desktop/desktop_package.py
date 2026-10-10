@@ -4,16 +4,24 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import ctypes
 import hashlib
+import io
 import json
+import locale
+import ntpath
 import os
 from pathlib import Path
 import platform as host_platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import traceback
+import uuid
 from typing import Any
 
 
@@ -26,118 +34,7 @@ PLATFORMS = ("linux", "windows", "macos")
 NATIVE_UI_REQUIREMENTS = SCRIPT_DIR.parent / "requirements-native-ui.txt"
 WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS = 180
 WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS = 30
-
-WINDOWS_TEMP_PREFLIGHT_SCRIPT = r'''$ErrorActionPreference = "Stop"
-try {
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-Write-Output "Identity=$($identity.Name) SID=$($identity.User.Value) IsSystem=$($identity.IsSystem)"
-foreach ($name in @("TEMP", "TMP", "SystemTemp", "DOTNET_ROLL_FORWARD")) {
-  Write-Output "$name=$([Environment]::GetEnvironmentVariable($name, "Process"))"
-}
-$memberDefinition = @'
-[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetTempPathW", ExactSpelling=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
-public static extern uint GetTempPathW(uint length, System.Text.StringBuilder path);
-[System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint="GetTempPath2W", ExactSpelling=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode, SetLastError=true)]
-public static extern uint GetTempPath2W(uint length, System.Text.StringBuilder path);
-'@
-[Console]::Out.WriteLine("Windows temp preflight phase=Add-Type start utc=$([DateTime]::UtcNow.ToString('o'))")
-[Console]::Out.Flush()
-Add-Type -Namespace DobbyVpn -Name TempPaths -MemberDefinition $memberDefinition -ErrorAction Stop
-[Console]::Out.WriteLine("Windows temp preflight phase=Add-Type complete utc=$([DateTime]::UtcNow.ToString('o'))")
-[Console]::Out.Flush()
-function Read-TempPath([bool]$modern) {
-  $buffer = [System.Text.StringBuilder]::new(32768)
-  if ($modern) {
-    $length = [DobbyVpn.TempPaths]::GetTempPath2W([uint32]$buffer.Capacity, $buffer)
-  } else {
-    [Console]::Out.WriteLine("Windows temp preflight phase=GetTempPathW start utc=$([DateTime]::UtcNow.ToString('o'))")
-    [Console]::Out.Flush()
-    $length = [DobbyVpn.TempPaths]::GetTempPathW([uint32]$buffer.Capacity, $buffer)
-    [Console]::Out.WriteLine("Windows temp preflight phase=GetTempPathW complete utc=$([DateTime]::UtcNow.ToString('o'))")
-    [Console]::Out.Flush()
-  }
-  if ($length -eq 0) { throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
-  if ($length -ge $buffer.Capacity) { throw "Native temp path exceeds buffer capacity $($buffer.Capacity): $length" }
-  return $buffer.ToString()
-}
-$legacyPath = Read-TempPath $false
-Write-Output "GetTempPathW=$legacyPath"
-$modernAvailable = $true
-try {
-  $modernPath = Read-TempPath $true
-  Write-Output "GetTempPath2W=$modernPath"
-} catch [System.EntryPointNotFoundException] {
-  $modernAvailable = $false
-  $modernPath = $legacyPath
-  Write-Output "GetTempPath2W=unavailable fallback=GetTempPathW"
-}
-$candidates = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-function Add-TempCandidate([string]$label, [string]$path) {
-  if ([string]::IsNullOrWhiteSpace($path)) { return }
-  $resolved = [System.IO.Path]::GetFullPath($path)
-  $root = [System.IO.Path]::GetPathRoot($resolved)
-  $resolved = $resolved.TrimEnd([char[]]@('\', '/'))
-  if ($resolved.Length -lt $root.Length) { $resolved = $root }
-  if ($candidates.ContainsKey($resolved)) {
-    $candidates[$resolved] = $candidates[$resolved] + "," + $label
-  } else {
-    $candidates.Add($resolved, $label)
-  }
-}
-Add-TempCandidate "GetTempPathW" $legacyPath
-if ($modernAvailable) { Add-TempCandidate "GetTempPath2W" $modernPath }
-$failures = [System.Collections.Generic.List[string]]::new()
-function Format-TempFailure([string]$label, $record) {
-  $details = $record | Format-List * -Force | Out-String -Width 4096
-  return "$label`n$details`nCLR exception:`n$($record.Exception.ToString())`nPowerShell script stack:`n$($record.ScriptStackTrace)"
-}
-foreach ($candidate in $candidates.GetEnumerator()) {
-  $path = $candidate.Key
-  $labels = $candidate.Value
-  Write-Output "TempCandidate=$labels path=$path"
-  $probe = Join-Path $path ("dobbyvpn-temp-preflight-" + [Guid]::NewGuid().ToString("N") + ".tmp")
-  $stream = $null
-  $created = $false
-  $primary = $null
-  $cleanupErrors = [System.Collections.Generic.List[object]]::new()
-  try {
-    $attributes = [System.IO.File]::GetAttributes($path)
-    if (($attributes -band [System.IO.FileAttributes]::Directory) -eq 0) { throw "Temp candidate is not a directory: $path" }
-    $drive = [System.IO.DriveInfo]::new([System.IO.Path]::GetPathRoot($path))
-    $free = $drive.AvailableFreeSpace
-    Write-Output "TempCandidate=$labels available_bytes=$free"
-    $stream = [System.IO.File]::Open($probe, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
-    $created = $true
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes("DobbyVPN Windows temp preflight`n")
-    $stream.Write($bytes, 0, $bytes.Length)
-    $stream.Flush($true)
-  } catch {
-    $primary = $_
-  } finally {
-    if ($null -ne $stream) {
-      try { $stream.Dispose() } catch { $cleanupErrors.Add($_) }
-    }
-    if ($created) {
-      try { [System.IO.File]::Delete($probe) } catch { $cleanupErrors.Add($_) }
-    }
-  }
-  if ($null -ne $primary) { $failures.Add((Format-TempFailure "Temp candidate $labels primary failure" $primary)) }
-  foreach ($cleanupError in $cleanupErrors) {
-    $failures.Add((Format-TempFailure "Temp candidate $labels cleanup failure" $cleanupError))
-  }
-  if ($null -eq $primary -and $cleanupErrors.Count -eq 0) { Write-Output "TempCandidate=$labels create_write_delete=passed" }
-}
-if ($failures.Count -gt 0) {
-  [Console]::Error.WriteLine("Windows temp preflight failed:")
-  foreach ($failure in $failures) { [Console]::Error.WriteLine($failure) }
-  exit 1
-}
-} catch {
-  $details = $_ | Format-List * -Force | Out-String -Width 4096
-  [Console]::Error.WriteLine("Windows temp preflight exception:`n$details`nCLR exception:`n$($_.Exception.ToString())`nPowerShell script stack:`n$($_.ScriptStackTrace)")
-  exit 1
-}
-'''
+WINDOWS_TEMP_PATH_BUFFER_CAPACITY = 32768
 
 
 class DesktopPlatformError(RuntimeError):
@@ -207,6 +104,188 @@ def _run(
     if check and completed.returncode != 0:
         _fail(f"{label}: command exited {completed.returncode}")
     return completed
+
+
+def _windows_identity_details() -> tuple[str, str]:
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    whoami = Path(system_root) / "System32" / "whoami.exe"
+    completed = subprocess.run(
+        [str(whoami), "/user", "/fo", "csv", "/nh"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    stdout = completed.stdout or b""
+    stderr = completed.stderr or b""
+    _forward(sys.stdout, stdout)
+    _forward(sys.stderr, stderr)
+    if completed.returncode != 0:
+        raise OSError(f"{whoami}: command exited {completed.returncode}")
+
+    encoding = locale.getpreferredencoding(False) or "utf-8"
+    decoded = stdout.decode(encoding, errors="replace")
+    rows = list(csv.reader(io.StringIO(decoded)))
+    if not rows or len(rows[0]) < 2:
+        raise ValueError(f"{whoami}: expected account and SID in CSV output")
+    return rows[0][0], rows[0][1]
+
+
+def _windows_api_error() -> OSError:
+    return ctypes.WinError(ctypes.get_last_error())
+
+
+def _call_windows_temp_path(function: Any, function_name: str) -> str:
+    function.argtypes = (ctypes.c_uint32, ctypes.POINTER(ctypes.c_wchar))
+    function.restype = ctypes.c_uint32
+    buffer = ctypes.create_unicode_buffer(WINDOWS_TEMP_PATH_BUFFER_CAPACITY)
+    length = function(len(buffer), buffer)
+    if length == 0:
+        raise _windows_api_error()
+    if length >= len(buffer):
+        raise OSError(
+            f"{function_name} path exceeds buffer capacity {len(buffer)}: {length}"
+        )
+    return buffer.value
+
+
+def _windows_temp_paths(kernel32: Any) -> tuple[str, str | None]:
+    legacy_path = _call_windows_temp_path(kernel32.GetTempPathW, "GetTempPathW")
+    print(f"GetTempPathW={legacy_path}", flush=True)
+    try:
+        modern_function = kernel32.GetTempPath2W
+    except AttributeError:
+        return legacy_path, None
+    return legacy_path, _call_windows_temp_path(modern_function, "GetTempPath2W")
+
+
+def _normalized_temp_candidates(
+    paths: list[tuple[str, str]],
+) -> list[tuple[str, list[str]]]:
+    candidates: list[tuple[str, list[str]]] = []
+    positions: dict[str, int] = {}
+    for label, path in paths:
+        if not path or not path.strip():
+            continue
+        resolved = ntpath.abspath(path)
+        root = ntpath.splitdrive(resolved)[0] + ntpath.sep
+        trimmed = resolved.rstrip("\\/")
+        if len(trimmed) < len(root):
+            resolved = root
+        else:
+            resolved = trimmed
+        key = ntpath.normcase(resolved)
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(candidates)
+            candidates.append((resolved, [label]))
+        else:
+            candidates[position][1].append(label)
+    return candidates
+
+
+def _probe_windows_temp_candidate(
+    path: str,
+    labels: list[str],
+) -> list[tuple[str, BaseException]]:
+    label_text = ",".join(labels)
+    print(f"TempCandidate={label_text} path={path}", flush=True)
+    probe = ntpath.join(
+        path,
+        f"dobbyvpn-temp-preflight-{uuid.uuid4().hex}.tmp",
+    )
+    descriptor: int | None = None
+    created = False
+    primary: BaseException | None = None
+    cleanup_errors: list[BaseException] = []
+    try:
+        attributes = os.stat(path)
+        if not stat.S_ISDIR(attributes.st_mode):
+            raise NotADirectoryError(f"Temp candidate is not a directory: {path}")
+        free = shutil.disk_usage(path).free
+        print(f"TempCandidate={label_text} available_bytes={free}", flush=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(probe, flags, 0o600)
+        created = True
+        payload = b"DobbyVPN Windows temp preflight\n"
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError("temporary preflight write made no progress")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+    except Exception as error:
+        primary = error
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except Exception as error:
+                cleanup_errors.append(error)
+        if created:
+            try:
+                os.unlink(probe)
+            except Exception as error:
+                cleanup_errors.append(error)
+
+    failures: list[tuple[str, BaseException]] = []
+    if primary is not None:
+        failures.append((f"Temp candidate {label_text} primary failure", primary))
+    failures.extend(
+        (f"Temp candidate {label_text} cleanup failure", error)
+        for error in cleanup_errors
+    )
+    if not failures:
+        print(f"TempCandidate={label_text} create_write_delete=passed", flush=True)
+    return failures
+
+
+def _print_preflight_exception(
+    label: str,
+    error: BaseException,
+) -> None:
+    print(label, file=sys.stderr, flush=True)
+    traceback.print_exception(
+        type(error),
+        error,
+        error.__traceback__,
+        file=sys.stderr,
+    )
+    sys.stderr.flush()
+
+
+def _windows_temp_preflight_probe() -> int:
+    try:
+        if os.name != "nt":
+            raise OSError("Windows temp preflight probe requires Windows")
+        identity, sid = _windows_identity_details()
+        is_system = sid == "S-1-5-18"
+        print(f"Identity={identity} SID={sid} IsSystem={is_system}", flush=True)
+        for name in ("TEMP", "TMP", "SystemTemp", "DOTNET_ROLL_FORWARD"):
+            print(f"{name}={os.environ.get(name, '')}", flush=True)
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        legacy_path, modern_path = _windows_temp_paths(kernel32)
+        paths = [("GetTempPathW", legacy_path)]
+        if modern_path is None:
+            print("GetTempPath2W=unavailable fallback=GetTempPathW", flush=True)
+        else:
+            print(f"GetTempPath2W={modern_path}", flush=True)
+            paths.append(("GetTempPath2W", modern_path))
+
+        failures: list[tuple[str, BaseException]] = []
+        for path, labels in _normalized_temp_candidates(paths):
+            failures.extend(_probe_windows_temp_candidate(path, labels))
+        if failures:
+            print("Windows temp preflight failed:", file=sys.stderr, flush=True)
+            for label, error in failures:
+                _print_preflight_exception(label, error)
+            return 1
+        return 0
+    except Exception as error:
+        _print_preflight_exception("Windows temp preflight exception:", error)
+        return 1
 
 
 def _emit_file(label: str, path: Path) -> None:
@@ -528,8 +607,12 @@ def _windows_temp_preflight(env: dict[str, str] | None = None) -> None:
     _run(
         "Windows temp preflight",
         [
-            "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
-            "-Command", WINDOWS_TEMP_PREFLIGHT_SCRIPT,
+            sys.executable,
+            "-c",
+            "import runpy, sys; "
+            "raise SystemExit(runpy.run_path(sys.argv[1])"
+            "['_windows_temp_preflight_probe']())",
+            str(Path(__file__).resolve()),
         ],
         env=env,
         timeout_seconds=WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS,

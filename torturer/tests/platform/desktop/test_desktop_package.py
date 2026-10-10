@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -107,6 +108,19 @@ class WindowsMSIFailureTests(unittest.TestCase):
 
 
 class WindowsTempPreflightTests(unittest.TestCase):
+    class NativeTempPath:
+        def __init__(self, path: str = "", *, result: int | None = None) -> None:
+            self.path = path
+            self.result = result
+            self.capacities: list[int] = []
+
+        def __call__(self, capacity: int, buffer: object) -> int:
+            self.capacities.append(capacity)
+            if self.result == 0:
+                return 0
+            setattr(buffer, "value", self.path)
+            return self.result if self.result is not None else len(self.path)
+
     def _build_args(self, output_dir: Path) -> argparse.Namespace:
         return argparse.Namespace(
             platform="windows",
@@ -117,6 +131,128 @@ class WindowsTempPreflightTests(unittest.TestCase):
             debug=False,
             skip_deps=True,
         )
+
+    def test_native_temp_paths_use_bounded_buffers_and_only_fallback_when_missing(self) -> None:
+        legacy = self.NativeTempPath("C:\\Windows\\Temp\\")
+        modern = self.NativeTempPath("C:\\Windows\\SystemTemp\\")
+        with redirect_stdout(StringIO()):
+            paths = desktop_package._windows_temp_paths(
+                SimpleNamespace(GetTempPathW=legacy, GetTempPath2W=modern)
+            )
+        self.assertEqual(legacy.capacities, [32768])
+        self.assertEqual(modern.capacities, [32768])
+        self.assertEqual(paths, ("C:\\Windows\\Temp\\", "C:\\Windows\\SystemTemp\\"))
+
+        missing_modern = self.NativeTempPath("C:\\Windows\\Temp\\")
+        with redirect_stdout(StringIO()):
+            fallback = desktop_package._windows_temp_paths(
+                SimpleNamespace(GetTempPathW=missing_modern)
+            )
+        self.assertEqual(fallback, ("C:\\Windows\\Temp\\", None))
+
+    def test_native_temp_path_failure_is_not_treated_as_missing_entrypoint(self) -> None:
+        legacy = self.NativeTempPath("C:\\Windows\\Temp\\")
+        modern = self.NativeTempPath(result=0)
+        output = StringIO()
+        with mock.patch.object(
+            desktop_package, "_windows_api_error", side_effect=OSError("native path failure")
+        ):
+            with redirect_stdout(output):
+                with self.assertRaisesRegex(OSError, "native path failure"):
+                    desktop_package._windows_temp_paths(
+                        SimpleNamespace(GetTempPathW=legacy, GetTempPath2W=modern)
+                    )
+        self.assertEqual(output.getvalue(), "GetTempPathW=C:\\Windows\\Temp\\\n")
+
+    def test_temp_candidates_deduplicate_case_insensitively(self) -> None:
+        self.assertEqual(
+            desktop_package._normalized_temp_candidates(
+                [
+                    ("GetTempPathW", "C:\\WINDOWS\\TEMP\\"),
+                    ("GetTempPath2W", "c:\\windows\\temp"),
+                ]
+            ),
+            [("C:\\WINDOWS\\TEMP", ["GetTempPathW", "GetTempPath2W"])],
+        )
+
+    def test_whoami_output_bytes_are_forwarded_when_identity_is_parsed(self) -> None:
+        stdout = b'"MACHINE\\SYSTEM","S-1-5-18"\r\n'
+        stderr = b"original whoami warning \xff\n"
+        output_capture = BinaryCapture()
+        error_capture = BinaryCapture()
+        completed = subprocess.CompletedProcess(
+            ["whoami.exe"], 0, stdout=stdout, stderr=stderr
+        )
+
+        with mock.patch.object(
+            desktop_package.subprocess, "run", return_value=completed
+        ), redirect_stdout(output_capture), redirect_stderr(error_capture):
+            identity = desktop_package._windows_identity_details()
+
+        self.assertEqual(identity, ("MACHINE\\SYSTEM", "S-1-5-18"))
+        self.assertEqual(output_capture.buffer.getvalue(), stdout)
+        self.assertEqual(error_capture.buffer.getvalue(), stderr)
+
+    def test_whoami_output_bytes_are_forwarded_when_identity_output_is_malformed(self) -> None:
+        stdout = b"malformed identity output \xff\n"
+        stderr = b"original whoami diagnostic \xfe\n"
+        output_capture = BinaryCapture()
+        error_capture = BinaryCapture()
+        completed = subprocess.CompletedProcess(
+            ["whoami.exe"], 0, stdout=stdout, stderr=stderr
+        )
+
+        with mock.patch.object(
+            desktop_package.subprocess, "run", return_value=completed
+        ), redirect_stdout(output_capture), redirect_stderr(error_capture):
+            with self.assertRaisesRegex(ValueError, "expected account and SID"):
+                desktop_package._windows_identity_details()
+
+        self.assertEqual(output_capture.buffer.getvalue(), stdout)
+        self.assertEqual(error_capture.buffer.getvalue(), stderr)
+
+    def test_temp_candidate_preserves_primary_and_all_cleanup_errors(self) -> None:
+        with (
+            mock.patch.object(
+                desktop_package.os, "stat", return_value=SimpleNamespace(st_mode=0o040000)
+            ),
+            mock.patch.object(
+                desktop_package.shutil, "disk_usage", return_value=SimpleNamespace(free=1024)
+            ),
+            mock.patch.object(desktop_package.os, "open", return_value=11),
+            mock.patch.object(
+                desktop_package.os, "write", side_effect=OSError("primary write failure")
+            ),
+            mock.patch.object(
+                desktop_package.os, "close", side_effect=OSError("close cleanup failure")
+            ) as close,
+            mock.patch.object(
+                desktop_package.os, "unlink", side_effect=OSError("delete cleanup failure")
+            ) as unlink,
+            redirect_stdout(StringIO()),
+        ):
+            failures = desktop_package._probe_windows_temp_candidate(
+                r"C:\Windows\Temp", ["GetTempPathW"]
+            )
+
+        self.assertEqual(
+            [failure[0] for failure in failures],
+            [
+                "Temp candidate GetTempPathW primary failure",
+                "Temp candidate GetTempPathW cleanup failure",
+                "Temp candidate GetTempPathW cleanup failure",
+            ],
+        )
+        self.assertEqual(
+            [str(failure[1]) for failure in failures],
+            [
+                "primary write failure",
+                "close cleanup failure",
+                "delete cleanup failure",
+            ],
+        )
+        close.assert_called_once_with(11)
+        unlink.assert_called_once()
 
     def test_failed_temp_preflight_prevents_backend_and_ui_builds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -130,6 +266,18 @@ class WindowsTempPreflightTests(unittest.TestCase):
             self.assertFalse((Path(temporary) / "out").exists())
 
         run.assert_not_called()
+
+    def test_temp_preflight_reuses_python_environment_and_deadline(self) -> None:
+        environment = {"TEMP": "C:\\Windows\\Temp"}
+        with mock.patch.object(desktop_package, "_run") as run:
+            desktop_package._windows_temp_preflight(environment)
+
+        self.assertEqual(run.call_args.args[1][0], sys.executable)
+        self.assertIs(run.call_args.kwargs["env"], environment)
+        self.assertEqual(
+            run.call_args.kwargs["timeout_seconds"],
+            desktop_package.WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS,
+        )
 
     def test_successful_temp_preflight_precedes_backend_and_ui_builds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -192,6 +340,7 @@ class WindowsTempPreflightTests(unittest.TestCase):
 
         self.assertEqual(output_capture.buffer.getvalue(), stdout)
         self.assertEqual(error_capture.buffer.getvalue(), stderr)
+        self.assertEqual(run.call_args.args[0][0], sys.executable)
         self.assertEqual(run.call_args.kwargs["timeout"], desktop_package.WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS)
         self.assertIsNone(run.call_args.kwargs["stdout"])
         self.assertIsNone(run.call_args.kwargs["stderr"])
