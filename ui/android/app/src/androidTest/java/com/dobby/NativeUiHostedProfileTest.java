@@ -4347,7 +4347,13 @@ public final class NativeUiHostedProfileTest {
 
     private void ensureRenderedDisconnected(long timeout) throws Exception {
         JSONObject current = snapshotResult("");
-        if (!"IDLE".equals(current.optString("state"))) {
+        String state = current.optString("state", "");
+        boolean stopped = ("IDLE".equals(state) || "CONFIGURED".equals(state))
+                && Boolean.TRUE.equals(current.opt("cleanup_complete"))
+                && Boolean.FALSE.equals(current.opt("recovering"))
+                && current.isNull("active_profile")
+                && current.isNull("pending_target");
+        if (!stopped) {
             disconnectThroughRenderedUI(timeout);
             return;
         }
