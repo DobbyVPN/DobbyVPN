@@ -1382,11 +1382,24 @@ func run() throws -> [String: Any] {
             // The process can disappear while NSWorkspace is returning its
             // application record. Only report it absent after a fresh check
             // finds no matching live process; a live, unidentifiable process
-            // keeps the original error.
+            // keeps the original error unless this is a PID-and-identity-bound
+            // liveness poll. That poll cannot authorize work, and its caller
+            // already owns the prior launch identity, so defer to its bounded
+            // close poll without returning a replacement identity.
             let stillRunning = NSWorkspace.shared.runningApplications.contains {
                 matchesRequestedApplication($0) && !$0.isTerminated
             }
             if !stillRunning { return ["ready": false, "alive": false] }
+            if let requestedPID, let requestedIdentity = request["identity"] as? String,
+               !requestedIdentity.isEmpty {
+                FileHandle.standardError.write(Data((
+                    "UI process creation time unavailable during bound probe; " +
+                        "pid=\(requestedPID) identity=\(requestedIdentity); " +
+                        "matching process remains listed and is not terminated; " +
+                        "preserving existing identity\n"
+                ).utf8))
+                return ["ready": false, "alive": true]
+            }
         }
         throw HelperError("UI process creation time unavailable")
     }

@@ -2767,7 +2767,8 @@ internal static class Program
                         ? markerValue.GetString() : null;
                 System.Windows.Rect? logViewport = string.IsNullOrEmpty(paletteMarker)
                     ? null : PhysicalBounds(logRoot, "Backend logs");
-                var entries = Walk(logRoot)
+                var initialLogElements = Walk(logRoot).ToArray();
+                var entries = initialLogElements
                     .Where(element => element.Current.ControlType == ControlType.Text)
                     .Select(element =>
                     {
@@ -2806,7 +2807,7 @@ internal static class Program
                 if (verifyDetails)
                 {
                     var detailsViewport = PhysicalBounds(logRoot, "Backend logs");
-                    var details = Walk(logRoot).FirstOrDefault(element => element.Current.Name == "Details" &&
+                    var details = initialLogElements.FirstOrDefault(element => element.Current.Name == "Details" &&
                         element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _) &&
                         VisibleInLogViewport(element, detailsViewport));
                     if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
