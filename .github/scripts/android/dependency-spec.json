@@ -5,6 +5,6 @@
     "build_tools": "36.0.0"
   },
   "go": {
-    "source_commit": "c293dd49cbe25e1fe8d97d94a5cb618e7b6d831e"
+    "source_commit": "2ae494ef9fb90e0da0073c31800ba38870249994"
   }
 }
