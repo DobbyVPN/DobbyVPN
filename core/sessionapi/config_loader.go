@@ -2,18 +2,14 @@ package sessionapi
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
-
-	"core/log"
 )
 
 const configFetchTimeout = 20 * time.Second
@@ -102,43 +98,7 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		return nil
 	}
 	request.Header.Set("User-Agent", "DobbyVPN/"+versionOrDev(l.Version))
-	fetchStartedAt := time.Now()
-	tracePhase := func(phase string, err error) {
-		fields := map[string]any{
-			"phase":      phase,
-			"source_url": source,
-			"elapsed_ms": time.Since(fetchStartedAt).Milliseconds(),
-		}
-		if err != nil {
-			fields["error"] = err.Error()
-		}
-		log.Debug("CONFIGURATION", "configuration URL HTTP fetch timing", fields)
-	}
-	requestTrace := &httptrace.ClientTrace{
-		ConnectStart: func(string, string) {
-			tracePhase("connect_start", nil)
-		},
-		ConnectDone: func(_ string, _ string, err error) {
-			tracePhase("connect_done", err)
-		},
-		TLSHandshakeStart: func() {
-			tracePhase("tls_handshake_start", nil)
-		},
-		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
-			tracePhase("tls_handshake_done", err)
-		},
-		WroteRequest: func(info httptrace.WroteRequestInfo) {
-			tracePhase("wrote_request", info.Err)
-		},
-		GotFirstResponseByte: func() {
-			tracePhase("first_response_byte", nil)
-		},
-	}
-	requestCtx = httptrace.WithClientTrace(requestCtx, requestTrace)
-	request = request.WithContext(requestCtx)
-	tracePhase("fetch_start", nil)
 	response, err := client.Do(request)
-	tracePhase("fetch_return", err)
 	if err != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
