@@ -533,7 +533,7 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
     }
 
     private func attachScreenshot(_ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "dobbyvpn-ui-\(name)"
         attachment.lifetime = .keepAlways
         add(attachment)
