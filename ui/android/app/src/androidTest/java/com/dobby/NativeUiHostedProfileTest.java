@@ -296,6 +296,7 @@ public final class NativeUiHostedProfileTest {
     private int subscriptionRequestCountBeforeLaunch = -1;
     private int savedSourceInitialGets = -1;
     private boolean processColdImportPending;
+    private boolean processColdSavedSourceRestorePending;
     private final File screenshotDirectory = new File(
             // Instrumentation executes in the target application's UID. The
             // instrumentation APK's files directory is a different sandbox and
@@ -440,8 +441,16 @@ public final class NativeUiHostedProfileTest {
         subscriptionControlKey = guiAuto ? command.getString("subscription_control_key") : "";
         subscriptionControlCAPem = guiAuto ? command.getString("subscription_control_ca_pem") : "";
         processColdImportPending = guiAuto && command.optBoolean("process_cold_import", false);
+        processColdSavedSourceRestorePending = guiAuto
+                && IMMEDIATE_SOURCE_ACTIONS_CASE.equals(testCase);
         subscriptionRequestCountBeforeLaunch = guiAuto
                 ? command.optInt("subscription_request_count_before_launch", -1) : -1;
+        if (processColdSavedSourceRestorePending) {
+            if (subscriptionRequestCountBeforeLaunch < 0) {
+                throw new IllegalArgumentException("ANDROID_SAVED_SOURCE_RESTORE_SETUP_INVALID");
+            }
+            savedSourceInitialGets = subscriptionRequestCountBeforeLaunch;
+        }
         if (guiAuto && (subscriptionControlURL.isEmpty() || subscriptionControlKey.isEmpty()
                 || subscriptionControlCAPem.isEmpty())) {
             throw new IllegalArgumentException("ANDROID_SUBSCRIPTION_CONTROL_MISSING");
@@ -491,8 +500,22 @@ public final class NativeUiHostedProfileTest {
                 switch (name) {
                     case "configure": {
                         if (guiAuto) {
-                            configureThroughRenderedUI(configuredSubscriptionURL,
-                                    operationTimeout(operation));
+                            if (processColdSavedSourceRestorePending) {
+                                long restoreDeadline = System.currentTimeMillis()
+                                        + operationTimeout(operation);
+                                markProgress("configure", "surface", "started");
+                                ensureUiSurface(remainingTimeout(
+                                        restoreDeadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
+                                foregroundActivity = ensureForegroundActivity();
+                                markProgress("configure", "surface", "completed");
+                                verifySavedURLRestoration(configuredSubscriptionURL,
+                                        remainingTimeout(restoreDeadline,
+                                                "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
+                                processColdSavedSourceRestorePending = false;
+                            } else {
+                                configureThroughRenderedUI(configuredSubscriptionURL,
+                                        operationTimeout(operation));
+                            }
                             // The one-step configure scenario must prove that
                             // the rendered profile was accepted by Go.  A
                             // later connect/reconnect owns that visible start
@@ -1013,61 +1036,11 @@ public final class NativeUiHostedProfileTest {
         markProgress("configure", "process-cold-import-loaded", "completed");
     }
 
-    private void launchActivityColdSavedSourceRestore(String subscriptionURL, long timeout) throws Exception {
-        long deadline = System.currentTimeMillis() + Math.max(1L, timeout);
-        expectedRenderedSource = subscriptionURL;
-        Activity previous = MainActivity.current;
-        if (previous != null) {
-            InstrumentationRegistry.getInstrumentation().runOnMainSync(previous::finishAndRemoveTask);
-            long finishDeadline = Math.min(deadline, System.currentTimeMillis() + 5_000L);
-            while (MainActivity.current != null && System.currentTimeMillis() < finishDeadline) {
-                SystemClock.sleep(25L);
-            }
-            if (MainActivity.current != null) {
-                throw new IllegalStateException("ANDROID_SAVED_SOURCE_RESTORE_ACTIVITY_DID_NOT_FINISH");
-            }
-        }
-        remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT");
-        JSONObject drained = waitForInFlightGets(0,
-                remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
-        savedSourceInitialGets = drained.getInt("subscription_gets");
-
-        File savedSource = new File(NativeVpnBridge.sourceURLPath(context));
-        File savedSourceDirectory = savedSource.getParentFile();
-        if (savedSourceDirectory == null
-                || (!savedSourceDirectory.isDirectory() && !savedSourceDirectory.mkdirs())) {
-            throw new IllegalStateException("ANDROID_SAVED_SOURCE_DIRECTORY_FAILED");
-        }
-        try (FileOutputStream output = new FileOutputStream(savedSource, false)) {
-            output.write(subscriptionURL.getBytes(StandardCharsets.UTF_8));
-            output.getFD().sync();
-        }
-
-        subscriptionFixturePost("/hold", new byte[0]);
-        try {
-            // The runner may leave a deep-link Activity open before
-            // instrumentation. Finish it while retaining the instrumentation
-            // process, then launch a bare link so the seeded saved URL is the
-            // only source for the production UI's automatic-load path.
-            String output = launchBareLink();
-            if (!output.contains("Status: ok")) {
-                throw new IllegalStateException("ANDROID_SAVED_SOURCE_RESTORE_LAUNCH_FAILED");
-            }
-        } catch (Exception failure) {
-            try {
-                subscriptionFixturePost("/release", new byte[0]);
-            } catch (Exception releaseFailure) {
-                failure.addSuppressed(releaseFailure);
-            }
-            throw failure;
-        }
-        markProgress("configure", "cold-saved-source-launched", "completed");
-    }
-
     private void verifySavedURLRestoration(String subscriptionURL, long timeout) throws Exception {
         long deadline = System.currentTimeMillis() + timeout;
         boolean releaseNeeded = true;
         Throwable primaryFailure = null;
+        expectedRenderedSource = subscriptionURL;
         try {
             waitForUiControl("Loading profiles…", remainingTimeout(
                     deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
@@ -1975,8 +1948,11 @@ public final class NativeUiHostedProfileTest {
                         || !"AUTO_SELECT".equals(auto.optString("active_mode"))) {
                     throw new AssertionError("Typed Configure case did not establish rendered Auto: " + auto);
                 }
-                int selectedIndex = 0;
-                tapEnabledControl("Profile 1 action", deadline);
+                // The active row disconnects. Choose a different fixture row
+                // before returning to Auto through the global action.
+                int activeIndex = auto.getJSONObject("active_profile").getInt("index");
+                int selectedIndex = activeIndex == 0 ? 1 : 0;
+                tapEnabledControl("Profile " + (selectedIndex + 1) + " action", deadline);
                 JSONObject selected = awaitSelection(
                         auto.getLong("generation"), "PROFILE_INDEX", selectedIndex, deadline);
                 tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
@@ -2001,10 +1977,6 @@ public final class NativeUiHostedProfileTest {
                 break;
             }
             case IMMEDIATE_SOURCE_ACTIONS_CASE: {
-                launchActivityColdSavedSourceRestore(subscriptionURL,
-                        remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
-                verifySavedURLRestoration(subscriptionURL,
-                        remainingTimeout(deadline, "ANDROID_SAVED_SOURCE_RESTORE_TIMEOUT"));
                 verifyAcceptedInventoryAfterActivityReopen(subscriptionURL, deadline);
                 int beforeColdImport = subscriptionFixtureState().getInt("subscription_gets");
                 verifyColdDeepLinkImport(subscriptionURL, beforeColdImport,

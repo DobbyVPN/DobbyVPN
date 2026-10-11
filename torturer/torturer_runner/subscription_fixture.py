@@ -365,9 +365,20 @@ class SubscriptionFixture:
         self._control_request("/profile", body=content)
 
     def hold_responses(self) -> None:
+        if self.platform == "android":
+            with self.control_condition:
+                self.hold_gets = True
+                self.release_permits = 0
+            return
         self._control_request("/hold", body=b"")
 
     def release_responses(self) -> None:
+        if self.platform == "android":
+            with self.control_condition:
+                self.hold_gets = False
+                self.release_permits = 0
+                self.control_condition.notify_all()
+            return
         self._control_request("/release", body=b"")
 
     def release_one_response(self) -> None:

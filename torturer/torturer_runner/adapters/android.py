@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import tempfile
@@ -20,6 +20,7 @@ import threading
 import time
 import tomllib
 from typing import Callable, Mapping
+from urllib.parse import quote
 import uuid
 
 from torturer_runner.android_diagnostics import OPTIONAL_MISSING, retained_log_sources
@@ -1223,21 +1224,70 @@ class AndroidAdapter:
             _remaining(deadline, "ANDROID_COMMAND_STAGE_TIMEOUT"),
             "ANDROID_COMMAND_STAGE_FAILED",
         )
-        instrument = self._run_instrumentation(
-            command_file.name,
-            deadline,
-            preserve_active=preserve_active,
-            output_name=output_name,
-            progress_name=progress_name,
-            test_case=test_case,
-            process_cold_import_url=(
-                self._subscription_fixture.url
-                if self.ui_mode == "gui-auto"
-                and self._subscription_fixture is not None
-                and json.loads(command_bytes.decode("utf-8")).get("process_cold_import") is True
-                else None
-            ),
-        )
+        try:
+            command_values = json.loads(command_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ScenarioExecutionError("ANDROID_COMMAND_STAGE_FAILED") from error
+        fixture = self._subscription_fixture
+        saved_source_url = None
+        cold_launch_uri = None
+        fixture_held = False
+        if test_case == "android:immediate-source-actions":
+            initial_gets = command_values.get("subscription_request_count_before_launch")
+            if (
+                self.ui_mode != "gui-auto"
+                or fixture is None
+                or not isinstance(initial_gets, int)
+                or isinstance(initial_gets, bool)
+                or initial_gets < 0
+            ):
+                raise ScenarioExecutionError("ANDROID_SAVED_SOURCE_RESTORE_SETUP_INVALID")
+            saved_source_url = (
+                f"{fixture.url}?android-case={test_case.removeprefix('android:')}"
+            )
+            cold_launch_uri = "dobbyvpn://"
+            device_files.append("configs/connection-url.txt")
+        elif (
+            self.ui_mode == "gui-auto"
+            and fixture is not None
+            and command_values.get("process_cold_import") is True
+        ):
+            cold_launch_uri = "dobbyvpn://import?url=" + quote(fixture.url, safe="")
+        primary_error: BaseException | None = None
+        try:
+            if saved_source_url is not None:
+                fixture.hold_responses()
+                fixture_held = True
+                self._stage_private_file(
+                    "configs/connection-url.txt",
+                    saved_source_url.encode("utf-8"),
+                    _remaining(deadline, "ANDROID_SAVED_SOURCE_STAGE_TIMEOUT"),
+                    "ANDROID_SAVED_SOURCE_STAGE_FAILED",
+                )
+            instrument = self._run_instrumentation(
+                command_file.name,
+                deadline,
+                preserve_active=preserve_active,
+                output_name=output_name,
+                progress_name=progress_name,
+                test_case=test_case,
+                cold_launch_uri=cold_launch_uri,
+            )
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            if fixture_held:
+                try:
+                    fixture.release_responses()
+                except BaseException as release_error:
+                    if primary_error is None:
+                        raise
+                    add_exception_notes(
+                        primary_error,
+                        "android_saved_source_fixture_release",
+                        release_error,
+                    )
         if (
             not _instrumentation_succeeded(instrument)
         ):
@@ -1545,16 +1595,20 @@ class AndroidAdapter:
     def _stage_private_file(
         self, name: str, payload: bytes, timeout: float, failure_code: str
     ) -> None:
-        destination = f"{_APP_FILES}/{name}"
+        relative = PurePosixPath(name)
+        destination = str(PurePosixPath(_APP_FILES) / relative)
+        parent = str(PurePosixPath(destination).parent)
         temporary = f"{destination}.tmp"
         script = (
-            f"test -d {_APP_DATA} && "
+            f"test -d {shlex.quote(_APP_DATA)} && "
             f"owner=$(stat -c %u:%g {_APP_DATA}) && "
-            f"mkdir -p {_APP_FILES} && chown \"$owner\" {_APP_FILES} && "
-            f"chmod 700 {_APP_FILES} && restorecon {_APP_FILES} && "
-            f"cat > {temporary} && chown \"$owner\" {temporary} && "
-            f"chmod 600 {temporary} && restorecon {temporary} && "
-            f"mv -f {temporary} {destination}"
+            f"mkdir -p {shlex.quote(_APP_FILES)} {shlex.quote(parent)} && "
+            f"chown \"$owner\" {shlex.quote(_APP_FILES)} {shlex.quote(parent)} && "
+            f"chmod 700 {shlex.quote(_APP_FILES)} {shlex.quote(parent)} && "
+            f"restorecon {shlex.quote(_APP_FILES)} {shlex.quote(parent)} && "
+            f"cat > {shlex.quote(temporary)} && chown \"$owner\" {shlex.quote(temporary)} && "
+            f"chmod 600 {shlex.quote(temporary)} && restorecon {shlex.quote(temporary)} && "
+            f"mv -f {shlex.quote(temporary)} {shlex.quote(destination)}"
         )
         self._adb(
             ("shell", "-T", "sh", "-c", shlex.quote(script)),
@@ -1594,7 +1648,7 @@ class AndroidAdapter:
         output_name: str | None = None,
         progress_name: str | None = None,
         test_case: str | None = None,
-        process_cold_import_url: str | None = None,
+        cold_launch_uri: str | None = None,
     ) -> CommandResult:
         controls = self._active_controls
         # A rendered GUI invocation must keep the instrumentation boundary
@@ -1621,21 +1675,31 @@ class AndroidAdapter:
                 _remaining(deadline, "ANDROID_COLD_START_TIMEOUT"),
                 "ANDROID_COLD_START_FAILED",
             )
-            if process_cold_import_url is not None:
-                from urllib.parse import quote
-
-                link = "dobbyvpn://import?url=" + quote(process_cold_import_url, safe="")
+            if cold_launch_uri is not None:
+                launch_timeout_code, launch_failure_code = (
+                    ("ANDROID_COLD_IMPORT_TIMEOUT", "ANDROID_COLD_IMPORT_LAUNCH_FAILED")
+                    if cold_launch_uri.startswith("dobbyvpn://import?")
+                    else (
+                        "ANDROID_SAVED_SOURCE_RESTORE_LAUNCH_TIMEOUT",
+                        "ANDROID_SAVED_SOURCE_RESTORE_LAUNCH_FAILED",
+                    )
+                )
                 start = self._adb(
                     (
                         "shell", "am", "start", "-W", "-a",
-                        "android.intent.action.VIEW", "-d", link, "-n", _MAIN_ACTIVITY,
+                        "android.intent.action.VIEW", "-d", cold_launch_uri,
+                        "-n", _MAIN_ACTIVITY,
                     ),
-                    _remaining(deadline, "ANDROID_COLD_IMPORT_TIMEOUT"),
-                    "ANDROID_COLD_IMPORT_LAUNCH_FAILED",
+                    _remaining(deadline, launch_timeout_code),
+                    launch_failure_code,
                     allow_nonzero=True,
                 )
-                if start.returncode != 0 or b"Status: ok" not in start.stdout or b"Complete" not in start.stdout:
-                    failure = ScenarioExecutionError("ANDROID_COLD_IMPORT_LAUNCH_FAILED")
+                if (
+                    start.returncode != 0
+                    or b"Status: ok" not in start.stdout
+                    or b"Complete" not in start.stdout
+                ):
+                    failure = ScenarioExecutionError(launch_failure_code)
                     _append_command_result_notes(failure, start)
                     raise failure
         if preserve_active:
@@ -1676,7 +1740,10 @@ class AndroidAdapter:
         )
         arguments = (
             "shell", "am", "instrument", "-w", "-r",
-            *(("--no-restart",) if preserve_active or process_cold_import_url is not None else ()),
+            *(("--no-restart",) if (
+                preserve_active
+                or cold_launch_uri is not None
+            ) else ()),
             "-e", "dobby.real_profile", "1",
             "-e", "dobby.hosted_command_file", command_name, "-e", "class",
             test_selector, _INSTRUMENTATION_COMPONENT,

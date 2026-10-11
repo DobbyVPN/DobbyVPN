@@ -45,6 +45,8 @@ def fixture_stub(
         profile_bytes=profile_bytes,
         replacement_calls=[],
         control_stats=lambda: {"subscription_gets": subscription_gets},
+        hold_responses=lambda: None,
+        release_responses=lambda: None,
     )
 
     def replace_response(content: bytes) -> None:
@@ -246,8 +248,80 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertEqual(
                 command["subscription_control_ca_pem"], FIXTURE_CA_PEM
             )
-            self.assertNotIn("saved_source_restore_only", command)
-            self.assertNotIn("saved_source_restore_preverified", command)
+
+    def test_saved_source_case_holds_and_stages_before_instrumentation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = phase_adapter(root)
+            fixture = adapter._subscription_fixture
+            events: list[object] = []
+            fixture.hold_responses = lambda: events.append("hold")
+
+            def release() -> None:
+                events.append("release")
+                raise RuntimeError("fixture release failed")
+
+            fixture.release_responses = release
+            staged: list[tuple[str, bytes]] = []
+            written_command: dict[str, object] = {}
+            write_command = adapter._write_command
+
+            def capture_command(*args: object, **kwargs: object):
+                command_file, profile_name, output_name = write_command(*args, **kwargs)
+                written_command.update(json.loads(command_file.read_text(encoding="utf-8")))
+                return command_file, profile_name, output_name
+
+            def stage(name: str, payload: bytes, *_args: object) -> None:
+                staged.append((name, payload))
+                events.append(("stage", name))
+
+            def instrument(*_args: object, **kwargs: object) -> object:
+                events.append(("instrument", kwargs.get("cold_launch_uri")))
+                raise ScenarioExecutionError("ANDROID_INSTRUMENTATION_FAILED")
+
+            adapter._stage_private_file = stage
+            adapter._run_instrumentation = instrument
+            adapter._write_command = capture_command
+            configure = SimpleNamespace(
+                id="configure", operation="configure", timeout_seconds=90
+            )
+            device_files: list[str] = []
+
+            with self.assertRaisesRegex(
+                ScenarioExecutionError, "ANDROID_INSTRUMENTATION_FAILED"
+            ) as caught:
+                adapter._execute_phase(
+                    SimpleNamespace(),
+                    (configure,),
+                    time.monotonic() + 60,
+                    device_files,
+                    test_case="android:immediate-source-actions",
+                )
+
+            self.assertEqual(
+                written_command["test_case"], "android:immediate-source-actions"
+            )
+            self.assertEqual(written_command["subscription_request_count_before_launch"], 0)
+            source_url = (
+                "https://127.0.0.1:54432/subscription"
+                "?android-case=immediate-source-actions"
+            )
+            self.assertEqual(
+                staged[-1], ("configs/connection-url.txt", source_url.encode("utf-8"))
+            )
+            self.assertIn("configs/connection-url.txt", device_files)
+            self.assertLess(events.index("hold"), events.index(("stage", "configs/connection-url.txt")))
+            self.assertLess(
+                events.index(("stage", "configs/connection-url.txt")),
+                events.index(("instrument", "dobbyvpn://")),
+            )
+            self.assertLess(
+                events.index(("instrument", "dobbyvpn://")), events.index("release")
+            )
+            self.assertTrue(any(
+                "android_saved_source_fixture_release_error=RuntimeError" in note
+                for note in getattr(caught.exception, "__notes__", ())
+            ))
 
     def test_each_rendered_case_selects_its_named_instrumentation_method(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -524,38 +598,49 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertFalse(any(root.glob(".android-n11-*")))
             self.assertIsNone(adapter._subscription_fixture)
 
-    def test_hosted_valid_import_launches_after_force_stop_before_instrumentation(self) -> None:
+    def test_hosted_cold_launch_uri_precedes_instrumentation_and_preserves_process(self) -> None:
         adapter = object.__new__(AndroidAdapter)
         adapter.ui_mode = "gui-auto"
         adapter._active_controls = ()
         adapter._progress_sink = None
-        calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+        calls: list[tuple[str, ...]] = []
 
         def adb(arguments: tuple[str, ...], _timeout: float, _failure: str, **options: object):
-            calls.append((arguments, options))
+            calls.append(tuple(arguments))
             output = b"Status: ok\nComplete\n" if "start" in arguments else b""
             return SimpleNamespace(returncode=0, stdout=output, stderr=b"", timed_out=False)
 
         adapter._adb = adb  # type: ignore[method-assign]
-        url = "https://127.0.0.1:54432/subscription"
-
-        result = adapter._run_instrumentation(
-            "android-hosted.command.json",
-            time.monotonic() + 20,
-            process_cold_import_url=url,
-        )
-
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(calls[0][0], ("shell", "am", "force-stop", _PACKAGE_NAME))
-        self.assertEqual(
-            calls[1][0],
+        launches = (
             (
-                "shell", "am", "start", "-W", "-a", "android.intent.action.VIEW",
-                "-d", "dobbyvpn://import?url=https%3A%2F%2F127.0.0.1%3A54432%2Fsubscription",
-                "-n", _MAIN_ACTIVITY,
+                "dobbyvpn://import?url=https%3A%2F%2F127.0.0.1%3A54432%2Fsubscription",
+                None,
             ),
+            ("dobbyvpn://", "android:immediate-source-actions"),
         )
-        self.assertEqual(calls[2][0][:6], ("shell", "am", "instrument", "-w", "-r", "--no-restart"))
+        for uri, test_case in launches:
+            with self.subTest(uri=uri):
+                calls.clear()
+                result = adapter._run_instrumentation(
+                    "android-hosted.command.json",
+                    time.monotonic() + 20,
+                    test_case=test_case,
+                    cold_launch_uri=uri,
+                )
+
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(calls[0], ("shell", "am", "force-stop", _PACKAGE_NAME))
+                self.assertEqual(
+                    calls[1],
+                    (
+                        "shell", "am", "start", "-W", "-a",
+                        "android.intent.action.VIEW", "-d", uri, "-n", _MAIN_ACTIVITY,
+                    ),
+                )
+                self.assertEqual(
+                    calls[2][:6],
+                    ("shell", "am", "instrument", "-w", "-r", "--no-restart"),
+                )
 
     def _run_ui(
         self, start_output: bytes, native_cases: list[str] | None = None,
