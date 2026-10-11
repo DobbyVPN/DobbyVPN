@@ -474,7 +474,9 @@ func logText(_ entries: [DobbyLogEntry], expanded: Set<String>) -> NSAttributedS
         let header = [entry.timestamp, entry.level, entry.source].filter { !$0.isEmpty }.joined(separator: " · ")
         output.append(NSAttributedString(string: header + "\n" + entry.message + "\n", attributes: [.font: logFont, .foregroundColor: color]))
         if entry.level != "RAW", let link = logDetailsURL(entry) {
-            output.append(NSAttributedString(string: expanded.contains(entry.id) ? "Hide details\n" : "Details\n", attributes: [.font: logFont, .link: link]))
+            let label = expanded.contains(entry.id) ? "Hide details" : "Details"
+            output.append(NSAttributedString(string: label, attributes: [.font: logFont, .link: link]))
+            output.append(NSAttributedString(string: "\n", attributes: [.font: logFont]))
             if expanded.contains(entry.id) {
                 output.append(NSAttributedString(string: entry.raw + "\n", attributes: [.font: logFont, .foregroundColor: normalLogColor]))
             }
