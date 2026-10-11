@@ -2292,14 +2292,29 @@ internal static partial class Program
             AssertLogsCase(assertions, $"frozen-visible-anchor-stays-stable-after-append-{index + 1}",
                 frozenWindow, FirstVisibleLogWindow(app));
         }
-        var rootWhileFrozen = AutomationElement.FromHandle(app.Window);
+        ScrollLogsToTail(app);
+        WaitLogsCase(deadline, "bottom of frozen log snapshot", () => CurrentVerticalScrollPercent(app) == 100.0,
+            "Frozen log snapshot did not reach its rendered bottom before resume");
+
+        AutomationElement? FindVisibleAppendedDetails(NativeDiagnostics.Entry entry)
+        {
+            var root = AutomationElement.FromHandle(app.Window);
+            var details = FindUniqueAutomationId(root, LogPresentationState.DetailsAutomationId(entry));
+            if (details is null || details.Current.IsOffscreen) return null;
+            var viewportBounds = PhysicalBounds(RequireLogsViewport(app), "Backend logs");
+            return HasUsableBounds(System.Windows.Rect.Intersect(details.Current.BoundingRectangle, viewportBounds))
+                ? details : null;
+        }
+
         foreach (var (entry, index) in appendedEntries.Select((entry, index) => (entry, index)))
             AssertLogsCase(assertions, $"controlled-append-{index + 1}-remains-unrendered-while-frozen", null,
-                FindUniqueAutomationId(rootWhileFrozen, LogPresentationState.DetailsAutomationId(entry))?.Current.AutomationId);
+                FindUniqueAutomationId(AutomationElement.FromHandle(app.Window),
+                    LogPresentationState.DetailsAutomationId(entry))?.Current.AutomationId);
         AddScreenshot(app, "logs-freeze-resume", "frozen", deadline, screenshots, screenshotDirectory);
 
         RequireForeground(app.Window, "resuming log follow with a wheel input over the rendered log viewport");
         var resumeStartPercent = CurrentVerticalScrollPercent(app);
+        AssertLogsCase(assertions, "frozen-snapshot-positioned-at-bottom-before-resume", 100.0, resumeStartPercent);
         var resumeStartWindow = FirstVisibleLogWindow(app)
             ?? throw new InvalidOperationException("Frozen log viewport did not expose a visible structured record before resume");
         var resumeAssertion = new Dictionary<string, object?>
@@ -2325,9 +2340,7 @@ internal static partial class Program
             {
                 resumedPercent = CurrentVerticalScrollPercent(app);
                 resumedWindow = FirstVisibleLogWindow(app);
-                var currentRoot = AutomationElement.FromHandle(app.Window);
-                appendedRecordsRendered = appendedEntries.All(entry =>
-                    FindUniqueAutomationId(currentRoot, LogPresentationState.DetailsAutomationId(entry)) is not null);
+                appendedRecordsRendered = appendedEntries.All(entry => FindVisibleAppendedDetails(entry) is not null);
                 resumeAssertion["actual"] = new
                 {
                     vertical_percent_before = resumeStartPercent,
@@ -2347,8 +2360,8 @@ internal static partial class Program
             throw;
         }
         foreach (var (entry, index) in appendedEntries.Select((entry, index) => (entry, index)))
-            AssertLogsCase(assertions, $"resumed-tail-shows-controlled-append-{index + 1}", entry.Raw,
-                FindLogDetailsRawText(app, entry));
+            AssertLogsCase(assertions, $"resumed-tail-shows-controlled-append-{index + 1}",
+                LogPresentationState.DetailsAutomationId(entry), FindVisibleAppendedDetails(entry)?.Current.AutomationId);
         AddScreenshot(app, "logs-freeze-resume", "resumed", deadline, screenshots, screenshotDirectory);
     }
 
@@ -2556,11 +2569,10 @@ internal static partial class Program
 
         if (!string.IsNullOrWhiteSpace(marker))
         {
-            string? expectedAutomationId = null;
             try
             {
                 var entry = ReadFixtureEntry(CreateFixtureDiagnostics(fixturePath), marker);
-                expectedAutomationId = LogPresentationState.DetailsAutomationId(entry);
+                var expectedAutomationId = LogPresentationState.DetailsAutomationId(entry);
                 var target = FindUniqueAutomationId(root, expectedAutomationId);
                 metadata["expected_details_automation_id"] = expectedAutomationId;
                 metadata["expected_details_found"] = target is not null;
@@ -2585,97 +2597,8 @@ internal static partial class Program
             {
                 metadata["expected_details_metadata_error"] = error.ToString();
             }
-
-            try
-            {
-                metadata["viewport_descendants"] = ReadLogsViewportDescendantMetadata(
-                    viewport, marker, expectedAutomationId);
-            }
-            catch (Exception error)
-            {
-                metadata["viewport_descendant_metadata_error"] = error.ToString();
-            }
         }
         return metadata;
-    }
-
-    private static Dictionary<string, object?> ReadLogsViewportDescendantMetadata(
-        AutomationElement viewport, string marker, string? expectedAutomationId)
-    {
-        const int maximumElements = 192;
-        const int maximumSamples = 80;
-        var countsByType = new Dictionary<string, int>(StringComparer.Ordinal);
-        var samples = new List<object>();
-        var markerMatches = new List<string>();
-        var expectedIdObserved = false;
-        var visited = 0;
-
-        foreach (var element in Walk(viewport).Take(maximumElements + 1))
-        {
-            visited++;
-            if (visited > maximumElements) break;
-
-            try
-            {
-                var current = element.Current;
-                var type = current.ControlType.ProgrammaticName;
-                countsByType[type] = countsByType.GetValueOrDefault(type) + 1;
-                var automationId = current.AutomationId ?? string.Empty;
-                if (automationId == expectedAutomationId) expectedIdObserved = true;
-
-                if (current.ControlType == ControlType.Text)
-                {
-                    var text = current.Name ?? string.Empty;
-                    if (element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern))
-                        text = ((TextPattern)pattern).DocumentRange.GetText(4096);
-                    var containsMarker = text.Contains(marker, StringComparison.Ordinal);
-                    if (containsMarker && !string.IsNullOrWhiteSpace(automationId))
-                        markerMatches.Add(automationId);
-                    if (samples.Count < maximumSamples &&
-                        (containsMarker || !string.IsNullOrWhiteSpace(automationId)))
-                    {
-                        samples.Add(new
-                        {
-                            automation_id = automationId,
-                            control_type = type,
-                            is_offscreen = current.IsOffscreen,
-                            bounds = RectJson(current.BoundingRectangle),
-                            text_length = text.Length,
-                            contains_fixture_marker = containsMarker,
-                        });
-                    }
-                }
-                else if (samples.Count < maximumSamples &&
-                    (!string.IsNullOrWhiteSpace(automationId) || current.ControlType == ControlType.Button))
-                {
-                    samples.Add(new
-                    {
-                        automation_id = automationId,
-                        control_type = type,
-                        accessible_name = current.Name,
-                        is_offscreen = current.IsOffscreen,
-                        bounds = RectJson(current.BoundingRectangle),
-                    });
-                }
-            }
-            catch (Exception error)
-            {
-                if (samples.Count < maximumSamples)
-                    samples.Add(new { metadata_error = error.ToString() });
-            }
-        }
-
-        return new Dictionary<string, object?>
-        {
-            ["sample_limit"] = maximumElements,
-            ["visited_count_including_overflow_probe"] = visited,
-            ["truncated"] = visited > maximumElements,
-            ["counts_by_control_type"] = countsByType,
-            ["expected_id_observed"] = expectedIdObserved,
-            ["fixture_marker_text_found"] = markerMatches.Count > 0,
-            ["fixture_marker_text_automation_ids"] = markerMatches,
-            ["controls"] = samples,
-        };
     }
 
     private static AutomationElement RequireLogsViewport(OwnedLogsApp app) =>
