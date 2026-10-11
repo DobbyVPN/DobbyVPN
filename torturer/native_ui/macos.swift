@@ -870,7 +870,7 @@ func capture(_ pid: pid_t, path: String) throws {
 }
 
 func inspectMacOSTextSize(
-    executablePath: String, candidateApp: NSRunningApplication, candidatePID: pid_t,
+    candidateBundle: MacOSCandidateApp, candidateApp: NSRunningApplication, candidatePID: pid_t,
     candidateIdentity: String, reactivateCandidate: () throws -> Void
 ) throws -> [String: Any] {
     var settingsApp: NSRunningApplication?
@@ -979,13 +979,7 @@ func inspectMacOSTextSize(
             catch { cleanupErrors.append("Reactivate installed app: \(error)") }
         }
         do {
-            let executable = URL(fileURLWithPath: executablePath).standardizedFileURL
-            var bundleURL = executable
-            while bundleURL.pathExtension.lowercased() != "app" {
-                let parent = bundleURL.deletingLastPathComponent()
-                try require(parent.path != bundleURL.path, "Installed executable is not inside an app bundle")
-                bundleURL = parent
-            }
+            let bundleURL = candidateBundle.bundleURL
             guard let info = Bundle(url: bundleURL)?.infoDictionary,
                   let bundleID = info["CFBundleIdentifier"] as? String else {
                 throw HelperError("Installed app bundle identity is unavailable: \(bundleURL.path)")
@@ -1270,6 +1264,27 @@ struct MacOSProcessIdentity {
 
 struct MacOSProcessMissing: Error {}
 
+struct MacOSCandidateApp {
+    let bundleURL: URL
+    let executablePath: String
+
+    init(path: String) throws {
+        let bundleURL = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: bundleURL.path, isDirectory: &isDirectory)
+        try require(bundleURL.pathExtension.lowercased() == "app" && exists && isDirectory.boolValue,
+                    "Candidate application path must be an existing .app bundle: \(path)")
+        guard let bundle = Bundle(url: bundleURL), let executableURL = bundle.executableURL else {
+            throw HelperError("Candidate .app bundle does not identify an executable: \(bundleURL.path)")
+        }
+        let executablePath = executableURL.resolvingSymlinksInPath().path
+        try require(FileManager.default.isExecutableFile(atPath: executablePath),
+                    "Candidate .app executable is missing or not executable: \(executablePath)")
+        self.bundleURL = bundleURL
+        self.executablePath = executablePath
+    }
+}
+
 func macOSProcessIdentity(_ pid: pid_t) throws -> MacOSProcessIdentity {
     var info = proc_bsdinfo()
     let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
@@ -1319,21 +1334,22 @@ struct MacOSLogsCaseDeadline {
 
 final class MacOSOwnedLogsApp {
     let application: NSRunningApplication
+    let candidate: MacOSCandidateApp
     let pid: pid_t
-    let executablePath: String
+    var executablePath: String { candidate.executablePath }
     private(set) var identity: String?
     var result: [String: Any]
 
-    init(application: NSRunningApplication, executablePath: String) {
+    init(application: NSRunningApplication, candidate: MacOSCandidateApp) {
         self.application = application
+        self.candidate = candidate
         pid = application.processIdentifier
-        self.executablePath = executablePath
         identity = nil
         result = [
             "pid": Int(application.processIdentifier),
             "identity": NSNull(),
             "process_start_utc": NSNull(),
-            "executable": executablePath,
+            "executable": candidate.executablePath,
         ]
     }
 
@@ -1707,20 +1723,14 @@ func verifyMacOSLogsApp(_ owned: MacOSOwnedLogsApp) throws {
 }
 
 func startMacOSLogsApp(
-    executablePath: String, fixture: MacOSLogsFixture, caseID: String, deadline: MacOSLogsCaseDeadline,
+    candidate: MacOSCandidateApp, fixture: MacOSLogsFixture, caseID: String, deadline: MacOSLogsCaseDeadline,
     launches: inout [MacOSOwnedLogsApp], opening urls: [URL] = []
 ) throws -> MacOSOwnedLogsApp {
     try deadline.check("candidate app launch")
-    for candidate in NSWorkspace.shared.runningApplications where !candidate.isTerminated {
-        if candidate.executableURL?.resolvingSymlinksInPath().path == executablePath {
-            throw HelperError("macOS native-case requires a cold launch; exact candidate process \(candidate.processIdentifier) is already running")
+    for running in NSWorkspace.shared.runningApplications where !running.isTerminated {
+        if running.executableURL?.resolvingSymlinksInPath().path == candidate.executablePath {
+            throw HelperError("macOS native-case requires a cold launch; exact candidate process \(running.processIdentifier) is already running")
         }
-    }
-    var appURL = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
-    while appURL.pathExtension.lowercased() != "app" {
-        let parent = appURL.deletingLastPathComponent()
-        try require(parent.path != appURL.path, "Candidate executable is not inside an app bundle")
-        appURL = parent
     }
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
@@ -1733,7 +1743,7 @@ func startMacOSLogsApp(
     var launchError: Error?
     if urls.isEmpty {
         writeMacOSNativeCaseProgress(caseID: caseID, stage: "workspace-launch-request-start")
-        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { application, error in
+        NSWorkspace.shared.openApplication(at: candidate.bundleURL, configuration: configuration) { application, error in
             writeMacOSNativeCaseProgress(caseID: caseID, stage: "workspace-launch-callback-start")
             launched = application
             launchError = error
@@ -1742,7 +1752,7 @@ func startMacOSLogsApp(
         }
     } else {
         writeMacOSNativeCaseProgress(caseID: caseID, stage: "workspace-open-url-request-start")
-        NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: configuration) { application, error in
+        NSWorkspace.shared.open(urls, withApplicationAt: candidate.bundleURL, configuration: configuration) { application, error in
             writeMacOSNativeCaseProgress(caseID: caseID, stage: "workspace-open-url-callback-start")
             launched = application
             launchError = error
@@ -1761,16 +1771,16 @@ func startMacOSLogsApp(
     try require(completed, "Candidate app launch did not return before the native-case deadline")
     if let launchError { throw HelperError("Candidate app launch failed: \(launchError)") }
     guard let launched, !launched.isTerminated else { throw HelperError("Candidate app launch returned no live process") }
-    try require(launched.executableURL?.resolvingSymlinksInPath().path == executablePath,
+    try require(launched.executableURL?.resolvingSymlinksInPath().path == candidate.executablePath,
                 "Workspace returned a different executable than requested: \(launched.executableURL?.path ?? "unknown")")
-    let owned = MacOSOwnedLogsApp(application: launched, executablePath: executablePath)
+    let owned = MacOSOwnedLogsApp(application: launched, candidate: candidate)
     launches.append(owned)
     let pid = launched.processIdentifier
     writeMacOSNativeCaseProgress(caseID: caseID, stage: "owned-process-identity-read-start")
     let process = try waitMacOSLogsCase(deadline, stage: "candidate OS process identity") { () -> MacOSProcessIdentity? in
         try macOSProcessIdentity(pid)
     }
-    try require(process.executablePath == executablePath,
+    try require(process.executablePath == candidate.executablePath,
                 "Candidate app process executable differs from the requested installed path: \(process.executablePath)")
     owned.accept(process)
     writeMacOSNativeCaseProgress(caseID: caseID, stage: "owned-process-identity-accepted")
@@ -1784,21 +1794,15 @@ func startMacOSLogsApp(
 }
 
 func openMacOSProtocolURL(
-    _ url: URL, executablePath: String, deadline: MacOSLogsCaseDeadline
+    _ url: URL, candidate: MacOSCandidateApp, deadline: MacOSLogsCaseDeadline
 ) throws -> NSRunningApplication {
     try deadline.check("protocol URL activation")
-    var appURL = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
-    while appURL.pathExtension.lowercased() != "app" {
-        let parent = appURL.deletingLastPathComponent()
-        try require(parent.path != appURL.path, "Candidate executable is not inside an app bundle")
-        appURL = parent
-    }
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
     var completed = false
     var openedApplication: NSRunningApplication?
     var openError: Error?
-    NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { application, error in
+    NSWorkspace.shared.open([url], withApplicationAt: candidate.bundleURL, configuration: configuration) { application, error in
         openedApplication = application
         openError = error
         completed = true
@@ -1809,7 +1813,7 @@ func openMacOSProtocolURL(
     try require(completed, "Protocol URL activation did not return before the native-case deadline")
     if let openError { throw HelperError("Candidate app protocol URL activation failed: \(openError)") }
     guard let application = openedApplication, !application.isTerminated,
-          application.executableURL?.resolvingSymlinksInPath().path == executablePath else {
+          application.executableURL?.resolvingSymlinksInPath().path == candidate.executablePath else {
         throw HelperError("Protocol URL activation returned no live candidate app process")
     }
     return application
@@ -2485,7 +2489,7 @@ func assertMacOSFixtureBytes(_ fixture: MacOSLogsFixture, original: Data,
 }
 
 func runMacOSConnectedSessionCase(
-    request: [String: Any], executable: String, fixture: MacOSLogsFixture,
+    request: [String: Any], candidateApp: MacOSCandidateApp, fixture: MacOSLogsFixture,
     subscriptionURL: String, deadline: MacOSLogsCaseDeadline, screenshotDirectory: String,
     activeApp: inout MacOSOwnedLogsApp?, launches: inout [MacOSOwnedLogsApp],
     assertions: inout [[String: Any]], screenshots: inout [String]
@@ -2496,7 +2500,6 @@ func runMacOSConnectedSessionCase(
         throw HelperError("connected-session requires subscription_failure_url")
     }
     let failureURL = try macOSNativeUniqueAttemptURL(failureSource)
-    let executablePath = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
     let observer: MacOSNativeObserver = { operation, timeoutSeconds, phase in
         try macOSNativeObserverCall(operation, timeoutSeconds: timeoutSeconds, deadline: deadline, phase: phase)
     }
@@ -2666,7 +2669,7 @@ func runMacOSConnectedSessionCase(
 
     let warmURL = try macOSPerformanceURL(subscriptionURL, group: "connected-warm-import", index: 1)
     let beforeWarm = retryCount
-    let warmApp = try openMacOSProtocolURL(try macOSImportURL(warmURL), executablePath: executablePath,
+    let warmApp = try openMacOSProtocolURL(try macOSImportURL(warmURL), candidate: candidateApp,
                                             deadline: deadline)
     try macOSNativeAssertion(&assertions, id: "warm-os-link-reuses-current-app-process",
                              expected: Int(activeApp!.pid), actual: Int(warmApp.processIdentifier))
@@ -2725,7 +2728,7 @@ func runMacOSConnectedSessionCase(
                              actual: macOSNativeSnapshotBoolean(emptyInventory, "configured") == false &&
                                 ((emptyInventory["profiles"] as? [Any])?.isEmpty == true) &&
                                 macOSNativeSnapshotValue(emptyInventory, "source_url") == savedSource)
-    activeApp = try startMacOSLogsApp(executablePath: executablePath, fixture: fixture,
+    activeApp = try startMacOSLogsApp(candidate: candidateApp, fixture: fixture,
                                       caseID: request["case"] as? String ?? "connected-session", deadline: deadline,
                                       launches: &launches)
     _ = try waitMacOSForAcceptedInventory(activeApp!, source: savedSource, minimumRows: 2, deadline: deadline)
@@ -2787,7 +2790,7 @@ func runMacOSConnectedSessionCase(
     let connectedBeforeCold = try observer("snapshot", min(30, deadline.remaining), nil)
     try closeMacOSLogsApp(activeApp!, deadline: MacOSLogsCaseDeadline(min(10, deadline.remaining)))
     activeApp = nil
-    activeApp = try startMacOSLogsApp(executablePath: executablePath, fixture: fixture,
+    activeApp = try startMacOSLogsApp(candidate: candidateApp, fixture: fixture,
                                       caseID: request["case"] as? String ?? "connected-session", deadline: deadline,
                                       launches: &launches, opening: [try macOSImportURL(coldURL)])
     _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: beforeCold + 1)
@@ -2811,7 +2814,7 @@ func runMacOSConnectedSessionCase(
 
     try closeMacOSLogsApp(activeApp!, deadline: MacOSLogsCaseDeadline(min(10, deadline.remaining)))
     activeApp = nil
-    activeApp = try startMacOSLogsApp(executablePath: executablePath, fixture: fixture,
+    activeApp = try startMacOSLogsApp(candidate: candidateApp, fixture: fixture,
                                       caseID: request["case"] as? String ?? "connected-session", deadline: deadline,
                                       launches: &launches)
     _ = try waitMacOSForAcceptedInventory(activeApp!, source: coldURL, minimumRows: 2, deadline: deadline)
@@ -2887,7 +2890,7 @@ func macOSSyntheticLayoutInventory() -> Data {
 }
 
 func runMacOSConnectedLayoutCase(
-    request: [String: Any], subscriptionURL: String, deadline: MacOSLogsCaseDeadline,
+    request: [String: Any], candidateApp: MacOSCandidateApp, subscriptionURL: String, deadline: MacOSLogsCaseDeadline,
     screenshotDirectory: String, activeApp: inout MacOSOwnedLogsApp?,
     assertions: inout [[String: Any]], screenshots: inout [String]
 ) throws -> [String: Any] {
@@ -2962,8 +2965,7 @@ func runMacOSConnectedLayoutCase(
     let layoutURL = try macOSURLAppendingQuery(subscriptionURL, name: "connected-layout", value: "24")
     let beforeLayout = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
     let beforeLayoutCount = try macOSSubscriptionStatsInteger(beforeLayout, "subscription_gets")
-    let layoutOpen = try openMacOSProtocolURL(macOSImportURL(layoutURL),
-        executablePath: activeApp!.executablePath, deadline: deadline)
+    let layoutOpen = try openMacOSProtocolURL(macOSImportURL(layoutURL), candidate: candidateApp, deadline: deadline)
     try macOSNativeAssertion(&assertions, id: "connected-layout-import-reuses-owned-native-process",
                              expected: Int(activeApp!.pid), actual: Int(layoutOpen.processIdentifier))
     let largeInventory = try waitMacOSForAcceptedInventory(
@@ -3013,8 +3015,7 @@ func runMacOSConnectedLayoutCase(
     let restoreURL = try macOSURLAppendingQuery(subscriptionURL, name: "connected-layout", value: "restore")
     let beforeRestore = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
     let beforeRestoreCount = try macOSSubscriptionStatsInteger(beforeRestore, "subscription_gets")
-    let restoreOpen = try openMacOSProtocolURL(macOSImportURL(restoreURL),
-        executablePath: activeApp!.executablePath, deadline: deadline)
+    let restoreOpen = try openMacOSProtocolURL(macOSImportURL(restoreURL), candidate: candidateApp, deadline: deadline)
     try macOSNativeAssertion(&assertions, id: "connected-layout-restore-reuses-owned-native-process",
                              expected: Int(activeApp!.pid), actual: Int(restoreOpen.processIdentifier))
     let restoredInventory = try waitMacOSForAcceptedInventory(
@@ -3228,7 +3229,7 @@ func runMacOSNativeCase(_ request: [String: Any]) throws -> [String: Any] {
             "connected-session", "connected-layout", "auto-recovery-stop",
         ]
         try require(supportedCases.contains(caseID), "Unsupported macOS native-case: \(caseID)")
-        try require(FileManager.default.fileExists(atPath: executable), "Candidate .app executable does not exist: \(executable)")
+        let candidateApp = try MacOSCandidateApp(path: executable)
         try require(AXIsProcessTrusted(), "Accessibility permission unavailable for macOS native-case")
         try require(CGPreflightScreenCaptureAccess(), "Screen recording permission unavailable for macOS native-case")
 
@@ -3271,7 +3272,7 @@ func runMacOSNativeCase(_ request: [String: Any]) throws -> [String: Any] {
         }
         originalFixtureBytes = try Data(contentsOf: backend)
         let openingURLs = caseID == "imports-cold" ? [try macOSImportURL(subscriptionURL)] : []
-        activeApp = try startMacOSLogsApp(executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+        activeApp = try startMacOSLogsApp(candidate: candidateApp,
                                          fixture: configuredFixture, caseID: caseID, deadline: deadline, launches: &launches,
                                          opening: openingURLs)
         if !markers.isEmpty {
@@ -3293,14 +3294,14 @@ func runMacOSNativeCase(_ request: [String: Any]) throws -> [String: Any] {
         switch caseID {
         case "connected-session":
             result["case_context"] = try runMacOSConnectedSessionCase(
-                request: request, executable: executable, fixture: configuredFixture,
+                request: request, candidateApp: candidateApp, fixture: configuredFixture,
                 subscriptionURL: subscriptionURL, deadline: deadline, screenshotDirectory: screenshotDirectory,
                 activeApp: &activeApp, launches: &launches, assertions: &assertions, screenshots: &screenshots
             )
 
         case "connected-layout":
             result["case_context"] = try runMacOSConnectedLayoutCase(
-                request: request, subscriptionURL: subscriptionURL, deadline: deadline,
+                request: request, candidateApp: candidateApp, subscriptionURL: subscriptionURL, deadline: deadline,
                 screenshotDirectory: screenshotDirectory, activeApp: &activeApp,
                 assertions: &assertions, screenshots: &screenshots
             )
@@ -3430,7 +3431,7 @@ func runMacOSNativeCase(_ request: [String: Any]) throws -> [String: Any] {
                 let previousPID = activeApp!.pid
                 let previousIdentity = activeApp!.identity
                 try closeMacOSLogsApp(activeApp!, deadline: deadline)
-                activeApp = try startMacOSLogsApp(executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+                activeApp = try startMacOSLogsApp(candidate: candidateApp,
                                                   fixture: configuredFixture, caseID: caseID, deadline: deadline,
                                                   launches: &launches)
                 let reopened = try waitMacOSLogsCase(deadline, stage: "reopened clear-boundary rendering") {
@@ -3526,7 +3527,7 @@ func runMacOSNativeCase(_ request: [String: Any]) throws -> [String: Any] {
             let previousPID = activeApp!.pid
             let opened = try openMacOSProtocolURL(
                 macOSImportURL(subscriptionURL),
-                executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+                candidate: candidateApp,
                 deadline: deadline
             )
             try require(opened.processIdentifier == previousPID,
@@ -3609,7 +3610,7 @@ func runMacOSNativeCase(_ request: [String: Any]) throws -> [String: Any] {
                 throw HelperError("Installed app has no verified process identity for Text Size inspection")
             }
             let details = try inspectMacOSTextSize(
-                executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+                candidateBundle: candidateApp,
                 candidateApp: activeApp!.application, candidatePID: activeApp!.pid,
                 candidateIdentity: processIdentity,
                 reactivateCandidate: { try activateMacOSLogsApp(activeApp!, caseID: caseID, deadline: deadline) }
