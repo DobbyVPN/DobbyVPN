@@ -7,6 +7,18 @@ on:
         description: Successful Build run whose packages should be qualified.
         type: string
         required: true
+      torturer_sha:
+        description: Exact private Torturer revision already verified locally.
+        type: string
+        required: true
+      release_attempt_id:
+        description: Reserved release-verification deployment ID.
+        type: string
+        required: true
+
+concurrency:
+  group: release-verification
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -16,6 +28,11 @@ jobs:
   resolve_build:
     name: Resolve selected Build
     runs-on: ubuntu-24.04
+    environment: release-tests
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
     outputs:
       source_sha: ${{ steps.resolve.outputs.source_sha }}
       version_name: ${{ steps.resolve.outputs.version_name }}
@@ -25,21 +42,43 @@ jobs:
       android_version_code: ${{ steps.resolve.outputs.android_version_code }}
       apple_build_number: ${{ steps.resolve.outputs.apple_build_number }}
       manifest_sha256: ${{ steps.resolve.outputs.manifest_sha256 }}
+      build_manifest: ${{ steps.resolve.outputs.build_manifest }}
+      torturer_sha: ${{ steps.claim.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ steps.claim.outputs.torturer_tree_sha256 }}
+      claimed: ${{ steps.claim.outputs.claimed }}
     steps:
       - name: Reject Test reruns
-        run: test "$GITHUB_RUN_ATTEMPT" = 1
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          RELEASE_ATTEMPT_ID: ${{ inputs.release_attempt_id }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_ATTEMPT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
           persist-credentials: false
       - name: Verify selected Build and artifact hashes
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
         run: |
           set -euo pipefail
           python3 .github/scripts/release/build_manifest.py resolve \
-            --repository "$GITHUB_REPOSITORY" --run-id "${{ inputs.build_run_id }}" \
+            --require-main --repository "$GITHUB_REPOSITORY" --run-id "$BUILD_RUN_ID" \
             --download-dir "$RUNNER_TEMP/dobbyvpn-selected-build-manifest" \
             --output "$RUNNER_TEMP/build.json"
           python3 - "$RUNNER_TEMP/build.json" "$GITHUB_OUTPUT" <<'PY'
@@ -56,9 +95,108 @@ jobs:
                   "android_version_code": manifest["android_version_code"],
                   "apple_build_number": manifest["apple_build_number"],
                   "manifest_sha256": manifest["manifest_sha256"],
+                  "build_manifest": json.dumps(manifest, separators=(",", ":")),
               }.items():
                   output.write(f"{key}={value}\n")
           PY
+      - name: Claim the exact reserved release verification
+        id: claim
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          RELEASE_ATTEMPT_ID: ${{ inputs.release_attempt_id }}
+        run: |
+          python3 - "$RUNNER_TEMP/build.json" <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          build = json.load(open(sys.argv[1], encoding="utf-8"))
+          if build["source_sha"] != os.environ["GITHUB_SHA"]:
+              raise SystemExit("Test main revision differs from selected Build")
+          tests_sha = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          if tests_sha != os.environ["TORTURER_SHA"]:
+              raise SystemExit("private tests checkout does not match requested revision")
+          tree = release_guard.tests_tree_sha256(Path("torturer"))
+          candidate = {
+              "schema": 1, "build_run_id": build["run_id"],
+              "build_manifest_sha256": build["manifest_sha256"],
+              "product_sha": build["source_sha"], "tests_repository": "DobbyVPN/Torturer",
+              "tests_sha": tests_sha, "tests_tree_sha256": tree,
+          }
+          release_guard.claim(release_guard.GitHubAPI(), os.environ["GITHUB_REPOSITORY"],
+                              int(os.environ["RELEASE_ATTEMPT_ID"]), int(os.environ["GITHUB_RUN_ID"]), candidate)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"torturer_sha={tests_sha}\ntorturer_tree_sha256={tree}\nclaimed=true\n")
+          PY
+
+  source_linux:
+    needs: resolve_build
+    uses: ./.github/workflows/source_tests.yml
+    secrets: inherit
+    with:
+      runner: ubuntu-24.04
+      checks: go-tests go-native-runtime python-tests
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
+
+  source_linux_arm:
+    needs: resolve_build
+    uses: ./.github/workflows/source_tests.yml
+    secrets: inherit
+    with:
+      runner: ubuntu-24.04-arm
+      checks: go-native-runtime
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
+
+  source_windows:
+    needs: resolve_build
+    uses: ./.github/workflows/source_tests.yml
+    secrets: inherit
+    with:
+      runner: windows-2022
+      checks: go-native-runtime windows-mutations
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
+
+  source_android:
+    needs: resolve_build
+    uses: ./.github/workflows/source_tests.yml
+    secrets: inherit
+    with:
+      runner: ubuntu-24.04
+      checks: android-unit android-mutations
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
+
+  source_macos:
+    needs: resolve_build
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    uses: ./.github/workflows/source_tests.yml
+    secrets: inherit
+    with:
+      runner: ${{ matrix.runner }}
+      checks: go-native-runtime swift-unit swift-mutations
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
+
+  ios_simulator:
+    needs: resolve_build
+    uses: ./.github/workflows/ios_simulator_test.yml
+    secrets: inherit
+    with:
+      source_sha: ${{ needs.resolve_build.outputs.source_sha }}
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
 
   ios_analysis:
     needs: resolve_build
@@ -93,7 +231,10 @@ jobs:
   migrate_windows:
     needs: resolve_build
     uses: ./.github/workflows/installer_migration.yml
+    secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       platform: windows
       architecture: amd64
       version_name: ${{ needs.resolve_build.outputs.version_name }}
@@ -103,7 +244,10 @@ jobs:
   migrate_macos_arm:
     needs: resolve_build
     uses: ./.github/workflows/installer_migration.yml
+    secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       platform: macos
       architecture: arm64
       version_name: ${{ needs.resolve_build.outputs.version_name }}
@@ -113,7 +257,10 @@ jobs:
   migrate_macos_intel:
     needs: resolve_build
     uses: ./.github/workflows/installer_migration.yml
+    secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       platform: macos
       architecture: amd64
       version_name: ${{ needs.resolve_build.outputs.version_name }}
@@ -121,13 +268,15 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
 
   render_start:
-    needs: resolve_build
+    needs: [resolve_build, source_linux, source_linux_arm, source_windows, source_macos, source_android, ios_simulator]
     uses: ./.github/workflows/render_start.yml
     permissions:
       contents: read
       actions: read
     secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       retention_days: 7
 
   qualify_linux:
@@ -136,7 +285,10 @@ jobs:
     permissions:
       contents: read
       actions: read
+    secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       platform: linux
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
@@ -149,7 +301,10 @@ jobs:
     permissions:
       contents: read
       actions: read
+    secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       platform: windows
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
@@ -165,7 +320,10 @@ jobs:
     permissions:
       contents: read
       actions: read
+    secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       platform: macos
       architecture: ${{ matrix.architecture }}
       build_run_id: ${{ inputs.build_run_id }}
@@ -179,7 +337,10 @@ jobs:
     permissions:
       contents: read
       actions: read
+    secrets: inherit
     with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       platform: android
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
@@ -188,78 +349,83 @@ jobs:
 
   render_cleanup:
     if: ${{ always() }}
-    needs: [render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android]
+    needs: [resolve_build, render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android]
     uses: ./.github/workflows/render_cleanup.yml
     permissions:
       contents: read
     secrets: inherit
+    with:
+      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
 
   qualification_result:
-    name: Require hosted mini and Render cleanup
+    name: Record final verification and release stop
     if: ${{ always() }}
-    needs: [resolve_build, render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_analysis, android_reproducibility, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight]
+    needs: [resolve_build, source_linux, source_linux_arm, source_windows, source_macos, source_android, ios_simulator, render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_analysis, android_reproducibility, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight]
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      RELEASE_ATTEMPT_ID: ${{ inputs.release_attempt_id }}
+      BUILD_JSON: ${{ needs.resolve_build.outputs.build_manifest }}
+      TORTURER_SHA: ${{ needs.resolve_build.outputs.torturer_sha }}
+      TORTURER_TREE_SHA256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
     steps:
-      - name: Check Render and platform jobs
-        env:
-          RENDER_START_RESULT: ${{ needs.render_start.result }}
-          LINUX_RESULT: ${{ needs.qualify_linux.result }}
-          WINDOWS_RESULT: ${{ needs.qualify_windows.result }}
-          MACOS_RESULT: ${{ needs.qualify_macos.result }}
-          ANDROID_RESULT: ${{ needs.qualify_android.result }}
-          RENDER_CLEANUP_RESULT: ${{ needs.render_cleanup.result }}
-          IOS_ANALYSIS_RESULT: ${{ needs.ios_analysis.result }}
-          ANDROID_REPRODUCIBILITY_RESULT: ${{ needs.android_reproducibility.result }}
-          FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
-          WINDOWS_MIGRATION_RESULT: ${{ needs.migrate_windows.result }}
-          MACOS_ARM_MIGRATION_RESULT: ${{ needs.migrate_macos_arm.result }}
-          MACOS_INTEL_MIGRATION_RESULT: ${{ needs.migrate_macos_intel.result }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download selected Android package for pairing verification
+        if: needs.resolve_build.result == 'success'
         run: |
-          set -euo pipefail
-          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo "Test attempt $GITHUB_RUN_ATTEMPT cannot qualify; dispatch a fresh Test workflow." >&2
-            exit 1
-          fi
-          test "$RENDER_START_RESULT" = success
-          test "$LINUX_RESULT" = success
-          test "$WINDOWS_RESULT" = success
-          test "$MACOS_RESULT" = success
-          test "$ANDROID_RESULT" = success
-          test "$RENDER_CLEANUP_RESULT" = success
-          test "$IOS_ANALYSIS_RESULT" = success
-          test "$ANDROID_REPRODUCIBILITY_RESULT" = success
-          test "$FDROID_RESULT" = success
-          test "$WINDOWS_MIGRATION_RESULT" = success
-          test "$MACOS_ARM_MIGRATION_RESULT" = success
-          test "$MACOS_INTEL_MIGRATION_RESULT" = success
-          echo "Selected Build package qualification passed"
-      - name: Write Test result
+          python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-unsign.apk "$RUNNER_TEMP/selected-android"
+      - name: Record and validate complete Test result
+        id: result
         if: always()
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-          SOURCE_SHA: ${{ needs.resolve_build.outputs.source_sha }}
-          BUILD_MANIFEST_SHA256: ${{ needs.resolve_build.outputs.manifest_sha256 }}
-          RESULT_PATH: ${{ runner.temp }}/test-result.json
+          ANDROID_PAIRING: ${{ needs.qualify_android.outputs.android_pairing }}
         run: |
-          python3 - <<'PY'
-          import json, os
+          python3 - <<'PYTHON'
+          import hashlib, json, os, sys
           from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import test_manifest
+          result_path = Path(os.environ["RUNNER_TEMP"]) / "test-result.json"
           needs = json.loads(os.environ["NEEDS_JSON"])
+          build = json.loads(os.environ["BUILD_JSON"] or "{}")
+          pairing = json.loads(os.environ["ANDROID_PAIRING"] or "{}")
+          pairing.update(build_run_id=int(os.environ["BUILD_RUN_ID"]),
+                         build_manifest_sha256=build.get("manifest_sha256", ""))
           result = {
-              "schema": 1,
-              "repository": os.environ["GITHUB_REPOSITORY"],
+              "schema": 2, "repository": os.environ["GITHUB_REPOSITORY"],
               "workflow_path": ".github/workflows/test.yml",
               "run_id": int(os.environ["GITHUB_RUN_ID"]),
               "build_run_id": int(os.environ["BUILD_RUN_ID"]),
-              "source_sha": os.environ.get("SOURCE_SHA", ""),
-              "build_manifest_sha256": os.environ.get("BUILD_MANIFEST_SHA256", ""),
+              "source_sha": build.get("source_sha", ""),
+              "build_manifest_sha256": build.get("manifest_sha256", ""),
+              "torturer_repository": "DobbyVPN/Torturer",
+              "torturer_sha": os.environ["TORTURER_SHA"],
+              "torturer_tree_sha256": os.environ["TORTURER_TREE_SHA256"],
+              "release_attempt_id": int(os.environ["RELEASE_ATTEMPT_ID"]),
+              "android_pairing": pairing,
               "checks": {name: item.get("result") for name, item in needs.items()},
           }
-          Path(os.environ["RESULT_PATH"]).write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
-          PY
+          result_path.write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
+          if os.environ["GITHUB_REF"] != "refs/heads/main" or os.environ["GITHUB_RUN_ATTEMPT"] != "1":
+              raise SystemExit("Only the first main Test attempt can qualify")
+          test_manifest.validate_result(result, repository=os.environ["GITHUB_REPOSITORY"],
+                                        run_id=result["run_id"], build=build, source_sha=os.environ["GITHUB_SHA"])
+          apk = Path(os.environ["RUNNER_TEMP"]) / "selected-android" / f"DobbyVPN-v{build['version']}-unsign.apk"
+          test_manifest.validate_android_pairing(result, hashlib.sha256(apk.read_bytes()).hexdigest())
+          PYTHON
       - name: Upload Test result
+        id: upload
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -267,3 +433,29 @@ jobs:
           path: ${{ runner.temp }}/test-result.json
           if-no-files-found: error
           retention-days: 7
+      - name: Finalize durable release verification
+        if: always() && needs.resolve_build.outputs.claimed == 'true'
+        env:
+          QUALIFICATION_VALID: ${{ steps.result.outcome == 'success' && steps.upload.outcome == 'success' && job.status == 'success' }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard, test_manifest
+          build = json.loads(os.environ["BUILD_JSON"])
+          candidate = {
+              "schema": 1, "build_run_id": build["run_id"],
+              "build_manifest_sha256": build["manifest_sha256"],
+              "product_sha": build["source_sha"], "tests_repository": "DobbyVPN/Torturer",
+              "tests_sha": os.environ["TORTURER_SHA"],
+              "tests_tree_sha256": os.environ["TORTURER_TREE_SHA256"],
+          }
+          valid = os.environ["QUALIFICATION_VALID"] == "true"
+          identity = test_manifest.guard_candidate(json.loads((Path(os.environ["RUNNER_TEMP"]) / "test-result.json").read_text())) if valid else None
+          release_guard.finalize(release_guard.GitHubAPI(), os.environ["GITHUB_REPOSITORY"],
+              int(os.environ["RELEASE_ATTEMPT_ID"]), int(os.environ["GITHUB_RUN_ID"]), candidate,
+              outcome="success" if valid else "failure", result_identity=identity)
+          if not valid:
+              raise SystemExit("Final release verification failed. Release is stopped; diagnose and reproduce locally.")
+          PYTHON

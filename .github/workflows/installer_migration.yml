@@ -3,6 +3,12 @@ name: Test installer migration qualification
 on:
   workflow_call:
     inputs:
+      torturer_sha:
+        required: true
+        type: string
+      torturer_tree_sha256:
+        required: true
+        type: string
       platform:
         required: true
         type: string
@@ -28,15 +34,46 @@ jobs:
     name: Installer migration / ${{ inputs.platform }} / ${{ inputs.architecture }}
     runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 20
+    environment: release-tests
+    env:
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      PYTHONPATH: ${{ github.workspace }}/torturer
     steps:
       - name: Reject Test reruns
         shell: bash
-        run: test "$GITHUB_RUN_ATTEMPT" = 1
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify private tests identity
+        shell: bash
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          actual = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          if actual != os.environ["TORTURER_SHA"] or release_guard.tests_tree_sha256(Path("torturer")) != os.environ["TORTURER_TREE_SHA256"]:
+              raise SystemExit("private test identity differs from reserved candidate")
+          PYTHON
+
 
       - name: Download installer
         shell: bash
@@ -62,7 +99,7 @@ jobs:
             macos:amd64) package=dobbyVPN-macos-amd64.pkg ;;
             *) exit 1 ;;
           esac
-          python3 .github/scripts/desktop/installer_migration.py \
+          python3 -m torturer_runner.installer_migration \
             --platform "$PLATFORM" \
             --package "$RUNNER_TEMP/dobbyvpn-installer-migration/package/$package" \
             --current-version "$EXPECTED_VERSION" \

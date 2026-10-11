@@ -74,11 +74,9 @@ jobs:
           set -euo pipefail
           selected="$RUNNER_TEMP/dobbyvpn-selected-android"
           python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-unsign.apk "$selected/app"
-          python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-test-companion-unsigned.apk "$selected/companion"
           python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-build-metadata "$selected/metadata"
           mkdir -p runtime/android-selected
           cp "$selected/app/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk" "runtime/android-selected/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-unsign.apk"
-          cp "$selected/companion/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-android-test-companion-unsigned.apk" "runtime/android-selected/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-android-test-companion-unsigned.apk"
           cp "$selected/metadata/android-build-driver-manifest.json" runtime/android-selected/build-driver-manifest.json
 
       # setup-go consults the job-level GOPATH. Create the reproducible
@@ -205,7 +203,6 @@ jobs:
             --source-root "$ANDROID_REPRO_SOURCE_ROOT" \
             --source-sha "$APP_SOURCE_SHA" \
             --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-unsign.apk" \
-            --test-companion-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
             --manifest "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
             --first-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-repro-first.apk" \
             --reproducibility "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-reproducibility.json" \
@@ -227,7 +224,6 @@ jobs:
             --single-build --source-root "$ANDROID_REPRO_SOURCE_ROOT" \
             --source-sha "$APP_SOURCE_SHA" \
             --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-unsign.apk" \
-            --test-companion-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-test-companion-unsigned.apk" \
             --metadata-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
             --dependency-manifest "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-dependency-provenance.json" \
             --gradle-archive "$GRADLE_ARCHIVE" --gradle-root "$GRADLE_ROOT" \
@@ -243,7 +239,6 @@ jobs:
           set -euo pipefail
           version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
           original="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/DobbyVPN-v${version}-unsign.apk"
-          companion="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/DobbyVPN-v${version}-android-test-companion-unsigned.apk"
           reference="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference/DobbyVPN-v${version}-reference-unsign.apk"
           mkdir -p "$(dirname "$reference")"
           "$GITHUB_WORKSPACE/.github/scripts/android/android_build_driver.sh" \
@@ -264,8 +259,7 @@ jobs:
           python3 .github/scripts/android/verify_android_apk_source.py \
             --apk "$original" --apk "$reference" --source-sha "$APP_SOURCE_SHA" \
             --repository "$APP_SOURCE_REPOSITORY" --version-name "$version" \
-            --version-code "$ANDROID_VERSION_CODE" --apkanalyzer "$apkanalyzer" \
-            --test-companion "$companion"
+            --version-code "$ANDROID_VERSION_CODE" --apkanalyzer "$apkanalyzer"
           readelf="$(find -L "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -type f -name llvm-readelf -perm -u+x -print -quit)"
           test -n "$readelf" && test -x "$readelf"
           python3 .github/scripts/android/verify_android_native_payloads.py --apk "$original" --readelf "$readelf"
@@ -273,7 +267,7 @@ jobs:
           source_tree="$(git -C "$ANDROID_REPRO_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
           python3 .github/scripts/android/android_apk_signing.py create-provenance \
             --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-provenance.json" \
-            --unsigned-apk "$original" --test-companion "$companion" \
+            --unsigned-apk "$original" \
             --build-driver-manifest "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-selected/build-driver-manifest.json" \
             --reproducibility "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference-reproducibility.json" \
             --source-sha "$APP_SOURCE_SHA" --source-tree "$source_tree" \
@@ -291,16 +285,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
           unsigned="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-unsign.apk"
-          companion="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-test-companion-unsigned.apk"
           reproducibility="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
           driver_manifest="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
           manifest="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-provenance.json"
-          test -f "$unsigned"; test -f "$companion"
+          test -f "$unsigned"
           source_tree="$(git -C "$ANDROID_REPRO_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
           python3 .github/scripts/android/android_apk_signing.py create-provenance \
             --output "$manifest" \
             --unsigned-apk "$unsigned" \
-            --test-companion "$companion" \
             --build-driver-manifest "$driver_manifest" \
             --reproducibility "$reproducibility" \
             --source-sha "$SOURCE_SHA" \
@@ -315,15 +307,6 @@ jobs:
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
-          if-no-files-found: error
-          retention-days: ${{ inputs.retention_days }}
-
-      - name: Upload Android test companion
-        if: ${{ inputs.reference_build_run_id == '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobbyvpn-android-test-companion-unsigned.apk
-          path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-test-companion-unsigned.apk
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 

@@ -8,6 +8,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: release-verification
+  cancel-in-progress: false
+
 permissions:
   actions: read
   contents: read
@@ -18,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
+      deployments: read
       actions: read
       contents: read
     outputs:

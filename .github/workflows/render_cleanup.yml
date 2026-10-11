@@ -2,6 +2,13 @@ name: Delete disposable functional VPN
 
 on:
   workflow_call:
+    inputs:
+      torturer_sha:
+        required: true
+        type: string
+      torturer_tree_sha256:
+        required: true
+        type: string
 
 jobs:
   cleanup:
@@ -11,15 +18,41 @@ jobs:
     environment: render-functional
     permissions:
       contents: read
-    env:
-      RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
-      RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
     steps:
+      - name: Require main before accessing private tests
+        run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify private tests identity
+        shell: bash
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          actual = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          if actual != os.environ["TORTURER_SHA"] or release_guard.tests_tree_sha256(Path("torturer")) != os.environ["TORTURER_TREE_SHA256"]:
+              raise SystemExit("private test identity differs from reserved candidate")
+          PYTHON
       - name: Delete Render VPN
+        env:
+          RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+          RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m disposable_vpn_server.render_service stop \

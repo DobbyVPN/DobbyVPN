@@ -3,6 +3,12 @@ name: Start disposable functional VPN
 on:
   workflow_call:
     inputs:
+      torturer_sha:
+        required: true
+        type: string
+      torturer_tree_sha256:
+        required: true
+        type: string
       retention_days:
         default: 1
         type: number
@@ -20,6 +26,7 @@ jobs:
       - name: Reject reruns before creating a Render service
         shell: bash
         run: |
+          test "$GITHUB_REF" = refs/heads/main
           if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
             echo "Workflow reruns are unsupported; dispatch a fresh workflow." >&2
             exit 1
@@ -29,6 +36,30 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify private tests identity
+        shell: bash
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          actual = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          if actual != os.environ["TORTURER_SHA"] or release_guard.tests_tree_sha256(Path("torturer")) != os.environ["TORTURER_TREE_SHA256"]:
+              raise SystemExit("private test identity differs from reserved candidate")
+          PYTHON
 
       - name: Start Render VPN
         working-directory: torturer

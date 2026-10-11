@@ -1,0 +1,125 @@
+name: Private source tests
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        type: string
+        required: true
+      checks:
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
+      torturer_sha:
+        type: string
+        required: true
+      torturer_tree_sha256:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    environment: release-tests
+    env:
+      SOURCE_CHECKS: ${{ inputs.checks }}
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
+      DOBBY_TEST_SHA: ${{ inputs.torturer_sha }}
+      DOBBY_TEST_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+    steps:
+      - name: Require final Test on main
+        shell: bash
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify selected private tree
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, runpy, subprocess
+          from pathlib import Path
+          guard = runpy.run_path('.github/scripts/release/release_guard.py')
+          actual = subprocess.check_output(['git', '-C', 'torturer', 'rev-parse', 'HEAD'], text=True).strip()
+          assert actual == os.environ['DOBBY_TEST_SHA'], 'private revision changed'
+          assert guard['tests_tree_sha256'](Path('torturer')) == os.environ['DOBBY_TEST_TREE_SHA256'], 'private tree changed'
+          PY
+      - name: Select Xcode
+        if: runner.os == 'macOS'
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Install Windows model compiler
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Read Android dependency pins
+        if: contains(inputs.checks, 'android-')
+        id: android
+        shell: bash
+        run: |
+          for pin in java_major android_compile_sdk android_build_tools android_ndk; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+      - name: Install Android JDK
+        if: contains(inputs.checks, 'android-')
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: ${{ steps.android.outputs.java_major }}
+      - name: Install Android SDK
+        if: contains(inputs.checks, 'android-')
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: >
+            platforms;android-${{ steps.android.outputs.android_compile_sdk }}
+            build-tools;${{ steps.android.outputs.android_build_tools }}
+            ndk;${{ steps.android.outputs.android_ndk }}
+      - name: Run private checks against selected production sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/private-source-results"
+          temporary="$RUNNER_TEMP/private-source-work"
+          mkdir -p "$output" "$temporary"
+          export TMPDIR="$temporary" TEMP="$temporary" TMP="$temporary"
+          if [[ "$SOURCE_CHECKS" == *android-* ]]; then
+            export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.android.outputs.android_ndk }}"
+          fi
+          status=0
+          for check in $SOURCE_CHECKS; do
+            python3 torturer/source_checks.py "$check" --product-root "$GITHUB_WORKSPACE" --output-dir "$output/$check" || status=1
+          done
+          exit "$status"
+      - name: Retain source coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: source-results-${{ inputs.runner }}-${{ inputs.checks }}
+          path: ${{ runner.temp }}/private-source-results
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove private scratch and compiler caches
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/private-source-work" "$RUNNER_TEMP/private-source-results"
+          python3 .github/scripts/source_checks.py cache-clean

@@ -84,13 +84,34 @@ def tests_tree_sha256(root: Path) -> str:
         _forward_bytes(sys.stdout, result.stdout)
         _forward_bytes(sys.stderr, result.stderr)
         result.check_returncode()
+
+    index = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--stage", "-z"],
+        capture_output=True,
+        check=False,
+    )
+    if index.returncode:
+        _forward_bytes(sys.stdout, index.stdout)
+        _forward_bytes(sys.stderr, index.stderr)
+        index.check_returncode()
+    for entry in index.stdout.split(b"\0"):
+        if not entry:
+            continue
+        metadata, separator, encoded_path = entry.partition(b"\t")
+        mode = metadata.split(b" ", 1)[0]
+        if separator and mode == b"160000":
+            path = Path(os.fsdecode(encoded_path)).as_posix()
+            raise ReleaseGuardError(f"selected test tree contains a Git submodule entry: {path}")
+
     files = sorted({Path(os.fsdecode(name)) for name in result.stdout.split(b"\0") if name},
                    key=lambda path: path.as_posix())
     digest = hashlib.sha256()
     count = 0
     for relative in files:
         source = root / relative
-        if not source.is_file() or source.is_symlink():
+        if source.is_symlink():
+            raise ReleaseGuardError(f"selected test tree contains a symlink: {relative.as_posix()}")
+        if not source.is_file():
             continue
         encoded = relative.as_posix().encode("utf-8")
         digest.update(len(encoded).to_bytes(8, "big"))

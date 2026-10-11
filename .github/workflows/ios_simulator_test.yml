@@ -1,0 +1,154 @@
+name: iOS Simulator app contract
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact public product revision selected by Test.
+        type: string
+        required: true
+      torturer_sha:
+        description: Exact private Torturer revision selected by Test.
+        type: string
+        required: true
+      torturer_tree_sha256:
+        description: Fingerprint of the exact selected private test tree.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios_simulator:
+    name: iOS Simulator app contract
+    runs-on: macos-15
+    environment: release-tests
+    timeout-minutes: 45
+    env:
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
+      DOBBY_TEST_SHA: ${{ inputs.torturer_sha }}
+      DOBBY_TEST_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+      DOBBY_SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - name: Require final Test on main
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TORTURER_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+
+      - name: Verify selected product and private test trees
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import runpy
+          import subprocess
+          from pathlib import Path
+
+          product_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          if product_sha != os.environ["SOURCE_SHA"]:
+              raise SystemExit("product checkout does not match selected source revision")
+
+          tests_root = Path(os.environ["DOBBY_TESTS_ROOT"])
+          tests_sha = subprocess.check_output(
+              ["git", "-C", str(tests_root), "rev-parse", "HEAD"], text=True
+          ).strip()
+          if tests_sha != os.environ["DOBBY_TEST_SHA"]:
+              raise SystemExit("private tests checkout does not match selected revision")
+
+          release_guard = runpy.run_path(
+              ".github/scripts/release/release_guard.py"
+          )
+          tree_sha = release_guard["tests_tree_sha256"](tests_root)
+          if tree_sha != os.environ["DOBBY_TEST_TREE_SHA256"]:
+              raise SystemExit("private tests tree does not match selected fingerprint")
+          PY
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Build TrustTunnel-enabled Go runtime for iOS Simulator
+        working-directory: core
+        shell: bash
+        run: |
+          set -euo pipefail
+          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
+          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
+          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
+          go mod download
+          ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
+          runtime_binary="$(find DobbyVPNRuntime.xcframework -type f -path '*/DobbyVPNRuntime.framework/DobbyVPNRuntime' -print -quit)"
+          test -n "$runtime_binary"
+          runtime_arches="$(xcrun lipo -archs "$runtime_binary" | tee /dev/stderr)"
+          [[ " $runtime_arches " == *" arm64 "* ]]
+
+      - name: Install pinned screenshot decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/dobbyvpn-screenshot-python"
+          python3 -m pip install --disable-pip-version-check --only-binary=:all: \
+            --no-deps --target "$package_dir" \
+            --requirement .github/scripts/requirements-native-ui.txt
+
+      - name: Run private iOS Simulator app contract
+        env:
+          PYTHONPATH: ${{ runner.temp }}/dobbyvpn-screenshot-python:${{ github.workspace }}/torturer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$DOBBY_TESTS_ROOT/tests/platform/ios_simulator/run_app_contract.py" \
+            --candidate-root "$DOBBY_PRODUCT_ROOT" \
+            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
+            --source-sha "$DOBBY_SOURCE_SHA"
+
+      - name: Retain complete iOS Simulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-ios-simulator-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-simulator-mini-contract/diagnostics
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Remove Simulator build and decoder scratch
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/ios-simulator-mini-contract" \
+            "$RUNNER_TEMP/dobbyvpn-screenshot-python"

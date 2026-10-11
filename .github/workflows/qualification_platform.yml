@@ -2,7 +2,16 @@ name: Hosted mini platform qualification
 
 on:
   workflow_call:
+    outputs:
+      android_pairing:
+        value: ${{ jobs.qualification.outputs.android_pairing }}
     inputs:
+      torturer_sha:
+        required: true
+        type: string
+      torturer_tree_sha256:
+        required: true
+        type: string
       platform:
         description: Platform to qualify.
         required: true
@@ -34,11 +43,19 @@ jobs:
   qualification:
     name: Hosted mini / ${{ inputs.platform }} / ${{ inputs.architecture || 'default' }}
     runs-on: ${{ inputs.platform == 'windows' && 'windows-2022' || inputs.platform == 'macos' && inputs.architecture == 'amd64' && 'macos-15-intel' || inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
-    timeout-minutes: 30
+    timeout-minutes: 45
+    environment: release-tests
     permissions:
       contents: read
       actions: read
+    outputs:
+      android_pairing: ${{ steps.android_companion.outputs.pairing }}
     env:
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
+      DOBBY_TEST_SHA: ${{ inputs.torturer_sha }}
+      DOBBY_TEST_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+      PYTHONPATH: ${{ github.workspace }}/torturer
       PLATFORM: ${{ inputs.platform }}
       ARCHITECTURE: ${{ inputs.architecture }}
       DOBBYVPN_COMMIT_SHA: ${{ inputs.source_sha || github.sha }}
@@ -47,6 +64,7 @@ jobs:
       - name: Reject hosted mini reruns before package qualification
         shell: bash
         run: |
+          test "$GITHUB_REF" = refs/heads/main
           if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
             echo "Hosted mini reruns are unsupported; start a fresh calling workflow run." >&2
             exit 1
@@ -58,6 +76,30 @@ jobs:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify private tests identity
+        shell: bash
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          actual = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          if actual != os.environ["TORTURER_SHA"] or release_guard.tests_tree_sha256(Path("torturer")) != os.environ["TORTURER_TREE_SHA256"]:
+              raise SystemExit("private test identity differs from reserved candidate")
+          PYTHON
+
       - name: Download qualification artifacts
         shell: bash
         env:
@@ -67,7 +109,7 @@ jobs:
           case "$PLATFORM" in
             linux) artifacts=(dobbyVPN-linux.deb) ;;
             windows) artifacts=(dobbyVPN-windows-amd64.msi) ;;
-            android) artifacts=(dobbyvpn-android-unsign.apk dobbyvpn-android-test-companion-unsigned.apk) ;;
+            android) artifacts=(dobbyvpn-android-unsign.apk) ;;
             macos)
               case "$ARCHITECTURE" in
                 arm64) artifacts=(dobbyVPN-macos-aarch64.pkg) ;;
@@ -127,7 +169,6 @@ jobs:
             android)
               version="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")"
               test -s "$GITHUB_WORKSPACE/release-packages/DobbyVPN-v${version}-unsign.apk"
-              test -s "$GITHUB_WORKSPACE/release-packages/DobbyVPN-v${version}-android-test-companion-unsigned.apk"
               ;;
             *) exit 1 ;;
           esac
@@ -155,6 +196,36 @@ jobs:
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
         with:
           packages: platform-tools
+
+      - name: Build private Android companion for the selected product APK
+        id: android_companion
+        if: inputs.platform == 'android'
+        shell: bash
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          compile_sdk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_compile_sdk)"
+          build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
+          ndk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_ndk)"
+          sdkmanager --install "platforms;android-$compile_sdk" "build-tools;$build_tools" "ndk;$ndk"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          from source_tests.android import build_test_companion
+          product = Path(os.environ["DOBBY_PRODUCT_ROOT"])
+          version = (product / "VERSION").read_text().strip()
+          result = build_test_companion(
+              product, Path(os.environ["DOBBY_TESTS_ROOT"]) / "source_tests/product",
+              product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk",
+              Path(os.environ["RUNNER_TEMP"]) / "private-android-companion",
+              product_sha=os.environ["DOBBYVPN_COMMIT_SHA"],
+              torturer_sha=os.environ["DOBBY_TEST_SHA"],
+              torturer_tree_sha256=os.environ["DOBBY_TEST_TREE_SHA256"],
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("pairing=" + json.dumps(result["pairing"], separators=(",", ":")) + "\n")
+          PYTHON
 
       - name: Validate and install the exact selected native package
         shell: bash
@@ -278,7 +349,7 @@ jobs:
               build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
               run_timed android-sdk-install sdkmanager --install 'platform-tools' "platforms;android-$compile_sdk" "build-tools;$build_tools" 'emulator' "system-images;android-$compile_sdk;google_apis;x86_64"
               unsigned_app="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-unsign.apk"
-              unsigned_companion="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-android-test-companion-unsigned.apk"
+              unsigned_companion="$RUNNER_TEMP/private-android-companion/dobbyvpn-test-companion-unsigned.apk"
               signed_app="$ANDROID_SIGNED_DIR/DobbyVPN-test.apk"
               signed_companion="$ANDROID_SIGNED_DIR/DobbyVPN-test-companion.apk"
               mkdir -p "$ANDROID_SIGNED_DIR"
@@ -651,7 +722,7 @@ jobs:
             if [ "$PLATFORM" = macos ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
             fi
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 "$GITHUB_WORKSPACE/.github/scripts/desktop/desktop_package.py" "${release_args[@]}"
+            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.desktop_platform "${release_args[@]}"
           fi
 
       - name: Stop Linux qualification service
@@ -868,4 +939,4 @@ jobs:
           rm -rf "$RUN_DIR"
           rm -rf "$RESULT_DIR"
           rm -rf "$ARTIFACT_DIR"
-          rm -rf "$ANDROID_SIGNED_DIR"
+          rm -rf "$ANDROID_SIGNED_DIR" "$RUNNER_TEMP/private-android-companion"

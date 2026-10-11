@@ -16,6 +16,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: release-verification
+  cancel-in-progress: false
+
 permissions:
   actions: read
   contents: read
@@ -26,6 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
+      deployments: read
       actions: read
       contents: read
     outputs:
@@ -377,8 +382,7 @@ jobs:
             dobbyVPN-windows-amd64.msi \
             dobbyVPN-macos-aarch64.pkg \
             dobbyVPN-macos-amd64.pkg \
-            dobbyvpn-android-unsign.apk \
-            dobbyvpn-android-test-companion-unsigned.apk; do
+            dobbyvpn-android-unsign.apk; do
             python3 .github/scripts/release/download_artifact.py \
               "$BUILD_RUN_ID" "$artifact" release
           done
@@ -410,10 +414,20 @@ jobs:
         run: |
           set -euo pipefail
           unsigned="release/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
-          companion="release/DobbyVPN-v$RELEASE_VERSION-android-test-companion-unsigned.apk"
+          python3 .github/scripts/release/download_artifact.py "$TEST_RUN_ID" test-result "$RUNNER_TEMP/selected-test-result"
+          python3 - "$RUNNER_TEMP/selected-test-result/test-result.json" "$unsigned" <<'PYTHON'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import test_manifest
+          raw = Path(sys.argv[1]).read_bytes()
+          if hashlib.sha256(raw).hexdigest() != os.environ["TEST_RESULT_SHA256"]:
+              raise SystemExit("selected Test result changed before publication")
+          test_manifest.validate_android_pairing(json.loads(raw), hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest())
+          PYTHON
           provenance="release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
           signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
-          test -f "$unsigned"; test -f "$companion"; test -f "$provenance"
+          test -f "$unsigned"; test -f "$provenance"
 
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           test -n "$sdk_root"
@@ -432,15 +446,14 @@ jobs:
           python3 .github/scripts/android/verify_android_apk_source.py \
             --apk "$unsigned" --source-sha "$RELEASE_SOURCE_SHA" \
             --repository "$GITHUB_REPOSITORY" --apkanalyzer "$apkanalyzer" \
-            --version-name "$RELEASE_VERSION" --version-code "$ANDROID_VERSION_CODE" \
-            --test-companion "$companion"
+            --version-name "$RELEASE_VERSION" --version-code "$ANDROID_VERSION_CODE"
 
           python3 .github/scripts/android/android_apk_signing.py sign-release \
             --unsigned-apk "$unsigned" --signed-apk "$signed" --apksigner "$apksigner"
 
           python3 .github/scripts/android/android_apk_signing.py finalize-provenance \
             --provenance "$provenance" --unsigned-apk "$unsigned" --signed-apk "$signed" \
-            --test-companion "$companion" --source-sha "$RELEASE_SOURCE_SHA" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
             --version-name "$RELEASE_VERSION" --version-code "$ANDROID_VERSION_CODE" \
             --apksigner "$apksigner"
 
@@ -449,7 +462,6 @@ jobs:
             --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
             --version-code "$ANDROID_VERSION_CODE" \
             --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
-          rm -- "$companion"
       - name: Create Build/Test/Publish provenance
         id: provenance
         env:
