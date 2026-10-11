@@ -379,8 +379,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
         let latestLogText = try XCTUnwrap(logs.value as? String)
         XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
-        let detailElements = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let detailElements = renderedLogDetailLinks(in: logs)
         let targetRecord = try XCTUnwrap(
             renderedLogRecord(containing: fixture.validationError, in: latestLogText),
             "The latest Paste validation record should remain in the rendered log view"
@@ -707,8 +706,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
     private func visibleLogAnchor(in logs: XCUIElement) -> RenderedLogAnchor? {
         guard let rendered = logs.value as? String, logs.frame.height > 0 else { return nil }
-        let details = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let details = renderedLogDetailLinks(in: logs)
         let detailCount = details.count
         // At the bottom-following position, only recent rows can intersect the viewport.
         // Querying every retained link makes XCUI traverse dozens of offscreen records.
@@ -728,8 +726,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
     private func topmostVisibleLogAnchor(in logs: XCUIElement) -> RenderedLogAnchor? {
         guard let rendered = logs.value as? String, logs.frame.height > 0 else { return nil }
-        let details = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let details = renderedLogDetailLinks(in: logs)
         let candidates = (0..<details.count).compactMap { index -> RenderedLogAnchor? in
             let element = details.element(boundBy: index)
             guard element.label == "Details", elementIsVisible(element, in: logs),
@@ -844,8 +841,7 @@ final class NativeUIInteractionTests: XCTestCase {
     ) {
         let attachmentName = "\(diagnosticPrefix)-scroll-\(failureCondition)"
         attachScreenshot("\(attachmentName)-screenshot")
-        let details = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let details = renderedLogDetailLinks(in: logs)
         let visibleDetailsFrames = (0..<details.count).compactMap { index -> String? in
             let element = details.element(boundBy: index)
             let frame = element.frame
@@ -900,8 +896,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
     private func detailElement(for anchor: RenderedLogAnchor, in logs: XCUIElement) -> XCUIElement? {
         guard let rendered = logs.value as? String else { return nil }
-        let details = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let details = renderedLogDetailLinks(in: logs)
         for index in 0..<details.count {
             guard renderedLogRecord(atDetailIndex: index, in: rendered) == anchor.record else { continue }
             return details.element(boundBy: index)
@@ -912,10 +907,14 @@ final class NativeUIInteractionTests: XCTestCase {
     private func detailElement(containing message: String, in logs: XCUIElement) -> XCUIElement? {
         guard let rendered = logs.value as? String,
               let target = renderedLogRecord(containing: message, in: rendered) else { return nil }
-        let details = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let details = renderedLogDetailLinks(in: logs)
         guard target.detailIndex < details.count else { return nil }
         return details.element(boundBy: target.detailIndex)
+    }
+
+    private func renderedLogDetailLinks(in logs: XCUIElement) -> XCUIElementQuery {
+        // Each rendered Details marker is one native Link; exclude duplicate TextView fragments from marker ordinals.
+        logs.links.matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
     }
 
     private func renderedLogRecord(atDetailIndex index: Int, in text: String) -> String? {

@@ -1,6 +1,7 @@
 package com.dobby.nativebridge
 
 import android.app.Activity
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
@@ -252,6 +253,7 @@ object NativeVpnBridge {
                 .setType("application/gzip")
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .setClipData(ClipData.newUri(context.contentResolver, "DobbyVPN logs", uri))
             context.startActivity(
                 Intent.createChooser(share, "Export logs")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),

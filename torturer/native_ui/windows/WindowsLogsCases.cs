@@ -2475,6 +2475,7 @@ internal static partial class Program
         if (ownerPid != (uint)app.Process.Id)
             throw new InvalidOperationException($"Log wheel input target changed ownership before {operation}");
 
+        TraceLogsWheelTargets(viewport, point, operation);
         var input = CreateMouseInput(MouseEventWheel, unchecked((uint)(short)wheelDelta));
         Marshal.SetLastPInvokeError(0);
         var inserted = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
@@ -2482,6 +2483,38 @@ internal static partial class Program
         if (inserted != 1)
             throw new InvalidOperationException(
                 $"SendInput inserted {inserted} of 1 log-wheel event for {operation}; lastError={lastError}");
+    }
+
+    private static void TraceLogsWheelTargets(AutomationElement viewport, NativePoint point, string operation)
+    {
+        object Describe(Func<AutomationElement> acquire)
+        {
+            try
+            {
+                var current = acquire().Current;
+                return new
+                {
+                    automation_id = current.AutomationId,
+                    name = current.Name,
+                    control_type = current.ControlType.ProgrammaticName,
+                    is_keyboard_focusable = current.IsKeyboardFocusable,
+                    bounds = RectJson(current.BoundingRectangle),
+                };
+            }
+            catch (Exception error)
+            {
+                return error.ToString();
+            }
+        }
+
+        TracePhase($"logs-wheel-targets {SerializeNativeCaseJson(new
+        {
+            operation,
+            point = new { x = point.X, y = point.Y },
+            viewport = Describe(() => viewport),
+            from_point = Describe(() => AutomationElement.FromPoint(new System.Windows.Point(point.X, point.Y))),
+            focused_element = Describe(() => AutomationElement.FocusedElement),
+        })}");
     }
 
     private static void AssertFixtureRetainsRecords(
