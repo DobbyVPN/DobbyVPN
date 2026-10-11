@@ -30,6 +30,8 @@ internal static partial class Program
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)]
+    private static extern bool GetGUIThreadInfo(uint threadId, ref NativeGuiThreadInfo info);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
@@ -59,6 +61,13 @@ internal static partial class Program
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeGuiThreadInfo
+    {
+        public uint Size, Flags;
+        public IntPtr ActiveWindow, FocusWindow, CaptureWindow, MenuOwnerWindow, MoveSizeWindow, CaretWindow;
+        public Rect CaretRect;
+    }
     // INPUT and MOUSEINPUT use a pointer-sized dwExtraInfo on both architectures.
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeInput

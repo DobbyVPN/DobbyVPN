@@ -2226,7 +2226,7 @@ internal static partial class Program
                 !currentViewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var currentPattern))
                 return false;
             return ((ScrollPattern)currentPattern).Current.VerticalScrollPercent == 100.0;
-        }, "The fixture row was not present at the exact rendered log tail before the logs-case deadline");
+        }, "The fixture entry was not available in the rendered log tree, or Backend logs was not visible at the current tail before the logs-case deadline");
         var viewport = RequireLogsViewport(app);
         if (!viewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
             throw new InvalidOperationException("Rendered Backend logs control did not expose scrolling");
@@ -2471,11 +2471,11 @@ internal static partial class Program
             throw new InvalidOperationException(
                 $"Pointer over the log viewport resolved to window 0x{windowAtPointer.ToInt64():X}, " +
                 $"not owned app window 0x{app.Window.ToInt64():X}, for {operation}");
-        GetWindowThreadProcessId(app.Window, out var ownerPid);
+        var ownerThreadId = GetWindowThreadProcessId(app.Window, out var ownerPid);
         if (ownerPid != (uint)app.Process.Id)
             throw new InvalidOperationException($"Log wheel input target changed ownership before {operation}");
 
-        TraceLogsWheelTargets(viewport, point, operation);
+        TraceLogsWheelFocus(app.Window, ownerThreadId, ownerPid, point, operation);
         var input = CreateMouseInput(MouseEventWheel, unchecked((uint)(short)wheelDelta));
         Marshal.SetLastPInvokeError(0);
         var inserted = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
@@ -2485,35 +2485,41 @@ internal static partial class Program
                 $"SendInput inserted {inserted} of 1 log-wheel event for {operation}; lastError={lastError}");
     }
 
-    private static void TraceLogsWheelTargets(AutomationElement viewport, NativePoint point, string operation)
+    private static void TraceLogsWheelFocus(
+        IntPtr ownedWindow, uint ownedThreadId, uint ownedProcessId, NativePoint point, string operation)
     {
-        object Describe(Func<AutomationElement> acquire)
+        object DescribeWindow(IntPtr window)
         {
-            try
+            var root = window == IntPtr.Zero ? IntPtr.Zero : GetAncestor(window, GaRoot);
+            return new
             {
-                var current = acquire().Current;
-                return new
-                {
-                    automation_id = current.AutomationId,
-                    name = current.Name,
-                    control_type = current.ControlType.ProgrammaticName,
-                    is_keyboard_focusable = current.IsKeyboardFocusable,
-                    bounds = RectJson(current.BoundingRectangle),
-                };
-            }
-            catch (Exception error)
-            {
-                return error.ToString();
-            }
+                window = DescribeWindowContext(window, includeGeometry: true),
+                root = DescribeWindowContext(root, includeGeometry: true),
+            };
         }
 
-        TracePhase($"logs-wheel-targets {SerializeNativeCaseJson(new
+        var info = new NativeGuiThreadInfo { Size = checked((uint)Marshal.SizeOf<NativeGuiThreadInfo>()) };
+        Marshal.SetLastPInvokeError(0);
+        var succeeded = GetGUIThreadInfo(ownedThreadId, ref info);
+        var errorCode = Marshal.GetLastPInvokeError();
+        TracePhase($"logs-wheel-native-focus {SerializeNativeCaseJson(new
         {
             operation,
             point = new { x = point.X, y = point.Y },
-            viewport = Describe(() => viewport),
-            from_point = Describe(() => AutomationElement.FromPoint(new System.Windows.Point(point.X, point.Y))),
-            focused_element = Describe(() => AutomationElement.FocusedElement),
+            owned_window = DescribeWindow(ownedWindow),
+            owned_thread_id = ownedThreadId,
+            owned_process_id = ownedProcessId,
+            gui_thread_info = new
+            {
+                succeeded,
+                error = succeeded ? null : new System.ComponentModel.Win32Exception(
+                    errorCode, $"GetGUIThreadInfo failed for owned thread {ownedThreadId}").ToString(),
+                error_code = succeeded ? (int?)null : errorCode,
+                flags = info.Flags,
+                active = DescribeWindow(info.ActiveWindow),
+                focus = DescribeWindow(info.FocusWindow),
+                capture = DescribeWindow(info.CaptureWindow),
+            },
         })}");
     }
 
