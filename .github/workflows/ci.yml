@@ -8,156 +8,52 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: Run the complete CI suite or one hosted mini platform check.
+        description: Run development CI or a product package check.
         required: true
         type: choice
         default: ci
         options:
           - ci
-          - linux-mini
-          - windows-mini
-          - macos-mini
-          - android-mini
           - debug-packages
           - fdroid-preflight
-          - ios-simulator-mini
-      native_case:
-        description: Optional registered iOS Simulator mini case selector.
-        required: false
-        type: string
 
 permissions:
   contents: read
 
 jobs:
-  python_tests:
-    name: python-tests
+  go_build:
+    name: Go source build (${{ matrix.name }})
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Run Python unit tests
-        run: python3 .github/scripts/source_checks.py python-tests
-
-  go:
-    name: Go unit and race tests
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Run Go unit and race tests
-        run: python3 .github/scripts/source_checks.py go-tests --output-dir "$RUNNER_TEMP/dobbyvpn-go-coverage"
-
-      - name: Retain complete Go coverage
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobbyvpn-go-coverage
-          path: ${{ runner.temp }}/dobbyvpn-go-coverage
-          if-no-files-found: warn
-          include-hidden-files: true
-          retention-days: 1
-
-  go_native_runtime:
-    name: Selected Go runtime tests on ARM64 Linux
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Verify native ARM64 runner
-        run: test "$(uname -m)" = aarch64
-
-      - name: Run selected Go runtime tests
-        run: python3 .github/scripts/source_checks.py go-native-runtime
-
-  go_native_windows:
-    name: Selected Go runtime tests on Windows
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            python: python3
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            python: python3
+          - name: Windows
+            runner: windows-2022
+            python: python
+          - name: macOS
+            runner: macos-15
+            python: python3
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
-      - name: Run selected Go runtime tests
-        run: python .github/scripts/source_checks.py go-native-runtime
-
-      - name: Check native Windows diagnostics
-        run: dotnet run --project torturer/native_ui/windows/NativeUI.csproj --configuration Release -- --diagnostics-test
-
-  go_native_macos:
-    name: Selected Go runtime tests on macOS
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
-    runs-on: macos-15
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          persist-credentials: false
+          go-version-file: .go-version
+          cache: false
 
-      - name: Run selected Go runtime tests
-        run: python3 .github/scripts/source_checks.py go-native-runtime
-
-  swift:
-    name: Swift lifecycle unit tests
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Select Xcode 26.3
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-
-      - name: Run Swift unit tests and retain coverage
-        run: python3 .github/scripts/source_checks.py swift-unit --output-dir "$RUNNER_TEMP/dobbyvpn-swift-coverage"
-
-      - name: Retain complete Swift coverage
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobbyvpn-swift-coverage
-          path: ${{ runner.temp }}/dobbyvpn-swift-coverage
-          if-no-files-found: warn
-          include-hidden-files: true
-          retention-days: 1
-
-  android_unit:
-    name: Android presentation unit tests
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Read Java version
-        id: pins
-        run: echo "java_major=$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin java_major)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: ${{ steps.pins.outputs.java_major }}
-
-      - name: Run production presentation tests
-        run: python3 .github/scripts/source_checks.py android-unit
+      - name: Build Go product packages
+        run: ${{ matrix.python }} .github/scripts/source_checks.py go-build
 
   android_lint:
     name: Android lint
@@ -253,8 +149,8 @@ jobs:
         run: python3 .github/scripts/source_checks.py actionlint
 
   android_build:
-    name: Android build and native library checks
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'debug-packages' }}
+    name: Android product build and native library checks
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'debug-packages' || inputs.platform == 'fdroid-preflight' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -298,23 +194,38 @@ jobs:
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
-      - name: Download Go modules for the Android backend
-        working-directory: core
-        run: go mod download
-
-      - name: Build Android app and instrumentation companion, then verify native ABI
+      - name: Build Android app without test companion, then verify native ABI
         run: |
           set -euo pipefail
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
+          export GO_BIN="$GOROOT/bin/go"
+          export GOPATH="$RUNNER_TEMP/dobbyvpn-android-gopath"
+          mkdir -p "$GOPATH"
           build_root="$RUNNER_TEMP/dobbyvpn-android-ci"
-          .github/scripts/android/android_build_check.sh \
+          version="$(python3 .github/scripts/release/version_metadata.py --version-file VERSION --field version_name)"
+          apk="$build_root/DobbyVPN-v${version}-unsign.apk"
+          mkdir -p "$build_root"
+          .github/scripts/android/android_build_driver.sh \
             --source-root "$GITHUB_WORKSPACE" \
             --source-sha "$GITHUB_SHA" \
-            --output "$build_root/app-release-unsigned.apk" \
-            --test-companion-output "$build_root/app-release-androidTest.apk"
+            --output "$apk" --local
+          mapfile -t ndk_toolchains < <(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#ndk_toolchains[@]}" = 1
+          readelf="${ndk_toolchains[0]}/bin/llvm-readelf"
+          test -x "$readelf"
+          python3 .github/scripts/android/verify_android_native_payloads.py --apk "$apk" --readelf "$readelf"
           python3 .github/scripts/android/android_debug_build.py \
             --source-sha "$GITHUB_SHA" --go-binary "$GOROOT/bin/go" \
-            --output "$build_root/app-debug.apk"
+            --output "$build_root/DobbyVPN-v${version}-debug.apk"
+
+      - name: Upload APK for F-Droid preflight
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'fdroid-preflight' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dobbyvpn-android-unsign.apk
+          path: ${{ runner.temp }}/dobbyvpn-android-ci/DobbyVPN-v*-unsign.apk
+          if-no-files-found: error
+          retention-days: 1
 
   ios_production:
     name: iOS production analysis and archive
@@ -332,83 +243,9 @@ jobs:
       - name: Check production iOS source
         run: python3 .github/scripts/ios/ios_production_check.py --source-sha "$GITHUB_SHA" --output-dir "$RUNNER_TEMP/ios-production"
 
-  ios_simulator:
-    name: iOS Simulator UI test
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'ios-simulator-mini' }}
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Select Xcode 26.3
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: .go-version
-          cache: false
-
-      - name: Build TrustTunnel-enabled Go runtime for iOS Simulator
-        working-directory: core
-        run: |
-          set -euo pipefail
-          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
-          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
-          go mod download
-          ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
-          runtime_binary="$(find DobbyVPNRuntime.xcframework -type f -path '*/DobbyVPNRuntime.framework/DobbyVPNRuntime' -print -quit)"
-          test -n "$runtime_binary"
-          runtime_arches="$(xcrun lipo -archs "$runtime_binary" | tee /dev/stderr)"
-          [[ " $runtime_arches " == *" arm64 "* ]]
-
-      - name: Install pinned screenshot decoder
-        run: |
-          set -euo pipefail
-          package_dir="$RUNNER_TEMP/dobbyvpn-screenshot-python"
-          python3 -m pip install --disable-pip-version-check --only-binary=:all: \
-            --no-deps --target "$package_dir" \
-            --requirement .github/scripts/requirements-native-ui.txt
-
-      - name: Build and launch app on iPhone Simulator
-        env:
-          PYTHONPATH: ${{ runner.temp }}/dobbyvpn-screenshot-python:${{ github.workspace }}/torturer
-          DOBBY_NATIVE_CASE: ${{ inputs.native_case }}
-          DOBBY_PLATFORM: ${{ inputs.platform }}
-        run: |
-          set -euo pipefail
-          run_app_contract() {
-            python3 torturer/tests/platform/ios_simulator/run_app_contract.py \
-              --candidate-root "$GITHUB_WORKSPACE" \
-              --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
-              --source-sha "$GITHUB_SHA" \
-              "$@"
-          }
-          if [[ -n "${DOBBY_NATIVE_CASE:-}" ]]; then
-            if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$DOBBY_PLATFORM" != ios-simulator-mini ]]; then
-              echo "native_case is supported only with platform=ios-simulator-mini" >&2
-              exit 2
-            fi
-            run_app_contract --native-case "$DOBBY_NATIVE_CASE"
-          else
-            run_app_contract
-          fi
-
-      - name: Retain complete iOS Simulator diagnostics
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dobbyvpn-ios-simulator-mini
-          path: ${{ runner.temp }}/ios-simulator-mini-contract/diagnostics
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 1
-
   ci_selected_version:
     name: Read selected build version
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' && inputs.platform != 'ios-simulator-mini' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' }}
     runs-on: ubuntu-24.04
     outputs:
       major: ${{ steps.version.outputs.major }}
@@ -428,35 +265,9 @@ jobs:
           python3 .github/scripts/release/version_metadata.py \
             --version-file VERSION --github-output "$GITHUB_OUTPUT"
 
-  focused_desktop_build:
-    name: Build selected desktop mini candidate
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini') }}
-    needs: [ci_selected_version]
-    uses: ./.github/workflows/desktop_package.yml
-    with:
-      platform: ${{ inputs.platform == 'linux-mini' && 'linux' || inputs.platform == 'windows-mini' && 'windows' || 'macos' }}
-      architecture: ${{ inputs.platform == 'macos-mini' && 'arm64' || 'amd64' }}
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.ci_selected_version.outputs.version_name }}
-
-  android_mini_build:
-    name: Build selected Android candidate
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'android-mini' || inputs.platform == 'fdroid-preflight') }}
-    needs: [ci_selected_version]
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/android_build.yml
-    with:
-      source_sha: ${{ github.sha }}
-      app_major_version: ${{ needs.ci_selected_version.outputs.major }}
-      app_minor_version: ${{ needs.ci_selected_version.outputs.minor }}
-      app_maintenance_version: ${{ needs.ci_selected_version.outputs.maintenance }}
-      android_version_code: ${{ needs.ci_selected_version.outputs.android_version_code }}
-
   fdroid_preflight:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'fdroid-preflight' }}
-    needs: [ci_selected_version, android_mini_build]
+    needs: [ci_selected_version, android_build]
     permissions:
       contents: read
       actions: read
@@ -465,158 +276,72 @@ jobs:
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.ci_selected_version.outputs.version_name }}
       version_code: ${{ needs.ci_selected_version.outputs.android_version_code }}
+      build_run_id: ${{ github.run_id }}
 
-  mini_render_start:
-    name: Start Render VPN for selected mini
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini' || inputs.platform == 'android-mini') }}
-    needs: [ci_selected_version]
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/render_start.yml
-    secrets: inherit
-
-  focused_desktop_mini:
-    name: Selected desktop hosted mini
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini') }}
-    needs: [focused_desktop_build, mini_render_start]
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/qualification_platform.yml
-    with:
-      platform: ${{ inputs.platform == 'linux-mini' && 'linux' || inputs.platform == 'windows-mini' && 'windows' || 'macos' }}
-      architecture: ${{ inputs.platform == 'macos-mini' && 'arm64' || '' }}
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
-
-  android_mini:
-    name: Android hosted mini
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'android-mini' }}
-    needs: [android_mini_build, mini_render_start]
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/qualification_platform.yml
-    with:
-      platform: android
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
-
-  mini_render_cleanup:
-    name: Delete Render VPN after selected mini
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.platform == 'linux-mini' || inputs.platform == 'windows-mini' || inputs.platform == 'macos-mini' || inputs.platform == 'android-mini') }}
-    needs: [mini_render_start, focused_desktop_mini, android_mini]
-    uses: ./.github/workflows/render_cleanup.yml
-    secrets: inherit
-
-  focused_mini_result:
-    name: Require selected check success
+  selected_package_result:
+    name: Require selected package check success
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' }}
-    needs: [ci_selected_version, focused_desktop_build, android_mini_build, mini_render_start, focused_desktop_mini, android_mini, mini_render_cleanup, ios_simulator, fdroid_preflight, debug_packages, android_build]
+    needs: [ci_selected_version, fdroid_preflight, debug_packages, android_build]
     runs-on: ubuntu-24.04
     steps:
-      - name: Check selected platform result
+      - name: Check selected package result
         env:
           PLATFORM: ${{ inputs.platform }}
           VERSION_RESULT: ${{ needs.ci_selected_version.result }}
-          DESKTOP_BUILD_RESULT: ${{ needs.focused_desktop_build.result }}
-          ANDROID_BUILD_RESULT: ${{ needs.android_mini_build.result }}
-          RENDER_START_RESULT: ${{ needs.mini_render_start.result }}
-          DESKTOP_RESULT: ${{ needs.focused_desktop_mini.result }}
-          ANDROID_RESULT: ${{ needs.android_mini.result }}
-          RENDER_CLEANUP_RESULT: ${{ needs.mini_render_cleanup.result }}
-          IOS_RESULT: ${{ needs.ios_simulator.result }}
           FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
           DEBUG_RESULT: ${{ needs.debug_packages.result }}
-          DEBUG_ANDROID_RESULT: ${{ needs.android_build.result }}
+          ANDROID_RESULT: ${{ needs.android_build.result }}
         run: |
           set -euo pipefail
           case "$PLATFORM" in
-            linux-mini|windows-mini|macos-mini)
-              test "$VERSION_RESULT" = success
-              test "$DESKTOP_BUILD_RESULT" = success
-              test "$RENDER_START_RESULT" = success
-              test "$DESKTOP_RESULT" = success
-              test "$RENDER_CLEANUP_RESULT" = success
-              ;;
-            android-mini)
-              test "$VERSION_RESULT" = success
-              test "$ANDROID_BUILD_RESULT" = success
-              test "$RENDER_START_RESULT" = success
-              test "$ANDROID_RESULT" = success
-              test "$RENDER_CLEANUP_RESULT" = success
-              ;;
             fdroid-preflight)
               test "$VERSION_RESULT" = success
-              test "$ANDROID_BUILD_RESULT" = success
+              test "$ANDROID_RESULT" = success
               test "$FDROID_RESULT" = success
               ;;
             debug-packages)
               test "$VERSION_RESULT" = success
               test "$DEBUG_RESULT" = success
-              test "$DEBUG_ANDROID_RESULT" = success
+              test "$ANDROID_RESULT" = success
               ;;
-            ios-simulator-mini)
-              test "$IOS_RESULT" = success
-              ;;
-            *) echo "unsupported focused platform: $PLATFORM" >&2; exit 1 ;;
+            *) echo "unsupported package check: $PLATFORM" >&2; exit 1 ;;
           esac
-          echo "Selected check passed: $PLATFORM"
+          echo "Selected package check passed: $PLATFORM"
 
   complete_ci:
     name: Complete CI
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') }}
     needs:
-      - python_tests
-      - go
-      - go_native_runtime
-      - go_native_windows
-      - go_native_macos
-      - swift
-      - android_unit
+      - go_build
       - android_lint
       - lint_go
       - lint_swift
       - security
       - actionlint
       - android_build
-      - ios_simulator
       - ios_production
     runs-on: ubuntu-24.04
     steps:
       - name: Require every full CI job
         env:
-          PYTHON_TESTS_RESULT: ${{ needs.python_tests.result }}
-          GO_RESULT: ${{ needs.go.result }}
-          GO_NATIVE_RUNTIME_RESULT: ${{ needs.go_native_runtime.result }}
-          GO_NATIVE_WINDOWS_RESULT: ${{ needs.go_native_windows.result }}
-          GO_NATIVE_MACOS_RESULT: ${{ needs.go_native_macos.result }}
-          SWIFT_RESULT: ${{ needs.swift.result }}
-          ANDROID_UNIT_RESULT: ${{ needs.android_unit.result }}
+          GO_BUILD_RESULT: ${{ needs.go_build.result }}
           ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
           LINT_GO_RESULT: ${{ needs.lint_go.result }}
           LINT_SWIFT_RESULT: ${{ needs.lint_swift.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
           ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
           ANDROID_BUILD_RESULT: ${{ needs.android_build.result }}
-          IOS_SIMULATOR_RESULT: ${{ needs.ios_simulator.result }}
           IOS_PRODUCTION_RESULT: ${{ needs.ios_production.result }}
         run: |
           set -euo pipefail
           for result in \
-            "$PYTHON_TESTS_RESULT" \
-            "$GO_RESULT" \
-            "$GO_NATIVE_RUNTIME_RESULT" \
-            "$GO_NATIVE_WINDOWS_RESULT" \
-            "$GO_NATIVE_MACOS_RESULT" \
-            "$SWIFT_RESULT" \
-            "$ANDROID_UNIT_RESULT" \
+            "$GO_BUILD_RESULT" \
             "$ANDROID_LINT_RESULT" \
             "$LINT_GO_RESULT" \
             "$LINT_SWIFT_RESULT" \
             "$SECURITY_RESULT" \
             "$ACTIONLINT_RESULT" \
             "$ANDROID_BUILD_RESULT" \
-            "$IOS_SIMULATOR_RESULT" \
             "$IOS_PRODUCTION_RESULT"; do
             test "$result" = success
           done

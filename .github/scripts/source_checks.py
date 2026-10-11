@@ -387,6 +387,28 @@ def go_native_runtime() -> None:
     run([str(go), "test", "-v", "-race", *flags, *packages], cwd=GO_MODULE, env=environment)
 
 
+def go_build() -> None:
+    """Compile product packages with the native toolchain for this runner."""
+    import desktop_build
+
+    go = prepare_native_runtime_check()
+    environment = go_environment(go)
+    packages = ["./..."]
+    flags: list[str] = []
+    if host_os() == "darwin":
+        desktop_build.configure_macos_deployment_target("macos", environment)
+        desktop_build.configure_macos_bridge_link(environment)
+        flags.append("-ldflags=-linkmode=external -extldflags=-lc++")
+    elif host_os() == "windows":
+        environment["PATH"] = str(GO_MODULE) + os.pathsep + environment.get("PATH", "")
+    elif host_os() == "linux" and desktop_build.go_arch_from_machine() != "amd64":
+        packages = NATIVE_GO_PACKAGES.copy()
+        packages.remove("./clientserver/executor")
+        log("Executor build is unavailable on Linux ARM64: the pinned TrustTunnel bridge supports Linux AMD64 only")
+
+    run([str(go), "build", *flags, *packages], cwd=GO_MODULE, env=environment)
+
+
 def go_tests(args: argparse.Namespace) -> None:
     require_platform("linux")
     go = prepare_go_source_checks()
@@ -631,7 +653,7 @@ def parse_args() -> argparse.Namespace:
         choices=(
             "python-tests", "go-tests", "go-unit", "go-race", "go-native-runtime",
             "swift-unit", "swift-mutations", "windows-mutations", "android-unit", "android-mutations",
-            "lint-go", "lint-android", "lint-swift", "security",
+            "go-build", "lint-go", "lint-android", "lint-swift", "security",
             "actionlint", "cache-clean",
         ),
     )
@@ -657,6 +679,8 @@ def main() -> int:
             go_tests(args)
         elif args.check == "go-native-runtime":
             go_native_runtime()
+        elif args.check == "go-build":
+            go_build()
         elif args.check == "swift-unit":
             swift_unit(args)
         elif args.check == "swift-mutations":
