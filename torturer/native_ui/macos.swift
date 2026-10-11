@@ -2621,7 +2621,11 @@ func runMacOSConnectedSessionCase(
 
     let beforeFailure = try macOSSubscriptionStatsInteger(
         macOSSubscriptionFixtureObservation(request: request, deadline: deadline), "subscription_gets")
-    try pasteValue(try macOSLogsView(activeApp!).view, value: failureURL)
+    let failureView = try macOSLogsView(activeApp!)
+    _ = try pasteValueWithNativeControl(
+        activeApp!.application, window: failureView.nodes[0], value: failureURL,
+        expectedSource: failureURL
+    )
     _ = try waitMacOSLogsCase(deadline, stage: "visible failed-load Retry control") { () throws -> Bool? in
         let nodes = try macOSLogsAXNodes(activeApp!)
         guard let retry = try? find(nodes, "subscription.retry"),
