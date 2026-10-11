@@ -2926,13 +2926,11 @@ public final class NativeUiHostedProfileTest {
         int lastVisible = -1;
         int swipes = 0;
         Rect lastViewportBounds = null;
-        Pattern profileActionPattern = Pattern.compile("^Profile ([1-9][0-9]*) action$");
-        UiLookupCounters firstTargetLookup = new UiLookupCounters();
-        String firstTargetNodeDiagnostics = null;
-        List<Throwable> firstTargetDiagnosticFailures = new ArrayList<>();
-        UiObject2 enumeratedTarget = null;
-        UiObject2 enumeratedTargetAncestor = null;
+        Pattern profileActionResource =
+                Pattern.compile("^profile\\.[^.]+\\.index\\.([0-9]+)\\.role\\.action$");
         String targetLabel = "Profile " + (targetIndex + 1) + " action";
+        String lastTargetGeometry = "not-observed";
+        String lastRequiredDescriptionBounds = "not-observed";
         while (swipes <= profileCount + 2 && System.currentTimeMillis() < deadline) {
             UiObject2 viewport = findUiObject("Connection controls");
             Rect viewportBounds = viewport == null ? new Rect() : viewport.getVisibleBounds();
@@ -2951,30 +2949,40 @@ public final class NativeUiHostedProfileTest {
                     requiredDescription = null;
                 }
             }
+            lastRequiredDescriptionBounds = requiredDescriptionBounds.toShortString();
             boolean requiredDescriptionVisible = requiredVisibleDescription == null
                     || (requiredDescription != null
                             && Rect.intersects(viewportBounds, requiredDescriptionBounds));
-            UiLookupCounters targetLookup = new UiLookupCounters();
-            targetLookup.attempts++;
-            UiObject2 target = findUiObject(targetLabel, targetLookup);
+            UiObject2 target = findUiObject(targetLabel);
             Rect targetBounds = target == null ? new Rect() : target.getVisibleBounds();
             UiObject2 targetButton = target;
             while (targetButton != null && !targetButton.isClickable()) {
                 targetButton = targetButton.getParent();
             }
-            if (firstTargetLookup.attempts == 0) {
-                firstTargetLookup = targetLookup;
-                StringBuilder firstNodes = new StringBuilder();
-                appendStoppedRecoveryNodeFields(
-                        firstNodes, "first_target_node", target, firstTargetDiagnosticFailures);
-                appendStoppedRecoveryNodeFields(
-                        firstNodes, "first_clickable_ancestor", targetButton,
-                        firstTargetDiagnosticFailures);
-                firstTargetNodeDiagnostics = firstNodes.toString();
-            }
+            Rect targetButtonBounds = targetButton == null
+                    ? new Rect() : targetButton.getVisibleBounds();
+            int clickX = targetBounds.centerX();
+            int clickY = targetBounds.centerY();
+            boolean targetIntersectsViewport = target != null
+                    && Rect.intersects(viewportBounds, targetBounds);
+            boolean targetButtonIntersectsViewport = targetButton != null
+                    && Rect.intersects(viewportBounds, targetButtonBounds);
+            boolean clickPointInsideViewport = target != null
+                    && !targetBounds.isEmpty()
+                    && viewportBounds.contains(clickX, clickY);
+            boolean clickPointInsideButton = targetButton != null
+                    && targetButtonBounds.contains(clickX, clickY);
+            lastTargetGeometry = "target_found=" + (target != null)
+                    + ", target_bounds=" + targetBounds.toShortString()
+                    + ", click_point=" + clickX + "," + clickY
+                    + ", click_point_inside_viewport=" + clickPointInsideViewport
+                    + ", clickable_ancestor_bounds=" + targetButtonBounds.toShortString()
+                    + ", click_point_inside_clickable_ancestor=" + clickPointInsideButton;
             if (target != null && targetButton != null
-                    && Rect.intersects(viewportBounds, targetBounds)
-                    && Rect.intersects(viewportBounds, targetButton.getVisibleBounds())
+                    && targetIntersectsViewport
+                    && targetButtonIntersectsViewport
+                    && clickPointInsideViewport
+                    && clickPointInsideButton
                     && requiredDescriptionVisible) {
                 if (requiredVisibleDescription != null) {
                     reportRequiredVisibleProfileAction(
@@ -2984,72 +2992,50 @@ public final class NativeUiHostedProfileTest {
                 return;
             }
 
+            if (targetIntersectsViewport
+                    && (targetButton == null || !targetButtonIntersectsViewport
+                            || !clickPointInsideButton)) {
+                throw profileActionVisibilityFailure(
+                        "visible stable-tag target has no valid clickable action geometry, "
+                                + lastTargetGeometry
+                                + ", required_description="
+                                + JSONObject.quote(String.valueOf(requiredVisibleDescription))
+                                + ", required_description_bounds=" + lastRequiredDescriptionBounds,
+                        targetIndex, viewportBounds, firstVisible, lastVisible);
+            }
+
             firstVisible = -1;
             lastVisible = -1;
-            enumeratedTarget = null;
-            enumeratedTargetAncestor = null;
-            List<UiObject2> profileActions;
+            List<UiObject2> visibleProfileActions;
             try {
-                profileActions = viewport.findObjects(
-                        By.desc(profileActionPattern).pkg(context.getPackageName()));
+                visibleProfileActions = viewport.findObjects(
+                        By.res(profileActionResource).pkg(context.getPackageName()));
             } catch (StaleObjectException ignored) {
                 SystemClock.sleep(POLL_MILLIS);
                 continue;
             }
-            Rect enumeratedTargetBounds = new Rect();
-            for (UiObject2 visibleAction : profileActions) {
+            for (UiObject2 visibleAction : visibleProfileActions) {
                 try {
-                    String contentDescription = visibleAction.getContentDescription();
-                    if (contentDescription == null) continue;
-                    Matcher description = profileActionPattern.matcher(contentDescription);
-                    if (!description.matches()) continue;
-                    int index = Integer.parseInt(description.group(1)) - 1;
+                    String resourceName = visibleAction.getResourceName();
+                    if (resourceName == null) continue;
+                    Matcher resource = profileActionResource.matcher(resourceName);
+                    if (!resource.matches()) continue;
+                    int index = Integer.parseInt(resource.group(1));
                     Rect actionBounds = visibleAction.getVisibleBounds();
                     if (!Rect.intersects(viewportBounds, actionBounds)) continue;
                     if (index < 0 || index >= profileCount) continue;
-                    UiObject2 clickableAncestor = null;
-                    if (index == targetIndex) {
-                        clickableAncestor = visibleAction;
-                        while (clickableAncestor != null && !clickableAncestor.isClickable()) {
-                            clickableAncestor = clickableAncestor.getParent();
-                        }
-                        enumeratedTarget = visibleAction;
-                        enumeratedTargetAncestor = clickableAncestor;
-                        enumeratedTargetBounds = new Rect(actionBounds);
-                    }
                     if (firstVisible < 0 || index < firstVisible) firstVisible = index;
                     if (lastVisible < 0 || index > lastVisible) lastVisible = index;
                 } catch (StaleObjectException ignored) {
                     // A row may be replaced while Compose updates the viewport; query again next iteration.
                 }
             }
-            boolean targetCandidateVisible = enumeratedTarget != null
-                    && Rect.intersects(viewportBounds, enumeratedTargetBounds);
-            if (targetCandidateVisible) {
-                if (enumeratedTargetAncestor != null
-                        && Rect.intersects(
-                                viewportBounds, enumeratedTargetAncestor.getVisibleBounds())) {
-                    if (requiredDescriptionVisible) {
-                        if (requiredVisibleDescription != null) {
-                            reportRequiredVisibleProfileAction(
-                                    requiredVisibleDescription, viewportBounds,
-                                    enumeratedTargetBounds, requiredDescriptionBounds);
-                        }
-                        return;
-                    }
-                } else {
-                    throw profileActionLookupFailure(
-                            "visible target candidate has no intersecting clickable action, swipe_count="
-                                    + swipes,
-                            targetIndex, viewportBounds, firstVisible, lastVisible,
-                            firstTargetLookup, firstTargetNodeDiagnostics,
-                            firstTargetDiagnosticFailures,
-                            enumeratedTarget, enumeratedTargetAncestor);
-                }
-            }
             boolean targetWithinVisibleRange = firstVisible >= 0
                     && targetIndex >= firstVisible && targetIndex <= lastVisible;
-            if (targetWithinVisibleRange && requiredDescriptionVisible) {
+            boolean targetClickPointOutsideViewport = target != null
+                    && !clickPointInsideViewport;
+            if (targetWithinVisibleRange && requiredDescriptionVisible
+                    && !targetClickPointOutsideViewport) {
                 waitForIdleBounded(device, deadline);
                 SystemClock.sleep(POLL_MILLIS);
                 continue;
@@ -3057,41 +3043,33 @@ public final class NativeUiHostedProfileTest {
             boolean towardLaterProfiles = firstVisible < 0 || targetIndex > lastVisible;
             if (requiredVisibleDescription != null && !requiredDescriptionVisible) {
                 Rect revealBounds = !requiredDescriptionBounds.isEmpty()
-                        ? requiredDescriptionBounds
-                        : !targetBounds.isEmpty() ? targetBounds : enumeratedTargetBounds;
+                        ? requiredDescriptionBounds : targetBounds;
                 if (!revealBounds.isEmpty()) {
                     towardLaterProfiles = revealBounds.centerY() >= viewportBounds.centerY();
                 }
+            } else if (targetClickPointOutsideViewport) {
+                towardLaterProfiles = clickY >= viewportBounds.bottom;
             }
             if (swipes == profileCount + 2
                     || !swipeControlsViewport(device, viewportBounds, towardLaterProfiles)) {
-                throw profileActionLookupFailure(
+                throw profileActionVisibilityFailure(
                         "bounded controls-viewport swipe could not reveal the target row"
                                 + (requiredVisibleDescription == null ? "" : ", required_description="
                                         + JSONObject.quote(requiredVisibleDescription))
-                                + ", swipe_count=" + swipes,
-                        targetIndex, viewportBounds, firstVisible, lastVisible,
-                        firstTargetLookup, firstTargetNodeDiagnostics,
-                        firstTargetDiagnosticFailures,
-                        enumeratedTarget, enumeratedTargetAncestor);
+                                + ", required_description_bounds=" + lastRequiredDescriptionBounds
+                                + ", swipe_count=" + swipes + ", " + lastTargetGeometry,
+                        targetIndex, viewportBounds, firstVisible, lastVisible);
             }
             swipes++;
             SystemClock.sleep(POLL_MILLIS);
         }
-        AssertionError failure = profileActionVisibilityFailure(
+        throw profileActionVisibilityFailure(
                 "target action did not become visible before the existing deadline"
                         + (requiredVisibleDescription == null ? "" : "; required_description="
                                 + JSONObject.quote(requiredVisibleDescription))
-                        + '\n'
-                        + firstTargetLookupDiagnostics(
-                                firstTargetLookup, firstTargetNodeDiagnostics)
-                        + "swipe_count=" + swipes + '\n',
+                        + ", required_description_bounds=" + lastRequiredDescriptionBounds
+                        + ", swipe_count=" + swipes + ", " + lastTargetGeometry,
                 targetIndex, lastViewportBounds, firstVisible, lastVisible);
-        for (Throwable diagnosticFailure : firstTargetDiagnosticFailures) {
-            failure.addSuppressed(new IllegalStateException(
-                    "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
-        }
-        throw failure;
     }
 
     private void reportRequiredVisibleProfileAction(
@@ -3219,40 +3197,6 @@ public final class NativeUiHostedProfileTest {
             failure.addSuppressed(diagnosticFailure);
             return failure;
         }
-    }
-
-    private AssertionError profileActionLookupFailure(String reason, int targetIndex,
-            Rect viewportBounds, int minimumVisibleIndex, int maximumVisibleIndex,
-            UiLookupCounters firstLookup, String firstTargetDiagnostics,
-            List<Throwable> firstLookupDiagnosticFailures,
-            UiObject2 enumeratedTarget, UiObject2 enumeratedAncestor) {
-        StringBuilder diagnostic = new StringBuilder();
-        List<Throwable> diagnosticFailures = new ArrayList<>();
-        diagnostic.append(firstTargetLookupDiagnostics(firstLookup, firstTargetDiagnostics));
-        appendStoppedRecoveryNodeFields(diagnostic, "enumerated_target_node", enumeratedTarget, diagnosticFailures);
-        appendStoppedRecoveryNodeFields(diagnostic, "enumerated_clickable_ancestor", enumeratedAncestor, diagnosticFailures);
-        AssertionError failure = profileActionVisibilityFailure(
-                reason + "\n" + diagnostic, targetIndex, viewportBounds,
-                minimumVisibleIndex, maximumVisibleIndex);
-        for (Throwable diagnosticFailure : diagnosticFailures) {
-            failure.addSuppressed(new IllegalStateException(
-                    "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
-        }
-        for (Throwable diagnosticFailure : firstLookupDiagnosticFailures) {
-            failure.addSuppressed(new IllegalStateException(
-                    "ANDROID_PROFILE_ACTION_LOOKUP_DIAGNOSTIC_FAILED", diagnosticFailure));
-        }
-        return failure;
-    }
-
-    private String firstTargetLookupDiagnostics(UiLookupCounters lookup, String nodeDiagnostics) {
-        return "first_target_lookup attempts=" + lookup.attempts
-                + " description_candidates=" + lookup.descriptionCandidates
-                + " text_candidates=" + lookup.textCandidates
-                + " visible_matches=" + lookup.visibleMatches
-                + " empty_bounds=" + lookup.emptyBounds
-                + " stale_objects=" + lookup.staleObjects + '\n'
-                + (nodeDiagnostics == null ? "first_target_nodes=not_observed\n" : nodeDiagnostics);
     }
 
     private long tapEnabledControl(String label, long deadline) throws Exception {
