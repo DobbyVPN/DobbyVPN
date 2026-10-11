@@ -22,7 +22,11 @@ from torturer_runner.adapters.android import (
     _MAIN_ACTIVITY,
     _PACKAGE_NAME,
 )
-from torturer_runner.native_cases import ANDROID_PERFORMANCE_CASE, ANDROID_PRESENTATION_CASES
+from torturer_runner.native_cases import (
+    ANDROID_PERFORMANCE_CASE,
+    ANDROID_PRESENTATION_CASES,
+    ANDROID_RENDERED_CASE_METHODS,
+)
 
 
 FIXTURE_CA_PEM = "synthetic run-owned fixture CA\n"
@@ -245,7 +249,7 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertNotIn("saved_source_restore_only", command)
             self.assertNotIn("saved_source_restore_preverified", command)
 
-    def test_instrumentation_selects_only_the_named_rendered_method(self) -> None:
+    def test_each_rendered_case_selects_its_named_instrumentation_method(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             adapter = phase_adapter(root)
@@ -259,45 +263,20 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                 )
 
             adapter._adb = mock.Mock(side_effect=adb)
-            adapter._run_instrumentation(
-                "one.command.json",
-                time.monotonic() + 30,
-                test_case="android:profile-selection",
-            )
+            for case, method in ANDROID_RENDERED_CASE_METHODS.items():
+                with self.subTest(case=case):
+                    adapter._run_instrumentation(
+                        "one.command.json",
+                        time.monotonic() + 30,
+                        test_case=f"android:{case}",
+                    )
 
-            instrumentation = commands[-1]
-            class_index = instrumentation.index("class")
-            self.assertEqual(
-                instrumentation[class_index + 1],
-                "com.dobby.NativeUiHostedProfileTest#profileSelection",
-            )
-
-    def test_performance_case_selects_its_report_only_method(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            adapter = phase_adapter(root)
-            commands: list[tuple[str, ...]] = []
-            adapter._progress_sink = None
-
-            def adb(arguments, *_args, **_kwargs):
-                commands.append(tuple(arguments))
-                return SimpleNamespace(
-                    returncode=0, stdout=b"", stderr=b"", stdout_text=""
-                )
-
-            adapter._adb = mock.Mock(side_effect=adb)
-            adapter._run_instrumentation(
-                "one.command.json",
-                time.monotonic() + 30,
-                test_case=f"android:{ANDROID_PERFORMANCE_CASE}",
-            )
-
-            instrumentation = commands[-1]
-            class_index = instrumentation.index("class")
-            self.assertEqual(
-                instrumentation[class_index + 1],
-                "com.dobby.NativeUiHostedProfileTest#subscriptionLoadPerformance",
-            )
+                    instrumentation = commands[-1]
+                    class_index = instrumentation.index("class")
+                    self.assertEqual(
+                        instrumentation[class_index + 1],
+                        f"com.dobby.NativeUiHostedProfileTest#{method}",
+                    )
 
     def test_rendered_case_pass_requires_its_assertions_and_retained_frame(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

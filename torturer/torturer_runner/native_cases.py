@@ -42,6 +42,15 @@ ANDROID_PRESENTATION_CASES = (
     "configure-acceptance", "profile-selection", "typed-url-coalescing",
     "immediate-source-actions", "stale-permission-target",
 )
+ANDROID_RENDERED_CASE_METHODS = {
+    "configure-acceptance": "configureAcceptance",
+    "profile-selection": "profileSelection",
+    "typed-url-coalescing": "typedUrlCoalescing",
+    "immediate-source-actions": "immediateSourceActions",
+    "stale-permission-target": "stalePermissionTarget",
+    ANDROID_PERFORMANCE_CASE: "subscriptionLoadPerformance",
+    AUTO_RECOVERY_STOP_CASE: "autoRecoveryStop",
+}
 
 NATIVE_CASE_SUITES = {
     **{(platform, case): "full" for platform in ("windows", "macos")

@@ -61,7 +61,11 @@ from .cli import (
     _parse_external_ip,
     _profile_file,
 )
-from ..native_cases import ANDROID_PERFORMANCE_CASE, ANDROID_PRESENTATION_CASES
+from ..native_cases import (
+    ANDROID_PERFORMANCE_CASE,
+    ANDROID_RENDERED_CASE_METHODS,
+    AUTO_RECOVERY_STOP_CASE,
+)
 
 
 _PACKAGE_NAME = "com.dobby.vpn"
@@ -111,17 +115,10 @@ _ROUTING_CLEANUP_SECONDS = 5.0
 _CONSENT_N11_MAX_SECONDS = 300.0
 _AUTO_RECOVERY_STOP_MAX_SECONDS = 280.0
 _AUTO_RECOVERY_STOP_DISCONNECT_SECONDS = 45
-_AUTO_RECOVERY_STOP_CASE = "android:auto-recovery-stop"
+_AUTO_RECOVERY_STOP_CASE = f"android:{AUTO_RECOVERY_STOP_CASE}"
 _ANDROID_RENDERED_CASE_IDS = {
-    f"android:{case}" for case in ANDROID_PRESENTATION_CASES
-} | {f"android:{ANDROID_PERFORMANCE_CASE}"}
-_ANDROID_RENDERED_CASE_METHODS = {
-    "android:configure-acceptance": "configureAcceptance",
-    "android:profile-selection": "profileSelection",
-    "android:typed-url-coalescing": "typedUrlCoalescing",
-    "android:immediate-source-actions": "immediateSourceActions",
-    "android:stale-permission-target": "stalePermissionTarget",
-    "android:subscription-load-performance": "subscriptionLoadPerformance",
+    f"android:{case}" for case in ANDROID_RENDERED_CASE_METHODS
+    if case != AUTO_RECOVERY_STOP_CASE
 }
 _ANDROID_RENDERED_CASE_SCREENSHOTS = {
     "android:configure-acceptance": "accepted-state",
@@ -1669,12 +1666,10 @@ class AndroidAdapter:
                 _append_command_result_notes(failure, start)
                 raise failure
         test_method = (
-            _ANDROID_RENDERED_CASE_METHODS.get(test_case)
-            if test_case is not None else None
+            ANDROID_RENDERED_CASE_METHODS.get(test_case.removeprefix("android:"))
+            if test_case is not None and test_case.startswith("android:") else None
         )
-        if test_case == _AUTO_RECOVERY_STOP_CASE:
-            test_method = "autoRecoveryStop"
-        elif test_case is not None and test_method is None:
+        if test_case is not None and test_method is None:
             raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
         test_selector = _INSTRUMENTATION_CLASS + (
             "#" + test_method if test_method is not None else "#runHostedCommand"

@@ -41,6 +41,9 @@ from .diagnostics import collect_installed_backend_logs, output_text
 from .build_reuse import production_inputs, validate_reuse_manifest
 from .ios_simulator import ui_test_selection
 from .native_cases import (
+    ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,
+    ANDROID_PRESENTATION_CASES,
+    ANDROID_RENDERED_CASE_METHODS,
     ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
     AUTO_RECOVERY_STOP_CASE,
     IOS_RENDERER_SEVERITY_CASE,
@@ -68,6 +71,31 @@ _BUILD_WORKFLOW = ".github/workflows/build.yml"
 _NATIVE_UI_TASK_TIMEOUT_RESERVE_SECONDS = 90.0
 _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS = 900.0
 _SCREENSHOT_DECODER_INSTALL_TIMEOUT_SECONDS = 180.0
+
+
+def _android_instrumentation_filter(case: str) -> str:
+    method = ANDROID_RENDERED_CASE_METHODS.get(case)
+    if method is not None:
+        return f"com.dobby.NativeUiHostedProfileTest#{method}"
+    return {
+        ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE:
+            "com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable",
+        ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE:
+            "com.dobby.NativeUiInstrumentedTest#clearBoundaryBeforeProcessRestart",
+    }[case]
+
+
+def _android_instrumentation_filters(cases: tuple[str, ...] | None) -> list[str]:
+    if cases is not None:
+        return [_android_instrumentation_filter(case) for case in cases]
+    return [
+        "com.dobby.NativeUiInstrumentedTest",
+        "com.dobby.NativeDiagnosticRetentionTest",
+        *[
+            _android_instrumentation_filter(case)
+            for case in ANDROID_PRESENTATION_CASES
+        ],
+    ]
 
 # The native desktop journey runs in an interactive user session rather than
 # the SSH worker's process environment.  Keep only values with a concrete
@@ -2250,20 +2278,7 @@ def run(args: argparse.Namespace) -> int:
         )
     elif args.platform == "android":
         state["coverage"].update(
-            instrumentation_filters=(
-                [{
-                    ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE:
-                        "com.dobby.NativeUiSmallScreenLogViewportTest#smallScreenLogViewportIsUsable",
-                    "logs-clear-process-restart":
-                        "com.dobby.NativeUiInstrumentedTest#clearBoundaryBeforeProcessRestart",
-                    AUTO_RECOVERY_STOP_CASE:
-                        "com.dobby.NativeUiHostedProfileTest#runHostedCommand",
-                }[native_cases[0]]]
-                if native_cases is not None else [
-                    "com.dobby.NativeUiInstrumentedTest",
-                    "com.dobby.NativeDiagnosticRetentionTest",
-                ]
-            ),
+            instrumentation_filters=_android_instrumentation_filters(native_cases),
         )
     _write_json(run_dir / "platform.json", state)
     try:

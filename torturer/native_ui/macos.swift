@@ -684,16 +684,6 @@ func pasteValue(_ editor: AXUIElement, value: String) throws {
     if let error = primary { throw error }
 }
 
-func pasteWithNativeControl(
-    _ app: NSRunningApplication, window: AXUIElement, source: String, expectedSource: String? = nil,
-    onInvocation: (() -> Void)? = nil
-) throws -> Int64 {
-    let value = try String(contentsOfFile: source, encoding: .utf8)
-    return try pasteValueWithNativeControl(
-        app, window: window, value: value, expectedSource: expectedSource, onInvocation: onInvocation
-    )
-}
-
 func pasteValueWithNativeControl(
     _ app: NSRunningApplication, window: AXUIElement, value: String, expectedSource: String? = nil,
     onInvocation: (() -> Void)? = nil
@@ -2161,14 +2151,6 @@ func waitMacOSForEnabledProfileAction(
               try macOSProfileActionIsEnabled(nodes, automationID: automationID) else { return nil }
         return true
     }
-}
-
-func macOSRectHasArea(_ value: Any?) -> Bool {
-    guard let value = value as? [String: Any],
-          let width = value["width"] as? NSNumber,
-          let height = value["height"] as? NSNumber else { return false }
-    return width.doubleValue.isFinite && height.doubleValue.isFinite &&
-        width.doubleValue > 0 && height.doubleValue > 0
 }
 
 func macOSRect(_ value: Any?) -> CGRect? {

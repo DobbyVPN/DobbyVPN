@@ -18,6 +18,20 @@ SOURCE_SHA = "a" * 40
 
 
 class AndroidLocalQualificationDispatchTests(unittest.TestCase):
+    def test_explicit_android_coverage_lists_all_selected_methods_in_order(self) -> None:
+        self.assertEqual(
+            local_vm._android_instrumentation_filters((
+                "stale-permission-target",
+                "logs-clear-process-restart",
+                "auto-recovery-stop",
+            )),
+            [
+                "com.dobby.NativeUiHostedProfileTest#stalePermissionTarget",
+                "com.dobby.NativeUiInstrumentedTest#clearBoundaryBeforeProcessRestart",
+                "com.dobby.NativeUiHostedProfileTest#autoRecoveryStop",
+            ],
+        )
+
     def test_prepare_persists_source_sha_with_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             run_dir = Path(name)
@@ -275,6 +289,20 @@ class AndroidLocalQualificationDispatchTests(unittest.TestCase):
                 mock.patch.object(local_vm, "_run_logged", side_effect=run_logged),
             ):
                 self.assertEqual(local_vm.run(run_args), 0)
+
+            state = json.loads((run_dir / "platform.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                state["coverage"]["instrumentation_filters"],
+                [
+                    "com.dobby.NativeUiInstrumentedTest",
+                    "com.dobby.NativeDiagnosticRetentionTest",
+                    "com.dobby.NativeUiHostedProfileTest#configureAcceptance",
+                    "com.dobby.NativeUiHostedProfileTest#profileSelection",
+                    "com.dobby.NativeUiHostedProfileTest#typedUrlCoalescing",
+                    "com.dobby.NativeUiHostedProfileTest#immediateSourceActions",
+                    "com.dobby.NativeUiHostedProfileTest#stalePermissionTarget",
+                ],
+            )
 
             self.assertEqual(len(logged_commands), 1)
             command = logged_commands[0]

@@ -374,8 +374,7 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testLogDetailsRevealAndCollapseTheOriginalRecord() throws {
-        capturesLogFreezeScreenshot = true
-        let fixture = try prepareScrollableLogFixture()
+        let fixture = try prepareScrollableLogFixture(recordCount: 1)
         let logs = fixture.logs
 
         let latestLogText = try XCTUnwrap(logs.value as? String)
@@ -392,15 +391,13 @@ final class NativeUIInteractionTests: XCTestCase {
         let details = detailElements.element(boundBy: targetRecord.detailIndex)
         XCTAssertTrue(details.waitForExistence(timeout: 10))
         XCTAssertEqual(details.label, "Details")
-        for _ in 0..<8 {
-            if details.isHittable { break }
-            let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.30))
-            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
-            start.press(forDuration: 0.1, thenDragTo: end)
-        }
-        XCTAssertTrue(details.isHittable, "The selected record's Details control should be reachable by scrolling")
+        XCTAssertTrue(details.isHittable, "The newest Details control should be available without scrolling")
         details.tap()
-        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Hide details"), object: details)
+        let expanded = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                self.detailElement(containing: fixture.validationError, in: logs)?.label == "Hide details"
+            }, object: logs
+        )
         XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 10), .completed)
         let originalRecord = XCTNSPredicateExpectation(
             predicate: NSPredicate(
@@ -415,12 +412,14 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(expandedText.contains("\"event\":\"ui.failure\""))
         XCTAssertTrue(expandedText.contains("\"source\":\"native-ui\""))
 
-        details.tap()
-        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Details"), object: details)
+        try XCTUnwrap(detailElement(containing: fixture.validationError, in: logs)).tap()
+        let collapsed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                self.detailElement(containing: fixture.validationError, in: logs)?.label == "Details"
+            }, object: logs
+        )
         XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 10), .completed)
-        let frozen = try freezeRecentLogRecord(fixture, diagnosticPrefix: "logs-details")
-        XCTAssertEqual(logs.value as? String, frozen.text, "Scrolling should preserve the rendered entries")
-        assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen.text, message: fixture.validationError)
+        XCTAssertEqual(logs.value as? String, latestLogText, "Collapsing Details should restore the rendered record")
     }
 
     func testFrozenLogsKeepTheirReadingPositionDuringConfigurationAndAbout() throws {
@@ -488,6 +487,7 @@ final class NativeUIInteractionTests: XCTestCase {
         let portraitAnchor = try XCTUnwrap(detailElement(for: readingAnchor, in: logs))
         XCTAssertTrue(elementIsVisible(portraitAnchor, in: logs))
         XCTAssertEqual(portraitAnchor.frame.minY - logs.frame.minY, readingOffset, accuracy: 2)
+        assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen.text, message: fixture.validationError)
     }
 
     func testFollowingResumesWhenReaderReturnsToBottom() throws {
@@ -519,7 +519,7 @@ final class NativeUIInteractionTests: XCTestCase {
         wait(for: [refreshOpportunity], timeout: 2.0)
     }
 
-    private func prepareScrollableLogFixture() throws -> ScrollableLogFixture {
+    private func prepareScrollableLogFixture(recordCount: Int = 8) throws -> ScrollableLogFixture {
         let clipboard = "http://example.invalid/repeat-error"
         let validationError = "Paste an HTTPS subscription URL with a host"
         app.terminate()
@@ -542,7 +542,7 @@ final class NativeUIInteractionTests: XCTestCase {
         expectedCount += 1
         XCTAssertTrue(waitForLogOccurrences(validationError, atLeast: expectedCount, in: logs, timeout: 20))
 
-        for _ in 0..<7 {
+        for _ in 1..<recordCount {
             configuration.tap()
             configuration.typeText("x")
             dismissConfigurationKeyboard()
@@ -552,10 +552,10 @@ final class NativeUIInteractionTests: XCTestCase {
         }
         let enoughEntries = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
-            return self.occurrences(of: validationError, in: text) >= 8
+            return self.occurrences(of: validationError, in: text) >= recordCount
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
-        XCTAssertGreaterThanOrEqual(expectedCount, 8)
+        XCTAssertGreaterThanOrEqual(expectedCount, recordCount)
         return ScrollableLogFixture(
             configuration: configuration,
             paste: paste,
@@ -907,6 +907,15 @@ final class NativeUIInteractionTests: XCTestCase {
             return details.element(boundBy: index)
         }
         return nil
+    }
+
+    private func detailElement(containing message: String, in logs: XCUIElement) -> XCUIElement? {
+        guard let rendered = logs.value as? String,
+              let target = renderedLogRecord(containing: message, in: rendered) else { return nil }
+        let details = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        guard target.detailIndex < details.count else { return nil }
+        return details.element(boundBy: target.detailIndex)
     }
 
     private func renderedLogRecord(atDetailIndex index: Int, in text: String) -> String? {

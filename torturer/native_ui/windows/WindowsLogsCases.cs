@@ -1826,12 +1826,6 @@ internal static partial class Program
         return (range.GetProperty("minimum").GetDouble(), range.GetProperty("maximum").GetDouble());
     }
 
-    private static void RequireSettingsAvailable(JsonElement response, string message)
-    {
-        if (!SettingsAvailable(response))
-            throw new InvalidOperationException(message + ": " + response.GetRawText());
-    }
-
     private static void RecordSettingsObservation(List<object> assertions, string id, JsonElement response)
     {
         var available = SettingsAvailable(response);
@@ -1843,15 +1837,6 @@ internal static partial class Program
         layout.GetValueOrDefault("visible_profile_actions") is string[] actions
             ? actions
             : throw new InvalidOperationException("Profile layout did not return visible semantic action identifiers");
-
-    private static bool HasPositiveRect(object? value)
-    {
-        if (value is null) return false;
-        var rect = JsonSerializer.SerializeToElement(value);
-        return rect.ValueKind == JsonValueKind.Object &&
-            rect.TryGetProperty("width", out var widthValue) && widthValue.TryGetDouble(out var width) && width > 0 &&
-            rect.TryGetProperty("height", out var heightValue) && heightValue.TryGetDouble(out var height) && height > 0;
-    }
 
     private static void RunAboutCase(
         OwnedLogsApp app, JsonElement request, LogsCaseDeadline deadline,

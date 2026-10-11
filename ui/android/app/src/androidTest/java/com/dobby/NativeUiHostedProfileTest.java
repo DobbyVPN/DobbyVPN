@@ -4729,10 +4729,10 @@ public final class NativeUiHostedProfileTest {
         Matcher profileAction = Pattern.compile("^Profile ([1-9][0-9]*) action$").matcher(label);
         if (profileAction.matches()) {
             int index = Integer.parseInt(profileAction.group(1)) - 1;
-            String prefix = Pattern.quote(context.getPackageName() + ":id/profile.");
+            String prefix = Pattern.quote("profile.");
             String suffix = Pattern.quote(".index." + index + ".role.action");
             List<UiObject2> candidates = device.findObjects(
-                    By.res(Pattern.compile(prefix + ".+" + suffix))
+                    By.res(Pattern.compile("^" + prefix + ".+" + suffix + "$"))
                             .pkg(context.getPackageName()));
             return findVisibleUiObject(candidates, counters, "resource-id");
         }
@@ -4787,9 +4787,8 @@ public final class NativeUiHostedProfileTest {
 
     private UiObject2 findResourceTag(UiDevice device, String tag,
             UiLookupCounters counters) {
-        String resourceName = context.getPackageName() + ":id/" + tag;
         return findVisibleUiObject(
-                device.findObjects(By.res(resourceName).pkg(context.getPackageName())),
+                device.findObjects(By.res(tag).pkg(context.getPackageName())),
                 counters,
                 "resource-id");
     }
