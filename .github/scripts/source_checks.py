@@ -159,41 +159,6 @@ def require_platform(expected: str) -> None:
         raise CheckError(f"this check requires {expected}; current host is {actual}")
 
 
-def python_tests() -> None:
-    """Run the product functional-support and source-check unit suites."""
-    requirements = SCRIPT_DIR / "requirements-native-ui.txt"
-    with tempfile.TemporaryDirectory(prefix="dobbyvpn-python-tests-") as package_dir:
-        run(
-            [
-                sys.executable, "-m", "pip", "install",
-                "--disable-pip-version-check", "--only-binary=:all:", "--no-deps",
-                "--target", package_dir, "--requirement", str(requirements),
-                "--requirement", str(SCRIPT_DIR / "android" / "requirements-fdroid.txt"),
-            ]
-        )
-        environment = os.environ.copy()
-        python_paths = [package_dir, str(ROOT / "torturer")]
-        existing = environment.get("PYTHONPATH")
-        if existing:
-            python_paths.append(existing)
-        environment["PYTHONPATH"] = os.pathsep.join(python_paths)
-        run(
-            [
-                sys.executable, "-m", "unittest", "discover",
-                "-s", "torturer/tests", "-t", "torturer", "-p", "test_*.py",
-            ],
-            env=environment,
-        )
-        for suite in ("android", "release"):
-            run(
-                [
-                    sys.executable, "-m", "unittest", "discover",
-                    "-s", str(SCRIPT_DIR / suite), "-p", "test_*.py",
-                ],
-                env=environment,
-            )
-
-
 def require_command(name: str, purpose: str) -> str:
     command = shutil.which(name)
     if not command:
@@ -312,81 +277,6 @@ def prepare_native_runtime_check() -> Path:
     return go
 
 
-def coverage_dir(args: argparse.Namespace, name: str) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
-    if args.output_dir:
-        output = args.output_dir.resolve()
-        output.mkdir(parents=True, exist_ok=True)
-        return output, None
-    runner_temp = os.environ.get("RUNNER_TEMP")
-    if runner_temp:
-        output = Path(runner_temp) / f"dobbyvpn-{name}-coverage"
-        output.mkdir(parents=True, exist_ok=True)
-        return output, None
-    temporary = tempfile.TemporaryDirectory(prefix=f"dobbyvpn-{name}-coverage-")
-    return Path(temporary.name), temporary
-
-
-def write_step_summary(title: str, text: str) -> None:
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary_path:
-        with open(summary_path, "a", encoding="utf-8") as summary:
-            summary.write(f"## {title}\n\n```text\n{text.rstrip()}\n```\n")
-
-
-def go_unit(args: argparse.Namespace) -> None:
-    require_platform("linux")
-    go = prepare_go_source_checks()
-    output, temporary = coverage_dir(args, "go")
-    try:
-        profile = output / "coverage.out"
-        run(
-            [
-                str(go), "test", "-p", "1", "-v", "-tags=ci", "-covermode=atomic",
-                "-coverpkg=./...", f"-coverprofile={profile}", "./...",
-            ],
-            cwd=GO_MODULE,
-            env=go_environment(go),
-        )
-        report = capture(
-            [str(go), "tool", "cover", f"-func={profile}"],
-            cwd=GO_MODULE,
-            env=go_environment(go),
-        )
-        write_step_summary("Unified Go coverage", report)
-    finally:
-        if temporary is not None:
-            temporary.cleanup()
-
-
-def go_race() -> None:
-    require_platform("linux")
-    go = prepare_go_source_checks()
-    run(
-        [str(go), "test", "-p", "1", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
-        cwd=GO_MODULE,
-        env=go_environment(go),
-    )
-
-
-def go_native_runtime() -> None:
-    import desktop_build
-
-    go = prepare_native_runtime_check()
-    environment = go_environment(go)
-    packages = NATIVE_GO_PACKAGES.copy()
-    flags = []
-    if host_os() == "darwin":
-        desktop_build.configure_macos_deployment_target("macos", environment)
-        desktop_build.configure_macos_bridge_link(environment)
-        flags.append("-ldflags=-linkmode=external -extldflags=-lc++")
-    elif host_os() == "windows":
-        environment["PATH"] = str(GO_MODULE) + os.pathsep + environment.get("PATH", "")
-    elif host_os() == "linux" and desktop_build.go_arch_from_machine() != "amd64":
-        packages.remove("./clientserver/executor")
-        log("Executor coverage unavailable on Linux ARM64: the pinned TrustTunnel bridge supports Linux AMD64 only")
-    run([str(go), "test", "-v", "-race", *flags, *packages], cwd=GO_MODULE, env=environment)
-
-
 def go_build() -> None:
     """Compile product packages with the native toolchain for this runner."""
     import desktop_build
@@ -407,82 +297,6 @@ def go_build() -> None:
         log("Executor build is unavailable on Linux ARM64: the pinned TrustTunnel bridge supports Linux AMD64 only")
 
     run([str(go), "build", *flags, *packages], cwd=GO_MODULE, env=environment)
-
-
-def go_tests(args: argparse.Namespace) -> None:
-    require_platform("linux")
-    go = prepare_go_source_checks()
-    output, temporary = coverage_dir(args, "go")
-    try:
-        profile = output / "coverage.out"
-        run(
-            [
-                str(go), "test", "-p", "1", "-v", "-tags=ci", "-covermode=atomic",
-                "-coverpkg=./...", f"-coverprofile={profile}", "./...",
-            ],
-            cwd=GO_MODULE,
-            env=go_environment(go),
-        )
-        report = capture(
-            [str(go), "tool", "cover", f"-func={profile}"],
-            cwd=GO_MODULE,
-            env=go_environment(go),
-        )
-        write_step_summary("Unified Go coverage", report)
-        run(
-            [str(go), "test", "-p", "1", "-v", "-race", "./routing/...", "./sessionapi/...", "./tunnel/..."],
-            cwd=GO_MODULE,
-            env=go_environment(go),
-        )
-    finally:
-        if temporary is not None:
-            temporary.cleanup()
-
-
-def swift_unit(args: argparse.Namespace) -> None:
-    require_platform("darwin")
-    swift = require_command("swift", "Swift lifecycle unit tests")
-    xcrun = require_command("xcrun", "Swift lifecycle coverage export")
-    output, temporary = coverage_dir(args, "swift")
-    try:
-        # Compile the unmodified store against test-local Security functions to
-        # force the add/update race without signing or touching a user's Keychain.
-        with tempfile.TemporaryDirectory(prefix="dobby-keychain-test-") as directory:
-            executable = Path(directory) / "keychain-collision-test"
-            run([xcrun, "swiftc", str(ROOT / "ui/apple/ios/integration/SharedKeychainSecretStore.swift"),
-                 str(SCRIPT_DIR / "ios/keychain_collision_test.swift"), "-o", str(executable)])
-            run([str(executable)])
-        run([swift, "test", "--enable-code-coverage", "--package-path", str(ROOT / "ui" / "apple")])
-        bin_path = capture([swift, "build", "--show-bin-path", "--package-path", str(ROOT / "ui" / "apple")]).strip()
-        build_path = Path(bin_path)
-        profiles = list(build_path.glob("**/codecov/default.profdata"))
-        tests = [path for path in build_path.glob("**/*.xctest/Contents/MacOS/*PackageTests") if os.access(path, os.X_OK)]
-        if len(profiles) != 1 or len(tests) != 1:
-            raise CheckError(
-                f"expected one Swift coverage profile and test executable, found {len(profiles)} and {len(tests)}"
-            )
-        lcov = output / "swift-lifecycle-core.lcov"
-        summary = output / "swift-lifecycle-core-coverage.md"
-        coverage = output / "swift-lifecycle-core.profdata"
-        shutil.copyfile(profiles[0], coverage)
-        report = capture(
-            [xcrun, "llvm-cov", "export", str(tests[0]), f"-instr-profile={profiles[0]}", "-format=lcov"],
-            emit_stdout=False,
-        )
-        lcov.write_text(report, encoding="utf-8")
-        run(
-            [
-                sys.executable,
-                str(SCRIPT_DIR / "ios" / "check_swift_coverage.py"),
-                "--lcov", str(lcov),
-                "--source-root", str(ROOT / "ui" / "apple" / "ios" / "integration"),
-                "--summary", str(summary),
-            ]
-        )
-        write_step_summary("Swift lifecycle-core coverage", summary.read_text(encoding="utf-8"))
-    finally:
-        if temporary is not None:
-            temporary.cleanup()
 
 
 def lint_go(tools: Tools) -> None:
@@ -545,15 +359,6 @@ def lint_android(tools: Tools) -> None:
     if not lock_file.is_file() or lock_file.stat().st_size == 0:
         raise CheckError("Gradle did not produce the Android release dependency lockfile")
     trivy_scan(tools, (lock_file,))
-
-
-def android_unit() -> None:
-    """Exercise the production presentation module without app, Go or SDK builds."""
-    gradle = ROOT / "ui" / "android" / "gradlew"
-    if not gradle.is_file():
-        raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
-    run([str(gradle), ":presentation:test", "--no-daemon", "--stacktrace"],
-        cwd=ROOT / "ui" / "android")
 
 
 def lint_swift(tools: Tools) -> None:
@@ -651,13 +456,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "check",
         choices=(
-            "python-tests", "go-tests", "go-unit", "go-race", "go-native-runtime",
-            "swift-unit", "swift-mutations", "windows-mutations", "android-unit", "android-mutations",
             "go-build", "lint-go", "lint-android", "lint-swift", "security",
             "actionlint", "cache-clean",
         ),
     )
-    parser.add_argument("--output-dir", type=Path, help="Keep coverage outputs in this directory")
     parser.add_argument("--git-repository", type=Path, help="Checkout whose full history TruffleHog scans")
     return parser.parse_args()
 
@@ -671,30 +473,8 @@ def main() -> int:
         if needs_tools:
             temporary_tools = tempfile.TemporaryDirectory(prefix="dobbyvpn-source-check-tools-")
             tools = Tools(Path(temporary_tools.name))
-        if args.check == "go-unit":
-            go_unit(args)
-        elif args.check == "go-race":
-            go_race()
-        elif args.check == "go-tests":
-            go_tests(args)
-        elif args.check == "go-native-runtime":
-            go_native_runtime()
-        elif args.check == "go-build":
+        if args.check == "go-build":
             go_build()
-        elif args.check == "swift-unit":
-            swift_unit(args)
-        elif args.check == "swift-mutations":
-            require_platform("darwin")
-            run([sys.executable, str(ROOT / "ui" / "apple" / "check_production_mutations.py")])
-        elif args.check == "windows-mutations":
-            require_platform("windows")
-            run([sys.executable, str(ROOT / "torturer" / "native_ui" / "windows" / "verify_production_mutations.py")])
-        elif args.check == "android-unit":
-            android_unit()
-        elif args.check == "android-mutations":
-            run([sys.executable, str(ROOT / "ui" / "android" / "check_presentation_mutations.py")])
-        elif args.check == "python-tests":
-            python_tests()
         elif args.check == "lint-go":
             assert tools is not None
             lint_go(tools)

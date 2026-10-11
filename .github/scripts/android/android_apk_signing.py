@@ -313,7 +313,6 @@ def _verify_driver_artifact(
 def create_provenance(
     output: Path,
     unsigned_apk: Path,
-    test_companion: Path,
     build_driver_manifest: Path,
     reproducibility: Path,
     *,
@@ -339,9 +338,9 @@ def create_provenance(
         version_code,
         expected_profile=profile,
     )
-    if not test_companion.is_file():
-        raise SigningError("unsigned Android test companion is missing")
-    if profile == "release" and driver.get("schema") == 2:
+    if profile == "release":
+        if type(driver.get("schema")) is not int or driver.get("schema") != 2:
+            raise SigningError("Android Release build-driver metadata schema mismatch")
         expected_driver_fields = {
             "repository": source_repository,
             "source_sha": source_sha,
@@ -354,15 +353,8 @@ def create_provenance(
         }
         if any(driver.get(key) != value for key, value in expected_driver_fields.items()):
             raise SigningError("Android single-build metadata does not match the selected Build")
-        if driver.get("test_companion") is None:
-            raise SigningError("Android Build metadata does not include its test companion")
-    else:
-        expected_source_identity_mode = {
-            "release": "git_checkout",
-            "local-complete": "harness_verified_archive",
-        }.get(profile)
-        if expected_source_identity_mode is None:
-            raise SigningError(f"unsupported Android provenance profile: {profile}")
+    elif profile == "local-complete":
+        expected_source_identity_mode = "harness_verified_archive"
         expected_driver_fields = {
             "schema": 1,
             "repository": source_repository,
@@ -378,32 +370,20 @@ def create_provenance(
             raise SigningError("Android build-driver manifest does not match the selected Build")
         if driver.get("source_identity_mode") != expected_source_identity_mode:
             raise SigningError("Android build-driver source identity mode does not match the build profile")
+    else:
+        raise SigningError(f"unsupported Android provenance profile: {profile}")
+    if "test_companion" in driver:
+        raise SigningError("Android product build metadata must not contain a test companion")
     _verify_driver_artifact(driver.get("artifact"), unsigned_apk, label="application")
-    driver_companion = driver.get("test_companion")
-    _verify_driver_artifact(driver_companion, test_companion, label="test companion")
-    if not isinstance(driver_companion, dict) or driver_companion.get("signing_classification") != "unsigned":
-        raise SigningError("Android build-driver test companion is not recorded as unsigned")
-
-    companion_record = {
-        "name": test_companion.name,
-        "sha256": _sha256(test_companion),
-        "bytes": test_companion.stat().st_size,
-        "application_id": "com.dobby.vpn.test",
-        "source_sha": source_sha,
-    }
     document: dict[str, object] = {
-        "schema": 1,
+        "schema": 2,
         "source_sha": source_sha,
         "version_name": version_name,
         "version_code": version_code,
         "application_id": "com.dobby.vpn",
-        "test_companion": companion_record,
         "build_driver": driver,
         "reproducibility": reproduction,
-        "artifacts": [
-            _artifact_record("unsigned", unsigned_apk),
-            _artifact_record("test_companion_unsigned", test_companion),
-        ],
+        "artifacts": [_artifact_record("unsigned", unsigned_apk)],
     }
     if profile != "release":
         document["build_profile"] = profile
@@ -414,7 +394,6 @@ def finalize_provenance(
     provenance: Path,
     unsigned_apk: Path,
     signed_apk: Path,
-    test_companion: Path,
     *,
     source_sha: str,
     version_name: str,
@@ -437,7 +416,8 @@ def finalize_provenance(
     if not isinstance(document, dict):
         raise SigningError("Android build provenance must be a JSON object")
     if (
-        document.get("schema") != 1
+        type(document.get("schema")) is not int
+        or document.get("schema") != 2
         or document.get("build_profile", "release") != "release"
         or document.get("source_sha") != source_sha
         or document.get("version_name") != version_name
@@ -445,6 +425,12 @@ def finalize_provenance(
         or document.get("application_id") != "com.dobby.vpn"
     ):
         raise SigningError("Android build provenance metadata does not match the selected Build")
+    expected_fields = {
+        "schema", "source_sha", "version_name", "version_code", "application_id",
+        "build_driver", "reproducibility", "artifacts",
+    }
+    if set(document) != expected_fields:
+        raise SigningError("Android build provenance has unexpected or missing fields")
 
     verify_document(
         document.get("reproducibility"),
@@ -453,24 +439,9 @@ def finalize_provenance(
         version_name,
         version_code,
     )
-    if not test_companion.is_file():
-        raise SigningError("unsigned Android test companion is missing")
-    companion_sha = _sha256(test_companion)
-    companion = document.get("test_companion")
-    if (
-        not isinstance(companion, dict)
-        or companion.get("name") != test_companion.name
-        or companion.get("sha256") != companion_sha
-        or companion.get("bytes") != test_companion.stat().st_size
-        or companion.get("application_id") != "com.dobby.vpn.test"
-        or companion.get("source_sha") != source_sha
-    ):
-        raise SigningError("unsigned Android test companion does not match build provenance")
-
-    expected_artifacts = {
-        "unsigned": _artifact_record("unsigned", unsigned_apk),
-        "test_companion_unsigned": _artifact_record("test_companion_unsigned", test_companion),
-    }
+    if not isinstance(document.get("build_driver"), dict) or "test_companion" in document["build_driver"]:
+        raise SigningError("Android product build metadata must not contain a test companion")
+    expected_artifacts = {"unsigned": _artifact_record("unsigned", unsigned_apk)}
     artifacts = document.get("artifacts")
     if not isinstance(artifacts, list) or len(artifacts) != len(expected_artifacts):
         raise SigningError("Android build provenance artifact set mismatch")
@@ -500,21 +471,13 @@ def finalize_provenance(
     ):
         raise SigningError("Android build-driver metadata does not match the selected Build")
     driver_artifact = driver.get("artifact")
-    driver_companion = driver.get("test_companion")
-    for actual, expected_record, label in (
-        (driver_artifact, expected_artifacts["unsigned"], "application"),
-        (driver_companion, expected_artifacts["test_companion_unsigned"], "test companion"),
+    if (
+        not isinstance(driver_artifact, dict)
+        or driver_artifact.get("name") != unsigned_apk.name
+        or driver_artifact.get("sha256") != _sha256(unsigned_apk)
+        or driver_artifact.get("bytes") != unsigned_apk.stat().st_size
     ):
-        if (
-            not isinstance(actual, dict)
-            or actual.get("name") != expected_record["name"]
-            or actual.get("sha256") != expected_record["sha256"]
-            or actual.get("bytes")
-            != (unsigned_apk if label == "application" else test_companion).stat().st_size
-        ):
-            raise SigningError(f"Android build-driver {label} does not match the selected APK")
-    if driver_companion.get("signing_classification") != "unsigned":
-        raise SigningError("Android build-driver test companion is not recorded as unsigned")
+        raise SigningError("Android build-driver application does not match the selected APK")
 
     verify_signed_payload(unsigned_apk, signed_apk)
     signer_digest = _signer_digest(apksigner, signed_apk, os.environ.copy())
@@ -566,7 +529,6 @@ def _parser() -> argparse.ArgumentParser:
     finalize.add_argument("--provenance", type=Path, required=True)
     finalize.add_argument("--unsigned-apk", type=Path, required=True)
     finalize.add_argument("--signed-apk", type=Path, required=True)
-    finalize.add_argument("--test-companion", type=Path, required=True)
     finalize.add_argument("--source-sha", required=True)
     finalize.add_argument("--version-name", required=True)
     finalize.add_argument("--version-code", type=int, required=True)
@@ -578,7 +540,6 @@ def _parser() -> argparse.ArgumentParser:
     create = commands.add_parser("create-provenance")
     create.add_argument("--output", type=Path, required=True)
     create.add_argument("--unsigned-apk", type=Path, required=True)
-    create.add_argument("--test-companion", type=Path, required=True)
     create.add_argument("--build-driver-manifest", type=Path, required=True)
     create.add_argument("--reproducibility", type=Path, required=True)
     create.add_argument("--source-sha", required=True)
@@ -620,7 +581,6 @@ def main(argv: list[str] | None = None) -> int:
                 args.provenance,
                 args.unsigned_apk,
                 args.signed_apk,
-                args.test_companion,
                 source_sha=args.source_sha,
                 version_name=args.version_name,
                 version_code=args.version_code,
@@ -632,7 +592,6 @@ def main(argv: list[str] | None = None) -> int:
             create_provenance(
                 args.output,
                 args.unsigned_apk,
-                args.test_companion,
                 args.build_driver_manifest,
                 args.reproducibility,
                 source_sha=args.source_sha,

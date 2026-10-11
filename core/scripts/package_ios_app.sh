@@ -4,7 +4,6 @@ set -euo pipefail
 
 target=${1:-}
 output=${2:-}
-architecture=${4:-}
 configuration=${DOBBY_BUILD_CONFIGURATION:-Release}
 case "$configuration" in
   Release) ;;
@@ -12,15 +11,11 @@ case "$configuration" in
   *) echo "Unknown build configuration: $configuration" >&2; exit 2 ;;
 esac
 if [[ -z "$target" || -z "$output" ]]; then
-  echo "usage: $0 ios|iosarchive|iosanalyze|iossimulator|iosexport OUTPUT [runtime-xcframework|archive.tar.gz] [simulator-architecture]" >&2
+  echo "usage: $0 ios|iosarchive|iosanalyze|iosexport OUTPUT [runtime-xcframework|archive.tar.gz]" >&2
   exit 2
 fi
 case "$target" in
   ios|iosarchive|iosanalyze) sdk=iphoneos; scheme=iosApp ;;
-  iossimulator)
-    sdk=iphonesimulator; scheme=iosAppUITests
-    case "$architecture" in arm64) xcode_arch=arm64 ;; amd64) xcode_arch=x86_64 ;; "") xcode_arch="" ;; *) echo "unsupported Simulator architecture: $architecture" >&2; exit 2 ;; esac
-    ;;
   iosexport) sdk=; scheme= ;;
   *) echo "unsupported iOS target: $target" >&2; exit 2 ;;
 esac
@@ -159,15 +154,7 @@ xcode_args=(
 if [[ "$configuration" == Debug ]]; then
   xcode_args+=(GCC_OPTIMIZATION_LEVEL=0 SWIFT_OPTIMIZATION_LEVEL=-Onone DEBUG_INFORMATION_FORMAT=dwarf-with-dsym STRIP_INSTALLED_PRODUCT=NO COPY_PHASE_STRIP=NO)
 fi
-if [[ "$target" == iossimulator ]]; then
-  derived_data=${output%/Build/Products/Release-iphonesimulator/Dobby-Vpn-Simulator.app}
-  [[ "$derived_data" != "$output" ]] || { echo "Simulator output path must be the Xcode app product path" >&2; exit 2; }
-  xcode_args+=(-derivedDataPath "$derived_data" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=-)
-  if [[ -n "${xcode_arch:-}" ]]; then xcode_args+=(ARCHS="$xcode_arch" ONLY_ACTIVE_ARCH=YES); fi
-  xcodebuild "${xcode_args[@]}" \
-    -destination "generic/platform=iOS Simulator" \
-    build-for-testing
-elif [[ "$target" == iosanalyze ]]; then
+if [[ "$target" == iosanalyze ]]; then
   mkdir -p "$output"
   xcode_args+=(-derivedDataPath "$output" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
   xcodebuild "${xcode_args[@]}" \

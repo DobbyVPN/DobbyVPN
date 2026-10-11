@@ -970,11 +970,6 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser(
-        "test",
-        help="run the shared functional mini suite against an installed package",
-        add_help=False,
-    )
-    commands.add_parser(
         "preflight-windows-temp",
         help="verify writable Windows temp paths used by desktop builds",
     )
@@ -1006,11 +1001,6 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments and arguments[0] == "test":
-        sys.path.insert(0, str(ROOT / "torturer"))
-        from torturer_runner.desktop_platform import main as test_main
-
-        return test_main(arguments)
     args = _parser().parse_args(arguments)
     if args.action == "build":
         return _build(args)

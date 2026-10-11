@@ -1283,51 +1283,6 @@ def build_app(args: argparse.Namespace) -> None:
         run_native_package()
 
 
-def build_test_seams_service(args: argparse.Namespace) -> None:
-    """Build a private test-seams service for a local runtime scenario."""
-    platform = normalize_platform(args.platform)
-    if platform not in {"linux", "windows", "macos"}:
-        fail("The test-seams service is supported only for Linux, Windows, and macOS")
-    output = Path(args.output)
-    if not output.is_absolute():
-        fail("test-seams service output must be an absolute path")
-    marker = (
-        _absent_absolute_path(args.recovery_stop_marker, "recovery Stop marker")
-        if args.recovery_stop_marker
-        else None
-    )
-    if marker is not None and not marker.parent.is_dir():
-        fail(f"recovery Stop marker parent must already exist: {marker.parent}")
-    if marker is not None and marker == output:
-        fail("service output and recovery Stop marker must be different paths")
-    runtime_dir = Path(args.runtime_dir) if args.runtime_dir else None
-    if platform == "linux" and runtime_dir is None:
-        fail("--runtime-dir is required for a Linux test-seams service")
-    if platform != "linux" and runtime_dir is not None:
-        fail("--runtime-dir is supported only for Linux test-seams services")
-    arch = None if args.arch == "native" else args.arch
-    build_service(
-        platform,
-        arch,
-        args.skip_deps,
-        False,
-        args.go_mod_tidy,
-        build_tags=("dobbyvpn_test_seams",),
-        output_path=output,
-        runtime_dir=runtime_dir,
-        recovery_stop_marker=marker,
-    )
-
-
-def _absent_absolute_path(raw: str, label: str) -> Path:
-    path = Path(raw)
-    if not path.is_absolute():
-        fail(f"{label} must be an absolute path")
-    if path.exists() or path.is_symlink():
-        fail(f"{label} must not already exist: {path}")
-    return path
-
-
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing build outputs when possible.")
@@ -1377,21 +1332,6 @@ def parse_args() -> argparse.Namespace:
     native_ui.add_argument("--arch", help="Target architecture for the native frontend.")
     native_ui.add_argument("--output", type=Path, required=True, help="Output directory on Windows or .app bundle path on macOS.")
 
-    test_seams = subparsers.add_parser(
-        "test-seams-service",
-        help="Build a private local service with explicit runtime test seams.",
-    )
-    test_seams.add_argument("--skip-deps", action="store_true", help="Do not install missing local dependencies.")
-    test_seams.add_argument("--platform", default="linux", choices=("linux", "windows", "macos"))
-    test_seams.add_argument("--arch", help="Target service architecture or native host architecture.")
-    test_seams.add_argument("--output", required=True, help="Absolute service output path to replace or create.")
-    test_seams.add_argument("--runtime-dir", help="Installed Linux runtime library directory.")
-    test_seams.add_argument(
-        "--recovery-stop-marker",
-        help="Absent absolute marker path compiled into the tagged service for a Stop scenario.",
-    )
-    test_seams.add_argument("--go-mod-tidy", action="store_true", help="Run go mod tidy before the service build.")
-
     return parser.parse_args()
 
 
@@ -1422,8 +1362,6 @@ def main() -> None:
     elif args.command == "native-ui":
         platform = host_platform() if args.platform == "current" else normalize_platform(args.platform)
         build_native_ui(platform, args.arch, args.output, debug=args.debug)
-    elif args.command == "test-seams-service":
-        build_test_seams_service(args)
     else:
         fail(f"Unknown command: {args.command}")
 

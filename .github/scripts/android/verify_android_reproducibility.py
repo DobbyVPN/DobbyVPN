@@ -163,10 +163,15 @@ def verify_publication_provenance(
         raise VerificationError("Android provenance is not valid JSON") from error
     if not isinstance(document, dict):
         raise VerificationError("Android provenance must be a JSON object")
-    if document.get("schema") != 1:
+    expected_fields = {
+        "schema", "source_sha", "version_name", "version_code", "application_id",
+        "build_driver", "reproducibility", "artifacts", "signer_certificate_sha256",
+        "signed_payload_matches_unsigned",
+    }
+    if set(document) != expected_fields:
+        raise VerificationError("Android provenance fields mismatch")
+    if type(document.get("schema")) is not int or document.get("schema") != 2:
         raise VerificationError("Android provenance schema mismatch")
-    if document.get("build_profile", "release") != "release":
-        raise VerificationError("Android publication provenance must use the Release build profile")
     if document.get("source_sha") != source_sha:
         raise VerificationError("Android provenance source mismatch")
     if document.get("version_name") != version_name:
@@ -179,6 +184,24 @@ def verify_publication_provenance(
         raise VerificationError("Android signer certificate mismatch")
     if document.get("signed_payload_matches_unsigned") is not True:
         raise VerificationError("Android signed-payload binding is missing")
+    driver = document.get("build_driver")
+    if not isinstance(driver, dict) or "test_companion" in driver:
+        raise VerificationError("Android product build metadata must not contain a test companion")
+    if type(driver.get("schema")) is not int or driver.get("schema") != 2:
+        raise VerificationError("Android product build metadata schema mismatch")
+    if any(
+        driver.get(key) != value
+        for key, value in {
+            "repository": "DobbyVPN/DobbyVPN",
+            "source_sha": source_sha,
+            "version_name": version_name,
+            "version_code": version_code,
+            "package": "com.dobby.vpn",
+            "signing_classification": "unsigned",
+            "signer_certificate_sha256": None,
+        }.items()
+    ):
+        raise VerificationError("Android build-driver metadata does not match the selected Build")
 
     verify_document(
         document.get("reproducibility"),
@@ -198,10 +221,18 @@ def verify_publication_provenance(
         raise VerificationError("Android provenance artifact kinds mismatch")
     for kind, path in expected.items():
         item = by_kind[kind]
-        if item.get("name") != path.name:
+        if set(item) != {"kind", "name", "sha256"} or item.get("name") != path.name:
             raise VerificationError(f"Android provenance {kind} filename mismatch")
         if item.get("sha256") != _sha256(path):
             raise VerificationError(f"Android provenance {kind} digest mismatch")
+    build_artifact = driver.get("artifact")
+    if (
+        not isinstance(build_artifact, dict)
+        or build_artifact.get("name") != unsigned_apk.name
+        or build_artifact.get("sha256") != _sha256(unsigned_apk)
+        or build_artifact.get("bytes") != unsigned_apk.stat().st_size
+    ):
+        raise VerificationError("Android build-driver application does not match the selected APK")
 
 
 def _validate_metadata(source_sha: str, version_name: str, version_code: int) -> None:

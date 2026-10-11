@@ -11,7 +11,6 @@ source_tree=''
 output=''
 manifest=''
 first_output=''
-test_companion_output=''
 reproducibility=''
 dependency_manifest=''
 metadata_output=''
@@ -36,7 +35,6 @@ while (($#)); do
     --output) output=${2:?missing --output value}; shift 2 ;;
     --manifest) manifest=${2:?missing --manifest value}; release_provenance_requested=1; shift 2 ;;
     --first-output) first_output=${2:?missing --first-output value}; release_provenance_requested=1; shift 2 ;;
-    --test-companion-output) test_companion_output=${2:?missing --test-companion-output value}; shift 2 ;;
     --reproducibility) reproducibility=${2:?missing --reproducibility value}; release_provenance_requested=1; shift 2 ;;
     --dependency-manifest) dependency_manifest=${2:?missing --dependency-manifest value}; release_provenance_requested=1; shift 2 ;;
     --metadata-output) metadata_output=${2:?missing --metadata-output value}; shift 2 ;;
@@ -296,9 +294,6 @@ if [[ "$local_build" == 0 ]]; then
   fi
 fi
 export GOMODCACHE="$build_mod_cache"
-if [[ -n "$test_companion_output" ]]; then
-  mkdir -p "$(dirname -- "$test_companion_output")"
-fi
 
 write_dependency_manifest() {
   local go_origin_args=(--go-build-origin "$go_build_origin")
@@ -368,24 +363,9 @@ run_unsigned_build() {
   cp -- "$built" "$destination"
 }
 
-run_test_companion_build() {
-  local destination=$1 built="$source_root/ui/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk"
-  ( cd -- "$source_root"
-    "$gradle_bin" -p ui/android :app:assembleReleaseAndroidTest "${gradle_flags[@]}" \
-      -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
-      -PdobbyGoBinary="$go_bin" \
-      -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
-  )
-  [[ -f "$built" ]] || { echo "Gradle did not produce $built" >&2; exit 1; }
-  cp -- "$built" "$destination"
-}
-
 if [[ "$local_build" == 1 ]]; then
   gradle_flags=(--no-daemon --stacktrace --warning-mode=all)
   run_unsigned_build "$build_cache/local" "$build_tmp/local" "$output"
-  if [[ -n "$test_companion_output" ]]; then
-    run_test_companion_build "$test_companion_output"
-  fi
   if [[ -n "$source_sha" ]]; then
     verify_source_integrity_after_build
   fi
@@ -395,13 +375,10 @@ fi
 
 if [[ "$single_build" == 1 ]]; then
   run_unsigned_build "$build_cache/single" "$build_tmp/single" "$output"
-  if [[ -n "$test_companion_output" ]]; then
-    run_test_companion_build "$test_companion_output"
-  fi
   verify_source_integrity_after_build
   write_dependency_manifest
   SOURCE_ROOT="$source_root" OUTPUT="$output" METADATA_OUTPUT="$metadata_output" \
-    TEST_COMPANION_OUTPUT="$test_companion_output" DEPENDENCY_MANIFEST="$dependency_manifest" \
+    DEPENDENCY_MANIFEST="$dependency_manifest" \
     SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" SOURCE_REPOSITORY="$source_repository" \
     VERSION_NAME="$version_name" VERSION_CODE="$version_code" \
     python3 - <<'PY'
@@ -426,7 +403,6 @@ def descriptor(path: Path) -> dict[str, object]:
         "bytes": path.stat().st_size,
     }
 
-companion_value = os.environ.get("TEST_COMPANION_OUTPUT", "")
 document = {
     "schema": 2,
     "repository": os.environ["SOURCE_REPOSITORY"],
@@ -438,10 +414,6 @@ document = {
     "signing_classification": "unsigned",
     "signer_certificate_sha256": None,
     "artifact": {"package": "com.dobby.vpn", **descriptor(Path(os.environ["OUTPUT"]))},
-    "test_companion": None if not companion_value else {
-        "signing_classification": "unsigned",
-        **descriptor(Path(companion_value)),
-    },
     "dependency_provenance": {
         "classification": "tracked_dependency_spec",
         **descriptor(Path(os.environ["DEPENDENCY_MANIFEST"])),
@@ -457,9 +429,6 @@ fi
 run_unsigned_build "$build_cache/first" "$build_tmp/first" "$first_output"
 ( cd -- "$source_root"; "$gradle_bin" -p ui/android clean --no-daemon --no-build-cache )
 run_unsigned_build "$build_cache/second" "$build_tmp/second" "$output"
-if [[ -n "$test_companion_output" ]]; then
-  run_test_companion_build "$test_companion_output"
-fi
 verify_source_integrity_after_build
 write_dependency_manifest
 
@@ -493,9 +462,6 @@ source_verifier_args=(
   --version-name "$version_name" --version-code "$version_code"
   --apkanalyzer "$apkanalyzer_bin"
 )
-if [[ -n "$test_companion_output" ]]; then
-  source_verifier_args+=(--test-companion "$test_companion_output")
-fi
 python3 "$source_verifier" "${source_verifier_args[@]}"
 
 # Verify the final Go backend libraries against the ABI policy. Both packaged
@@ -518,7 +484,7 @@ python3 "$source_root/.github/scripts/android/verify_android_native_payloads.py"
   --apk "$output" --readelf "$readelf_bin"
 
 SOURCE_ROOT="$source_root" OUTPUT="$output" MANIFEST="$manifest" FIRST_OUTPUT="$first_output" \
-  TEST_COMPANION_OUTPUT="$test_companion_output" REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \
+  REPRODUCIBILITY="$reproducibility" DEPENDENCY_MANIFEST="$dependency_manifest" \
   SOURCE_COMMIT="$source_commit" SOURCE_TREE="$source_tree" SOURCE_REPOSITORY="$source_repository" \
   SOURCE_IDENTITY_MODE="$source_identity_mode" \
   VERSION_NAME="$version_name" VERSION_CODE="$version_code" \
@@ -529,7 +495,6 @@ import os
 from pathlib import Path
 
 source_root = Path(os.environ["SOURCE_ROOT"])
-test_companion_value = os.environ.get("TEST_COMPANION_OUTPUT", "")
 
 def descriptor(path: Path) -> dict[str, object]:
     if not path.is_file():
@@ -561,11 +526,6 @@ document = {
         "name": Path(os.environ["OUTPUT"]).name,
         **descriptor(Path(os.environ["OUTPUT"])),
         "package": "com.dobby.vpn",
-    },
-    "test_companion": None if not test_companion_value else {
-        "name": Path(test_companion_value).name,
-        **descriptor(Path(test_companion_value)),
-        "signing_classification": "unsigned",
     },
 }
 manifest = Path(os.environ["MANIFEST"])

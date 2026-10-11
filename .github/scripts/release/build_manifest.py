@@ -31,7 +31,6 @@ def required_artifacts(version: str) -> tuple[str, ...]:
         "DobbyVPN.xcarchive.tar.gz",
         "DobbyVPN.xcarchive-debug.tar.gz",
         "dobbyvpn-android-unsign.apk",
-        "dobbyvpn-android-test-companion-unsigned.apk",
         "dobbyvpn-android-debug.apk",
         "dobbyvpn-android-build-metadata",
         "dobbyVPN-linux.deb",
@@ -148,7 +147,7 @@ def create_manifest(
             raise BuildManifestError(f"Build artifact has an invalid size: {name}")
         artifacts.append({"name": name, "sha256": digest[7:], "size": size})
     return {
-        "schema": 1,
+        "schema": 2,
         "repository": repository,
         "workflow_path": BUILD_WORKFLOW_PATH,
         "run_id": run_id,
@@ -174,7 +173,7 @@ def resolve_build(repository: str, run_id: int, destination: Path, *, require_ma
     if len(files) != 1 or files[0].name != "build.json":
         raise BuildManifestError("Build manifest artifact must contain exactly build.json")
     manifest = json.loads(files[0].read_text(encoding="utf-8"))
-    if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+    if not isinstance(manifest, dict) or manifest.get("schema") != 2:
         raise BuildManifestError("selected Build manifest has an unsupported schema")
     if (
         manifest.get("repository") != repository

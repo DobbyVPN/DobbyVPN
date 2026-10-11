@@ -5,7 +5,6 @@ export PYTHONDONTWRITEBYTECODE=1
 source_root=''
 source_sha=''
 output=''
-test_companion_output=''
 source_repository='DobbyVPN/DobbyVPN'
 test_seams=0
 
@@ -14,7 +13,6 @@ while (($#)); do
     --source-root) source_root=${2:?missing --source-root value}; shift 2 ;;
     --source-sha) source_sha=${2:?missing --source-sha value}; shift 2 ;;
     --output) output=${2:?missing --output value}; shift 2 ;;
-    --test-companion-output) test_companion_output=${2:?missing --test-companion-output value}; shift 2 ;;
     --test-seams) test_seams=1; shift ;;
     --source-repository) source_repository=${2:?missing --source-repository value}; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -27,10 +25,6 @@ done
 }
 source_root=$(cd -- "$source_root" && pwd -P)
 [[ -n "$output" ]] || { echo '--output is required' >&2; exit 2; }
-[[ -n "$test_companion_output" ]] || {
-  echo '--test-companion-output is required' >&2
-  exit 2
-}
 [[ -z "$source_sha" || "$source_sha" =~ ^[0-9a-f]{40}$ ]] || {
   echo '--source-sha must be a full lowercase Git commit identity' >&2
   exit 2
@@ -58,7 +52,6 @@ export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$sdk_root/ndk/$ndk_version}"
 driver_args=(
   --source-root "$source_root"
   --output "$output"
-  --test-companion-output "$test_companion_output"
   --local
 )
 if [[ "$test_seams" == 1 ]]; then

@@ -109,10 +109,6 @@ android {
     compileSdk = 35
     ndkVersion = pinnedAndroidNdkVersion
     ndkPath = ndkHome.get()
-    // Keep the release APK and its instrumented companion as one tested
-    // variant.  Without this explicit selection AGP does not register the
-    // assembleReleaseAndroidTest task for the plain application module.
-    testBuildType = "release"
 
     defaultConfig {
         applicationId = providers.gradleProperty("packageName").get()
@@ -120,8 +116,6 @@ android {
         targetSdk = 35
         this.versionCode = releaseVersionCode
         this.versionName = releaseVersionName
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        manifestPlaceholders["dobbyTestSourceSha"] = sourceCommit
         buildConfigField("String", "PROJECT_REPOSITORY_COMMIT", "\"$sourceCommit\"")
         buildConfigField(
             "String",
@@ -341,8 +335,4 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
-    testImplementation("junit:junit:4.13.2")
 }

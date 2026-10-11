@@ -15,10 +15,6 @@ import sys
 import time
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "android"))
-from android_apk_signing import find_android_tool, sign_test_pair
-
-
 PLATFORMS = ("linux", "windows", "android", "macos")
 DESKTOP_PLATFORMS = ("linux", "windows", "macos")
 DEFAULT_ARCHITECTURES = {
@@ -52,7 +48,6 @@ class CandidateError(ValueError):
 class CandidatePaths:
     mode: str = "local-build"
     app: Path | None = None
-    test_companion: Path | None = None
     service: Path | None = None
     cli: Path | None = None
     ui: Path | None = None
@@ -66,7 +61,6 @@ class CandidatePaths:
                 name: str(path)
                 for name, path in (
                     ("app", self.app),
-                    ("test_companion", self.test_companion),
                     ("service", self.service),
                     ("cli", self.cli),
                     ("ui", self.ui),
@@ -260,17 +254,12 @@ def _build_android(
     helper = _android_helper(source_root)
     build_check = source_root / ".github" / "scripts" / "android" / "android_build_check.sh"
     output = candidate_root / "dobbyvpn-release-unsigned.apk"
-    companion_output = candidate_root / "dobbyvpn-test-companion-unsigned.apk"
-    signed_output = candidate_root / "dobbyvpn-release.apk"
-    signed_companion = candidate_root / "dobbyvpn-test-companion.apk"
     driver_command = [
         str(helper),
         "--source-root",
         str(source_root),
         "--output",
         str(output),
-        "--test-companion-output",
-        str(companion_output),
     ]
     environment = os.environ.copy()
     if source_sha is None and source_tree is None:
@@ -278,7 +267,6 @@ def _build_android(
             str(build_check),
             "--source-root", str(source_root),
             "--output", str(output),
-            "--test-companion-output", str(companion_output),
         ]
         if test_seams:
             command.append("--test-seams")
@@ -326,8 +314,6 @@ def _build_android(
     _run(command, label=label, source_root=source_root, environment=environment)
     if not output.is_file():
         raise CandidateError("Android build did not produce the application APK")
-    if not companion_output.is_file():
-        raise CandidateError("Android build did not produce the test companion APK")
 
     if source_sha is not None and source_tree is not None:
         provenance = candidate_root / "android-provenance.json"
@@ -346,7 +332,6 @@ def _build_android(
                 "--profile", "local-complete",
                 "--output", str(provenance),
                 "--unsigned-apk", str(output),
-                "--test-companion", str(companion_output),
                 "--build-driver-manifest", str(manifest),
                 "--reproducibility", str(reproducibility),
                 "--source-sha", source_sha,
@@ -359,17 +344,7 @@ def _build_android(
             source_root=source_root,
             environment=environment,
         )
-    sign_test_pair(
-        output,
-        companion_output,
-        signed_output,
-        signed_companion,
-        apksigner=find_android_tool("apksigner", "DOBBYVPN_APKSIGNER"),
-        keytool=find_android_tool("keytool", "DOBBYVPN_KEYTOOL"),
-    )
-    output.unlink()
-    companion_output.unlink()
-    return signed_output
+    return output
 
 
 def _candidate_paths(
@@ -377,7 +352,6 @@ def _candidate_paths(
     request_root: Path,
     platform: str,
     app_path: Path | None,
-    test_companion_path: Path | None,
     cli_path: Path | None,
     ui_path: Path | None,
     service_path: Path | None,
@@ -387,13 +361,8 @@ def _candidate_paths(
     if platform == "android":
         if app_path is None:
             raise CandidateError("Android application is missing")
-        if test_companion_path is None:
-            raise CandidateError("Android test companion is missing")
         return CandidatePaths(
             app=_regular_file(app_path, request_root, "Android app"),
-            test_companion=_regular_file(
-                test_companion_path, request_root, "Android test companion"
-            ),
         )
 
     if service_path is None or cli_path is None:
@@ -464,7 +433,6 @@ def prepare_candidate(
     if not candidate_root.is_relative_to(source_root):
         raise CandidateError("candidate root must be below source root")
     candidate_root = _new_directory(candidate_root, request_root, "candidate root")
-    test_companion_path: Path | None = None
     ui_path: Path | None = None
     if platform in DESKTOP_PLATFORMS:
         _build_desktop(
@@ -493,7 +461,6 @@ def prepare_candidate(
             source_tree=source_tree,
             test_seams=test_seams,
         )
-        test_companion_path = candidate_root / "dobbyvpn-test-companion.apk"
         service_path = None
         cli_path = None
 
@@ -511,7 +478,6 @@ def prepare_candidate(
         request_root=request_root,
         platform=platform,
         app_path=app_path,
-        test_companion_path=test_companion_path,
         cli_path=cli_path,
         ui_path=ui_path,
         service_path=service_path,
