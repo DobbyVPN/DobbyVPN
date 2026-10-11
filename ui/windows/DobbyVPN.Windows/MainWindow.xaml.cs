@@ -627,17 +627,6 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(StatusText, value);
     }
 
-    private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
-    {
-        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, index);
-            if (child is T match) return match;
-            if (FindChild<T>(child) is T nested) return nested;
-        }
-        return null;
-    }
-
     private void LogsText_Loaded(object sender, RoutedEventArgs e)
     {
         _logScroll = LogsScroll;

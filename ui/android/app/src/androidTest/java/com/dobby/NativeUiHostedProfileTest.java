@@ -4657,7 +4657,7 @@ public final class NativeUiHostedProfileTest {
             List<UiObject2> candidates = device.findObjects(
                     By.res(Pattern.compile("^" + prefix + ".+" + suffix + "$"))
                             .pkg(context.getPackageName()));
-            return findVisibleUiObject(candidates, counters, "resource-id");
+            return findVisibleUiObject(candidates, counters);
         }
         String tag = stableTagForLabel(label);
         if (tag != null) {
@@ -4674,12 +4674,10 @@ public final class NativeUiHostedProfileTest {
         // Descriptions and display text remain assertions about user-visible
         // state; required controls above are located through production tags.
         UiObject2 value = findVisibleUiObject(
-                device.findObjects(By.desc(label).pkg(context.getPackageName())), counters,
-                "description");
+                device.findObjects(By.desc(label).pkg(context.getPackageName())), counters);
         if (value != null) return value;
         return findVisibleUiObject(
-                device.findObjects(By.text(label).pkg(context.getPackageName())), counters,
-                "text");
+                device.findObjects(By.text(label).pkg(context.getPackageName())), counters);
     }
 
     private boolean isConnectionStatus(String label) {
@@ -4714,8 +4712,7 @@ public final class NativeUiHostedProfileTest {
             UiLookupCounters counters) {
         return findVisibleUiObject(
                 device.findObjects(By.res(tag).pkg(context.getPackageName())),
-                counters,
-                "resource-id");
+                counters);
     }
 
     private String textOf(UiObject2 object) {
@@ -4724,12 +4721,10 @@ public final class NativeUiHostedProfileTest {
     }
 
     private UiObject2 findVisibleUiObject(List<UiObject2> candidates) {
-        return findVisibleUiObject(candidates, null, "");
+        return findVisibleUiObject(candidates, null);
     }
 
-    private UiObject2 findVisibleUiObject(
-            List<UiObject2> candidates, UiLookupCounters counters, String selectorKind) {
-        if (counters != null) counters.recordCandidates(selectorKind, candidates.size());
+    private UiObject2 findVisibleUiObject(List<UiObject2> candidates, UiLookupCounters counters) {
         for (UiObject2 candidate : candidates) {
             try {
                 // Accessibility can retain nodes from a hidden screen
@@ -4835,15 +4830,11 @@ public final class NativeUiHostedProfileTest {
         String quotedLabel = JSONObject.quote(label);
         IllegalStateException failure = new IllegalStateException(
                 "ANDROID_UI_CONTROL_TIMEOUT: label=" + quotedLabel
-                        + ", selector=By.desc(" + quotedLabel
-                        + ")|By.text(" + quotedLabel + ")"
                         + ", package=" + context.getPackageName()
                         + ", timeoutMillis=" + timeout
                         + ", elapsedMillis="
                         + Math.max(0L, SystemClock.uptimeMillis() - startedAt)
                         + ", attempts=" + counters.attempts
-                        + ", descriptionCandidates=" + counters.descriptionCandidates
-                        + ", textCandidates=" + counters.textCandidates
                         + ", visibleMatches=" + counters.visibleMatches
                         + ", emptyBounds=" + counters.emptyBounds
                         + ", staleObjects=" + counters.staleObjects
@@ -4932,19 +4923,9 @@ public final class NativeUiHostedProfileTest {
 
     private static final class UiLookupCounters {
         int attempts;
-        int descriptionCandidates;
-        int textCandidates;
         int visibleMatches;
         int emptyBounds;
         int staleObjects;
-
-        void recordCandidates(String selectorKind, int count) {
-            if ("description".equals(selectorKind)) {
-                descriptionCandidates += count;
-            } else if ("text".equals(selectorKind)) {
-                textCandidates += count;
-            }
-        }
     }
 
     private static final class RecoveryStopUiState {
