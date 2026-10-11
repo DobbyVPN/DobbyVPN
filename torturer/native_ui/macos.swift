@@ -1835,8 +1835,9 @@ func closeMacOSLogsApp(_ owned: MacOSOwnedLogsApp, deadline: MacOSLogsCaseDeadli
     if !owned.application.isTerminated {
         try require(owned.application.terminate(), "Candidate app quit request failed")
     }
+    let gracefulCloseDeadline = MacOSLogsCaseDeadline(min(5, deadline.remaining))
     do {
-        _ = try waitMacOSLogsCase(deadline, stage: "owned app close") { () throws -> Bool? in
+        _ = try waitMacOSLogsCase(gracefulCloseDeadline, stage: "owned app close") { () throws -> Bool? in
             guard let identity = owned.identity else {
                 return owned.application.isTerminated ? true : nil
             }
