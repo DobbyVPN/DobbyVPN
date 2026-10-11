@@ -2471,11 +2471,10 @@ internal static partial class Program
             throw new InvalidOperationException(
                 $"Pointer over the log viewport resolved to window 0x{windowAtPointer.ToInt64():X}, " +
                 $"not owned app window 0x{app.Window.ToInt64():X}, for {operation}");
-        var ownerThreadId = GetWindowThreadProcessId(app.Window, out var ownerPid);
+        GetWindowThreadProcessId(app.Window, out var ownerPid);
         if (ownerPid != (uint)app.Process.Id)
             throw new InvalidOperationException($"Log wheel input target changed ownership before {operation}");
 
-        TraceLogsWheelFocus(app.Window, ownerThreadId, ownerPid, point, operation);
         var input = CreateMouseInput(MouseEventWheel, unchecked((uint)(short)wheelDelta));
         Marshal.SetLastPInvokeError(0);
         var inserted = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
@@ -2483,44 +2482,6 @@ internal static partial class Program
         if (inserted != 1)
             throw new InvalidOperationException(
                 $"SendInput inserted {inserted} of 1 log-wheel event for {operation}; lastError={lastError}");
-    }
-
-    private static void TraceLogsWheelFocus(
-        IntPtr ownedWindow, uint ownedThreadId, uint ownedProcessId, NativePoint point, string operation)
-    {
-        object DescribeWindow(IntPtr window)
-        {
-            var root = window == IntPtr.Zero ? IntPtr.Zero : GetAncestor(window, GaRoot);
-            return new
-            {
-                window = DescribeWindowContext(window, includeGeometry: true),
-                root = DescribeWindowContext(root, includeGeometry: true),
-            };
-        }
-
-        var info = new NativeGuiThreadInfo { Size = checked((uint)Marshal.SizeOf<NativeGuiThreadInfo>()) };
-        Marshal.SetLastPInvokeError(0);
-        var succeeded = GetGUIThreadInfo(ownedThreadId, ref info);
-        var errorCode = Marshal.GetLastPInvokeError();
-        TracePhase($"logs-wheel-native-focus {SerializeNativeCaseJson(new
-        {
-            operation,
-            point = new { x = point.X, y = point.Y },
-            owned_window = DescribeWindow(ownedWindow),
-            owned_thread_id = ownedThreadId,
-            owned_process_id = ownedProcessId,
-            gui_thread_info = new
-            {
-                succeeded,
-                error = succeeded ? null : new System.ComponentModel.Win32Exception(
-                    errorCode, $"GetGUIThreadInfo failed for owned thread {ownedThreadId}").ToString(),
-                error_code = succeeded ? (int?)null : errorCode,
-                flags = info.Flags,
-                active = DescribeWindow(info.ActiveWindow),
-                focus = DescribeWindow(info.FocusWindow),
-                capture = DescribeWindow(info.CaptureWindow),
-            },
-        })}");
     }
 
     private static void AssertFixtureRetainsRecords(

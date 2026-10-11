@@ -620,7 +620,21 @@ public sealed partial class MainWindow : Window
         };
         LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
-            var properties = args.GetCurrentPoint(LogsScroll).Properties;
+            var point = args.GetCurrentPoint(LogsScroll);
+            var properties = point.Properties;
+            var source = args.OriginalSource as DependencyObject;
+            _diagnostics.RecordInfo("logs.pointer-wheel", "Pointer wheel reached the log viewport", new
+            {
+                is_horizontal_mouse_wheel = properties.IsHorizontalMouseWheel,
+                mouse_wheel_delta = properties.MouseWheelDelta,
+                point = new { x = point.Position.X, y = point.Position.Y },
+                source_type = args.OriginalSource?.GetType().FullName,
+                source_automation_id = source is null ? null : AutomationProperties.GetAutomationId(source),
+                handled = args.Handled,
+                vertical_offset = LogsScroll.VerticalOffset,
+                scrollable_height = LogsScroll.ScrollableHeight,
+                follows_tail = _logPresentation.FollowsTail,
+            });
             if (properties.IsHorizontalMouseWheel || properties.MouseWheelDelta == 0) return;
             if (properties.MouseWheelDelta > 0) RequestLogFollowFreezeForUpwardIntent();
             else RegisterLogDownScrollIntent();
