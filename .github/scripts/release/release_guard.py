@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -71,6 +73,34 @@ def _forward_bytes(stream: Any, value: bytes | None) -> None:
         raise TypeError("diagnostic stream does not expose a byte-preserving buffer")
     binary_stream.write(value)
     binary_stream.flush()
+
+
+def tests_tree_sha256(root: Path) -> str:
+    """Fingerprint the exact nonignored test files used locally or by hosted Test."""
+    root = root.resolve()
+    command = ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
+    result = subprocess.run(command, capture_output=True, check=False)
+    if result.returncode:
+        _forward_bytes(sys.stdout, result.stdout)
+        _forward_bytes(sys.stderr, result.stderr)
+        result.check_returncode()
+    files = sorted({Path(os.fsdecode(name)) for name in result.stdout.split(b"\0") if name},
+                   key=lambda path: path.as_posix())
+    digest = hashlib.sha256()
+    count = 0
+    for relative in files:
+        source = root / relative
+        if not source.is_file() or source.is_symlink():
+            continue
+        encoded = relative.as_posix().encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "big"))
+        digest.update(encoded)
+        with source.open("rb") as stream:
+            digest.update(hashlib.file_digest(stream, "sha256").digest())
+        count += 1
+    if not count:
+        raise ReleaseGuardError("selected test tree contains no files")
+    return digest.hexdigest()
 
 
 def _log_url(record: Mapping[str, Any]) -> str | None:
