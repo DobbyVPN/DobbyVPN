@@ -1952,6 +1952,8 @@ public final class NativeUiHostedProfileTest {
                 // before returning to Auto through the global action.
                 int activeIndex = auto.getJSONObject("active_profile").getInt("index");
                 int selectedIndex = activeIndex == 0 ? 1 : 0;
+                scrollControlsToProfileAction(
+                        selectedIndex, auto.getJSONArray("profiles").length(), deadline);
                 tapEnabledControl("Profile " + (selectedIndex + 1) + " action", deadline);
                 JSONObject selected = awaitSelection(
                         auto.getLong("generation"), "PROFILE_INDEX", selectedIndex, deadline);
@@ -1978,17 +1980,19 @@ public final class NativeUiHostedProfileTest {
             }
             case IMMEDIATE_SOURCE_ACTIONS_CASE: {
                 verifyAcceptedInventoryAfterActivityReopen(subscriptionURL, deadline);
+                String coldImportURL = urlWithQuery(
+                        subscriptionURL, "android-cold-import", "1");
                 int beforeColdImport = subscriptionFixtureState().getInt("subscription_gets");
-                verifyColdDeepLinkImport(subscriptionURL, beforeColdImport,
+                verifyColdDeepLinkImport(coldImportURL, beforeColdImport,
                         remainingTimeout(deadline, "ANDROID_COLD_IMPORT_TIMEOUT"));
-                verifyInvalidDeepLinksDoNotFetch(subscriptionURL,
+                verifyInvalidDeepLinksDoNotFetch(coldImportURL,
                         remainingTimeout(deadline, "ANDROID_INVALID_IMPORT_TIMEOUT"));
-                verifyLongListAndValidPaste(subscriptionURL, deadline);
+                verifyLongListAndValidPaste(coldImportURL, deadline);
                 connectThroughRenderedUI(
                         remainingTimeout(deadline, "ANDROID_UI_CONNECT_TIMEOUT"), operation);
                 JSONObject retryFacts = verifyRetryAndWarmImportWhileConnected(
-                        subscriptionURL, deadline);
-                verifyReplacementInventoryWhileOldProfileIsActive(subscriptionURL, deadline);
+                        coldImportURL, deadline);
+                verifyReplacementInventoryWhileOldProfileIsActive(coldImportURL, deadline);
                 ensureRenderedDisconnected(remainingTimeout(deadline, "ANDROID_UI_DISCONNECT_TIMEOUT"));
                 checks.put("saved_source_restored", true)
                         .put("activity_reopen_kept_inventory", true)
