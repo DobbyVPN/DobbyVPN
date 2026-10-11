@@ -60,7 +60,6 @@ final class NativeUIInteractionTests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         if app.state != .notRunning { app.terminate() }
-        app.launch()
     }
 
     override func tearDownWithError() throws {
@@ -69,6 +68,7 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testUnsupportedTypedURLKeepsControlsUsable() {
+        app.launch()
         let configuration = app.textFields["Connection configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         assertLogLayout()
@@ -89,6 +89,7 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testAboutShowsSelectedProductRevision() throws {
+        app.launch()
         let configuration = app.textFields["Connection configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         configuration.tap()
@@ -128,6 +129,7 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testClearRemovesEarlierRenderedRecordsAndRetainsLaterRecord() throws {
+        app.launch()
         let configuration = app.textFields["Connection configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         assertLogLayout()
@@ -219,13 +221,13 @@ final class NativeUIInteractionTests: XCTestCase {
 
     func testColdImportKeepsItsValidSource() throws {
         guard #available(iOS 16.4, *) else { throw XCTSkip("URL activation checks require iOS 16.4 or newer") }
-        app.terminate()
         app.open(try subscriptionImportLink("https://example.invalid/cold?a=%2F"))
         assertImportedSource("https://example.invalid/cold?a=%2F")
     }
 
     func testWarmAndInvalidImportsKeepTheLatestValidSource() throws {
         guard #available(iOS 16.4, *) else { throw XCTSkip("URL activation checks require iOS 16.4 or newer") }
+        app.launch()
         let warm = "https://example.invalid/warm"
         XCUIDevice.shared.system.open(try subscriptionImportLink(warm))
         assertImportedSource(warm)
@@ -242,7 +244,6 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testLargeTextKeepsLogsAndControlsVisible() {
-        app.terminate()
         app.launchArguments = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         UIPasteboard.general.string = "https://example.invalid/large-text"
         app.launch()
@@ -267,7 +268,6 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testCompactLandscapeKeepsConnectionControlsAndLogsReachable() {
-        app.terminate()
         UIPasteboard.general.string = "https://example.invalid/landscape"
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -297,7 +297,6 @@ final class NativeUIInteractionTests: XCTestCase {
     }
 
     func testEmptyAndNonTextClipboardDoesNotFillSubscriptionField() {
-        app.terminate()
         UIPasteboard.general.items = []
         app.launch()
 
@@ -332,7 +331,6 @@ final class NativeUIInteractionTests: XCTestCase {
 
     func testPasteReadsClipboardOnlyAfterTapAndRejectsNonHTTPSInput() {
         let clipboard = "http://example.invalid/not-a-subscription"
-        app.terminate()
         UIPasteboard.general.string = clipboard
         app.launch()
 
@@ -359,7 +357,6 @@ final class NativeUIInteractionTests: XCTestCase {
 
     func testValidNativePasteAcceptedOnTap() {
         let clipboard = "https://example.invalid/native-paste"
-        app.terminate()
         UIPasteboard.general.string = clipboard
         app.launch()
 
@@ -521,7 +518,6 @@ final class NativeUIInteractionTests: XCTestCase {
     private func prepareScrollableLogFixture(recordCount: Int = 8) throws -> ScrollableLogFixture {
         let clipboard = "http://example.invalid/repeat-error"
         let validationError = "Paste an HTTPS subscription URL with a host"
-        app.terminate()
         UIPasteboard.general.string = clipboard
         app.launch()
 
