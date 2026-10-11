@@ -30,6 +30,7 @@ internal static partial class Program
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
@@ -91,9 +92,17 @@ internal static partial class Program
     private const uint GwOwner = 4;
     private const int HtCaption = 2;
     private const uint InputMouse = 0;
+    private const uint MouseEventMove = 0x0001;
     private const uint MouseEventLeftDown = 0x0002;
     private const uint MouseEventLeftUp = 0x0004;
     private const uint MouseEventWheel = 0x0800;
+    private const uint MouseEventMoveNoCoalesce = 0x2000;
+    private const uint MouseEventVirtualDesk = 0x4000;
+    private const uint MouseEventAbsolute = 0x8000;
+    private const int SmXVirtualScreen = 76;
+    private const int SmYVirtualScreen = 77;
+    private const int SmCxVirtualScreen = 78;
+    private const int SmCyVirtualScreen = 79;
 
     private readonly record struct SettingsWindowCandidate(
         IntPtr Window,
@@ -1111,12 +1120,12 @@ internal static partial class Program
         return bounds;
     }
 
-    private static NativeInput CreateMouseInput(uint flags, uint mouseData = 0) => new()
+    private static NativeInput CreateMouseInput(uint flags, uint mouseData = 0, int dx = 0, int dy = 0) => new()
     {
         Type = InputMouse,
         Union = new NativeInputUnion
         {
-            Mouse = new NativeMouseInput { MouseData = mouseData, Flags = flags, ExtraInfo = UIntPtr.Zero },
+            Mouse = new NativeMouseInput { Dx = dx, Dy = dy, MouseData = mouseData, Flags = flags, ExtraInfo = UIntPtr.Zero },
         },
     };
 
